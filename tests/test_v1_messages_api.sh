@@ -13,6 +13,7 @@ set -e
 # 配置
 # ============================================================
 API_KEY="sk-d8d563******"
+API_KEY="sk-d8d563c410cd87a6c29dc81bf983aa935a16fe27166a8eb0444c1324ec15b854"
 MODEL="minimax/minimax-m2.1"
 
 # API 端点

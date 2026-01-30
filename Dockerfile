@@ -45,11 +45,15 @@ RUN npm install --only=production --no-audit --no-fund --loglevel verbose
 COPY --from=builder /app/dist/ ./dist/
 COPY wrangler.toml ./
 
+#ENV
+ENV LOCAL_TOKEN_COUNTING true
+
 # Expose port
 EXPOSE 8788
 
 # Run the server
 # CMD ["pm2", "start", "src/server.ts", "-i", "8"]
-CMD ["npm", "run", "start"]
+CMD ["npx", "tsx", "dist/server.js"]
+# CMD ["npm", "run", "start"]
 # CMD ["node", "dist/server.js"]
 # CMD ["npm", "run", "dev"]

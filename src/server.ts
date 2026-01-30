@@ -4,12 +4,12 @@
  */
 
 import { createServer } from 'http';
-import type { Env } from './types/shared';
+import type { Env } from './types/shared.js';
 
 const port = parseInt(process.env.PORT || '8788', 10);
 
 // Import the Workers fetch handler
-import handler from './index';
+import handler from './index.js';
 
 // Extend Env interface for Node.js environment
 interface NodeEnv extends Env {
@@ -18,10 +18,8 @@ interface NodeEnv extends Env {
 
 const env: NodeEnv = {
   NODE_ENV: process.env.NODE_ENV || 'production',
-  DEV_MODE: process.env.DEV_MODE || 'false',
-  ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS || '*',
+    ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS || '*',
   LOCAL_TOKEN_COUNTING: process.env.LOCAL_TOKEN_COUNTING || 'false',
-  LOCAL_TOKEN_COUNTING_FACTOR: process.env.LOCAL_TOKEN_COUNTING_FACTOR || '4',
   ALLOWED_HOSTS: process.env.ALLOWED_HOSTS || '127.0.0.1,localhost,api.qnaigc.com',
   IMAGE_BLOCK_DATA_MAX_SIZE: process.env.IMAGE_BLOCK_DATA_MAX_SIZE || '10485760',
   FIXED_ROUTE_TARGET_URL: process.env.FIXED_ROUTE_TARGET_URL || 'https://api.qnaigc.com',
@@ -43,11 +41,15 @@ const server = createServer(async (req, res) => {
           },
         });
 
-    const request = new Request(url.toString(), {
+    const requestInit: any = {
       method: req.method,
       headers: req.headers as Record<string, string>,
       body: bodyStream,
-    });
+    };
+    if (bodyStream) {
+      requestInit.duplex = 'half';
+    }
+    const request = new Request(url.toString(), requestInit);
 
     const response = await handler.fetch(request, env);
 

@@ -13,10 +13,12 @@
   },
   "dependencies": {
     "@cloudflare/workers-types": "^4.20241106.0",
+    "js-tiktoken": "^1.0.21",
     "tiktoken": "^1.0.15",
     "typescript": "^5.9.3",
     "wrangler": "^4.60.0"
   },
+  "type": "module",
   "engines": {
     "node": ">=18"
   },

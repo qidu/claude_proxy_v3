@@ -10,12 +10,6 @@ export interface Env {
     LOCAL_TOKEN_COUNTING?: string;
 
     /**
-     * Token estimation factor for local counting.
-     * Default: 4 (characters per token).
-     */
-    LOCAL_TOKEN_COUNTING_FACTOR?: string;
-
-    /**
      * Comma-separated list of allowed CORS origins.
      * If empty or not set, defaults to '*' (allow all).
      * For production, set to your domain(s).
