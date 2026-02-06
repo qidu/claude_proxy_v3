@@ -2,6 +2,7 @@
  * Main router and middleware for Claude Proxy v3
  *
  * Handles dynamic routing to target APIs and converts between Claude and OpenAI formats.
+ * Also supports Gemini API bypass mode for direct Gemini API access.
  */
 
 import { Env } from './types/shared';
@@ -11,6 +12,7 @@ import { createLogger } from './utils/logger';
 import { handleModelsRequest } from './handlers/models';
 import { handleTokenCountingRequest } from './handlers/token-counting';
 import { handleMessagesRequest } from './handlers/messages';
+import { handleGeminiRequest } from './handlers/gemini';
 
 /**
  * Generate a unique request ID
@@ -67,8 +69,8 @@ function getCorsHeaders(request: Request, env: Env): Record<string, string> {
 
   return {
     'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key, anthropic-beta',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key, x-goog-api-key, anthropic-beta',
     'Access-Control-Max-Age': '86400',
   };
 }
@@ -143,6 +145,44 @@ function parseFixedRoute(path: string, env: Env): { targetUrl: string; targetEnd
     };
   }
 
+  // Gemini Interactions endpoint - bypass to Gemini API
+  if (path === '/v1/interactions' || path.startsWith('/v1/interactions?')) {
+    const config = {
+      baseUrl: env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
+      apiVersion: env.GEMINI_API_VERSION || 'v1beta',
+    };
+    return {
+      targetUrl: `${config.baseUrl}/${config.apiVersion}/interactions`,
+      targetEndpoint: 'v1/interactions',
+    };
+  }
+
+  // Get specific interaction
+  const interactionMatch = path.match(/^\/v1\/interactions\/(v[0-9]+_[A-Za-z0-9_-]+)$/);
+  if (interactionMatch) {
+    const config = {
+      baseUrl: env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
+      apiVersion: env.GEMINI_API_VERSION || 'v1beta',
+    };
+    return {
+      targetUrl: `${config.baseUrl}/${config.apiVersion}/interactions/${interactionMatch[1]}`,
+      targetEndpoint: 'v1/interactions/get',
+    };
+  }
+
+  // Cancel interaction
+  const cancelMatch = path.match(/^\/v1\/interactions\/(v[0-9]+_[A-Za-z0-9_-]+)\/cancel$/);
+  if (cancelMatch) {
+    const config = {
+      baseUrl: env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
+      apiVersion: env.GEMINI_API_VERSION || 'v1beta',
+    };
+    return {
+      targetUrl: `${config.baseUrl}/${config.apiVersion}/interactions/${cancelMatch[1]}/cancel`,
+      targetEndpoint: 'v1/interactions/cancel',
+    };
+  }
+
   throw new Error(`Unsupported fixed route: ${path}`);
 }
 
@@ -180,8 +220,9 @@ export default {
       }
 
       let targetUrl: string;
-      let handlerType: 'models' | 'token-counting' | 'messages';
+      let handlerType: 'models' | 'token-counting' | 'messages' | 'gemini';
       let modelId: string | undefined;
+      let isGeminiBypass = false;
 
       // Determine routing mode based on URL path
       if (isDynamicRoute(path)) {
@@ -190,15 +231,27 @@ export default {
         const { targetConfig, claudeEndpoint } = parsedRoute;
         modelId = parsedRoute.modelId;
 
-        // SSRF protection: validate host against whitelist
-        const host = targetConfig.targetUrl.replace(/^https?:\/\//, '');
-        if (!isHostAllowed(host, env.ALLOWED_HOSTS)) {
-          logger.warn(requestId, `Host not allowed: ${host}. Allowed hosts: ${env.ALLOWED_HOSTS || '127.0.0.1, localhost'}`);
-          return createErrorResponse(new Error('Host not allowed'), requestId, 403);
-        }
+        // Check for Gemini API bypass mode
+        const isGeminiApi = targetConfig.targetUrl.includes('generativelanguage.googleapis.com') ||
+                           targetConfig.targetUrl.includes('gemini');
 
-        handlerType = getHandlerType(claudeEndpoint);
-        targetUrl = buildTargetUrl(targetConfig, claudeEndpoint, modelId);
+        if (isGeminiApi && (env.GEMINI_BYPASS_ENABLED === 'true' || env.GEMINI_BYPASS_ENABLED === '1')) {
+          // Gemini API bypass mode
+          isGeminiBypass = true;
+          handlerType = 'gemini';
+          targetUrl = buildTargetUrl(targetConfig, claudeEndpoint, modelId);
+        } else {
+          // Standard routing
+          // SSRF protection: validate host against whitelist
+          const host = targetConfig.targetUrl.replace(/^https?:\/\//, '');
+          if (!isHostAllowed(host, env.ALLOWED_HOSTS)) {
+            logger.warn(requestId, `Host not allowed: ${host}. Allowed hosts: ${env.ALLOWED_HOSTS || '127.0.0.1, localhost'}`);
+            return createErrorResponse(new Error('Host not allowed'), requestId, 403);
+          }
+
+          handlerType = getHandlerType(claudeEndpoint);
+          targetUrl = buildTargetUrl(targetConfig, claudeEndpoint, modelId);
+        }
       } else {
         // Fixed routing: /v1/messages -> /v1/chat/completions
         const fixedRoute = parseFixedRoute(path, env);
@@ -209,6 +262,8 @@ export default {
           handlerType = 'models';
         } else if (fixedRoute.targetEndpoint === 'v1/messages/count_tokens') {
           handlerType = 'token-counting';
+        } else if (fixedRoute.targetEndpoint.startsWith('v1/interactions')) {
+          handlerType = 'gemini';
         } else {
           handlerType = 'messages';
         }
@@ -230,6 +285,10 @@ export default {
 
         case 'messages':
           response = await handleMessagesRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
+          break;
+
+        case 'gemini':
+          response = await handleGeminiRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
           break;
 
         default:

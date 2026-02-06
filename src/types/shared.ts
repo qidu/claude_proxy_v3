@@ -56,6 +56,32 @@ export interface Env {
      * Default: info
      */
     LOG_LEVEL?: string;
+
+    /**
+     * Gemini API key for direct Gemini API access.
+     * Used when routing requests to Gemini Generative Language API.
+     */
+    GEMINI_API_KEY?: string;
+
+    /**
+     * Gemini API base URL.
+     * Default: https://generativelanguage.googleapis.com
+     */
+    GEMINI_BASE_URL?: string;
+
+    /**
+     * Gemini API version.
+     * Default: v1beta
+     */
+    GEMINI_API_VERSION?: string;
+
+    /**
+     * Enable Gemini API bypass mode.
+     * When enabled, requests to gemini-related endpoints will be
+     * proxied directly to the Gemini API.
+     * Set to "true" or "1" to enable.
+     */
+    GEMINI_BYPASS_ENABLED?: string;
 }
 
 /**

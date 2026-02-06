@@ -238,7 +238,7 @@ function extractAuthHeaders(request: Request): Record<string, string> {
 /**
  * Determine handler type based on Claude endpoint
  */
-function getHandlerType(claudeEndpoint: string): 'models' | 'token-counting' | 'messages' {
+function getHandlerType(claudeEndpoint: string): 'models' | 'token-counting' | 'messages' | 'gemini' {
   if (claudeEndpoint === 'v1/models') {
     return 'models';
   }
@@ -249,6 +249,11 @@ function getHandlerType(claudeEndpoint: string): 'models' | 'token-counting' | '
 
   if (claudeEndpoint.startsWith('v1/messages')) {
     return 'messages';
+  }
+
+  // Gemini Interactions API endpoints
+  if (claudeEndpoint.startsWith('v1/interactions') || claudeEndpoint.startsWith('v1beta/interactions')) {
+    return 'gemini';
   }
 
   throw new Error(`Unknown Claude endpoint: ${claudeEndpoint}`);
