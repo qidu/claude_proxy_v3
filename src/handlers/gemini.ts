@@ -41,6 +41,14 @@ function getGeminiConfig(env: Env): GeminiConfig {
 }
 
 /**
+ * Check if request is in native Gemini format
+ */
+function isNativeGeminiRequest(body: Record<string, unknown>): boolean {
+    // Native Gemini requests have 'input' field, Claude requests have 'messages'
+    return 'input' in body && !('messages' in body);
+}
+
+/**
  * Handle Gemini API request
  */
 export async function handleGeminiRequest(
@@ -56,26 +64,28 @@ export async function handleGeminiRequest(
     const config = getGeminiConfig(env ?? {});
 
     // Parse request body
-    const requestBody = await request.json() as ClaudeMessagesRequest;
-    const claudeRequest = requestBody;
+    const requestBody = await request.json() as Record<string, unknown>;
 
-    // Calculate max image data size from environment or use default
-    const maxImageDataSize = env?.IMAGE_BLOCK_DATA_MAX_SIZE
-        ? parseInt(env.IMAGE_BLOCK_DATA_MAX_SIZE, 10)
-        : 1 * 1024 * 1024; // Default 1MB
+    // Determine if this is a native Gemini request or needs conversion from Claude format
+    let geminiRequest: GeminiInteractionRequest;
+    let isStreaming: boolean;
 
-    // Convert Claude request to Gemini format
-    const geminiRequest: GeminiInteractionRequest = convertClaudeToGeminiRequest(
-        claudeRequest,
-        modelId
-    );
+    if (isNativeGeminiRequest(requestBody)) {
+        // Native Gemini format - use directly
+        activeLogger.debug(requestId, 'Using native Gemini request format');
+        geminiRequest = requestBody as unknown as GeminiInteractionRequest;
+        isStreaming = geminiRequest.stream === true;
+    } else {
+        // Claude format - convert to Gemini
+        activeLogger.debug(requestId, 'Converting Claude request to Gemini format');
+        const claudeRequest = requestBody as unknown as ClaudeMessagesRequest;
+        geminiRequest = convertClaudeToGeminiRequest(claudeRequest, modelId);
+        isStreaming = claudeRequest.stream === true;
+    }
 
     // Determine the target endpoint
     const endpoint = determineGeminiEndpoint(request, geminiRequest);
     const fullTargetUrl = `${config.baseUrl}/${config.apiVersion}${endpoint}`;
-
-    // Check if streaming is requested
-    const isStreaming = claudeRequest.stream === true;
 
     // Log request info
     activeLogger.debug(requestId, `Gemini upstream request url: ${fullTargetUrl}`);
