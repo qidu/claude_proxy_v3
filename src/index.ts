@@ -117,7 +117,7 @@ function isDynamicRoute(path: string): boolean {
  * Fixed route: /v1/messages -> /v1/chat/completions
  * Uses FIXED_ROUTE_TARGET_URL and FIXED_ROUTE_PATH_PREFIX from env
  */
-function parseFixedRoute(path: string, env: Env): { targetUrl: string; targetEndpoint: string } {
+function parseFixedRoute(path: string, env: Env): { targetUrl: string; targetEndpoint: string; endpointType?: 'interactions' | 'openai-compatible' } {
   const baseUrl = env.FIXED_ROUTE_TARGET_URL || 'https://api.example.com';
   const pathPrefix = env.FIXED_ROUTE_PATH_PREFIX || '';
 
@@ -147,40 +147,82 @@ function parseFixedRoute(path: string, env: Env): { targetUrl: string; targetEnd
 
   // Gemini Interactions endpoint - bypass to Gemini API
   if (path === '/v1/interactions' || path.startsWith('/v1/interactions?')) {
-    const config = {
-      baseUrl: env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
-      apiVersion: env.GEMINI_API_VERSION || 'v1beta',
-    };
-    return {
-      targetUrl: `${config.baseUrl}/${config.apiVersion}/interactions`,
-      targetEndpoint: 'v1/interactions',
-    };
+    const endpointType = env.GEMINI_ENDPOINT_TYPE || 'openai-compatible';
+
+    if (endpointType === 'interactions') {
+      // Gemini Interactions API
+      const config = {
+        baseUrl: env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
+        apiVersion: env.GEMINI_API_VERSION || 'v1beta',
+      };
+      return {
+        targetUrl: `${config.baseUrl}/${config.apiVersion}/interactions`,
+        targetEndpoint: 'v1/interactions',
+        endpointType: 'interactions',
+      };
+    } else {
+      // OpenAI-compatible endpoint
+      const baseUrl = env.GEMINI_BASE_URL || 'https://api.qnaigc.com/v1';
+      return {
+        targetUrl: `${baseUrl}/chat/completions`,
+        targetEndpoint: 'v1/interactions',
+        endpointType: 'openai-compatible',
+      };
+    }
   }
 
   // Get specific interaction
   const interactionMatch = path.match(/^\/v1\/interactions\/(v[0-9]+_[A-Za-z0-9_-]+)$/);
   if (interactionMatch) {
-    const config = {
-      baseUrl: env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
-      apiVersion: env.GEMINI_API_VERSION || 'v1beta',
-    };
-    return {
-      targetUrl: `${config.baseUrl}/${config.apiVersion}/interactions/${interactionMatch[1]}`,
-      targetEndpoint: 'v1/interactions/get',
-    };
+    const endpointType = env.GEMINI_ENDPOINT_TYPE || 'openai-compatible';
+
+    if (endpointType === 'interactions') {
+      const config = {
+        baseUrl: env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
+        apiVersion: env.GEMINI_API_VERSION || 'v1beta',
+      };
+      return {
+        targetUrl: `${config.baseUrl}/${config.apiVersion}/interactions/${interactionMatch[1]}`,
+        targetEndpoint: 'v1/interactions/get',
+        endpointType: 'interactions',
+      };
+    } else {
+      // OpenAI-compatible endpoints don't support GET for specific interactions
+      // Fall back to creating new interaction
+      const baseUrl = env.GEMINI_BASE_URL || 'https://api.qnaigc.com/v1';
+      return {
+        targetUrl: `${baseUrl}/chat/completions`,
+        targetEndpoint: 'v1/interactions',
+        endpointType: 'openai-compatible',
+      };
+    }
   }
 
   // Cancel interaction
   const cancelMatch = path.match(/^\/v1\/interactions\/(v[0-9]+_[A-Za-z0-9_-]+)\/cancel$/);
   if (cancelMatch) {
-    const config = {
-      baseUrl: env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
-      apiVersion: env.GEMINI_API_VERSION || 'v1beta',
-    };
-    return {
-      targetUrl: `${config.baseUrl}/${config.apiVersion}/interactions/${cancelMatch[1]}/cancel`,
-      targetEndpoint: 'v1/interactions/cancel',
-    };
+    const endpointType = env.GEMINI_ENDPOINT_TYPE || 'openai-compatible';
+
+    if (endpointType === 'interactions') {
+      const config = {
+        baseUrl: env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
+        apiVersion: env.GEMINI_API_VERSION || 'v1beta',
+      };
+      return {
+        targetUrl: `${config.baseUrl}/${config.apiVersion}/interactions/${cancelMatch[1]}/cancel`,
+        targetEndpoint: 'v1/interactions/cancel',
+        endpointType: 'interactions',
+      };
+    } else {
+      // OpenAI-compatible endpoints don't support cancel operations
+      // Fall back to creating new interaction
+      const baseUrl = env.GEMINI_BASE_URL || 'https://api.qnaigc.com/v1';
+      return {
+        targetUrl: `${baseUrl}/chat/completions`,
+        targetEndpoint: 'v1/interactions',
+        endpointType: 'openai-compatible',
+      };
+    }
   }
 
   throw new Error(`Unsupported fixed route: ${path}`);

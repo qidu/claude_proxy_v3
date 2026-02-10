@@ -82,6 +82,14 @@ export interface Env {
      * Set to "true" or "1" to enable.
      */
     GEMINI_BYPASS_ENABLED?: string;
+
+    /**
+     * Gemini endpoint type.
+     * 'interactions' for Google's Gemini Interactions API (generativelanguage.googleapis.com)
+     * 'openai-compatible' for OpenAI-compatible Gemini wrappers
+     * Default: 'openai-compatible'
+     */
+    GEMINI_ENDPOINT_TYPE?: 'interactions' | 'openai-compatible';
 }
 
 /**

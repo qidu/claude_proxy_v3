@@ -12,6 +12,9 @@ import { GeminiInteractionRequest, GeminiInteractionResponse } from '../types/ge
 import { convertClaudeToGeminiRequest } from '../converters/claude-to-gemini';
 import { convertGeminiToClaudeResponse } from '../converters/gemini-to-claude';
 import { createGeminiStreamTransformer } from '../converters/gemini-streaming';
+import { convertClaudeToOpenAIRequest } from '../converters/claude-to-openai';
+import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude';
+import { createStreamTransformer } from '../converters/streaming';
 import { handleTargetApiError } from '../utils/errors';
 
 /**
@@ -20,6 +23,7 @@ import { handleTargetApiError } from '../utils/errors';
 interface GeminiConfig {
     baseUrl: string;
     apiVersion: string;
+    endpointType: 'interactions' | 'openai-compatible';
 }
 
 /**
@@ -28,6 +32,7 @@ interface GeminiConfig {
 const DEFAULT_GEMINI_CONFIG: GeminiConfig = {
     baseUrl: 'https://generativelanguage.googleapis.com',
     apiVersion: 'v1beta',
+    endpointType: 'openai-compatible',
 };
 
 /**
@@ -37,6 +42,7 @@ function getGeminiConfig(env: Env): GeminiConfig {
     return {
         baseUrl: env.GEMINI_BASE_URL || DEFAULT_GEMINI_CONFIG.baseUrl,
         apiVersion: env.GEMINI_API_VERSION || DEFAULT_GEMINI_CONFIG.apiVersion,
+        endpointType: env.GEMINI_ENDPOINT_TYPE || DEFAULT_GEMINI_CONFIG.endpointType,
     };
 }
 
@@ -49,7 +55,7 @@ function isNativeGeminiRequest(body: Record<string, unknown>): boolean {
 }
 
 /**
- * Handle Gemini API request
+ * Handle Gemini API request (factory function)
  */
 export async function handleGeminiRequest(
     request: Request,
@@ -62,6 +68,35 @@ export async function handleGeminiRequest(
 ): Promise<Response> {
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
     const config = getGeminiConfig(env ?? {});
+
+    activeLogger.debug(requestId, `Gemini endpoint type: ${config.endpointType}`);
+    activeLogger.debug(requestId, `Gemini base URL: ${config.baseUrl}`);
+    activeLogger.debug(requestId, `Gemini API version: ${config.apiVersion}`);
+
+    if (config.endpointType === 'interactions') {
+        return handleGeminiInteractionsRequest(
+            request, targetUrl, authHeaders, requestId, modelId, env, logger
+        );
+    } else {
+        return handleGeminiOpenAICompatibleRequest(
+            request, targetUrl, authHeaders, requestId, modelId, env, logger
+        );
+    }
+}
+
+/**
+ * Handle Gemini Interactions API request
+ */
+async function handleGeminiInteractionsRequest(
+    request: Request,
+    targetUrl: string,
+    authHeaders: Record<string, string>,
+    requestId: string,
+    modelId?: string,
+    env?: Env,
+    logger?: Logger
+): Promise<Response> {
+    const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
     // Parse request body
     const requestBody = await request.json() as Record<string, unknown>;
@@ -83,9 +118,9 @@ export async function handleGeminiRequest(
         isStreaming = claudeRequest.stream === true;
     }
 
-    // Determine the target endpoint
+    // Determine the target endpoint - append to existing targetUrl since parseFixedRoute already set it up
     const endpoint = determineGeminiEndpoint(request, geminiRequest);
-    const fullTargetUrl = `${config.baseUrl}/${config.apiVersion}${endpoint}`;
+    const fullTargetUrl = endpoint ? `${targetUrl}${endpoint}` : targetUrl;
 
     // Log request info
     activeLogger.debug(requestId, `Gemini upstream request url: ${fullTargetUrl}`);
@@ -98,7 +133,7 @@ export async function handleGeminiRequest(
     };
 
     // Add API key from headers or environment
-    const apiKey = extractGeminiApiKey(request, authHeaders, env);
+    const apiKey = extractGeminiApiKey(request, authHeaders, env, 'interactions');
     if (apiKey) {
         geminiHeaders['x-goog-api-key'] = apiKey;
     }
@@ -122,14 +157,84 @@ export async function handleGeminiRequest(
 
         // Handle streaming response
         if (isStreaming) {
-            return handleGeminiStreamingResponse(response, geminiRequest.model || 'gemini-pro', requestId, activeLogger);
+            return handleGeminiStreamingResponse(response, geminiRequest.model || 'gemini-pro', requestId, activeLogger, 'interactions');
         }
 
         // Handle non-streaming response
-        return handleGeminiNonStreamingResponse(response, geminiRequest.model || 'gemini-pro', requestId, activeLogger);
+        return handleGeminiNonStreamingResponse(response, geminiRequest.model || 'gemini-pro', requestId, activeLogger, 'interactions');
 
     } catch (error) {
         activeLogger.error(requestId, `Gemini API error: ${(error as Error).message}`);
+        throw error;
+    }
+}
+
+/**
+ * Handle OpenAI-compatible Gemini wrapper request
+ */
+async function handleGeminiOpenAICompatibleRequest(
+    request: Request,
+    targetUrl: string,
+    authHeaders: Record<string, string>,
+    requestId: string,
+    modelId?: string,
+    env?: Env,
+    logger?: Logger
+): Promise<Response> {
+    const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
+
+    // Parse request body
+    const requestBody = await request.json() as Record<string, unknown>;
+
+    // Always convert Claude to OpenAI format for OpenAI-compatible endpoints
+    activeLogger.debug(requestId, 'Converting Claude request to OpenAI format for Gemini');
+    const claudeRequest = requestBody as unknown as ClaudeMessagesRequest;
+    const openaiRequest = convertClaudeToOpenAIRequest(claudeRequest, modelId || claudeRequest.model);
+    const isStreaming = claudeRequest.stream === true;
+
+    // Log request info
+    activeLogger.debug(requestId, `Gemini upstream request url: ${targetUrl}`);
+    activeLogger.debug(requestId, `Gemini model: ${openaiRequest.model}`);
+    activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
+
+    // Prepare headers for OpenAI-compatible API
+    const openaiHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+    };
+
+    // Add API key from headers or environment
+    const apiKey = extractGeminiApiKey(request, authHeaders, env, 'openai-compatible');
+    if (apiKey) {
+        openaiHeaders['Authorization'] = `Bearer ${apiKey}`;
+    }
+
+    // Forward other auth headers
+    if (authHeaders['Authorization']) {
+        openaiHeaders['Authorization'] = authHeaders['Authorization'];
+    }
+
+    try {
+        const response = await fetch(targetUrl, {
+            method: 'POST',
+            headers: openaiHeaders,
+            body: JSON.stringify(openaiRequest),
+        });
+
+        // Handle target API errors
+        if (!response.ok) {
+            handleTargetApiError(response, 'Gemini API (OpenAI-compatible)');
+        }
+
+        // Handle streaming response
+        if (isStreaming) {
+            return handleGeminiStreamingResponse(response, openaiRequest.model, requestId, activeLogger, 'openai-compatible');
+        }
+
+        // Handle non-streaming response
+        return handleGeminiNonStreamingResponse(response, openaiRequest.model, requestId, activeLogger, 'openai-compatible');
+
+    } catch (error) {
+        activeLogger.error(requestId, `Gemini API (OpenAI-compatible) error: ${(error as Error).message}`);
         throw error;
     }
 }
@@ -145,7 +250,8 @@ function determineGeminiEndpoint(request: Request, geminiRequest: GeminiInteract
     if (path.endsWith('/cancel')) {
         // Cancel interaction
         const interactionId = extractInteractionId(path);
-        return `/interactions/${interactionId}/cancel`;
+        // Return just the interaction ID suffix (parseFixedRoute already handles /interactions)
+        return `/${interactionId}/cancel`;
     }
 
     if (path.match(/\/interactions\/[a-zA-Z0-9_-]+$/)) {
@@ -156,17 +262,20 @@ function determineGeminiEndpoint(request: Request, geminiRequest: GeminiInteract
             queryParams.set('stream', 'true');
         }
         const query = queryParams.toString();
-        return `/interactions/${interactionId}${query ? '?' + query : ''}`;
+        // Return just the interaction ID suffix (parseFixedRoute already handles /interactions)
+        return `/${interactionId}${query ? '?' + query : ''}`;
     }
 
     if (request.method === 'DELETE') {
         // Delete interaction
         const interactionId = extractInteractionId(path);
-        return `/interactions/${interactionId}`;
+        // Return just the interaction ID suffix (parseFixedRoute already handles /interactions)
+        return `/${interactionId}`;
     }
 
     // Default: create interaction
-    return '/interactions';
+    // Return empty string since parseFixedRoute already includes /interactions
+    return '';
 }
 
 /**
@@ -187,29 +296,45 @@ function extractInteractionId(path: string): string {
 function extractGeminiApiKey(
     request: Request,
     authHeaders: Record<string, string>,
-    env?: Env
+    env?: Env,
+    endpointType: 'interactions' | 'openai-compatible' = 'interactions'
 ): string | undefined {
-    // Check request header first
-    const headerKey = request.headers.get('x-goog-api-key');
-    if (headerKey) {
-        return headerKey;
-    }
+    if (endpointType === 'openai-compatible') {
+        // OpenAI-compatible endpoints: Authorization: Bearer or x-api-key
+        const authHeader = authHeaders['Authorization'];
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            return authHeader.slice(7);
+        }
 
-    // Check Authorization header for API key
-    const authHeader = authHeaders['Authorization'];
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        return authHeader.slice(7);
-    }
+        const apiKeyHeader = request.headers.get('x-api-key');
+        if (apiKeyHeader) {
+            return apiKeyHeader;
+        }
 
-    // Check x-api-key header (converted to Authorization format in routing)
-    const apiKeyHeader = request.headers.get('x-api-key');
-    if (apiKeyHeader) {
-        return apiKeyHeader;
-    }
+        // Check environment variable
+        if (env?.GEMINI_API_KEY) {
+            return env.GEMINI_API_KEY;
+        }
+    } else {
+        // Native Gemini API: x-goog-api-key or Authorization: Bearer
+        const headerKey = request.headers.get('x-goog-api-key');
+        if (headerKey) {
+            return headerKey;
+        }
 
-    // Check environment variable
-    if (env?.GEMINI_API_KEY) {
-        return env.GEMINI_API_KEY;
+        const authHeader = authHeaders['Authorization'];
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            return authHeader.slice(7);
+        }
+
+        const apiKeyHeader = request.headers.get('x-api-key');
+        if (apiKeyHeader) {
+            return apiKeyHeader;
+        }
+
+        if (env?.GEMINI_API_KEY) {
+            return env.GEMINI_API_KEY;
+        }
     }
 
     return undefined;
@@ -222,28 +347,47 @@ async function handleGeminiNonStreamingResponse(
     response: Response,
     model: string,
     requestId: string,
-    logger: Logger
+    logger: Logger,
+    endpointType: 'interactions' | 'openai-compatible' = 'interactions'
 ): Promise<Response> {
     try {
         const responseText = await response.text();
         logger.debug(requestId, 'Gemini response received');
 
-        const geminiResponse: GeminiInteractionResponse = JSON.parse(responseText);
+        if (endpointType === 'openai-compatible') {
+            // Parse OpenAI-compatible response
+            const openaiResponse = JSON.parse(responseText);
+            const claudeResponse = convertOpenAIToClaudeResponse(
+                openaiResponse,
+                model,
+                requestId
+            );
+            return new Response(JSON.stringify(claudeResponse), {
+                status: 200,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-request-id': requestId,
+                },
+            });
+        } else {
+            // Parse native Gemini response
+            const geminiResponse: GeminiInteractionResponse = JSON.parse(responseText);
 
-        // Convert to Claude format
-        const claudeResponse: ClaudeMessagesResponse = convertGeminiToClaudeResponse(
-            geminiResponse,
-            model,
-            requestId
-        );
+            // Convert to Claude format
+            const claudeResponse: ClaudeMessagesResponse = convertGeminiToClaudeResponse(
+                geminiResponse,
+                model,
+                requestId
+            );
 
-        return new Response(JSON.stringify(claudeResponse), {
-            status: 200,
-            headers: {
-                'Content-Type': 'application/json',
-                'x-request-id': requestId,
-            },
-        });
+            return new Response(JSON.stringify(claudeResponse), {
+                status: 200,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-request-id': requestId,
+                },
+            });
+        }
     } catch (error) {
         logger.error(requestId, `Error converting Gemini response: ${(error as Error).message}`);
         throw new Error(`Failed to convert Gemini response: ${(error as Error).message}`);
@@ -257,7 +401,8 @@ async function handleGeminiStreamingResponse(
     response: Response,
     model: string,
     requestId: string,
-    logger: Logger
+    logger: Logger,
+    endpointType: 'interactions' | 'openai-compatible' = 'interactions'
 ): Promise<Response> {
     if (!response.body) {
         throw new Error('Response body is not readable');
@@ -268,8 +413,10 @@ async function handleGeminiStreamingResponse(
     try {
         logger.debug(requestId, 'Gemini streaming response started');
 
-        // Create streaming transformer
-        const transformer = createGeminiStreamTransformer(model, requestId);
+        // Create streaming transformer based on endpoint type
+        const transformer = endpointType === 'openai-compatible'
+            ? createStreamTransformer(model, requestId)
+            : createGeminiStreamTransformer(model, requestId);
 
         // Create a tee to read the raw response while also transforming it
         const [stream1, stream2] = response.body.tee();

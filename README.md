@@ -11,12 +11,18 @@ A complete Claude API proxy new implementation that supports the full Claude API
 
 - **Extended Thinking Support**: Built-in support for Claude's thinking configuration with budget tokens
 
+- **Gemini API Support**: Dual-mode support for Google Gemini API:
+  - **Interactions API**: Native Gemini Interactions API (`/v1/interactions`)
+  - **OpenAI-Compatible**: OpenAI-compatible Gemini wrapper endpoints
+  - Automatic request format detection and conversion
+
 - **Dynamic Routing**: Route requests to any OpenAI-compatible API using URL patterns:
   - `/https/api.qnaigc.com/v1/models`
   - `/https/api.qnaigc.com/v1/messages`
   - `/https/api.qnaigc.com/openai/v1/models/llama3-70b/v1/messages`
   - `/https/api.qnaigc.com/v1/messages/count_tokens`
   - `/https/api.qnaigc.com/openai/v1/models/llama3-70b/v1/messages/count_tokens`
+  - `/https/generativelanguage.googleapis.com/v1beta/interactions`
 
 
 - **TypeScript First**: Full type safety with comprehensive Claude and OpenAI type definitions
@@ -36,12 +42,18 @@ npm install
 
 Edit `src/server.ts` or `wrangler.toml` to set your environment variables:
 
-Counting tokens with local `tiktoken`(default model `cl100k_base`) when setting `LOCAL_TOKEN_COUNTING` to `true` 
+Counting tokens with local `tiktoken`(default model `cl100k_base`) when setting `LOCAL_TOKEN_COUNTING` to `true`
 or consuming tokens from the upstream API to response with 'usage' field.
 
 ```toml
 [vars]
 LOCAL_TOKEN_COUNTING = "false"
+
+# Gemini API configuration
+GEMINI_ENDPOINT_TYPE = "openai-compatible"  # or "interactions" for native Gemini API
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
+GEMINI_API_VERSION = "v1beta"
+GEMINI_API_KEY = "your-gemini-api-key"
 ```
 
 ### 3. Develop Locally
@@ -114,10 +126,18 @@ bash tests/test_all_models.sh
 bash tests/test_shell.sh
 
 bash tests/test_shell_sse.sh
+
+# Test Gemini API
+node tests/test_gemini_native.js
+node tests/test_gemini_openai_compatible.js
+node tests/test_gemini_simple.js
 ```
 
 ### 6. Docs
 Designing, Implementation, Reviewing, Testing docs are all generated with `Claude Code` + `DeepSeek-V3.2`, these md files are listed in `docs`.
+
+- `docs/Refactor_gemini_interactions_to_openai_compatible.md`: Comprehensive architecture analysis and refactoring guide for Gemini API support
+- `tests/README.md`: Gemini API testing guide covering both native and OpenAI-compatible modes
 
 ## 📚 API Reference
 
@@ -277,11 +297,28 @@ targetUrl = targetUrl.replace('v1/messages', 'v1/chat/completions')
    POST /https/generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp/v1/messages/count_tokens
    ```
 
+4. **Use Gemini Interactions API**:
+   ```
+   POST /https/generativelanguage.googleapis.com/v1beta/interactions
+   GET /https/generativelanguage.googleapis.com/v1beta/interactions/v1_abc123
+   DELETE /https/generativelanguage.googleapis.com/v1beta/interactions/v1_abc123
+   POST /https/generativelanguage.googleapis.com/v1beta/interactions/v1_abc123/cancel
+   ```
+
 ### Authentication
 
 Forward authentication headers from the original request:
 - `Authorization: Bearer <token>`
 - `x-api-key: <key>`
+
+#### Gemini API Authentication
+For Gemini API endpoints, authentication headers are automatically mapped:
+- **OpenAI-Compatible Mode**: Uses `Authorization: Bearer <api-key>` header
+- **Native Interactions Mode**: Uses `x-goog-api-key: <api-key>` header
+- API keys can be provided via:
+  - Request headers: `Authorization: Bearer <key>` or `x-api-key: <key>`
+  - Environment variable: `GEMINI_API_KEY`
+  - For native Gemini: `x-goog-api-key: <key>` header
 
 ## 🏗️ Architecture
 
@@ -293,11 +330,15 @@ src/
 ├── handlers/
 │   ├── messages.ts         # Messages API handler
 │   ├── models.ts           # Models API handler
-│   └── token-counting.ts   # Token counting handler
+│   ├── token-counting.ts   # Token counting handler
+│   └── gemini.ts           # Gemini API handler (dual-mode)
 ├── converters/
 │   ├── claude-to-openai.ts # Request conversion
 │   ├── openai-to-claude.ts # Response conversion
-│   └── streaming.ts        # Streaming response conversion
+│   ├── streaming.ts        # Streaming response conversion
+│   ├── claude-to-gemini.ts # Claude to Gemini conversion
+│   ├── gemini-to-claude.ts # Gemini to Claude conversion
+│   └── gemini-streaming.ts # Gemini streaming transformer
 ├── utils/
 │   ├── routing.ts          # Dynamic routing logic
 │   ├── validation.ts       # Request validation
@@ -306,15 +347,17 @@ src/
 └── types/
     ├── claude.ts           # Claude API types
     ├── openai.ts           # OpenAI API types
+    ├── gemini.ts           # Gemini API types
     └── shared.ts           # Shared types
 ```
 
 ### Key Components
 
 1. **Router Middleware**: Parses URLs, handles authentication, routes to handlers
-2. **Converters**: Convert between Claude and OpenAI API formats
+2. **Converters**: Convert between Claude, OpenAI, and Gemini API formats
 3. **Validation**: Comprehensive request validation with Claude API error formats
 4. **Error Handling**: Claude API-compatible error responses
+5. **Gemini Dual-Mode Handler**: Supports both native Interactions API and OpenAI-compatible endpoints with automatic format detection
 
 ## 🧪 Other Testing
 
@@ -345,6 +388,27 @@ curl -X POST "http://localhost:8787/https/api.qnaigc.com/v1/messages" \
     "messages": [{"role": "user", "content": "Hello"}],
     "max_tokens": 1000
   }'
+
+# Use Gemini Interactions API (native mode)
+curl -X POST "http://localhost:8787/https/generativelanguage.googleapis.com/v1beta/interactions" \
+  -H "Content-Type: application/json" \
+  -H "x-goog-api-key: your-gemini-api-key" \
+  -d '{
+    "model": "gemini-2.0-flash-exp",
+    "input": {
+      "messages": [{"role": "user", "content": "Hello"}]
+    }
+  }'
+
+# Use Gemini OpenAI-compatible mode
+curl -X POST "http://localhost:8787/https/api.qnaigc.com/v1/messages" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-gemini-api-key" \
+  -d '{
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 1000,
+    "model": "gemini-2.0-flash-exp"
+  }'
 ```
 
 ## 📄 License
@@ -362,5 +426,6 @@ MIT
 
 - [Claude API Documentation](https://docs.anthropic.com/claude/reference/)
 - [OpenAI API Documentation](https://platform.openai.com/docs/api-reference)
+- [Google Gemini API Documentation](https://ai.google.dev/gemini-api/docs)
 - [Cloudflare Workers Documentation](https://developers.cloudflare.com/workers/)
 - [Claude Proxy (v0)](https://github.com/tingxifa/claude_proxy) and a [fork(v0.1)](https://github.com/qidu/claude_proxy)
