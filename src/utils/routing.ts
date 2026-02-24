@@ -4,8 +4,8 @@
  * Handles URL patterns like:
  * - /v1/models (Models API)
  * - /https/api.qnaigc.com/v1/models (Models API)
- * - /https/api.qnaigc.com/openai/v1/models/llama3-70b-8192/v1/messages/count_tokens (Token Counting API)
- * - /https/api.qnaigc.com/openai/v1/models/llama3-70b-8192/v1/messages (Messages API)
+ * - /https/api.qnaigc.com/openai/v1/models/deepseek-v3.1/v1/messages/count_tokens (Token Counting API)
+ * - /https/api.qnaigc.com/openai/v1/models/deepseek-v3.1/v1/messages (Messages API)
  */
 
 import { validateBetaFeatures } from './beta-features';
@@ -71,8 +71,8 @@ function getAllowedHosts(allowedHostsEnv?: string): string[] {
  * Examples:
  * - /v1/models
  * - /https/api.qnaigc.com/openai/v1/models
- * - /https/api.qnaigc.com/openai/v1/models/llama3-70b-8192/v1/messages
- * - /https/api.qnaigc.com/openai/v1/models/llama3-70b-8192/v1/messages/count_tokens
+ * - /https/api.qnaigc.com/openai/v1/models/deepseek-v3.1/v1/messages
+ * - /https/api.qnaigc.com/openai/v1/models/deepseek-v3.1/v1/messages/count_tokens
  */
 function parseDynamicRoute(url: string): ParsedRoute {
   // Remove leading slash if present

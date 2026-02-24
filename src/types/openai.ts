@@ -11,11 +11,18 @@ export type OpenAIContent =
 
 export type OpenAIContentPart =
     | OpenAITextPart
+    | OpenAIThinkingPart
     | OpenAIImagePart;
 
 export interface OpenAITextPart {
     type: "text";
     text: string;
+}
+
+export interface OpenAIThinkingPart {
+    type: "thinking";
+    thinking: string;
+    signature?: string;
 }
 
 export interface OpenAIImagePart {
@@ -155,6 +162,8 @@ export interface OpenAIStreamChunk {
         delta: {
             role?: OpenAIRole;
             content?: string;
+            thinking?: string;
+            signature?: string;
             tool_calls?: Array<{
                 index: number;
                 id?: string;

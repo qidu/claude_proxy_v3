@@ -14,9 +14,9 @@ A complete Claude API proxy new implementation that supports the full Claude API
 - **Dynamic Routing**: Route requests to any OpenAI-compatible API using URL patterns:
   - `/https/api.qnaigc.com/v1/models`
   - `/https/api.qnaigc.com/v1/messages`
-  - `/https/api.qnaigc.com/openai/v1/models/llama3-70b/v1/messages`
+  - `/https/api.qnaigc.com/openai/v1/models/deepseek-v3.1/v1/messages`
   - `/https/api.qnaigc.com/v1/messages/count_tokens`
-  - `/https/api.qnaigc.com/openai/v1/models/llama3-70b/v1/messages/count_tokens`
+  - `/https/api.qnaigc.com/openai/v1/models/deepseek-v3.1/v1/messages/count_tokens`
 
 
 - **TypeScript First**: Full type safety with comprehensive Claude and OpenAI type definitions
@@ -138,15 +138,15 @@ List available models from the target API.
 {
   "data": [
     {
-      "id": "llama3-70b-8192",
+      "id": "deepseek-v3.1",
       "type": "model",
       "created_at": "2024-01-01T00:00:00Z",
       "display_name": "Llama 3 70B"
     }
   ],
-  "first_id": "llama3-70b-8192",
+  "first_id": "deepseek-v3.1",
   "has_more": false,
-  "last_id": "llama3-70b-8192"
+  "last_id": "deepseek-v3.1"
 }
 ```
 
@@ -164,7 +164,7 @@ Send messages with optional thinking configuration.
 **Request with Thinking**:
 ```json
 {
-  "model": "llama3-70b-8192",
+  "model": "deepseek-v3.1",
   "messages": [
     {
       "role": "user",
@@ -191,7 +191,7 @@ Send messages with optional thinking configuration.
       "text": "The capital of France is Paris."
     }
   ],
-  "model": "llama3-70b-8192",
+  "model": "deepseek-v3.1",
   "stop_reason": "end_turn",
   "usage": {
     "input_tokens": 10,
@@ -214,7 +214,7 @@ Count tokens in messages, including thinking configuration.
 **Request**:
 ```json
 {
-  "model": "llama3-70b-8192",
+  "model": "deepseek-v3.1",
   "messages": [
     {
       "role": "user",
