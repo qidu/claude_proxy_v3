@@ -3,7 +3,7 @@
  * Converts Gemini SSE streaming format to Claude SSE streaming format
  */
 
-import { GeminiSSEEvent, GeminiContent } from '../types/gemini';
+import { GeminiSSEEvent, GeminiContent } from '../types/gemini.js';
 
 /**
  * State for streaming conversion

@@ -3,8 +3,8 @@
  * Converts Claude API requests to Gemini Interactions API format
  */
 
-import { ClaudeMessagesRequest, ClaudeContentBlock, ClaudeTool, ClaudeMessage, ClaudeTextBlock, ClaudeImageBlock, ClaudeToolUseBlock, ClaudeToolResultBlock, ThinkingBlock } from '../types/claude';
-import { GeminiInteractionRequest, GeminiTool, GeminiContent, GeminiGenerationConfig, GeminiInput } from '../types/gemini';
+import { ClaudeMessagesRequest, ClaudeContentBlock, ClaudeTool, ClaudeMessage, ClaudeTextBlock, ClaudeImageBlock, ClaudeToolUseBlock, ClaudeToolResultBlock, ThinkingBlock } from '../types/claude.js';
+import { GeminiInteractionRequest, GeminiTool, GeminiContent, GeminiGenerationConfig, GeminiInput } from '../types/gemini.js';
 
 /**
  * Convert Claude request to Gemini format
@@ -183,7 +183,7 @@ function convertClaudeContentToGemini(
                 const thinkingBlock = block as ThinkingBlock;
                 geminiContent.push({
                     type: 'thought',
-                    signature: thinkingBlock.text,
+                    signature: thinkingBlock.signature || '',
                 });
                 break;
 

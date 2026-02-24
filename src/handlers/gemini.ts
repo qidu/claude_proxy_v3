@@ -5,17 +5,17 @@
  * Supports both standard Claude API format and Gemini Interactions API
  */
 
-import { Env } from '../types/shared';
-import { Logger, createLogger } from '../utils/logger';
-import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude';
-import { GeminiInteractionRequest, GeminiInteractionResponse } from '../types/gemini';
-import { convertClaudeToGeminiRequest } from '../converters/claude-to-gemini';
-import { convertGeminiToClaudeResponse } from '../converters/gemini-to-claude';
-import { createGeminiStreamTransformer } from '../converters/gemini-streaming';
-import { convertClaudeToOpenAIRequest } from '../converters/claude-to-openai';
-import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude';
-import { createStreamTransformer } from '../converters/streaming';
-import { handleTargetApiError } from '../utils/errors';
+import { Env } from '../types/shared.js';
+import { Logger, createLogger } from '../utils/logger.js';
+import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.js';
+import { GeminiInteractionRequest, GeminiInteractionResponse } from '../types/gemini.js';
+import { convertClaudeToGeminiRequest } from '../converters/claude-to-gemini.js';
+import { convertGeminiToClaudeResponse } from '../converters/gemini-to-claude.js';
+import { createGeminiStreamTransformer } from '../converters/gemini-streaming.js';
+import { convertClaudeToOpenAIRequest } from '../converters/claude-to-openai.js';
+import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
+import { createStreamTransformer } from '../converters/streaming.js';
+import { handleTargetApiError } from '../utils/errors.js';
 
 /**
  * Gemini API configuration

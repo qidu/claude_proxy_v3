@@ -5,14 +5,14 @@
  * Also supports Gemini API bypass mode for direct Gemini API access.
  */
 
-import { Env } from './types/shared';
-import { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, isHostAllowed } from './utils/routing';
-import { createErrorResponse } from './utils/errors';
-import { createLogger } from './utils/logger';
-import { handleModelsRequest } from './handlers/models';
-import { handleTokenCountingRequest } from './handlers/token-counting';
-import { handleMessagesRequest } from './handlers/messages';
-import { handleGeminiRequest } from './handlers/gemini';
+import { Env } from './types/shared.js';
+import { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, isHostAllowed } from './utils/routing.js';
+import { createErrorResponse } from './utils/errors.js';
+import { createLogger } from './utils/logger.js';
+import { handleModelsRequest } from './handlers/models.js';
+import { handleTokenCountingRequest } from './handlers/token-counting.js';
+import { handleMessagesRequest } from './handlers/messages.js';
+import { handleGeminiRequest } from './handlers/gemini.js';
 
 /**
  * Generate a unique request ID
@@ -44,7 +44,7 @@ function getCorsOrigin(request: Request, env: Env): string {
   }
 
   // Parse allowed origins list
-  const allowedList = allowedOrigins.split(',').map(o => o.trim());
+  const allowedList = (allowedOrigins as string).split(',').map((o: string) => o.trim());
 
   // If wildcard is in the list, allow all
   if (allowedList.includes('*')) {
@@ -248,6 +248,31 @@ export default {
       // Skip favicon requests
       if (path === '/favicon.ico') {
         return new Response(null, { status: 204 });
+      }
+
+      // Health check endpoint (also for root path)
+      if (path === '/health' || path === '/') {
+        const healthUrl = env.FIXED_ROUTE_TARGET_URL 
+          ? `${env.FIXED_ROUTE_TARGET_URL}/v1/models`
+          : 'https://api.qnaigc.com/v1/models';
+        const healthAuth = extractAuthHeaders(request);
+        
+        try {
+          const healthResponse = await handleModelsRequest(request, healthUrl, healthAuth, requestId, logger);
+          if (healthResponse.ok) {
+            const data = await healthResponse.json();
+            return new Response(JSON.stringify({ status: 'ok', models: data.data?.length || 0 }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+        } catch {
+          // Fall through to error
+        }
+        return new Response(JSON.stringify({ error: 'No models Found.' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        });
       }
 
       // Request body size limit (10MB)
