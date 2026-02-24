@@ -8,9 +8,9 @@
  * - /https/api.qnaigc.com/openai/v1/models/deepseek-v3.1/v1/messages (Messages API)
  */
 
-import { validateBetaFeatures } from './beta-features';
+import { validateBetaFeatures } from './beta-features.js';
 
-import { validateBetaFeatures as validateBetaFeaturesUtil } from './beta-features';
+import { validateBetaFeatures as validateBetaFeaturesUtil } from './beta-features.js';
 
 export { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, isHostAllowed, getAllowedHosts };
 

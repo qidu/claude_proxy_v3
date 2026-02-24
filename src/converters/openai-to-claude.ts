@@ -2,8 +2,8 @@
  * Converter from OpenAI API format to Claude API format
  */
 
-import { ClaudeMessagesResponse, ClaudeContentBlock, ClaudeTokenCountingResponse, ClaudeModelsResponse, ClaudeModel } from '../types/claude';
-import { OpenAIResponse, OpenAITokenCountingResponse, OpenAIModelsResponse, OpenAIModel, OpenAITextPart } from '../types/openai';
+import { ClaudeMessagesResponse, ClaudeContentBlock, ClaudeTokenCountingResponse, ClaudeModelsResponse, ClaudeModel } from '../types/claude.js';
+import { OpenAIResponse, OpenAITokenCountingResponse, OpenAIModelsResponse, OpenAIModel, OpenAITextPart } from '../types/openai.js';
 
 /**
  * Convert OpenAI finish reason to Claude stop reason

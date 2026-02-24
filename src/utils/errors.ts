@@ -2,7 +2,7 @@
  * Error handling utilities for Claude Proxy v3
  */
 
-import { ClaudeErrorResponse } from '../types/shared';
+import { ClaudeErrorResponse } from '../types/shared.js';
 
 export class ClaudeProxyError extends Error {
   constructor(

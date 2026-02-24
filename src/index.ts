@@ -4,13 +4,13 @@
  * Handles dynamic routing to target APIs and converts between Claude and OpenAI formats.
  */
 
-import { Env } from './types/shared';
-import { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, isHostAllowed } from './utils/routing';
-import { createErrorResponse } from './utils/errors';
-import { createLogger } from './utils/logger';
-import { handleModelsRequest } from './handlers/models';
-import { handleTokenCountingRequest } from './handlers/token-counting';
-import { handleMessagesRequest } from './handlers/messages';
+import { Env } from './types/shared.js';
+import { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, isHostAllowed } from './utils/routing.js';
+import { createErrorResponse } from './utils/errors.js';
+import { createLogger } from './utils/logger.js';
+import { handleModelsRequest } from './handlers/models.js';
+import { handleTokenCountingRequest } from './handlers/token-counting.js';
+import { handleMessagesRequest } from './handlers/messages.js';
 
 /**
  * Generate a unique request ID

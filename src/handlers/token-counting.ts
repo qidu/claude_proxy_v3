@@ -10,19 +10,19 @@
  * - Uses tiktoken for accurate BPE token counting when LOCAL_TIKTOKEN=true
  */
 
-import { Env } from '../types/shared';
-import { Logger, createLogger } from '../utils/logger';
-import { ClaudeTokenCountingRequest, ClaudeTokenCountingResponse } from '../types/claude';
-import { OpenAIResponse, OpenAITokenCountingRequest } from '../types/openai';
-import { convertClaudeTokenCountingToOpenAI } from '../converters/claude-to-openai';
-import { validateClaudeTokenCountingRequest, validateAuthHeaders } from '../utils/validation';
-import { handleTargetApiError } from '../utils/errors';
+import { Env } from '../types/shared.js';
+import { Logger, createLogger } from '../utils/logger.js';
+import { ClaudeTokenCountingRequest, ClaudeTokenCountingResponse } from '../types/claude.js';
+import { OpenAIResponse, OpenAITokenCountingRequest } from '../types/openai.js';
+import { convertClaudeTokenCountingToOpenAI } from '../converters/claude-to-openai.js';
+import { validateClaudeTokenCountingRequest, validateAuthHeaders } from '../utils/validation.js';
+import { handleTargetApiError } from '../utils/errors.js';
 import {
   countClaudeRequestTokens,
   getLocalTokenCountingConfig,
   TokenCountingOptions,
   getTiktokenTokenizer,
-} from '../utils/token-counting';
+} from '../utils/token-counting.js';
 
 /**
  * Handle token counting API request

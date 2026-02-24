@@ -1,0 +1,19 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+
+# Development files
+.git
+.gitignore
+.claude
+tests
+docs
+*.md
+
+# Cloudflare
+.wrangler
+
+# Local scripts
+*.sh

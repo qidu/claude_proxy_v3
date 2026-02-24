@@ -4,7 +4,7 @@
  * Provides extended thinking support functionality
  */
 
-import { ThinkingConfigParam } from '../types/claude';
+import { ThinkingConfigParam } from '../types/claude.js';
 
 /**
  * Validate thinking budget tokens

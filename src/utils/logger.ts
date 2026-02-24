@@ -3,7 +3,7 @@
  * Log levels: debug=0, info=1, warn=2, error=3
  */
 
-import { Env } from '../types/shared';
+import { Env } from '../types/shared.js';
 
 export interface Logger {
   debug: (requestId: string, message: string, ...args: unknown[]) => void;
