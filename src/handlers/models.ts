@@ -4,12 +4,12 @@
  * Handles GET /v1/models endpoint
  */
 
-import { Logger } from '../utils/logger';
-import { ClaudeModelsResponse } from '../types/claude';
-import { OpenAIModelsResponse } from '../types/openai';
-import { convertOpenAIModelsToClaude } from '../converters/openai-to-claude';
-import { validateModelsRequestParams } from '../utils/validation';
-import { handleTargetApiError } from '../utils/errors';
+import { Logger } from '../utils/logger.js';
+import { ClaudeModelsResponse } from '../types/claude.js';
+import { OpenAIModelsResponse } from '../types/openai.js';
+import { convertOpenAIModelsToClaude } from '../converters/openai-to-claude.js';
+import { validateModelsRequestParams } from '../utils/validation.js';
+import { handleTargetApiError } from '../utils/errors.js';
 
 /**
  * Handle models API request

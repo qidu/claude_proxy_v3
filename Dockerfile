@@ -1,59 +1,40 @@
 # Build image
-FROM node:20 AS builder
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install dependencies
-COPY package*.json ./
-RUN sed -i 's/"dev": "wrangler dev",\r$//' package.json
-RUN sed -i 's/"dev": "wrangler deploy",\r$//' package.json
-#RUN sed -i 's/"tiktoken": "^1.0.15",\r$//' package.json
-RUN sed -i 's/"wrangler": "^4.60.0"\r$//' package.json
-RUN cat package.json
-RUN echo "nameserver 8.8.8.8" >> /etc/resolv.conf
-RUN echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-RUN npm install --no-audit --no-fund --loglevel verbose
+# Install build tools (no python needed - sharp/esbuild have prebuilt binaries)
+RUN apk add --no-cache make g++
 
-# Copy source
+# Copy package files first for better caching
+COPY package*.json ./
+
+# Modify package.json in a single RUN to reduce layers
+RUN sed -i 's/"dev": "wrangler dev",\r$//' package.json && \
+    sed -i 's/"dev": "wrangler deploy",\r$//' package.json && \
+    sed -i 's/"wrangler": "^4.60.0"\r$//' package.json
+
+# Install dependencies
+RUN npm ci --no-audit --no-fund
+
+# Copy source and build
 COPY tsconfig.json ./
 COPY tsconfig.server.json ./
 COPY wrangler.toml ./
 COPY src/ ./src/
-
-# Build server (CommonJS for Node.js)
-RUN ./node_modules/.bin/tsc -p tsconfig.server.json
-# RUN npm install -g pm2
 RUN npm run build
 
-# Production image
-FROM node:20
+# Production image - much smaller
+FROM node:20-alpine
 
 WORKDIR /app
 
-# Install production dependencies
-COPY package*.json ./
-RUN sed -i 's/"dev": "wrangler dev",\r$//' package.json
-RUN sed -i 's/"dev": "wrangler deploy",\r$//' package.json
-#RUN sed -i 's/"tiktoken": "^1.0.15",\r$//' package.json
-RUN sed -i 's/"wrangler": "^4.60.0"\r$//' package.json
-RUN cat package.json
-RUN echo "nameserver 8.8.8.8" >> /etc/resolv.conf
-RUN echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-RUN npm install --only=production --no-audit --no-fund --loglevel verbose
-
-# Copy built files
-COPY --from=builder /app/dist/ ./dist/
+# Copy only what's needed from builder
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
 COPY wrangler.toml ./
 
-#ENV
-ENV LOCAL_TOKEN_COUNTING true
-
-# Expose port
+ENV LOCAL_TOKEN_COUNTING=true
 EXPOSE 8788
 
-# Run the server
-# CMD ["pm2", "start", "src/server.ts", "-i", "8"]
-CMD ["npx", "tsx", "dist/server.js"]
-# CMD ["npm", "run", "start"]
-# CMD ["node", "dist/server.js"]
-# CMD ["npm", "run", "dev"]
+CMD ["node", "dist/server.js"]

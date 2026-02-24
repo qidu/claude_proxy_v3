@@ -2,8 +2,8 @@
  * Converter from Claude API format to OpenAI API format
  */
 
-import { ClaudeMessagesRequest, ClaudeTokenCountingRequest, ClaudeContent, ClaudeContentBlock, ClaudeTool, ThinkingConfigParam } from '../types/claude';
-import { OpenAIRequest, OpenAITokenCountingRequest, OpenAIMessage, OpenAIToolCall } from '../types/openai';
+import { ClaudeMessagesRequest, ClaudeTokenCountingRequest, ClaudeContent, ClaudeContentBlock, ClaudeTool, ThinkingConfigParam } from '../types/claude.js';
+import { OpenAIRequest, OpenAITokenCountingRequest, OpenAIMessage, OpenAIToolCall } from '../types/openai.js';
 
 /**
  * Recursively cleans a JSON Schema to make it compatible with target APIs like Google Gemini.

@@ -24,7 +24,8 @@ export type ClaudeContent =
 
 export interface ThinkingBlock {
     type: "thinking";
-    text: string;
+    thinking: string;
+    signature?: string;
 }
 
 export interface WebSearchToolResultBlock {

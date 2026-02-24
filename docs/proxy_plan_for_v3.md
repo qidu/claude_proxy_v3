@@ -108,7 +108,7 @@
                                                                                                                                                                         
  1. Implement POST /v1/messages/count_tokens                                                                                                                            
    - Create token-counting handler                                                                                                                                      
-   - Parse dynamic routing: /https/api.groq.com/openai/v1/models/llama3-70b-8192/v1/messages/count_tokens                                                               
+   - Parse dynamic routing: /https/api.groq.com/openai/v1/models/deepseek-v3.1/v1/messages/count_tokens                                                               
    - Convert Claude token counting request → OpenAI format                                                                                                              
    - Forward to target API's token counting endpoint                                                                                                                    
    - Convert response back to Claude format                                                                                                                             
@@ -175,7 +175,7 @@
                                                                                                                                                                         
  Token Counting API Implementation                                                                                                                                      
                                                                                                                                                                         
- URL Format: /https/api.groq.com/openai/v1/models/llama3-70b-8192/v1/messages/count_tokens                                                                              
+ URL Format: /https/api.groq.com/openai/v1/models/deepseek-v3.1/v1/messages/count_tokens                                                                              
                                                                                                                                                                         
  Conversion Strategy:                                                                                                                                                   
  - Claude token counting request → OpenAI token counting format                                                                                                         
@@ -215,7 +215,7 @@
  Manual Testing                                                                                                                                                         
                                                                                                                                                                         
  - Claude CLI integration                                                                                                                                               
- - Different provider APIs (OpenAI, Groq, Google Gemini)                                                                                                                
+ - Different provider APIs (OpenAI, Google Gemini)                                                                                                                
                                                                                                                                                                         
  Migration Considerations (Clean Break)                                                                                                                                 
                                                                                                                                                                         

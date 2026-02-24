@@ -2,8 +2,8 @@
  * Validation utilities for Claude Proxy v3
  */
 
-import { ClaudeMessagesRequest, ClaudeTokenCountingRequest, ClaudeContent, ThinkingConfigParam } from '../types/claude';
-import { ValidationError } from './errors';
+import { ClaudeMessagesRequest, ClaudeTokenCountingRequest, ClaudeContent, ThinkingConfigParam } from '../types/claude.js';
+import { ValidationError } from './errors.js';
 
 // Default max image block data size: 10MB
 const DEFAULT_IMAGE_DATA_MAX_SIZE = 10 * 1024 * 1024;

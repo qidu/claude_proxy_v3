@@ -4,15 +4,15 @@
  * Handles POST /v1/messages endpoint with extended thinking support
  */
 
-import { Env } from '../types/shared';
-import { Logger, createLogger } from '../utils/logger';
-import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude';
-import { OpenAIRequest, OpenAIResponse } from '../types/openai';
-import { convertClaudeToOpenAIRequest } from '../converters/claude-to-openai';
-import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude';
-import { createStreamTransformer } from '../converters/streaming';
-import { validateClaudeMessagesRequest, validateAuthHeaders } from '../utils/validation';
-import { handleTargetApiError } from '../utils/errors';
+import { Env } from '../types/shared.js';
+import { Logger, createLogger } from '../utils/logger.js';
+import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.js';
+import { OpenAIRequest, OpenAIResponse } from '../types/openai.js';
+import { convertClaudeToOpenAIRequest } from '../converters/claude-to-openai.js';
+import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
+import { createStreamTransformer } from '../converters/streaming.js';
+import { validateClaudeMessagesRequest, validateAuthHeaders } from '../utils/validation.js';
+import { handleTargetApiError } from '../utils/errors.js';
 
 /**
  * Handle messages API request
