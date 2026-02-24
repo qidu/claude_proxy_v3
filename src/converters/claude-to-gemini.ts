@@ -7,53 +7,66 @@ import { ClaudeMessagesRequest, ClaudeContentBlock, ClaudeTool, ClaudeMessage, C
 import { GeminiInteractionRequest, GeminiTool, GeminiContent, GeminiGenerationConfig, GeminiInput } from '../types/gemini.js';
 
 /**
- * Convert Claude request to Gemini format
+ * Convert Claude request to Gemini generateContent format
  */
 export function convertClaudeToGeminiRequest(
     claudeRequest: ClaudeMessagesRequest,
     modelId?: string
-): GeminiInteractionRequest {
-    const geminiRequest: GeminiInteractionRequest = {
-        model: modelId || claudeRequest.model,
-        input: convertClaudeMessagesToGeminiInput(claudeRequest.messages),
-        stream: claudeRequest.stream,
-        store: true,
+): Record<string, unknown> {
+    const contents: Array<{ role: string; parts: Array<Record<string, unknown>> }> = [];
+
+    for (const msg of claudeRequest.messages) {
+        const parts: Array<Record<string, unknown>> = [];
+        
+        if (typeof msg.content === 'string') {
+            parts.push({ text: msg.content });
+        } else if (Array.isArray(msg.content)) {
+            for (const block of msg.content) {
+                if (typeof block === 'string') {
+                    parts.push({ text: block });
+                } else if (block.type === 'text') {
+                    parts.push({ text: (block as ClaudeTextBlock).text });
+                } else if (block.type === 'image') {
+                    const imgBlock = block as ClaudeImageBlock;
+                    parts.push({
+                        inline_data: {
+                            mime_type: imgBlock.source.media_type || 'image/jpeg',
+                            data: imgBlock.source.data
+                        }
+                    });
+                }
+                // Skip other block types for now
+            }
+        }
+        
+        if (parts.length > 0) {
+            contents.push({
+                role: msg.role === 'user' ? 'user' : 'model',
+                parts
+            });
+        }
+    }
+
+    const request: Record<string, unknown> = {
+        contents
     };
 
-    // Convert system instruction (Claude uses 'system' field)
+    // Add system instruction
     if (claudeRequest.system) {
         if (typeof claudeRequest.system === 'string') {
-            geminiRequest.system_instruction = claudeRequest.system;
-        } else if (Array.isArray(claudeRequest.system)) {
-            geminiRequest.system_instruction = claudeRequest.system
-                .map(s => (s as ClaudeTextBlock).text || '')
-                .join('\n');
+            request.system_instruction = { parts: [{ text: claudeRequest.system }] };
         }
     }
 
-    // Convert tools
-    if (claudeRequest.tools && claudeRequest.tools.length > 0) {
-        geminiRequest.tools = claudeRequest.tools.map(convertClaudeToolToGemini);
+    // Add generation config
+    if (claudeRequest.temperature !== undefined || claudeRequest.max_tokens !== undefined) {
+        const config: Record<string, unknown> = {};
+        if (claudeRequest.temperature !== undefined) config.temperature = claudeRequest.temperature;
+        if (claudeRequest.max_tokens !== undefined) config.max_output_tokens = claudeRequest.max_tokens;
+        request.generation_config = config;
     }
 
-    // Convert generation config
-    if (claudeRequest.temperature !== undefined ||
-        claudeRequest.top_k !== undefined ||
-        claudeRequest.max_tokens !== undefined ||
-        claudeRequest.stop_sequences ||
-        claudeRequest.thinking) {
-        geminiRequest.generation_config = convertClaudeConfigToGemini(claudeRequest);
-    }
-
-    // Convert tool choice
-    if (claudeRequest.tool_choice) {
-        if (!geminiRequest.generation_config) {
-            geminiRequest.generation_config = {};
-        }
-        geminiRequest.generation_config.tool_choice = convertClaudeToolChoiceToGemini(claudeRequest.tool_choice);
-    }
-
-    return geminiRequest;
+    return request;
 }
 
 /**

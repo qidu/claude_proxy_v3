@@ -11,6 +11,7 @@ import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.j
 import { GeminiInteractionRequest, GeminiInteractionResponse } from '../types/gemini.js';
 import { convertClaudeToGeminiRequest } from '../converters/claude-to-gemini.js';
 import { convertGeminiToClaudeResponse } from '../converters/gemini-to-claude.js';
+import { convertGeminiGenerateContentToClaude } from '../converters/gemini-to-claude.js';
 import { createGeminiStreamTransformer } from '../converters/gemini-streaming.js';
 import { convertClaudeToOpenAIRequest } from '../converters/claude-to-openai.js';
 import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
@@ -102,29 +103,41 @@ async function handleGeminiInteractionsRequest(
     const requestBody = await request.json() as Record<string, unknown>;
 
     // Determine if this is a native Gemini request or needs conversion from Claude format
-    let geminiRequest: GeminiInteractionRequest;
+    let geminiRequest: Record<string, unknown>;
     let isStreaming: boolean;
+    let effectiveModelId = modelId;
 
     if (isNativeGeminiRequest(requestBody)) {
         // Native Gemini format - use directly
         activeLogger.debug(requestId, 'Using native Gemini request format');
-        geminiRequest = requestBody as unknown as GeminiInteractionRequest;
-        isStreaming = geminiRequest.stream === true;
+        geminiRequest = requestBody;
+        isStreaming = requestBody.stream === true;
+        effectiveModelId = effectiveModelId || (requestBody.model as string);
+        
+        // Convert native format (input: string) to generateContent format (contents: [...])
+        if (typeof geminiRequest.input === 'string') {
+            geminiRequest = {
+                model: effectiveModelId || geminiRequest.model || 'gemini-pro',
+                contents: [{ role: 'user', parts: [{ text: geminiRequest.input }] }],
+                stream: isStreaming,
+            };
+        }
     } else {
-        // Claude format - convert to Gemini
+        // Claude format - convert to Gemini generateContent format
         activeLogger.debug(requestId, 'Converting Claude request to Gemini format');
         const claudeRequest = requestBody as unknown as ClaudeMessagesRequest;
         geminiRequest = convertClaudeToGeminiRequest(claudeRequest, modelId);
         isStreaming = claudeRequest.stream === true;
+        effectiveModelId = effectiveModelId || claudeRequest.model;
     }
 
-    // Determine the target endpoint - append to existing targetUrl since parseFixedRoute already set it up
-    const endpoint = determineGeminiEndpoint(request, geminiRequest);
+    // Determine the target endpoint
+    const endpoint = determineGeminiEndpoint(request, geminiRequest, effectiveModelId);
     const fullTargetUrl = endpoint ? `${targetUrl}${endpoint}` : targetUrl;
 
     // Log request info
     activeLogger.debug(requestId, `Gemini upstream request url: ${fullTargetUrl}`);
-    activeLogger.debug(requestId, `Gemini model: ${geminiRequest.model}`);
+    activeLogger.debug(requestId, `Gemini model: ${effectiveModelId || 'gemini-pro'}`);
     activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
 
     // Prepare headers for Gemini API
@@ -135,7 +148,7 @@ async function handleGeminiInteractionsRequest(
     // Add API key from headers or environment
     const apiKey = extractGeminiApiKey(request, authHeaders, env, 'interactions');
     if (apiKey) {
-        geminiHeaders['x-goog-api-key'] = apiKey;
+        geminiHeaders['Authorization'] = `Bearer ${apiKey}`;
     }
 
     // Forward other auth headers
@@ -157,11 +170,11 @@ async function handleGeminiInteractionsRequest(
 
         // Handle streaming response
         if (isStreaming) {
-            return handleGeminiStreamingResponse(response, geminiRequest.model || 'gemini-pro', requestId, activeLogger, 'interactions');
+            return handleGeminiStreamingResponse(response, effectiveModelId || 'gemini-pro', requestId, activeLogger, 'interactions');
         }
 
         // Handle non-streaming response
-        return handleGeminiNonStreamingResponse(response, geminiRequest.model || 'gemini-pro', requestId, activeLogger, 'interactions');
+        return handleGeminiNonStreamingResponse(response, effectiveModelId || 'gemini-pro', requestId, activeLogger, 'interactions');
 
     } catch (error) {
         activeLogger.error(requestId, `Gemini API error: ${(error as Error).message}`);
@@ -242,40 +255,10 @@ async function handleGeminiOpenAICompatibleRequest(
 /**
  * Determine the Gemini endpoint based on request
  */
-function determineGeminiEndpoint(request: Request, geminiRequest: GeminiInteractionRequest): string {
-    const url = new URL(request.url);
-    const path = url.pathname;
-
-    // Check for specific endpoints
-    if (path.endsWith('/cancel')) {
-        // Cancel interaction
-        const interactionId = extractInteractionId(path);
-        // Return just the interaction ID suffix (parseFixedRoute already handles /interactions)
-        return `/${interactionId}/cancel`;
-    }
-
-    if (path.match(/\/interactions\/[a-zA-Z0-9_-]+$/)) {
-        // Get interaction
-        const interactionId = extractInteractionId(path);
-        const queryParams = new URLSearchParams();
-        if (url.searchParams.get('stream') === 'true') {
-            queryParams.set('stream', 'true');
-        }
-        const query = queryParams.toString();
-        // Return just the interaction ID suffix (parseFixedRoute already handles /interactions)
-        return `/${interactionId}${query ? '?' + query : ''}`;
-    }
-
-    if (request.method === 'DELETE') {
-        // Delete interaction
-        const interactionId = extractInteractionId(path);
-        // Return just the interaction ID suffix (parseFixedRoute already handles /interactions)
-        return `/${interactionId}`;
-    }
-
-    // Default: create interaction
-    // Return empty string since parseFixedRoute already includes /interactions
-    return '';
+function determineGeminiEndpoint(request: Request, geminiRequest: Record<string, unknown>, modelId?: string): string {
+    // Default: generateContent endpoint
+    const model = modelId || (geminiRequest.model as string) || 'gemini-pro';
+    return `/${model}:generateContent`;
 }
 
 /**
@@ -370,15 +353,11 @@ async function handleGeminiNonStreamingResponse(
                 },
             });
         } else {
-            // Parse native Gemini response
-            const geminiResponse: GeminiInteractionResponse = JSON.parse(responseText);
-
+            // Parse native Gemini generateContent response
+            const geminiResponse = JSON.parse(responseText);
+            
             // Convert to Claude format
-            const claudeResponse: ClaudeMessagesResponse = convertGeminiToClaudeResponse(
-                geminiResponse,
-                model,
-                requestId
-            );
+            const claudeResponse = convertGeminiGenerateContentToClaude(geminiResponse, model, requestId);
 
             return new Response(JSON.stringify(claudeResponse), {
                 status: 200,

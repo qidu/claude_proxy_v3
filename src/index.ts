@@ -150,13 +150,13 @@ function parseFixedRoute(path: string, env: Env): { targetUrl: string; targetEnd
     const endpointType = env.GEMINI_ENDPOINT_TYPE || 'openai-compatible';
 
     if (endpointType === 'interactions') {
-      // Gemini Interactions API
+      // Gemini GenerateContent API
       const config = {
         baseUrl: env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
         apiVersion: env.GEMINI_API_VERSION || 'v1beta',
       };
       return {
-        targetUrl: `${config.baseUrl}/${config.apiVersion}/interactions`,
+        targetUrl: `${config.baseUrl}/${config.apiVersion}/models`,
         targetEndpoint: 'v1/interactions',
         endpointType: 'interactions',
       };

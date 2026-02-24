@@ -164,3 +164,69 @@ function mapGeminiStatusToStopReason(
             return null;
     }
 }
+
+/**
+ * Convert Gemini generateContent response to Claude format
+ */
+export function convertGeminiGenerateContentToClaude(
+    geminiResponse: Record<string, unknown>,
+    model: string,
+    requestId: string
+): ClaudeMessagesResponse {
+    const candidates = geminiResponse.candidates as Array<Record<string, unknown>> | undefined;
+    const usageMetadata = geminiResponse.usageMetadata as Record<string, number> | undefined;
+    
+    let content: ClaudeContentBlock[] = [];
+    let stopReason: 'end_turn' | 'max_tokens' | 'tool_use' | 'stop_sequence' | 'timeout' | null = null;
+    
+    if (candidates && candidates.length > 0) {
+        const firstCandidate = candidates[0];
+        const candidateContent = firstCandidate.content as Record<string, unknown> | undefined;
+        const finishReason = firstCandidate.finishReason as string | undefined;
+        
+        if (candidateContent) {
+            const parts = candidateContent.parts as Array<Record<string, unknown>> | undefined;
+            if (parts && parts.length > 0) {
+                const textParts: string[] = [];
+                for (const part of parts) {
+                    if (part.text) {
+                        textParts.push(part.text as string);
+                    }
+                }
+                if (textParts.length > 0) {
+                    content = [{
+                        type: 'text',
+                        text: textParts.join('')
+                    }];
+                }
+            }
+        }
+        
+        // Map finish reason
+        switch (finishReason) {
+            case 'STOP':
+                stopReason = 'end_turn';
+                break;
+            case 'MAX_TOKENS':
+                stopReason = 'max_tokens';
+                break;
+            case 'SAFETY':
+            case 'RECITATION':
+                stopReason = 'stop_sequence';
+                break;
+        }
+    }
+    
+    return {
+        id: `msg_${Date.now()}_${requestId.slice(-8)}`,
+        type: 'message',
+        role: 'assistant',
+        model: model,
+        content: content,
+        stop_reason: stopReason,
+        usage: {
+            input_tokens: usageMetadata?.promptTokenCount || 0,
+            output_tokens: usageMetadata?.candidatesTokenCount || 0,
+        },
+    };
+}

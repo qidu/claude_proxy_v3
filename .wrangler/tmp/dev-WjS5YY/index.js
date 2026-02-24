@@ -1927,339 +1927,108 @@ init_modules_watch_stub();
 // src/converters/claude-to-gemini.ts
 init_modules_watch_stub();
 function convertClaudeToGeminiRequest(claudeRequest, modelId) {
-  const geminiRequest = {
-    model: modelId || claudeRequest.model,
-    input: convertClaudeMessagesToGeminiInput(claudeRequest.messages),
-    stream: claudeRequest.stream,
-    store: true
+  const contents = [];
+  for (const msg of claudeRequest.messages) {
+    const parts = [];
+    if (typeof msg.content === "string") {
+      parts.push({ text: msg.content });
+    } else if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (typeof block === "string") {
+          parts.push({ text: block });
+        } else if (block.type === "text") {
+          parts.push({ text: block.text });
+        } else if (block.type === "image") {
+          const imgBlock = block;
+          parts.push({
+            inline_data: {
+              mime_type: imgBlock.source.media_type || "image/jpeg",
+              data: imgBlock.source.data
+            }
+          });
+        }
+      }
+    }
+    if (parts.length > 0) {
+      contents.push({
+        role: msg.role === "user" ? "user" : "model",
+        parts
+      });
+    }
+  }
+  const request = {
+    contents
   };
   if (claudeRequest.system) {
     if (typeof claudeRequest.system === "string") {
-      geminiRequest.system_instruction = claudeRequest.system;
-    } else if (Array.isArray(claudeRequest.system)) {
-      geminiRequest.system_instruction = claudeRequest.system.map((s) => s.text || "").join("\n");
+      request.system_instruction = { parts: [{ text: claudeRequest.system }] };
     }
   }
-  if (claudeRequest.tools && claudeRequest.tools.length > 0) {
-    geminiRequest.tools = claudeRequest.tools.map(convertClaudeToolToGemini);
+  if (claudeRequest.temperature !== void 0 || claudeRequest.max_tokens !== void 0) {
+    const config = {};
+    if (claudeRequest.temperature !== void 0) config.temperature = claudeRequest.temperature;
+    if (claudeRequest.max_tokens !== void 0) config.max_output_tokens = claudeRequest.max_tokens;
+    request.generation_config = config;
   }
-  if (claudeRequest.temperature !== void 0 || claudeRequest.top_k !== void 0 || claudeRequest.max_tokens !== void 0 || claudeRequest.stop_sequences || claudeRequest.thinking) {
-    geminiRequest.generation_config = convertClaudeConfigToGemini(claudeRequest);
-  }
-  if (claudeRequest.tool_choice) {
-    if (!geminiRequest.generation_config) {
-      geminiRequest.generation_config = {};
-    }
-    geminiRequest.generation_config.tool_choice = convertClaudeToolChoiceToGemini(claudeRequest.tool_choice);
-  }
-  return geminiRequest;
+  return request;
 }
 __name(convertClaudeToGeminiRequest, "convertClaudeToGeminiRequest");
-function convertClaudeMessagesToGeminiInput(messages) {
-  if (messages.length === 0) {
-    return "";
-  }
-  const isTextOnly = messages.every((msg) => {
-    if (typeof msg.content === "string") return true;
-    if (Array.isArray(msg.content)) {
-      return msg.content.every(
-        (block) => typeof block === "string" || block.type === "text"
-      );
-    }
-    return typeof msg.content === "string";
-  });
-  if (isTextOnly) {
-    return messages.map((msg) => {
-      const content = typeof msg.content === "string" ? msg.content : Array.isArray(msg.content) ? msg.content.map(
-        (block) => typeof block === "string" ? block : block.text
-      ).join("") : "";
-      const role = msg.role === "user" ? "User" : "Model";
-      return `${role}: ${content}`;
-    }).join("\n\n");
-  }
-  const turns = [];
-  for (const msg of messages) {
-    const role = msg.role === "user" ? "user" : "model";
-    const content = convertClaudeContentToGemini(msg.content);
-    if (typeof content === "string") {
-      turns.push({ role, content: [{ type: "text", text: content }] });
-    } else if (Array.isArray(content)) {
-      turns.push({ role, content });
-    }
-  }
-  return turns;
-}
-__name(convertClaudeMessagesToGeminiInput, "convertClaudeMessagesToGeminiInput");
-function convertClaudeContentToGemini(content) {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    content = [content];
-  }
-  const geminiContent = [];
-  for (const block of content) {
-    if (typeof block === "string") {
-      geminiContent.push({ type: "text", text: block });
-      continue;
-    }
-    switch (block.type) {
-      case "text":
-        const textBlock = block;
-        geminiContent.push({
-          type: "text",
-          text: textBlock.text || "",
-          annotations: textBlock.citations?.map((c) => ({
-            start_index: c.start_char_index,
-            end_index: c.end_char_index,
-            source: c.document_title || ""
-          }))
-        });
-        break;
-      case "image":
-        const imgBlock = block;
-        if (imgBlock.source.data) {
-          geminiContent.push({
-            type: "image",
-            data: imgBlock.source.data,
-            mime_type: mapClaudeImageMimeToGemini(imgBlock.source.media_type)
-          });
-        }
-        break;
-      case "tool_use":
-        const toolUseBlock = block;
-        geminiContent.push({
-          type: "function_call",
-          name: toolUseBlock.name,
-          arguments: toolUseBlock.input,
-          id: toolUseBlock.id
-        });
-        break;
-      case "tool_result":
-        const toolResultBlock = block;
-        geminiContent.push({
-          type: "function_result",
-          name: "",
-          result: toolResultBlock.content,
-          is_error: false,
-          call_id: toolResultBlock.tool_use_id
-        });
-        break;
-      case "thinking":
-        const thinkingBlock = block;
-        geminiContent.push({
-          type: "thought",
-          signature: thinkingBlock.signature || ""
-        });
-        break;
-      case "document":
-        geminiContent.push({
-          type: "text",
-          text: "[Document]"
-        });
-        break;
-      default:
-        geminiContent.push({
-          type: "text",
-          text: JSON.stringify(block)
-        });
-    }
-  }
-  return geminiContent;
-}
-__name(convertClaudeContentToGemini, "convertClaudeContentToGemini");
-function convertClaudeToolToGemini(tool) {
-  return {
-    type: "function",
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.input_schema
-  };
-}
-__name(convertClaudeToolToGemini, "convertClaudeToolToGemini");
-function convertClaudeConfigToGemini(claudeRequest) {
-  const config = {};
-  if (claudeRequest.temperature !== void 0) {
-    config.temperature = claudeRequest.temperature;
-  }
-  if (claudeRequest.top_k !== void 0) {
-    config.top_p = claudeRequest.top_k / 100;
-  }
-  if (claudeRequest.max_tokens) {
-    config.max_output_tokens = claudeRequest.max_tokens;
-  }
-  if (claudeRequest.stop_sequences) {
-    config.stop_sequences = claudeRequest.stop_sequences;
-  }
-  if (claudeRequest.thinking && claudeRequest.thinking.type === "enabled") {
-    config.thinking_level = "medium";
-    config.max_output_tokens = claudeRequest.thinking.budget_tokens || config.max_output_tokens;
-  }
-  return config;
-}
-__name(convertClaudeConfigToGemini, "convertClaudeConfigToGemini");
-function convertClaudeToolChoiceToGemini(toolChoice) {
-  if (toolChoice.type === "auto") {
-    return { type: "auto" };
-  }
-  if (toolChoice.type === "none") {
-    return { type: "none" };
-  }
-  if (toolChoice.type === "any") {
-    return { type: "any" };
-  }
-  if (toolChoice.type === "tool" && toolChoice.name) {
-    return { type: "function", function: { name: toolChoice.name } };
-  }
-  return { type: "auto" };
-}
-__name(convertClaudeToolChoiceToGemini, "convertClaudeToolChoiceToGemini");
-function mapClaudeImageMimeToGemini(mimeType) {
-  switch (mimeType) {
-    case "image/png":
-      return "image/png";
-    case "image/jpeg":
-    case "image/jpg":
-      return "image/jpeg";
-    case "image/webp":
-      return "image/webp";
-    case "image/heic":
-      return "image/heic";
-    case "image/heif":
-      return "image/heif";
-    default:
-      return "image/png";
-  }
-}
-__name(mapClaudeImageMimeToGemini, "mapClaudeImageMimeToGemini");
 
 // src/converters/gemini-to-claude.ts
 init_modules_watch_stub();
-function convertGeminiToClaudeResponse(geminiResponse, model, requestId) {
-  const role = geminiResponse.role === "model" ? "assistant" : geminiResponse.role;
-  return {
-    id: geminiResponse.id,
-    type: "message",
-    role,
-    model,
-    content: convertGeminiContentToClaude(geminiResponse.outputs),
-    stop_reason: mapGeminiStatusToStopReason(geminiResponse.status),
-    usage: convertGeminiUsageToClaude(geminiResponse.usage)
-  };
-}
-__name(convertGeminiToClaudeResponse, "convertGeminiToClaudeResponse");
-function convertGeminiContentToClaude(outputs) {
-  if (!outputs || outputs.length === 0) {
-    return [];
-  }
-  const claudeBlocks = [];
-  for (const output of outputs) {
-    switch (output.type) {
-      case "text":
-        const textContent = output;
-        const textBlock = {
-          type: "text",
-          text: textContent.text || ""
-        };
-        if (textContent.annotations && textContent.annotations.length > 0) {
-          textBlock.citations = textContent.annotations.map((ann) => ({
-            type: "char_location",
-            cited_text: "",
-            document_index: 0,
-            document_title: ann.source,
-            start_char_index: ann.start_index,
-            end_char_index: ann.end_index
-          }));
-        }
-        claudeBlocks.push(textBlock);
-        break;
-      case "image":
-        const imageContent = output;
-        claudeBlocks.push({
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: imageContent.mime_type || "image/png",
-            data: imageContent.data
+function convertGeminiGenerateContentToClaude(geminiResponse, model, requestId) {
+  const candidates = geminiResponse.candidates;
+  const usageMetadata = geminiResponse.usageMetadata;
+  let content = [];
+  let stopReason = null;
+  if (candidates && candidates.length > 0) {
+    const firstCandidate = candidates[0];
+    const candidateContent = firstCandidate.content;
+    const finishReason = firstCandidate.finishReason;
+    if (candidateContent) {
+      const parts = candidateContent.parts;
+      if (parts && parts.length > 0) {
+        const textParts = [];
+        for (const part of parts) {
+          if (part.text) {
+            textParts.push(part.text);
           }
-        });
-        break;
-      case "function_call":
-        const callContent = output;
-        const toolUseBlock = {
-          type: "tool_use",
-          id: callContent.id || `tool-${Date.now()}`,
-          name: callContent.name,
-          input: callContent.arguments || {}
-        };
-        claudeBlocks.push(toolUseBlock);
-        break;
-      case "function_result":
-        const resultContent = output;
-        const toolResultBlock = {
-          type: "tool_result",
-          tool_use_id: resultContent.call_id || "",
-          content: resultContent.result
-        };
-        if (resultContent.is_error) {
-          toolResultBlock.content = String(resultContent.result);
         }
-        claudeBlocks.push(toolResultBlock);
+        if (textParts.length > 0) {
+          content = [{
+            type: "text",
+            text: textParts.join("")
+          }];
+        }
+      }
+    }
+    switch (finishReason) {
+      case "STOP":
+        stopReason = "end_turn";
         break;
-      case "thought":
-        const thoughtContent = output;
-        claudeBlocks.push({
-          type: "thinking",
-          thinking: thoughtContent.signature || thoughtContent.summary?.content?.text || "",
-          signature: thoughtContent.signature
-        });
+      case "MAX_TOKENS":
+        stopReason = "max_tokens";
         break;
-      case "code_execution_result":
-        const codeResult = output;
-        claudeBlocks.push({
-          type: "text",
-          text: codeResult.result || ""
-        });
+      case "SAFETY":
+      case "RECITATION":
+        stopReason = "stop_sequence";
         break;
-      default:
-        claudeBlocks.push({
-          type: "text",
-          text: JSON.stringify(output)
-        });
     }
   }
-  return claudeBlocks;
-}
-__name(convertGeminiContentToClaude, "convertGeminiContentToClaude");
-function convertGeminiUsageToClaude(usage) {
-  if (!usage) {
-    return { input_tokens: 0, output_tokens: 0 };
-  }
   return {
-    input_tokens: usage.total_input_tokens,
-    output_tokens: usage.total_output_tokens
+    id: `msg_${Date.now()}_${requestId.slice(-8)}`,
+    type: "message",
+    role: "assistant",
+    model,
+    content,
+    stop_reason: stopReason,
+    usage: {
+      input_tokens: usageMetadata?.promptTokenCount || 0,
+      output_tokens: usageMetadata?.candidatesTokenCount || 0
+    }
   };
 }
-__name(convertGeminiUsageToClaude, "convertGeminiUsageToClaude");
-function mapGeminiStatusToStopReason(status) {
-  switch (status) {
-    case "completed":
-      return "end_turn";
-    case "in_progress":
-      return null;
-    // Still generating
-    case "requires_action":
-      return "tool_use";
-    // Tool call requested
-    case "failed":
-      return null;
-    case "cancelled":
-      return "stop_sequence";
-    default:
-      return null;
-  }
-}
-__name(mapGeminiStatusToStopReason, "mapGeminiStatusToStopReason");
+__name(convertGeminiGenerateContentToClaude, "convertGeminiGenerateContentToClaude");
 
 // src/converters/gemini-streaming.ts
 init_modules_watch_stub();
@@ -2534,27 +2303,37 @@ async function handleGeminiInteractionsRequest(request, targetUrl, authHeaders, 
   const requestBody = await request.json();
   let geminiRequest;
   let isStreaming;
+  let effectiveModelId = modelId;
   if (isNativeGeminiRequest(requestBody)) {
     activeLogger.debug(requestId, "Using native Gemini request format");
     geminiRequest = requestBody;
-    isStreaming = geminiRequest.stream === true;
+    isStreaming = requestBody.stream === true;
+    effectiveModelId = effectiveModelId || requestBody.model;
+    if (typeof geminiRequest.input === "string") {
+      geminiRequest = {
+        model: effectiveModelId || geminiRequest.model || "gemini-pro",
+        contents: [{ role: "user", parts: [{ text: geminiRequest.input }] }],
+        stream: isStreaming
+      };
+    }
   } else {
     activeLogger.debug(requestId, "Converting Claude request to Gemini format");
     const claudeRequest = requestBody;
     geminiRequest = convertClaudeToGeminiRequest(claudeRequest, modelId);
     isStreaming = claudeRequest.stream === true;
+    effectiveModelId = effectiveModelId || claudeRequest.model;
   }
-  const endpoint = determineGeminiEndpoint(request, geminiRequest);
+  const endpoint = determineGeminiEndpoint(request, geminiRequest, effectiveModelId);
   const fullTargetUrl = endpoint ? `${targetUrl}${endpoint}` : targetUrl;
   activeLogger.debug(requestId, `Gemini upstream request url: ${fullTargetUrl}`);
-  activeLogger.debug(requestId, `Gemini model: ${geminiRequest.model}`);
+  activeLogger.debug(requestId, `Gemini model: ${effectiveModelId || "gemini-pro"}`);
   activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
   const geminiHeaders = {
     "Content-Type": "application/json"
   };
   const apiKey = extractGeminiApiKey(request, authHeaders, env, "interactions");
   if (apiKey) {
-    geminiHeaders["x-goog-api-key"] = apiKey;
+    geminiHeaders["Authorization"] = `Bearer ${apiKey}`;
   }
   if (authHeaders["Authorization"]) {
   }
@@ -2568,9 +2347,9 @@ async function handleGeminiInteractionsRequest(request, targetUrl, authHeaders, 
       handleTargetApiError(response, "Gemini API");
     }
     if (isStreaming) {
-      return handleGeminiStreamingResponse(response, geminiRequest.model || "gemini-pro", requestId, activeLogger, "interactions");
+      return handleGeminiStreamingResponse(response, effectiveModelId || "gemini-pro", requestId, activeLogger, "interactions");
     }
-    return handleGeminiNonStreamingResponse(response, geminiRequest.model || "gemini-pro", requestId, activeLogger, "interactions");
+    return handleGeminiNonStreamingResponse(response, effectiveModelId || "gemini-pro", requestId, activeLogger, "interactions");
   } catch (error) {
     activeLogger.error(requestId, `Gemini API error: ${error.message}`);
     throw error;
@@ -2616,38 +2395,11 @@ async function handleGeminiOpenAICompatibleRequest(request, targetUrl, authHeade
   }
 }
 __name(handleGeminiOpenAICompatibleRequest, "handleGeminiOpenAICompatibleRequest");
-function determineGeminiEndpoint(request, geminiRequest) {
-  const url = new URL(request.url);
-  const path = url.pathname;
-  if (path.endsWith("/cancel")) {
-    const interactionId = extractInteractionId(path);
-    return `/${interactionId}/cancel`;
-  }
-  if (path.match(/\/interactions\/[a-zA-Z0-9_-]+$/)) {
-    const interactionId = extractInteractionId(path);
-    const queryParams = new URLSearchParams();
-    if (url.searchParams.get("stream") === "true") {
-      queryParams.set("stream", "true");
-    }
-    const query = queryParams.toString();
-    return `/${interactionId}${query ? "?" + query : ""}`;
-  }
-  if (request.method === "DELETE") {
-    const interactionId = extractInteractionId(path);
-    return `/${interactionId}`;
-  }
-  return "";
+function determineGeminiEndpoint(request, geminiRequest, modelId) {
+  const model = modelId || geminiRequest.model || "gemini-pro";
+  return `/${model}:generateContent`;
 }
 __name(determineGeminiEndpoint, "determineGeminiEndpoint");
-function extractInteractionId(path) {
-  const parts = path.split("/");
-  const interactionIndex = parts.findIndex((p) => p === "interactions");
-  if (interactionIndex >= 0 && parts[interactionIndex + 1]) {
-    return parts[interactionIndex + 1];
-  }
-  throw new Error("Invalid interaction path");
-}
-__name(extractInteractionId, "extractInteractionId");
 function extractGeminiApiKey(request, authHeaders, env, endpointType = "interactions") {
   if (endpointType === "openai-compatible") {
     const authHeader = authHeaders["Authorization"];
@@ -2701,11 +2453,7 @@ async function handleGeminiNonStreamingResponse(response, model, requestId, logg
       });
     } else {
       const geminiResponse = JSON.parse(responseText);
-      const claudeResponse = convertGeminiToClaudeResponse(
-        geminiResponse,
-        model,
-        requestId
-      );
+      const claudeResponse = convertGeminiGenerateContentToClaude(geminiResponse, model, requestId);
       return new Response(JSON.stringify(claudeResponse), {
         status: 200,
         headers: {
@@ -2865,7 +2613,7 @@ function parseFixedRoute(path, env) {
         apiVersion: env.GEMINI_API_VERSION || "v1beta"
       };
       return {
-        targetUrl: `${config.baseUrl}/${config.apiVersion}/interactions`,
+        targetUrl: `${config.baseUrl}/${config.apiVersion}/models`,
         targetEndpoint: "v1/interactions",
         endpointType: "interactions"
       };

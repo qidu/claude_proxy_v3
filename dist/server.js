@@ -15,6 +15,11 @@ const env = {
     FIXED_ROUTE_TARGET_URL: process.env.FIXED_ROUTE_TARGET_URL || 'https://api.qnaigc.com',
     FIXED_ROUTE_PATH_PREFIX: process.env.FIXED_ROUTE_PATH_PREFIX || '',
     LOG_LEVEL: process.env.LOG_LEVEL || 'info',
+    GEMINI_ENDPOINT_TYPE: process.env.GEMINI_ENDPOINT_TYPE || 'openai-compatible',
+    GEMINI_BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
+    GEMINI_API_VERSION: process.env.GEMINI_API_VERSION || 'v1beta',
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    GEMINI_BYPASS_ENABLED: process.env.GEMINI_BYPASS_ENABLED,
 };
 const server = createServer(async (req, res) => {
     try {
