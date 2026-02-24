@@ -168,6 +168,31 @@ export default {
         return new Response(null, { status: 204 });
       }
 
+      // Health check endpoint (also for root path)
+      if (path === '/health' || path === '/') {
+        const healthUrl = env.FIXED_ROUTE_TARGET_URL 
+          ? `${env.FIXED_ROUTE_TARGET_URL}/v1/models`
+          : 'https://api.qnaigc.com/v1/models';
+        const healthAuth = extractAuthHeaders(request);
+        
+        try {
+          const healthResponse = await handleModelsRequest(request, healthUrl, healthAuth, requestId, logger);
+          if (healthResponse.ok) {
+            const data = await healthResponse.json();
+            return new Response(JSON.stringify({ status: 'ok', models: data.data?.length || 0 }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+        } catch {
+          // Fall through to error
+        }
+        return new Response(JSON.stringify({ error: 'No models Found.' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
       // Request body size limit (10MB)
       const contentLength = request.headers.get('content-length');
       if (contentLength) {
