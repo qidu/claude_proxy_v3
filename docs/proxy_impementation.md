@@ -10,7 +10,7 @@
 
   1. URL Parsing and Route Extraction
 
-  When a request like POST /https/api.groq.com/openai/v1/models/llama3-70b-8192/v1/messages arrives:
+  When a request like POST /https/api.groq.com/openai/v1/models/deepseek-v3.1/v1/messages arrives:
 
   // src/index.ts:68-78
   const url = new URL(request.url);
@@ -19,11 +19,11 @@
 
   The parseDynamicRoute() function (src/utils/routing.ts:35-143) performs complex parsing:
 
-  For URL: /https/api.groq.com/openai/v1/models/llama3-70b-8192/v1/messages
+  For URL: /https/api.groq.com/openai/v1/models/deepseek-v3.1/v1/messages
 
   // Debug output shows parsing:
-  [DEBUG] parseDynamicRoute called with url: /https/api.groq.com/openai/v1/models/llama3-70b-8192/v1/messages
-  [DEBUG] Parts: ["https","api.groq.com","openai","v1","models","llama3-70b-8192","v1","messages"]
+  [DEBUG] parseDynamicRoute called with url: /https/api.groq.com/openai/v1/models/deepseek-v3.1/v1/messages
+  [DEBUG] Parts: ["https","api.groq.com","openai","v1","models","deepseek-v3.1","v1","messages"]
 
   Parsing Logic:
   1. Protocol extraction: parts[0] = "https" (must be http or https)
@@ -37,7 +37,7 @@
       targetPathPrefix: "/openai/v1/models"
     },
     claudeEndpoint: "v1/messages",
-    modelId: "llama3-70b-8192"
+    modelId: "deepseek-v3.1"
   }
 
   2. Handler Determination
@@ -56,8 +56,8 @@
   const targetUrl = buildTargetUrl(targetConfig, claudeEndpoint, modelId);
 
   buildTargetUrl() (src/utils/routing.ts:148-157) concatenates:
-  https://api.groq.com + /openai/v1/models + /llama3-70b-8192 + /v1/messages
-  = https://api.groq.com/openai/v1/models/llama3-70b-8192/v1/messages
+  https://api.groq.com + /openai/v1/models + /deepseek-v3.1 + /v1/messages
+  = https://api.groq.com/openai/v1/models/deepseek-v3.1/v1/messages
 
   4. Authentication Header Extraction
 
@@ -95,15 +95,15 @@
 
   Messages Handler (src/handlers/messages.ts:18-67)
 
-  POST /https/api.groq.com/openai/v1/models/llama3-70b-8192/v1/messages
+  POST /https/api.groq.com/openai/v1/models/deepseek-v3.1/v1/messages
   → Convert Claude request to OpenAI format
-  → POST https://api.groq.com/openai/v1/models/llama3-70b-8192/v1/messages
+  → POST https://api.groq.com/openai/v1/models/deepseek-v3.1/v1/messages
   → Handle streaming/non-streaming responses
   → Convert OpenAI response to Claude format
 
   Token Counting Handler (src/handlers/token-counting.ts)
 
-  POST /https/api.groq.com/openai/v1/models/llama3-70b-8192/v1/messages/count_tokens
+  POST /https/api.groq.com/openai/v1/models/deepseek-v3.1/v1/messages/count_tokens
   → Similar to messages but for token counting
 
   Request Transformation Pipeline
@@ -136,13 +136,13 @@
 
   Example: Complete Request Flow
 
-  Test Request: POST /https/api.groq.com/openai/v1/models/llama3-70b-8192/v1/messages
+  Test Request: POST /https/api.groq.com/openai/v1/models/deepseek-v3.1/v1/messages
 
-  1. Parse: {protocol: "https", host: "api.groq.com", pathPrefix: "/openai/v1/models", modelId: "llama3-70b-8192", claudeEndpoint: "v1/messages"}
+  1. Parse: {protocol: "https", host: "api.groq.com", pathPrefix: "/openai/v1/models", modelId: "deepseek-v3.1", claudeEndpoint: "v1/messages"}
   2. Handler: 'messages' (from getHandlerType("v1/messages"))
-  3. Target URL: https://api.groq.com/openai/v1/models/llama3-70b-8192/v1/messages
+  3. Target URL: https://api.groq.com/openai/v1/models/deepseek-v3.1/v1/messages
   4. Convert: Claude request → OpenAI format
-  5. Forward: To Groq API with auth headers
+  5. Forward: To API with auth headers
   6. Convert Back: OpenAI response → Claude format
   7. Return: With CORS headers and request ID
 

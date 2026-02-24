@@ -42,8 +42,8 @@ We have successfully implemented Claude Proxy v3 following the plan outlined in 
 ```
 Examples:
 - `GET /https/api.groq.com/openai/v1/models/v1/models`
-- `POST /https/api.groq.com/openai/v1/models/llama3-70b-8192/v1/messages`
-- `POST /https/api.groq.com/openai/v1/models/llama3-70b-8192/v1/messages/count_tokens`
+- `POST /https/api.groq.com/openai/v1/models/deepseek-v3.1/v1/messages`
+- `POST /https/api.groq.com/openai/v1/models/deepseek-v3.1/v1/messages/count_tokens`
 
 ### 2. **Extended Thinking Support**
 - Complete thinking type definitions `ThinkingConfigParam`
@@ -141,11 +141,11 @@ curl -X GET "http://localhost:8787/https/api.groq.com/openai/v1/models/v1/models
 
 ### Send Message with Thinking
 ```bash
-curl -X POST "http://localhost:8787/https/api.groq.com/openai/v1/models/llama3-70b-8192/v1/messages" \
+curl -X POST "http://localhost:8787/https/api.groq.com/openai/v1/models/deepseek-v3.1/v1/messages" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
-    "model": "llama3-70b-8192",
+    "model": "deepseek-v3.1",
     "messages": [{"role": "user", "content": "Hello"}],
     "max_tokens": 1000,
     "thinking": {
@@ -157,11 +157,11 @@ curl -X POST "http://localhost:8787/https/api.groq.com/openai/v1/models/llama3-7
 
 ### Count Tokens
 ```bash
-curl -X POST "http://localhost:8787/https/api.groq.com/openai/v1/models/llama3-70b-8192/v1/messages/count_tokens" \
+curl -X POST "http://localhost:8787/https/api.groq.com/openai/v1/models/deepseek-v3.1/v1/messages/count_tokens" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
-    "model": "llama3-70b-8192",
+    "model": "deepseek-v3.1",
     "messages": [{"role": "user", "content": "Test message"}],
     "thinking": {
       "type": "enabled",

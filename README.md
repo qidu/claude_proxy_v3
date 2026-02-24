@@ -141,7 +141,7 @@ List available models from the target API.
       "id": "deepseek-v3.1",
       "type": "model",
       "created_at": "2024-01-01T00:00:00Z",
-      "display_name": "Llama 3 70B"
+      "display_name": "DeepSeek-V3.1"
     }
   ],
   "first_id": "deepseek-v3.1",
@@ -262,12 +262,12 @@ targetUrl = targetUrl.replace('v1/messages', 'v1/chat/completions')
 
 ### Examples
 
-1. **List models from Groq**:
+1. **List models**:
    ```
    GET /https/api.qnaigc.com/v1/models
    ```
 
-2. **Send message to Groq Llama 3**:
+2. **Send message**:
    ```
    POST /https/api.qnaigc.com/v1/messages
    ```

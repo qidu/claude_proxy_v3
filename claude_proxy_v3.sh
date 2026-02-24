@@ -9,7 +9,7 @@
 DEFAULT_WORKER_URL="https://claude-proxy-v3.your-domain.workers.dev"
 DEFAULT_API_KEY=""
 DEFAULT_OPEN_AI_URL="api.qnaigc.com"
-DEFAULT_OPEN_MODEL="llama3-70b-8192"
+DEFAULT_OPEN_MODEL="deepseek-v3.1"
 DEFAULT_THINKING_ENABLED="n"
 DEFAULT_THINKING_BUDGET="10000"
 
