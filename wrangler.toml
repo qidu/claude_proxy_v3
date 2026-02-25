@@ -3,6 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2025-01-21"
 
 [vars]
+VERSION = "dev"  # Set to commit id, tag, or branch name
 LOCAL_TOKEN_COUNTING = "false"
 LOCAL_TOKEN_COUNTING_FACTOR = "4"
 ALLOWED_HOSTS="127.0.0.1,localhost,api.qnaigc.com,api.yoosheen.com"

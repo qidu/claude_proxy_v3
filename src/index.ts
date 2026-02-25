@@ -280,7 +280,11 @@ export default {
           const healthResponse = await handleModelsRequest(request, healthUrl, healthAuth, requestId, logger);
           if (healthResponse.ok) {
             const data = await healthResponse.json() as { data?: unknown[] };
-            return new Response(JSON.stringify({ status: 'ok', models: data.data?.length || 0 }), {
+            return new Response(JSON.stringify({ 
+              status: 'ok', 
+              models: data.data?.length || 0,
+              version: env.VERSION || 'unknown'
+            }), {
               status: 200,
               headers: { 'Content-Type': 'application/json' },
             });
@@ -288,7 +292,10 @@ export default {
         } catch {
           // Fall through to error
         }
-        return new Response(JSON.stringify({ error: 'No models Found.' }), {
+        return new Response(JSON.stringify({ 
+          error: 'No models Found.',
+          version: env.VERSION || 'unknown'
+        }), {
           status: 404,
           headers: { 'Content-Type': 'application/json' },
         });

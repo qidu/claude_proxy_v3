@@ -14,6 +14,12 @@ export interface Logger {
 
 export interface Env {
     /**
+     * Version identifier (commit id, tag, or branch name).
+     * Example: "v1.0.0", "main", "abc123def"
+     */
+    VERSION?: string;
+
+    /**
      * Enable local token counting (no API call).
      * Set to "true" or "1" to enable.
      */

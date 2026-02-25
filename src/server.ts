@@ -18,6 +18,7 @@ interface NodeEnv extends Env {
 
 const env: NodeEnv = {
   NODE_ENV: process.env.NODE_ENV || 'production',
+  VERSION: process.env.VERSION || 'dev',
   ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS || '*',
   LOCAL_TOKEN_COUNTING: process.env.LOCAL_TOKEN_COUNTING || 'false',
   ALLOWED_HOSTS: process.env.ALLOWED_HOSTS || '127.0.0.1,localhost,api.qnaigc.com',
