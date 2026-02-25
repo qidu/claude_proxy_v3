@@ -3,14 +3,14 @@
 [upstream]
 # Default upstream for openai-completions mode
 default_url = "https://api.qnaigc.com"
-default_api_key = "sk-87abde0542f46913036*"
+default_api_key = "sk-87abde0542f46913036******"
 
 # Model-specific routing
 [models.gemini-2-5-flash]
 endpoint = "/v1beta/models/gemini-2.5-flash:generateContent"
 mode = "native"
 base_url = "https://api.example.com"
-api_key = "sk-rFaHPAoJidbsN2B*"
+api_key = "sk-rFaHPAoJidbsN2B******"
 
 [models.deepseek-v3-1]
 mode = "openai-completions"

@@ -1,33 +1,37 @@
 # Claude Proxy v3
 
-A complete Claude API proxy new implementation that supports the full Claude API surface, including Models API, Token Counting API, and extended thinking support.
+A complete Claude API proxy that supports multiple AI model providers with unified Claude API format.
 
 ## ✨ Features
 
-- **Complete Claude API Support**: Full implementation of Claude API endpoints:
+- **Unified Claude API Format**: All models respond in Claude API format
   - `GET /v1/models` - List available models
-  - `POST /v1/messages` - Send messages with extended thinking support
+  - `POST /v1/messages` - Send messages (supports 49+ models)
   - `POST /v1/messages/count_tokens` - Count tokens in messages
 
-- **Extended Thinking Support**: Built-in support for Claude's thinking configuration with budget tokens
+- **Multiple Model Providers**: Support for 6+ providers:
+  - DeepSeek (v3.1, v3.2, R1, etc.)
+  - MiniMax (M2.1, M2.5, M1)
+  - GLM/Z-AI (GLM-4.5, GLM-5, etc.)
+  - Moonshot/Kimi (K2.5, K2-0905)
+  - Qwen (Qwen3, Qwen-Max, Qwen-Turbo, Qwen-Coder)
+  - Doubao (Seed-1.6-Thinking)
 
-- **Gemini API Support**: Dual-mode support for Google Gemini API:
-  - **Interactions API**: Native Gemini Interactions API (`/v1/interactions`)
-  - **OpenAI-Compatible**: OpenAI-compatible Gemini wrapper endpoints
-  - Automatic request format detection and conversion
+- **Extended Thinking Support**: Reasoning models with step-by-step explanations
+  - DeepSeek R1 series (deepseek-r1, deepseek-r1-0528)
+  - Doubao Thinking (doubao-seed-1.6-thinking)
+  - Qwen Thinking variants (qwen3-*-thinking)
+  - Natural reasoning without special parameters
 
-- **Dynamic Routing**: Route requests to any OpenAI-compatible API using URL patterns:
-  - `/https/api.qnaigc.com/v1/models`
-  - `/https/api.qnaigc.com/v1/messages`
-  - `/https/api.qnaigc.com/openai/v1/models/llama3-70b/v1/messages`
-  - `/https/api.qnaigc.com/v1/messages/count_tokens`
-  - `/https/api.qnaigc.com/openai/v1/models/llama3-70b/v1/messages/count_tokens`
-  - `/https/generativelanguage.googleapis.com/v1beta/interactions`
+- **Flexible Configuration**:
+  - File-based config: `proxy_config.toml`
+  - URL-based config: Eureka service discovery support
+  - Model-specific routing
+  - Native and OpenAI-compatible modes
 
-
-- **TypeScript First**: Full type safety with comprehensive Claude and OpenAI type definitions
-
-- **Cloudflare Workers Ready**: Optimized for deployment on Cloudflare's global network
+- **Dynamic Routing**: Route requests to any OpenAI-compatible API
+- **TypeScript First**: Full type safety with comprehensive type definitions
+- **Cloudflare Workers Ready**: Optimized for edge deployment
 
 ## 🚀 Quick Start
 
@@ -40,14 +44,28 @@ npm install
 
 ### 2. Configure
 
-Edit `src/server.ts` or `wrangler.toml` to set your environment variables:
-
-Counting tokens with local `tiktoken`(default model `cl100k_base`) when setting `LOCAL_TOKEN_COUNTING` to `true`
-or consuming tokens from the upstream API to response with 'usage' field.
-
+#### Basic Configuration (`wrangler.toml`):
 ```toml
 [vars]
 LOCAL_TOKEN_COUNTING = "false"
+FIXED_ROUTE_TARGET_URL = "https://api.qnaigc.com"
+PROXY_CONFIG_PATH = "./proxy_config.toml"
+```
+
+#### Model Configuration (`proxy_config.toml`):
+```toml
+[upstream]
+default_url = "https://api.qnaigc.com"
+default_api_key = "your-api-key"
+
+[models.gemini-2-5-flash]
+mode = "native"
+base_url = "https://api.example.com"
+api_key = "your-gemini-key"
+
+[defaults]
+mode = "openai-completions"
+```
 
 # Gemini API configuration
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
@@ -73,68 +91,44 @@ npm run dev
 
 or
 ```bash
-npm install typescript
-npx tsc -p tsconfig.server.json
-LOCAL_TOKEN_COUNTING=true npx tsx dist/server.js
-
-#node dist/server.js
+npm run build
+PROXY_CONFIG_PATH=./proxy_config.toml npx tsx dist/server.js
 ```
 
 ### 4. Deploy
 
-Refer to `Dockerfile`
-Build
+#### Docker
 ```bash
-sudo docker build -t claude-proxy-v3 .
-```
-If pending at `RUN npm install` ...,
-Edit `/etc/docker/daemon.json`:
-```json
-  {
-    "dns": ["8.8.8.8", "8.8.4.4"]
-  }
-```
-Then restart Docker: 
-```bash
-sudo systemctl restart docker
-```
-Run it
-```bash
-sudo docker run -p 8788:8788 claude-proxy-v3
+docker build -t claude-proxy-v3 .
+docker run -p 8788:8788 -v $(pwd)/proxy_config.toml:/app/proxy_config.toml claude-proxy-v3
 ```
 
+#### PM2 (High Performance)
 ```bash
-# npm run deploy
+npm run build
+pm2 start dist/server.js -i 4
 ```
 
-High performance deploy advices
+### 5. Test
 
-Run like a cluster
 ```bash
-# npm install -g pm2
-# npx tsc -p tsconfig.server.json
-# pm2 start dist/server.js -i 4
-# pm2 ls
-# pm2 stop all
+# Test multiple models
+bash tests/test_models.sh
 
-# or
-LOCAL_TOKEN_COUNTING=true npx tsx dist/server.js
-
-npm run build && npm run start
+# Test specific endpoint
+curl http://localhost:8788/v1/messages \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{
+    "model": "deepseek-v3.1",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 100
+  }'
 ```
 
-### 5. Test One Model or Test All Models
-
-comparing and testing API
-
-```bash
-bash tests/test_v1_messages_api.sh
-
-bash tests/test_all_models.sh
-
-bash tests/test_shell.sh
-
-bash tests/test_shell_sse.sh
+### 6. Docs
+- `docs/routing_refactor.md` - Routing architecture and implementation
+- `docs/config_loader.md` - Configuration loading guide
+- `docs/test_results_after_refactoring.md` - Comprehensive test results (22 models tested)
 
 # Test Gemini API
 node tests/test_gemini_native.js
@@ -267,87 +261,56 @@ Count tokens in messages, including thinking configuration.
 }
 ```
 
-## 🔧 Dynamic Routing
+## 🔧 Configuration
 
-The proxy uses dynamic routing to forward requests to any OpenAI-compatible API.
+### Environment Variables
 
-### Routing Modes
+```toml
+# wrangler.toml
+[vars]
+# OpenAI-compatible upstream
+FIXED_ROUTE_TARGET_URL = "https://api.qnaigc.com"
+FIXED_ROUTE_PATH_PREFIX = ""
 
-The proxy supports **dual-mode routing** for Gemini endpoints:
+# Config file path or URL
+PROXY_CONFIG_PATH = "./proxy_config.toml"
+# PROXY_CONFIG_URL = "http://eureka-server/config/proxy_config.toml"
 
-#### 1. `/v1/messages` → OpenAI-compatible upstream
-- Always routes to OpenAI-compatible upstream (`/v1/chat/completions`)
-- Converts Claude format → OpenAI format
-- Handler: `messages.ts`
-
-#### 2. `/v1/interactions` → Dual-mode (handled by gemini.ts)
-Configure via `GEMINI_INTERACTIONS_MODE`:
-
-**Mode: `openai`** (OpenAI-compatible upstream)
-- Converts Gemini Interactions format → OpenAI format
-- Routes to: `FIXED_ROUTE_TARGET_URL/v1/chat/completions`
-- Handler: `gemini.ts` (converts and forwards to OpenAI upstream)
-
-**Mode: `gemini`** (Native Gemini API)
-- Converts Gemini Interactions format → Gemini generateContent format
-- Routes to: `GEMINI_BASE_URL/v1beta/models/{model}:generateContent`
-- Handler: `gemini.ts` (converts and forwards to Gemini API)
-
-#### 3. `/v1beta/models/{model}:generateContent` → Dual-mode
-Configure via `GEMINI_GENERATE_CONTENT_MODE`:
-
-**Mode: `openai`** (OpenAI-compatible upstream)
-- Converts Gemini generateContent format → OpenAI format
-- Routes to: `FIXED_ROUTE_TARGET_URL/v1/chat/completions`
-- Handler: `openai.ts`
-
-**Mode: `gemini`** (Native Gemini API)
-- Pass through Gemini generateContent format
-- Routes to: `GEMINI_BASE_URL/v1beta/models/{model}:generateContent`
-- Handler: `gemini.ts`
-
-### Routing Direction
-
-Fixed routing `/v1/messages` requests to `/v1/chat/completions`, disable routing `/v1/messages` requests to upstream `/v1/messages`.
-
-Refer to `src/handlers/messages.ts`
-
-```
-targetUrl = targetUrl.replace('v1/messages', 'v1/chat/completions')
+# Optional settings
+LOCAL_TOKEN_COUNTING = "false"
+ALLOWED_HOSTS = "127.0.0.1,localhost,api.qnaigc.com"
+LOG_LEVEL = "debug"
 ```
 
-### URL Format
+### Model Configuration
 
+```toml
+# proxy_config.toml
+[upstream]
+default_url = "https://api.qnaigc.com"
+default_api_key = "sk-your-api-key"
+
+[models.gemini-2-5-flash]
+mode = "native"
+base_url = "https://api.example.com"
+api_key = "sk-gemini-key"
+
+[models.deepseek-v3-1]
+mode = "openai-completions"
+# Uses default upstream
+
+[defaults]
+mode = "openai-completions"
 ```
-/{protocol}/{host}/{path_prefix}/{model_id?}/{claude_endpoint}
 
-/{protocol}/{host}/{claude_endpoint}
-```
+### Configuration Loading
 
-### Examples
+The proxy supports two config sources:
 
-1. **List models from Groq**:
-   ```
-   GET /https/api.qnaigc.com/v1/models
-   ```
+1. **Local File**: `PROXY_CONFIG_PATH=./proxy_config.toml`
+2. **Remote URL**: `PROXY_CONFIG_URL=http://eureka-server/config/proxy_config.toml`
 
-2. **Send message to Groq Llama 3**:
-   ```
-   POST /https/api.qnaigc.com/v1/messages
-   ```
-
-3. **Count tokens with Google Gemini**:
-   ```
-   POST /https/generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp/v1/messages/count_tokens
-   ```
-
-4. **Use Gemini Interactions API**:
-   ```
-   POST /https/generativelanguage.googleapis.com/v1beta/interactions
-   GET /https/generativelanguage.googleapis.com/v1beta/interactions/v1_abc123
-   DELETE /https/generativelanguage.googleapis.com/v1beta/interactions/v1_abc123
-   POST /https/generativelanguage.googleapis.com/v1beta/interactions/v1_abc123/cancel
-   ```
+Config is loaded on startup and cached for performance.
 
 ### Authentication
 
@@ -403,7 +366,7 @@ src/
 4. **Error Handling**: Claude API-compatible error responses
 5. **Gemini Dual-Mode Handler**: Supports both native Interactions API and OpenAI-compatible endpoints with automatic format detection
 
-## 🧪 Other Testing
+## 🧪 Testing
 
 ### Type Checking
 
@@ -411,49 +374,55 @@ src/
 npm run typecheck
 ```
 
-### Local Development
+### Test Multiple Models
 
 ```bash
-npm run dev
+bash tests/test_models.sh
 ```
 
 ### Example Requests
 
 ```bash
 # List models
-curl -X GET "http://localhost:8787/https/api.qnaigc.com/v1/models" \
+curl http://localhost:8788/v1/models \
   -H "Authorization: Bearer your-api-key"
 
 # Send message
-curl -X POST "http://localhost:8787/https/api.qnaigc.com/v1/messages" \
+curl http://localhost:8788/v1/messages \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-api-key" \
   -d '{
+    "model": "deepseek-v3.1",
     "messages": [{"role": "user", "content": "Hello"}],
-    "max_tokens": 1000
+    "max_tokens": 100
   }'
 
-# Use Gemini Interactions API (native mode)
-curl -X POST "http://localhost:8787/https/generativelanguage.googleapis.com/v1beta/interactions" \
-  -H "Content-Type: application/json" \
-  -H "x-goog-api-key: your-gemini-api-key" \
+# Test with different models
+curl http://localhost:8788/v1/messages \
+  -H "Authorization: Bearer your-api-key" \
   -d '{
-    "model": "gemini-2.0-flash-exp",
-    "input": {
-      "messages": [{"role": "user", "content": "Hello"}]
-    }
-  }'
-
-# Use Gemini OpenAI-compatible mode
-curl -X POST "http://localhost:8787/https/api.qnaigc.com/v1/messages" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-gemini-api-key" \
-  -d '{
-    "messages": [{"role": "user", "content": "Hello"}],
-    "max_tokens": 1000,
-    "model": "gemini-2.0-flash-exp"
+    "model": "qwen-max-2025-01-25",
+    "messages": [{"role": "user", "content": "Capital of France?"}],
+    "max_tokens": 50
   }'
 ```
+
+### Test Results
+
+See `docs/test_results_after_refactoring.md` for comprehensive test results:
+- ✅ 26 models tested successfully
+- ✅ 10+ question types validated (math, coding, translation, reasoning, etc.)
+- ✅ 6 providers tested (DeepSeek, MiniMax, GLM, Moonshot, Qwen, Doubao)
+- ✅ Extended thinking/reasoning models validated
+- ✅ 100% success rate
+
+### Reasoning Models Tested:
+- deepseek-r1, deepseek-r1-0528 - Step-by-step mathematical reasoning
+- doubao-seed-1.6-thinking - Detailed reasoning process
+- deepseek/deepseek-v3.2-exp - Complex explanations
+- moonshotai/kimi-k2.5 - Structured explanations
+- minimax/minimax-m2.1 - Scientific reasoning
+- z-ai/glm-5 - Multi-section explanations
 
 ## 📄 License
 
