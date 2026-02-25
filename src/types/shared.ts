@@ -2,6 +2,16 @@
  * Shared types and interfaces for Claude Proxy v3
  */
 
+/**
+ * Logger interface
+ */
+export interface Logger {
+    debug(requestId: string, message: string): void;
+    info(requestId: string, message: string): void;
+    warn(requestId: string, message: string): void;
+    error(requestId: string, message: string): void;
+}
+
 export interface Env {
     /**
      * Enable local token counting (no API call).
@@ -76,21 +86,36 @@ export interface Env {
     GEMINI_API_VERSION?: string;
 
     /**
-     * Enable Gemini API bypass mode.
-     * When enabled, requests to gemini-related endpoints will be
-     * proxied directly to the Gemini API.
-     * Set to "true" or "1" to enable.
+     * Claude API base URL for native mode.
+     * Default: https://api.anthropic.com
      */
-    GEMINI_BYPASS_ENABLED?: string;
+    CLAUDE_BASE_URL?: string;
 
     /**
-     * Gemini endpoint type.
-     * 'interactions' for Google's Gemini Interactions API (generativelanguage.googleapis.com)
-     * 'openai-compatible' for OpenAI-compatible Gemini wrappers
-     * Default: 'openai-compatible'
+     * /v1/messages upstream mode.
+     * 'native' = pass through to Claude API (Anthropic/AWS/Vertex)
+     * 'openai-completions' = convert to OpenAI format
+     * Default: 'openai-completions'
      */
-    GEMINI_ENDPOINT_TYPE?: 'interactions' | 'openai-compatible';
+    MESSAGES_UPSTREAM_MODE?: 'native' | 'openai-completions';
+
+    /**
+     * /v1/interactions upstream mode.
+     * 'native' = pass through to Gemini API
+     * 'openai-completions' = convert to OpenAI format
+     * Default: 'native'
+     */
+    INTERACTIONS_UPSTREAM_MODE?: 'native' | 'openai-completions';
+
+    /**
+     * /v1beta/models/{model}:generateContent upstream mode.
+     * 'native' = pass through to Gemini API
+     * 'openai-completions' = convert to OpenAI format
+     * Default: 'native'
+     */
+    GENERATE_CONTENT_UPSTREAM_MODE?: 'native' | 'openai-completions';
 }
+
 
 /**
  * Error response type for Claude API

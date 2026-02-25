@@ -24,7 +24,6 @@ import { handleTargetApiError } from '../utils/errors.js';
 interface GeminiConfig {
     baseUrl: string;
     apiVersion: string;
-    endpointType: 'interactions' | 'openai-compatible';
 }
 
 /**
@@ -33,7 +32,6 @@ interface GeminiConfig {
 const DEFAULT_GEMINI_CONFIG: GeminiConfig = {
     baseUrl: 'https://generativelanguage.googleapis.com',
     apiVersion: 'v1beta',
-    endpointType: 'openai-compatible',
 };
 
 /**
@@ -43,7 +41,6 @@ function getGeminiConfig(env: Env): GeminiConfig {
     return {
         baseUrl: env.GEMINI_BASE_URL || DEFAULT_GEMINI_CONFIG.baseUrl,
         apiVersion: env.GEMINI_API_VERSION || DEFAULT_GEMINI_CONFIG.apiVersion,
-        endpointType: env.GEMINI_ENDPOINT_TYPE || DEFAULT_GEMINI_CONFIG.endpointType,
     };
 }
 
@@ -57,6 +54,7 @@ function isNativeGeminiRequest(body: Record<string, unknown>): boolean {
 
 /**
  * Handle Gemini API request (factory function)
+ * Routes to either Interactions or generateContent handler based on URL
  */
 export async function handleGeminiRequest(
     request: Request,
@@ -68,18 +66,16 @@ export async function handleGeminiRequest(
     logger?: Logger
 ): Promise<Response> {
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
-    const config = getGeminiConfig(env ?? {});
 
-    activeLogger.debug(requestId, `Gemini endpoint type: ${config.endpointType}`);
-    activeLogger.debug(requestId, `Gemini base URL: ${config.baseUrl}`);
-    activeLogger.debug(requestId, `Gemini API version: ${config.apiVersion}`);
-
-    if (config.endpointType === 'interactions') {
-        return handleGeminiInteractionsRequest(
+    // Determine which Gemini endpoint to use based on URL
+    if (targetUrl.includes(':generateContent')) {
+        activeLogger.debug(requestId, 'Routing to Gemini generateContent handler');
+        return handleGeminiGenerateContentRequest(
             request, targetUrl, authHeaders, requestId, modelId, env, logger
         );
     } else {
-        return handleGeminiOpenAICompatibleRequest(
+        activeLogger.debug(requestId, 'Routing to Gemini Interactions handler');
+        return handleGeminiInteractionsRequest(
             request, targetUrl, authHeaders, requestId, modelId, env, logger
         );
     }
@@ -89,6 +85,146 @@ export async function handleGeminiRequest(
  * Handle Gemini Interactions API request
  */
 async function handleGeminiInteractionsRequest(
+    request: Request,
+    targetUrl: string,
+    authHeaders: Record<string, string>,
+    requestId: string,
+    modelId?: string,
+    env?: Env,
+    logger?: Logger
+): Promise<Response> {
+    const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
+
+    // Native mode - pass through to Gemini API
+    return handleGeminiToGeminiMode(request, targetUrl, authHeaders, requestId, modelId, env, activeLogger);
+}
+
+/**
+ * Handle Gemini Interactions → OpenAI upstream mode
+ */
+async function handleGeminiToOpenAIMode(
+    request: Request,
+    targetUrl: string,
+    authHeaders: Record<string, string>,
+    requestId: string,
+    modelId?: string,
+    env?: Env,
+    logger?: Logger
+): Promise<Response> {
+    const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
+    const requestBody = await request.json() as Record<string, unknown>;
+
+    // Convert Gemini Interactions format to OpenAI format
+    let openaiRequest: Record<string, unknown>;
+    const model = modelId || (requestBody.model as string) || 'gemini-pro';
+    
+    if (typeof requestBody.input === 'string') {
+        openaiRequest = {
+            model,
+            messages: [{ role: 'user', content: requestBody.input }],
+            stream: requestBody.stream || false,
+        };
+    } else if (Array.isArray(requestBody.contents)) {
+        const messages = requestBody.contents.map((content: any) => ({
+            role: content.role === 'model' ? 'assistant' : content.role,
+            content: content.parts?.map((p: any) => p.text).join('') || '',
+        }));
+        openaiRequest = {
+            model,
+            messages,
+            stream: requestBody.stream || false,
+        };
+    } else {
+        throw new Error('Invalid Gemini Interactions request format');
+    }
+
+    activeLogger.debug(requestId, `Gemini→OpenAI mode: ${targetUrl}`);
+
+    const response = await fetch(targetUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify(openaiRequest),
+    });
+
+    if (!response.ok) {
+        handleTargetApiError(response, 'OpenAI API');
+    }
+
+    // Convert OpenAI response back to Claude format
+    if (openaiRequest.stream) {
+        return handleOpenAIStreamingToClaude(response, model, requestId, activeLogger);
+    } else {
+        const openaiResponse = await response.json() as Record<string, unknown>;
+        const claudeResponse = convertOpenAIToClaudeResponse(openaiResponse as any, model, requestId);
+        return new Response(JSON.stringify(claudeResponse), {
+            headers: { 'Content-Type': 'application/json' },
+        });
+    }
+}
+
+/**
+ * Helper: Handle OpenAI streaming response and convert to Claude format
+ */
+async function handleOpenAIStreamingToClaude(
+    response: Response,
+    model: string,
+    requestId: string,
+    logger: Logger
+): Promise<Response> {
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    const encoder = new TextEncoder();
+
+    (async () => {
+        try {
+            const reader = response.body?.getReader();
+            if (!reader) throw new Error('No response body');
+
+            const decoder = new TextDecoder();
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const text = decoder.decode(value);
+                const lines = text.split('\n');
+                
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const data = line.slice(6);
+                        if (data.trim() === '[DONE]') {
+                            await writer.write(encoder.encode('event: message_stop\ndata: {"type":"message_stop"}\n\n'));
+                        } else {
+                            try {
+                                const parsed = JSON.parse(data);
+                                const claudeChunk = convertOpenAIToClaudeResponse(parsed, model, requestId);
+                                await writer.write(encoder.encode(`data: ${JSON.stringify(claudeChunk)}\n\n`));
+                            } catch {
+                                // Skip invalid chunks
+                            }
+                        }
+                    }
+                }
+            }
+            await writer.close();
+        } catch (error) {
+            logger.error(requestId, `Streaming error: ${(error as Error).message}`);
+            await writer.abort();
+        }
+    })();
+
+    return new Response(readable, {
+        headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+        },
+    });
+}
+
+/**
+ * Handle Gemini Interactions → Gemini generateContent mode
+ */
+async function handleGeminiToGeminiMode(
     request: Request,
     targetUrl: string,
     authHeaders: Record<string, string>,
@@ -183,9 +319,9 @@ async function handleGeminiInteractionsRequest(
 }
 
 /**
- * Handle OpenAI-compatible Gemini wrapper request
+ * Handle Gemini generateContent API request
  */
-async function handleGeminiOpenAICompatibleRequest(
+async function handleGeminiGenerateContentRequest(
     request: Request,
     targetUrl: string,
     authHeaders: Record<string, string>,
@@ -199,55 +335,82 @@ async function handleGeminiOpenAICompatibleRequest(
     // Parse request body
     const requestBody = await request.json() as Record<string, unknown>;
 
-    // Always convert Claude to OpenAI format for OpenAI-compatible endpoints
-    activeLogger.debug(requestId, 'Converting Claude request to OpenAI format for Gemini');
-    const claudeRequest = requestBody as unknown as ClaudeMessagesRequest;
-    const openaiRequest = convertClaudeToOpenAIRequest(claudeRequest, modelId || claudeRequest.model);
-    const isStreaming = claudeRequest.stream === true;
+    // Determine if this is a native Gemini request or needs conversion from Claude format
+    let geminiRequest: Record<string, unknown>;
+    let isStreaming: boolean;
+    let effectiveModelId = modelId;
+
+    if (isNativeGeminiRequest(requestBody)) {
+        // Native Gemini format - use directly
+        activeLogger.debug(requestId, 'Using native Gemini request format');
+        geminiRequest = requestBody;
+        isStreaming = requestBody.stream === true;
+        effectiveModelId = effectiveModelId || (requestBody.model as string);
+        
+        // Convert native format (input: string) to generateContent format (contents: [...])
+        if (typeof geminiRequest.input === 'string') {
+            geminiRequest = {
+                model: effectiveModelId || geminiRequest.model || 'gemini-pro',
+                contents: [{ role: 'user', parts: [{ text: geminiRequest.input }] }],
+                stream: isStreaming,
+            };
+        }
+    } else {
+        // Claude format - convert to Gemini generateContent format
+        activeLogger.debug(requestId, 'Converting Claude request to Gemini format');
+        const claudeRequest = requestBody as unknown as ClaudeMessagesRequest;
+        geminiRequest = convertClaudeToGeminiRequest(claudeRequest, modelId);
+        isStreaming = claudeRequest.stream === true;
+        effectiveModelId = effectiveModelId || claudeRequest.model;
+    }
+
+    // Determine the target endpoint
+    const endpoint = determineGeminiEndpoint(request, geminiRequest, effectiveModelId);
+    const fullTargetUrl = endpoint ? `${targetUrl}${endpoint}` : targetUrl;
 
     // Log request info
-    activeLogger.debug(requestId, `Gemini upstream request url: ${targetUrl}`);
-    activeLogger.debug(requestId, `Gemini model: ${openaiRequest.model}`);
+    activeLogger.debug(requestId, `Gemini upstream request url: ${fullTargetUrl}`);
+    activeLogger.debug(requestId, `Gemini model: ${effectiveModelId || 'gemini-pro'}`);
     activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
 
-    // Prepare headers for OpenAI-compatible API
-    const openaiHeaders: Record<string, string> = {
+    // Prepare headers for Gemini API
+    const geminiHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
     };
 
     // Add API key from headers or environment
-    const apiKey = extractGeminiApiKey(request, authHeaders, env, 'openai-compatible');
+    const apiKey = extractGeminiApiKey(request, authHeaders, env, 'interactions');
     if (apiKey) {
-        openaiHeaders['Authorization'] = `Bearer ${apiKey}`;
+        geminiHeaders['Authorization'] = `Bearer ${apiKey}`;
     }
 
     // Forward other auth headers
     if (authHeaders['Authorization']) {
-        openaiHeaders['Authorization'] = authHeaders['Authorization'];
+        // Keep Authorization for backward compatibility
     }
 
     try {
-        const response = await fetch(targetUrl, {
+        const response = await fetch(fullTargetUrl, {
             method: 'POST',
-            headers: openaiHeaders,
-            body: JSON.stringify(openaiRequest),
+            headers: geminiHeaders,
+            body: JSON.stringify(geminiRequest),
         });
 
         // Handle target API errors
         if (!response.ok) {
-            handleTargetApiError(response, 'Gemini API (OpenAI-compatible)');
+            handleTargetApiError(response, 'Gemini API');
         }
 
         // Handle streaming response
         if (isStreaming) {
-            return handleGeminiStreamingResponse(response, openaiRequest.model, requestId, activeLogger, 'openai-compatible');
+            return handleGeminiStreamingResponse(response, effectiveModelId || 'gemini-pro', requestId, activeLogger, 'interactions');
         }
 
         // Handle non-streaming response
-        return handleGeminiNonStreamingResponse(response, openaiRequest.model, requestId, activeLogger, 'openai-compatible');
+        return handleGeminiNonStreamingResponse(response, effectiveModelId || 'gemini-pro', requestId, activeLogger, 'interactions');
 
     } catch (error) {
-        activeLogger.error(requestId, `Gemini API (OpenAI-compatible) error: ${(error as Error).message}`);
+        activeLogger.error(requestId, `Gemini API error: ${(error as Error).message}`);
         throw error;
     }
 }

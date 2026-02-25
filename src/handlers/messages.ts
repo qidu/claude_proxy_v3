@@ -28,29 +28,96 @@ export async function handleMessagesRequest(
 ): Promise<Response> {
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
   // Parse request body
-  const requestBody = await request.json() as ClaudeMessagesRequest;
-  const claudeRequest = requestBody;
+  const requestBody = await request.json() as Record<string, unknown>;
+  
+  // Check if request is already in OpenAI format
+  // OpenAI format: { model, messages, stream, temperature, ... }
+  // Claude format: { model, messages, max_tokens, thinking, system, ... }
+  const isOpenAIFormat = !requestBody.system && !requestBody.thinking && !requestBody.stop_sequences;
 
-  // Calculate max image data size from environment or use default
-  const maxImageDataSize = env?.IMAGE_BLOCK_DATA_MAX_SIZE
-    ? parseInt(env.IMAGE_BLOCK_DATA_MAX_SIZE, 10)
-    : 1 * 1024 * 1024; // Default 1MB
+  if (isOpenAIFormat) {
+    // Request is already in OpenAI format, pass through directly
+    const openaiRequest = requestBody;
+    const isStreaming = requestBody.stream === true;
 
-  // Validate request
-  validateClaudeMessagesRequest(claudeRequest, modelId, maxImageDataSize);
-  validateAuthHeaders(authHeaders);
+    // Log request info
+    console.debug(requestId, `Upstream request url: ${targetUrl}`);
+    activeLogger.debug(requestId, `Upstream request url: ${targetUrl}`);
+    activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
 
-  // Use model from URL if provided, otherwise from request
-  const targetModelId = modelId || claudeRequest.model;
+    const response = await fetch(targetUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders,
+      },
+      body: JSON.stringify(openaiRequest),
+    });
 
-  // Convert Claude request to OpenAI format
-  const openaiRequest: OpenAIRequest = convertClaudeToOpenAIRequest(
-    claudeRequest,
-    targetModelId
-  );
-  if (targetUrl.includes('v1/messages')) {
-    targetUrl = targetUrl.replace('v1/messages', 'v1/chat/completions')
+    // Handle target API errors
+    if (!response.ok) {
+      handleTargetApiError(response, 'Messages API');
+    }
+
+    // Handle streaming response
+    if (isStreaming) {
+      const openaiResponse = await response.json();
+      const model = (openaiRequest.model as string) || 'deepseek-v3.1';
+      const reader = response.body?.getReader();
+      if (reader) {
+        const decoder = new TextDecoder();
+        const stream = new ReadableStream({
+          async start(controller) {
+            let buffer = '';
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+              for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                  const data = line.slice(6);
+                  if (data.trim() === '[DONE]') {
+                    controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+                  } else {
+                    try {
+                      const chunk = JSON.parse(data);
+                      const claudeChunk = convertOpenAIToClaudeChunk(chunk, model, requestId);
+                      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(claudeChunk)}\n\n`));
+                    } catch {
+                      controller.enqueue(new TextEncoder().encode(`${line}\n`));
+                    }
+                  }
+                }
+              }
+            }
+            controller.close();
+          },
+        });
+        return new Response(stream, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          },
+        });
+      }
+      return response;
+    }
+
+    // Non-streaming response
+    const openaiResponse = await response.json();
+    const model = (openaiRequest.model as string) || 'deepseek-v3.1';
+    const claudeResponse = convertOpenAIToClaudeResponse(openaiResponse, model, requestId);
+    return new Response(JSON.stringify(claudeResponse), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
+
+  // Claude format - convert to OpenAI
+  const claudeRequest = requestBody as ClaudeMessagesRequest;
 
   // Check if streaming is requested
   const isStreaming = claudeRequest.stream === true;

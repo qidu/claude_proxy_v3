@@ -584,83 +584,6 @@ __name(convertOpenAIModelsToClaude, "convertOpenAIModelsToClaude");
 // src/utils/validation.ts
 init_modules_watch_stub();
 var DEFAULT_IMAGE_DATA_MAX_SIZE = 10 * 1024 * 1024;
-function validateClaudeMessagesRequest(request, modelId, maxImageDataSize = DEFAULT_IMAGE_DATA_MAX_SIZE) {
-  if (!request.messages || !Array.isArray(request.messages)) {
-    throw new ValidationError("messages field is required and must be an array");
-  }
-  if (request.messages.length === 0) {
-    throw new ValidationError("messages array must not be empty");
-  }
-  if (request.messages.length > 1e5) {
-    throw new ValidationError("messages array cannot exceed 100,000 messages per request");
-  }
-  for (let i = 0; i < request.messages.length; i++) {
-    validateClaudeMessage(request.messages[i], `messages[${i}]`, maxImageDataSize);
-  }
-  if (!modelId && !request.model) {
-    throw new ValidationError("Either model must be specified in URL or in request body");
-  }
-  if (request.max_tokens !== void 0) {
-    if (typeof request.max_tokens !== "number") {
-      throw new ValidationError("max_tokens must be a number");
-    }
-    if (request.max_tokens < 1) {
-      throw new ValidationError("max_tokens must be at least 1");
-    }
-    if (request.max_tokens > 1e5) {
-      throw new ValidationError("max_tokens cannot exceed 100,000");
-    }
-  }
-  if (request.temperature !== void 0) {
-    if (typeof request.temperature !== "number") {
-      throw new ValidationError("temperature must be a number");
-    }
-    if (request.temperature < 0 || request.temperature > 1) {
-      throw new ValidationError("temperature must be between 0 and 1");
-    }
-  }
-  if (request.top_p !== void 0) {
-    if (typeof request.top_p !== "number") {
-      throw new ValidationError("top_p must be a number");
-    }
-    if (request.top_p < 0 || request.top_p > 1) {
-      throw new ValidationError("top_p must be between 0 and 1");
-    }
-  }
-  if (request.top_k !== void 0) {
-    if (typeof request.top_k !== "number") {
-      throw new ValidationError("top_k must be a number");
-    }
-    if (request.top_k < 1 || request.top_k > 1e3) {
-      throw new ValidationError("top_k must be between 1 and 1000");
-    }
-  }
-  if (request.thinking !== void 0) {
-    validateThinkingConfig(request.thinking, "thinking");
-  }
-  if (request.stop_sequences !== void 0) {
-    if (!Array.isArray(request.stop_sequences)) {
-      throw new ValidationError("stop_sequences must be an array");
-    }
-    for (let i = 0; i < request.stop_sequences.length; i++) {
-      if (typeof request.stop_sequences[i] !== "string") {
-        throw new ValidationError(`stop_sequences[${i}] must be a string`);
-      }
-    }
-  }
-  if (request.metadata !== void 0) {
-    if (typeof request.metadata !== "object" || request.metadata === null) {
-      throw new ValidationError("metadata must be an object");
-    }
-    if (request.metadata.user_id !== void 0 && typeof request.metadata.user_id !== "string") {
-      throw new ValidationError("metadata.user_id must be a string");
-    }
-  }
-  if (request.stream !== void 0 && typeof request.stream !== "boolean") {
-    throw new ValidationError("stream must be a boolean");
-  }
-}
-__name(validateClaudeMessagesRequest, "validateClaudeMessagesRequest");
 function validateClaudeMessage(message, context = "message", maxImageDataSize = DEFAULT_IMAGE_DATA_MAX_SIZE) {
   if (!message || typeof message !== "object") {
     throw new ValidationError(`${context} must be an object`);
@@ -1066,19 +989,19 @@ function convertClaudeTokenCountingToOpenAI(claudeRequest, modelName, requestId)
       openaiMessages.push(assistantMessage);
     }
   }
-  const openaiRequest = {
+  const openaiRequest2 = {
     model: modelName,
     messages: openaiMessages
   };
   const convertedTools = convertClaudeToolsToOpenAI(claudeRequest.tools);
   if (convertedTools) {
-    openaiRequest.tools = convertedTools;
+    openaiRequest2.tools = convertedTools;
   }
   const convertedThinking = convertClaudeThinkingToOpenAI(claudeRequest.thinking);
   if (convertedThinking !== void 0) {
-    openaiRequest.thinking = convertedThinking;
+    openaiRequest2.thinking = convertedThinking;
   }
-  return openaiRequest;
+  return openaiRequest2;
 }
 __name(convertClaudeTokenCountingToOpenAI, "convertClaudeTokenCountingToOpenAI");
 function convertClaudeToOpenAIRequest(claudeRequest, modelName) {
@@ -1140,7 +1063,7 @@ function convertClaudeToOpenAIRequest(claudeRequest, modelName) {
       openaiMessages.push(assistantMessage);
     }
   }
-  const openaiRequest = {
+  const openaiRequest2 = {
     model: modelName,
     messages: openaiMessages,
     max_tokens: claudeRequest.max_tokens,
@@ -1151,17 +1074,17 @@ function convertClaudeToOpenAIRequest(claudeRequest, modelName) {
   };
   const convertedTools = convertClaudeToolsToOpenAI(claudeRequest.tools);
   if (convertedTools) {
-    openaiRequest.tools = convertedTools;
+    openaiRequest2.tools = convertedTools;
   }
   const convertedToolChoice = convertClaudeToolChoiceToOpenAI(claudeRequest.tool_choice);
   if (convertedToolChoice !== void 0) {
-    openaiRequest.tool_choice = convertedToolChoice;
+    openaiRequest2.tool_choice = convertedToolChoice;
   }
   const convertedThinking = convertClaudeThinkingToOpenAI(claudeRequest.thinking);
   if (convertedThinking !== void 0) {
-    openaiRequest.thinking = convertedThinking;
+    openaiRequest2.thinking = convertedThinking;
   }
-  return openaiRequest;
+  return openaiRequest2;
 }
 __name(convertClaudeToOpenAIRequest, "convertClaudeToOpenAIRequest");
 
@@ -1613,7 +1536,7 @@ async function handleLocalTokenCounting(claudeRequest, requestId, localConfig, l
 }
 __name(handleLocalTokenCounting, "handleLocalTokenCounting");
 async function handleApiBasedTokenCounting(claudeRequest, targetUrl, authHeaders, requestId, logger) {
-  const openaiRequest = convertClaudeTokenCountingToOpenAI(
+  const openaiRequest2 = convertClaudeTokenCountingToOpenAI(
     claudeRequest,
     claudeRequest.model,
     requestId
@@ -1630,7 +1553,7 @@ async function handleApiBasedTokenCounting(claudeRequest, targetUrl, authHeaders
       "Content-Type": "application/json",
       ...authHeaders
     },
-    body: JSON.stringify(openaiRequest)
+    body: JSON.stringify(openaiRequest2)
   });
   if (!response.ok) {
     handleTargetApiError(response, "Token Counting API");
@@ -1812,18 +1735,81 @@ __name(createStreamTransformer, "createStreamTransformer");
 async function handleMessagesRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger) {
   const activeLogger = logger ?? createLogger(env ?? {});
   const requestBody = await request.json();
-  const claudeRequest = requestBody;
-  const maxImageDataSize = env?.IMAGE_BLOCK_DATA_MAX_SIZE ? parseInt(env.IMAGE_BLOCK_DATA_MAX_SIZE, 10) : 1 * 1024 * 1024;
-  validateClaudeMessagesRequest(claudeRequest, modelId, maxImageDataSize);
-  validateAuthHeaders(authHeaders);
-  const targetModelId = modelId || claudeRequest.model;
-  const openaiRequest = convertClaudeToOpenAIRequest(
-    claudeRequest,
-    targetModelId
-  );
-  if (targetUrl.includes("v1/messages")) {
-    targetUrl = targetUrl.replace("v1/messages", "v1/chat/completions");
+  const isOpenAIFormat = !requestBody.system && !requestBody.thinking && !requestBody.stop_sequences;
+  if (isOpenAIFormat) {
+    const openaiRequest2 = requestBody;
+    const isStreaming2 = requestBody.stream === true;
+    console.debug(requestId, `Upstream request url: ${targetUrl}`);
+    activeLogger.debug(requestId, `Upstream request url: ${targetUrl}`);
+    activeLogger.debug(requestId, `Is streaming: ${isStreaming2}`);
+    const response2 = await fetch(targetUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders
+      },
+      body: JSON.stringify(openaiRequest2)
+    });
+    if (!response2.ok) {
+      handleTargetApiError(response2, "Messages API");
+    }
+    if (isStreaming2) {
+      const openaiResponse2 = await response2.json();
+      const model2 = openaiRequest2.model || "deepseek-v3.1";
+      const reader = response2.body?.getReader();
+      if (reader) {
+        const decoder = new TextDecoder();
+        const stream = new ReadableStream({
+          async start(controller) {
+            let buffer = "";
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() || "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  const data = line.slice(6);
+                  if (data.trim() === "[DONE]") {
+                    controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+                  } else {
+                    try {
+                      const chunk = JSON.parse(data);
+                      const claudeChunk = convertOpenAIToClaudeChunk(chunk, model2, requestId);
+                      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(claudeChunk)}
+
+`));
+                    } catch {
+                      controller.enqueue(new TextEncoder().encode(`${line}
+`));
+                    }
+                  }
+                }
+              }
+            }
+            controller.close();
+          }
+        });
+        return new Response(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive"
+          }
+        });
+      }
+      return response2;
+    }
+    const openaiResponse = await response2.json();
+    const model = openaiRequest2.model || "deepseek-v3.1";
+    const claudeResponse = convertOpenAIToClaudeResponse(openaiResponse, model, requestId);
+    return new Response(JSON.stringify(claudeResponse), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
   }
+  const claudeRequest = requestBody;
   const isStreaming = claudeRequest.stream === true;
   console.debug(requestId, `Upstream request url: ${targetUrl}`);
   activeLogger.debug(requestId, `Upstream request url: ${targetUrl}`);
@@ -2252,31 +2238,15 @@ function mapGeminiContentTypeToClaude(geminiType) {
 __name(mapGeminiContentTypeToClaude, "mapGeminiContentTypeToClaude");
 
 // src/handlers/gemini.ts
-var DEFAULT_GEMINI_CONFIG = {
-  baseUrl: "https://generativelanguage.googleapis.com",
-  apiVersion: "v1beta",
-  endpointType: "openai-compatible"
-};
-function getGeminiConfig(env) {
-  return {
-    baseUrl: env.GEMINI_BASE_URL || DEFAULT_GEMINI_CONFIG.baseUrl,
-    apiVersion: env.GEMINI_API_VERSION || DEFAULT_GEMINI_CONFIG.apiVersion,
-    endpointType: env.GEMINI_ENDPOINT_TYPE || DEFAULT_GEMINI_CONFIG.endpointType
-  };
-}
-__name(getGeminiConfig, "getGeminiConfig");
 function isNativeGeminiRequest(body) {
   return "input" in body && !("messages" in body);
 }
 __name(isNativeGeminiRequest, "isNativeGeminiRequest");
 async function handleGeminiRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger) {
   const activeLogger = logger ?? createLogger(env ?? {});
-  const config = getGeminiConfig(env ?? {});
-  activeLogger.debug(requestId, `Gemini endpoint type: ${config.endpointType}`);
-  activeLogger.debug(requestId, `Gemini base URL: ${config.baseUrl}`);
-  activeLogger.debug(requestId, `Gemini API version: ${config.apiVersion}`);
-  if (config.endpointType === "interactions") {
-    return handleGeminiInteractionsRequest(
+  if (targetUrl.includes(":generateContent")) {
+    activeLogger.debug(requestId, "Routing to Gemini generateContent handler");
+    return handleGeminiGenerateContentRequest(
       request,
       targetUrl,
       authHeaders,
@@ -2286,7 +2256,8 @@ async function handleGeminiRequest(request, targetUrl, authHeaders, requestId, m
       logger
     );
   } else {
-    return handleGeminiOpenAICompatibleRequest(
+    activeLogger.debug(requestId, "Routing to Gemini Interactions handler");
+    return handleGeminiInteractionsRequest(
       request,
       targetUrl,
       authHeaders,
@@ -2299,6 +2270,11 @@ async function handleGeminiRequest(request, targetUrl, authHeaders, requestId, m
 }
 __name(handleGeminiRequest, "handleGeminiRequest");
 async function handleGeminiInteractionsRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger) {
+  const activeLogger = logger ?? createLogger(env ?? {});
+  return handleGeminiToGeminiMode(request, targetUrl, authHeaders, requestId, modelId, env, activeLogger);
+}
+__name(handleGeminiInteractionsRequest, "handleGeminiInteractionsRequest");
+async function handleGeminiToGeminiMode(request, targetUrl, authHeaders, requestId, modelId, env, logger) {
   const activeLogger = logger ?? createLogger(env ?? {});
   const requestBody = await request.json();
   let geminiRequest;
@@ -2355,46 +2331,65 @@ async function handleGeminiInteractionsRequest(request, targetUrl, authHeaders, 
     throw error;
   }
 }
-__name(handleGeminiInteractionsRequest, "handleGeminiInteractionsRequest");
-async function handleGeminiOpenAICompatibleRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger) {
+__name(handleGeminiToGeminiMode, "handleGeminiToGeminiMode");
+async function handleGeminiGenerateContentRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger) {
   const activeLogger = logger ?? createLogger(env ?? {});
   const requestBody = await request.json();
-  activeLogger.debug(requestId, "Converting Claude request to OpenAI format for Gemini");
-  const claudeRequest = requestBody;
-  const openaiRequest = convertClaudeToOpenAIRequest(claudeRequest, modelId || claudeRequest.model);
-  const isStreaming = claudeRequest.stream === true;
-  activeLogger.debug(requestId, `Gemini upstream request url: ${targetUrl}`);
-  activeLogger.debug(requestId, `Gemini model: ${openaiRequest.model}`);
+  let geminiRequest;
+  let isStreaming;
+  let effectiveModelId = modelId;
+  if (isNativeGeminiRequest(requestBody)) {
+    activeLogger.debug(requestId, "Using native Gemini request format");
+    geminiRequest = requestBody;
+    isStreaming = requestBody.stream === true;
+    effectiveModelId = effectiveModelId || requestBody.model;
+    if (typeof geminiRequest.input === "string") {
+      geminiRequest = {
+        model: effectiveModelId || geminiRequest.model || "gemini-pro",
+        contents: [{ role: "user", parts: [{ text: geminiRequest.input }] }],
+        stream: isStreaming
+      };
+    }
+  } else {
+    activeLogger.debug(requestId, "Converting Claude request to Gemini format");
+    const claudeRequest = requestBody;
+    geminiRequest = convertClaudeToGeminiRequest(claudeRequest, modelId);
+    isStreaming = claudeRequest.stream === true;
+    effectiveModelId = effectiveModelId || claudeRequest.model;
+  }
+  const endpoint = determineGeminiEndpoint(request, geminiRequest, effectiveModelId);
+  const fullTargetUrl = endpoint ? `${targetUrl}${endpoint}` : targetUrl;
+  activeLogger.debug(requestId, `Gemini upstream request url: ${fullTargetUrl}`);
+  activeLogger.debug(requestId, `Gemini model: ${effectiveModelId || "gemini-pro"}`);
   activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
-  const openaiHeaders = {
+  const geminiHeaders = {
     "Content-Type": "application/json"
   };
-  const apiKey = extractGeminiApiKey(request, authHeaders, env, "openai-compatible");
+  const apiKey = extractGeminiApiKey(request, authHeaders, env, "interactions");
   if (apiKey) {
-    openaiHeaders["Authorization"] = `Bearer ${apiKey}`;
+    geminiHeaders["Authorization"] = `Bearer ${apiKey}`;
   }
   if (authHeaders["Authorization"]) {
-    openaiHeaders["Authorization"] = authHeaders["Authorization"];
   }
   try {
-    const response = await fetch(targetUrl, {
+    const response = await fetch(fullTargetUrl, {
       method: "POST",
-      headers: openaiHeaders,
-      body: JSON.stringify(openaiRequest)
+      headers: geminiHeaders,
+      body: JSON.stringify(geminiRequest)
     });
     if (!response.ok) {
-      handleTargetApiError(response, "Gemini API (OpenAI-compatible)");
+      handleTargetApiError(response, "Gemini API");
     }
     if (isStreaming) {
-      return handleGeminiStreamingResponse(response, openaiRequest.model, requestId, activeLogger, "openai-compatible");
+      return handleGeminiStreamingResponse(response, effectiveModelId || "gemini-pro", requestId, activeLogger, "interactions");
     }
-    return handleGeminiNonStreamingResponse(response, openaiRequest.model, requestId, activeLogger, "openai-compatible");
+    return handleGeminiNonStreamingResponse(response, effectiveModelId || "gemini-pro", requestId, activeLogger, "interactions");
   } catch (error) {
-    activeLogger.error(requestId, `Gemini API (OpenAI-compatible) error: ${error.message}`);
+    activeLogger.error(requestId, `Gemini API error: ${error.message}`);
     throw error;
   }
 }
-__name(handleGeminiOpenAICompatibleRequest, "handleGeminiOpenAICompatibleRequest");
+__name(handleGeminiGenerateContentRequest, "handleGeminiGenerateContentRequest");
 function determineGeminiEndpoint(request, geminiRequest, modelId) {
   const model = modelId || geminiRequest.model || "gemini-pro";
   return `/${model}:generateContent`;
@@ -2521,6 +2516,199 @@ async function handleGeminiStreamingResponse(response, model, requestId, logger,
 }
 __name(handleGeminiStreamingResponse, "handleGeminiStreamingResponse");
 
+// src/handlers/openai.ts
+init_modules_watch_stub();
+function isGeminiInteractionsRequest(body) {
+  return "input" in body || "model" in body && "contents" in body;
+}
+__name(isGeminiInteractionsRequest, "isGeminiInteractionsRequest");
+function convertGeminiInteractionsToOpenAI(geminiRequest) {
+  const model = geminiRequest.model || "gemini-pro";
+  if (typeof geminiRequest.input === "string") {
+    return {
+      model,
+      messages: [{ role: "user", content: geminiRequest.input }],
+      stream: geminiRequest.stream || false
+    };
+  }
+  if (Array.isArray(geminiRequest.contents)) {
+    const messages = geminiRequest.contents.map((content) => ({
+      role: content.role === "model" ? "assistant" : content.role,
+      content: content.parts?.map((p) => p.text).join("") || ""
+    }));
+    return {
+      model,
+      messages,
+      stream: geminiRequest.stream || false
+    };
+  }
+  throw new Error("Invalid Gemini Interactions request format");
+}
+__name(convertGeminiInteractionsToOpenAI, "convertGeminiInteractionsToOpenAI");
+function convertGeminiGenerateContentToOpenAI(geminiRequest) {
+  const model = geminiRequest.model || "gemini-pro";
+  if (Array.isArray(geminiRequest.contents)) {
+    const messages = geminiRequest.contents.map((content) => ({
+      role: content.role === "model" ? "assistant" : content.role,
+      content: content.parts?.map((p) => p.text).join("") || ""
+    }));
+    const config = geminiRequest.generationConfig;
+    return {
+      model,
+      messages,
+      stream: config?.stream || false
+    };
+  }
+  throw new Error("Invalid Gemini generateContent request format");
+}
+__name(convertGeminiGenerateContentToOpenAI, "convertGeminiGenerateContentToOpenAI");
+async function handleOpenAIRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger) {
+  const activeLogger = logger ?? createLogger(env ?? {});
+  const requestBody = await request.json();
+  let openaiRequest2;
+  let isStreaming;
+  if (isGeminiInteractionsRequest(requestBody)) {
+    activeLogger.debug(requestId, "Converting Gemini request to OpenAI format");
+    if (Array.isArray(requestBody.contents)) {
+      openaiRequest2 = convertGeminiGenerateContentToOpenAI(requestBody);
+    } else {
+      openaiRequest2 = convertGeminiInteractionsToOpenAI(requestBody);
+    }
+    isStreaming = openaiRequest2.stream === true;
+  } else {
+    activeLogger.debug(requestId, "Converting Claude request to OpenAI format");
+    const claudeRequest = requestBody;
+    const converted = convertClaudeToOpenAIRequest(claudeRequest, modelId || claudeRequest.model);
+    openaiRequest2 = converted;
+    isStreaming = claudeRequest.stream === true;
+  }
+  if (modelId) {
+    openaiRequest2.model = modelId;
+  }
+  activeLogger.debug(requestId, `OpenAI upstream request url: ${targetUrl}`);
+  activeLogger.debug(requestId, `Model: ${openaiRequest2.model}`);
+  activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
+  const headers = {
+    "Content-Type": "application/json",
+    ...authHeaders
+  };
+  try {
+    const response = await fetch(targetUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(openaiRequest2)
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      activeLogger.error(requestId, `OpenAI API error: ${response.status} ${errorText}`);
+      throw new Error(`OpenAI API error: ${response.status} ${errorText}`);
+    }
+    if (isStreaming) {
+      return handleOpenAIStreamingResponse(response, openaiRequest2.model, requestId, activeLogger);
+    }
+    return handleOpenAINonStreamingResponse(response, openaiRequest2.model, requestId, activeLogger);
+  } catch (error) {
+    activeLogger.error(requestId, `OpenAI API error: ${error.message}`);
+    throw error;
+  }
+}
+__name(handleOpenAIRequest, "handleOpenAIRequest");
+async function handleOpenAIStreamingResponse(response, modelId, requestId, logger) {
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+  (async () => {
+    try {
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("No response body");
+      }
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const text = new TextDecoder().decode(value);
+        const claudeChunk = convertOpenAIStreamToClaude(text, modelId, requestId);
+        if (claudeChunk) {
+          await writer.write(encoder.encode(claudeChunk));
+        }
+      }
+      await writer.close();
+    } catch (error) {
+      logger.error(requestId, `OpenAI streaming error: ${error.message}`);
+      await writer.abort();
+    }
+  })();
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive"
+    }
+  });
+}
+__name(handleOpenAIStreamingResponse, "handleOpenAIStreamingResponse");
+async function handleOpenAINonStreamingResponse(response, modelId, requestId, logger) {
+  const openaiResponse = await response.json();
+  const claudeResponse = convertOpenAIToClaudeResponse(openaiResponse, modelId, requestId);
+  return new Response(JSON.stringify(claudeResponse), {
+    headers: {
+      "Content-Type": "application/json"
+    }
+  });
+}
+__name(handleOpenAINonStreamingResponse, "handleOpenAINonStreamingResponse");
+function convertOpenAIStreamToClaude(chunk, modelId, requestId) {
+  const lines = chunk.split("\n");
+  let result = "";
+  for (const line of lines) {
+    if (line.startsWith("data: ")) {
+      const data = line.slice(6);
+      if (data.trim() === "[DONE]") {
+        result += 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+      } else {
+        try {
+          const parsed = JSON.parse(data);
+          const claudeChunk = convertOpenAIToClaudeResponse(parsed, modelId, requestId);
+          result += `data: ${JSON.stringify(claudeChunk)}
+
+`;
+        } catch {
+          result += line + "\n";
+        }
+      }
+    }
+  }
+  return result || null;
+}
+__name(convertOpenAIStreamToClaude, "convertOpenAIStreamToClaude");
+
+// src/handlers/claude.ts
+init_modules_watch_stub();
+async function handleClaudeRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger) {
+  const activeLogger = logger ?? createLogger(env ?? {});
+  const requestBody = await request.json();
+  const isStreaming = requestBody.stream === true;
+  activeLogger.debug(requestId, `Claude native upstream: ${targetUrl}`);
+  activeLogger.debug(requestId, `Model: ${modelId || requestBody.model}`);
+  activeLogger.debug(requestId, `Streaming: ${isStreaming}`);
+  const response = await fetch(targetUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders
+    },
+    body: JSON.stringify(requestBody)
+  });
+  if (!response.ok) {
+    handleTargetApiError(response, "Claude API");
+  }
+  return new Response(response.body, {
+    status: response.status,
+    headers: response.headers
+  });
+}
+__name(handleClaudeRequest, "handleClaudeRequest");
+
 // src/index.ts
 function generateRequestId() {
   return `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -2585,90 +2773,95 @@ function isDynamicRoute(path) {
 }
 __name(isDynamicRoute, "isDynamicRoute");
 function parseFixedRoute(path, env) {
-  const baseUrl = env.FIXED_ROUTE_TARGET_URL || "https://api.example.com";
-  const pathPrefix = env.FIXED_ROUTE_PATH_PREFIX || "";
   if (path === "/v1/messages" || path.startsWith("/v1/messages?")) {
-    return {
-      targetUrl: `${baseUrl}${pathPrefix}/v1/chat/completions`,
-      targetEndpoint: "v1/chat/completions"
-    };
+    const mode = env.MESSAGES_UPSTREAM_MODE || "openai-completions";
+    if (mode === "native") {
+      const baseUrl = env.CLAUDE_BASE_URL || "https://api.anthropic.com";
+      return {
+        targetUrl: `${baseUrl}/v1/messages`,
+        targetEndpoint: "v1/messages",
+        handlerType: "messages",
+        upstreamMode: "native"
+      };
+    } else {
+      const baseUrl = env.FIXED_ROUTE_TARGET_URL || "https://api.example.com";
+      const pathPrefix = env.FIXED_ROUTE_PATH_PREFIX || "";
+      return {
+        targetUrl: `${baseUrl}${pathPrefix}/v1/chat/completions`,
+        targetEndpoint: "v1/messages",
+        handlerType: "messages",
+        upstreamMode: "openai-completions"
+      };
+    }
+  }
+  if (path === "/v1/interactions" || path.startsWith("/v1/interactions?")) {
+    const mode = env.INTERACTIONS_UPSTREAM_MODE || "native";
+    if (mode === "native") {
+      const baseUrl = env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com";
+      const apiVersion = env.GEMINI_API_VERSION || "v1beta";
+      return {
+        targetUrl: `${baseUrl}/${apiVersion}`,
+        targetEndpoint: "v1/interactions",
+        handlerType: "interactions",
+        upstreamMode: "native"
+      };
+    } else {
+      const baseUrl = env.FIXED_ROUTE_TARGET_URL || "https://api.example.com";
+      const pathPrefix = env.FIXED_ROUTE_PATH_PREFIX || "";
+      return {
+        targetUrl: `${baseUrl}${pathPrefix}/v1/chat/completions`,
+        targetEndpoint: "v1/interactions",
+        handlerType: "interactions",
+        upstreamMode: "openai-completions"
+      };
+    }
+  }
+  if (path.startsWith("/v1beta/models/") && path.includes(":generateContent")) {
+    const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):generateContent/);
+    const modelId = modelMatch ? modelMatch[1] : "gemini-pro";
+    const mode = env.GENERATE_CONTENT_UPSTREAM_MODE || "native";
+    if (mode === "native") {
+      const baseUrl = env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com";
+      const apiVersion = env.GEMINI_API_VERSION || "v1beta";
+      return {
+        targetUrl: `${baseUrl}/${apiVersion}/models/${modelId}:generateContent`,
+        targetEndpoint: "v1beta/models/generateContent",
+        handlerType: "generateContent",
+        upstreamMode: "native",
+        modelId
+      };
+    } else {
+      const baseUrl = env.FIXED_ROUTE_TARGET_URL || "https://api.example.com";
+      const pathPrefix = env.FIXED_ROUTE_PATH_PREFIX || "";
+      return {
+        targetUrl: `${baseUrl}${pathPrefix}/v1/chat/completions`,
+        targetEndpoint: "v1beta/models/generateContent",
+        handlerType: "generateContent",
+        upstreamMode: "openai-completions",
+        modelId
+      };
+    }
+  }
+  if (path === "/v1/chat/completions" || path.startsWith("/v1/chat/completions?")) {
+    throw new Error("Direct access to /v1/chat/completions is not allowed. Use /v1/messages instead.");
   }
   if (path === "/v1/messages/count_tokens" || path.startsWith("/v1/messages/count_tokens?")) {
+    const baseUrl = env.FIXED_ROUTE_TARGET_URL || "https://api.example.com";
+    const pathPrefix = env.FIXED_ROUTE_PATH_PREFIX || "";
     return {
       targetUrl: `${baseUrl}${pathPrefix}/v1/messages/count_tokens`,
-      targetEndpoint: "v1/messages/count_tokens"
+      targetEndpoint: "v1/messages/count_tokens",
+      handlerType: "token-counting"
     };
   }
   if (path === "/v1/models" || path.startsWith("/v1/models?")) {
+    const baseUrl = env.FIXED_ROUTE_TARGET_URL || "https://api.example.com";
+    const pathPrefix = env.FIXED_ROUTE_PATH_PREFIX || "";
     return {
       targetUrl: `${baseUrl}${pathPrefix}/v1/models`,
-      targetEndpoint: "v1/models"
+      targetEndpoint: "v1/models",
+      handlerType: "models"
     };
-  }
-  if (path === "/v1/interactions" || path.startsWith("/v1/interactions?")) {
-    const endpointType = env.GEMINI_ENDPOINT_TYPE || "openai-compatible";
-    if (endpointType === "interactions") {
-      const config = {
-        baseUrl: env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com",
-        apiVersion: env.GEMINI_API_VERSION || "v1beta"
-      };
-      return {
-        targetUrl: `${config.baseUrl}/${config.apiVersion}/models`,
-        targetEndpoint: "v1/interactions",
-        endpointType: "interactions"
-      };
-    } else {
-      const baseUrl2 = env.GEMINI_BASE_URL || "https://api.qnaigc.com/v1";
-      return {
-        targetUrl: `${baseUrl2}/chat/completions`,
-        targetEndpoint: "v1/interactions",
-        endpointType: "openai-compatible"
-      };
-    }
-  }
-  const interactionMatch = path.match(/^\/v1\/interactions\/(v[0-9]+_[A-Za-z0-9_-]+)$/);
-  if (interactionMatch) {
-    const endpointType = env.GEMINI_ENDPOINT_TYPE || "openai-compatible";
-    if (endpointType === "interactions") {
-      const config = {
-        baseUrl: env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com",
-        apiVersion: env.GEMINI_API_VERSION || "v1beta"
-      };
-      return {
-        targetUrl: `${config.baseUrl}/${config.apiVersion}/interactions/${interactionMatch[1]}`,
-        targetEndpoint: "v1/interactions/get",
-        endpointType: "interactions"
-      };
-    } else {
-      const baseUrl2 = env.GEMINI_BASE_URL || "https://api.qnaigc.com/v1";
-      return {
-        targetUrl: `${baseUrl2}/chat/completions`,
-        targetEndpoint: "v1/interactions",
-        endpointType: "openai-compatible"
-      };
-    }
-  }
-  const cancelMatch = path.match(/^\/v1\/interactions\/(v[0-9]+_[A-Za-z0-9_-]+)\/cancel$/);
-  if (cancelMatch) {
-    const endpointType = env.GEMINI_ENDPOINT_TYPE || "openai-compatible";
-    if (endpointType === "interactions") {
-      const config = {
-        baseUrl: env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com",
-        apiVersion: env.GEMINI_API_VERSION || "v1beta"
-      };
-      return {
-        targetUrl: `${config.baseUrl}/${config.apiVersion}/interactions/${cancelMatch[1]}/cancel`,
-        targetEndpoint: "v1/interactions/cancel",
-        endpointType: "interactions"
-      };
-    } else {
-      const baseUrl2 = env.GEMINI_BASE_URL || "https://api.qnaigc.com/v1";
-      return {
-        targetUrl: `${baseUrl2}/chat/completions`,
-        targetEndpoint: "v1/interactions",
-        endpointType: "openai-compatible"
-      };
-    }
   }
   throw new Error(`Unsupported fixed route: ${path}`);
 }
@@ -2717,37 +2910,25 @@ var src_default = {
       let targetUrl;
       let handlerType;
       let modelId;
+      let upstreamMode;
       let isGeminiBypass = false;
       if (isDynamicRoute(path)) {
         const parsedRoute = parseDynamicRoute(path);
         const { targetConfig, claudeEndpoint } = parsedRoute;
         modelId = parsedRoute.modelId;
-        const isGeminiApi = targetConfig.targetUrl.includes("generativelanguage.googleapis.com") || targetConfig.targetUrl.includes("gemini");
-        if (isGeminiApi && (env.GEMINI_BYPASS_ENABLED === "true" || env.GEMINI_BYPASS_ENABLED === "1")) {
-          isGeminiBypass = true;
-          handlerType = "gemini";
-          targetUrl = buildTargetUrl(targetConfig, claudeEndpoint, modelId);
-        } else {
-          const host = targetConfig.targetUrl.replace(/^https?:\/\//, "");
-          if (!isHostAllowed(host, env.ALLOWED_HOSTS)) {
-            logger.warn(requestId, `Host not allowed: ${host}. Allowed hosts: ${env.ALLOWED_HOSTS || "127.0.0.1, localhost"}`);
-            return createErrorResponse(new Error("Host not allowed"), requestId, 403);
-          }
-          handlerType = getHandlerType(claudeEndpoint);
-          targetUrl = buildTargetUrl(targetConfig, claudeEndpoint, modelId);
+        const host = targetConfig.targetUrl.replace(/^https?:\/\//, "");
+        if (!isHostAllowed(host, env.ALLOWED_HOSTS)) {
+          logger.warn(requestId, `Host not allowed: ${host}. Allowed hosts: ${env.ALLOWED_HOSTS || "127.0.0.1, localhost"}`);
+          return createErrorResponse(new Error("Host not allowed"), requestId, 403);
         }
+        handlerType = getHandlerType(claudeEndpoint);
+        targetUrl = buildTargetUrl(targetConfig, claudeEndpoint, modelId);
       } else {
         const fixedRoute = parseFixedRoute(path, env);
         targetUrl = fixedRoute.targetUrl;
-        if (fixedRoute.targetEndpoint === "v1/models") {
-          handlerType = "models";
-        } else if (fixedRoute.targetEndpoint === "v1/messages/count_tokens") {
-          handlerType = "token-counting";
-        } else if (fixedRoute.targetEndpoint.startsWith("v1/interactions")) {
-          handlerType = "gemini";
-        } else {
-          handlerType = "messages";
-        }
+        handlerType = fixedRoute.handlerType;
+        upstreamMode = fixedRoute.upstreamMode;
+        modelId = fixedRoute.modelId;
       }
       const authHeaders = extractAuthHeaders(request);
       let response;
@@ -2759,10 +2940,25 @@ var src_default = {
           response = await handleTokenCountingRequest(request, targetUrl, authHeaders, requestId, env, logger);
           break;
         case "messages":
-          response = await handleMessagesRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
+          if (upstreamMode === "native") {
+            response = await handleClaudeRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
+          } else {
+            response = await handleMessagesRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
+          }
           break;
-        case "gemini":
-          response = await handleGeminiRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
+        case "interactions":
+          if (upstreamMode === "native") {
+            response = await handleGeminiRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
+          } else {
+            response = await handleOpenAIRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
+          }
+          break;
+        case "generateContent":
+          if (upstreamMode === "native") {
+            response = await handleGeminiRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
+          } else {
+            response = await handleOpenAIRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
+          }
           break;
         default:
           throw new Error(`Unsupported handler type: ${handlerType}`);
