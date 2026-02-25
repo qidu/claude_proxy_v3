@@ -15,7 +15,7 @@ import { handleMessagesRequest } from './handlers/messages.js';
 import { handleGeminiRequest } from './handlers/gemini.js';
 import { handleOpenAIRequest } from './handlers/openai.js';
 import { handleClaudeRequest } from './handlers/claude.js';
-import { loadProxyConfig } from './utils/config-loader.js';
+import { loadProxyConfig, getModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
 
 /**
  * Generate a unique request ID
@@ -305,14 +305,101 @@ export default {
         }
       }
 
-      let targetUrl: string;
-      let handlerType: 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent';
+      let targetUrl: string = '';
+      let handlerType: 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' = 'messages';
       let modelId: string | undefined;
       let upstreamMode: 'native' | 'openai-completions' | undefined;
       let isGeminiBypass = false;
+      
+      // Extract authentication headers early
+      const authHeaders = extractAuthHeaders(request);
+      let modelAuthHeaders = authHeaders;
 
-      // Determine routing mode based on URL path
-      if (isDynamicRoute(path)) {
+      // For endpoints that need model-specific routing, extract model from request body
+      if (path === '/v1/messages' || path.startsWith('/v1/messages?') ||
+          path === '/v1/interactions' || path.startsWith('/v1/interactions?') ||
+          (path.startsWith('/v1beta/models/') && path.includes(':generateContent'))) {
+        try {
+          const bodyText = await request.text();
+          const body = JSON.parse(bodyText);
+          const modelName = body.model;
+          
+          if (modelName && proxyConfig.models) {
+            // Get model-specific routing config
+            const modelRoute = getModelRouteConfig(modelName, proxyConfig, env);
+            
+            // Override auth headers if model has specific API key
+            if (modelRoute.apiKey) {
+              modelAuthHeaders = {
+                ...authHeaders,
+                'Authorization': `Bearer ${modelRoute.apiKey}`,
+              };
+            }
+            
+            // Determine handler type and build target URL based on endpoint and mode
+            if (path === '/v1/messages' || path.startsWith('/v1/messages?')) {
+              handlerType = 'messages';
+              if (modelRoute.mode === 'native') {
+                targetUrl = `${modelRoute.targetUrl}/v1/messages`;
+                upstreamMode = 'native';
+              } else {
+                targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
+                upstreamMode = 'openai-completions';
+              }
+            } else if (path === '/v1/interactions' || path.startsWith('/v1/interactions?')) {
+              handlerType = 'interactions';
+              if (modelRoute.mode === 'native') {
+                // Native Gemini API - need to extract model ID from path or use model name
+                const geminiModelId = modelName.replace(/[/.]/g, '-');
+                targetUrl = `${modelRoute.targetUrl}/v1beta/models/${geminiModelId}:generateContent`;
+                upstreamMode = 'native';
+              } else {
+                targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
+                upstreamMode = 'openai-completions';
+              }
+            } else if (path.startsWith('/v1beta/models/') && path.includes(':generateContent')) {
+              handlerType = 'generateContent';
+              const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):generateContent/);
+              const pathModelId = modelMatch ? modelMatch[1] : modelName;
+              if (modelRoute.mode === 'native') {
+                targetUrl = `${modelRoute.targetUrl}/v1beta/models/${pathModelId}:generateContent`;
+                upstreamMode = 'native';
+              } else {
+                targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
+                upstreamMode = 'openai-completions';
+              }
+            }
+            
+            modelId = modelName;
+            
+            logger.debug(requestId, `Model-specific routing: ${modelName} -> ${targetUrl} (${modelRoute.mode}) [${handlerType}]`);
+            
+            // Recreate request with body
+            request = new Request(request.url, {
+              method: request.method,
+              headers: request.headers,
+              body: bodyText,
+            });
+          } else {
+            // No model-specific config, use default routing
+            const fixedRoute = parseFixedRoute(path, env);
+            targetUrl = fixedRoute.targetUrl;
+            handlerType = fixedRoute.handlerType;
+            upstreamMode = fixedRoute.upstreamMode;
+            modelId = fixedRoute.modelId;
+            
+            // Recreate request with body
+            request = new Request(request.url, {
+              method: request.method,
+              headers: request.headers,
+              body: bodyText,
+            });
+          }
+        } catch (error) {
+          logger.error(requestId, `Failed to parse request body for model routing: ${(error as Error).message}`);
+          return createErrorResponse(new Error('Invalid request body'), requestId, 400);
+        }
+      } else if (isDynamicRoute(path)) {
         // Dynamic routing: /https/api.qnaigc.com/v1/messages
         const parsedRoute = parseDynamicRoute(path);
         const { targetConfig, claudeEndpoint } = parsedRoute;
@@ -336,44 +423,41 @@ export default {
         modelId = fixedRoute.modelId;
       }
 
-      // Extract authentication headers
-      const authHeaders = extractAuthHeaders(request);
-
       // Route to appropriate handler
       let response: Response;
       switch (handlerType) {
         case 'models':
-          response = await handleModelsRequest(request, targetUrl, authHeaders, requestId, logger);
+          response = await handleModelsRequest(request, targetUrl, modelAuthHeaders, requestId, logger);
           break;
 
         case 'token-counting':
-          response = await handleTokenCountingRequest(request, targetUrl, authHeaders, requestId, env, logger);
+          response = await handleTokenCountingRequest(request, targetUrl, modelAuthHeaders, requestId, env, logger);
           break;
 
         case 'messages':
           // /v1/messages routes based on upstream mode
           if (upstreamMode === 'native') {
-            response = await handleClaudeRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
+            response = await handleClaudeRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
           } else {
-            response = await handleMessagesRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
+            response = await handleMessagesRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
           }
           break;
 
         case 'interactions':
           // /v1/interactions routes based on upstream mode
           if (upstreamMode === 'native') {
-            response = await handleGeminiRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
+            response = await handleGeminiRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
           } else {
-            response = await handleOpenAIRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
+            response = await handleOpenAIRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
           }
           break;
 
         case 'generateContent':
           // /v1beta/models/{model}:generateContent routes based on upstream mode
           if (upstreamMode === 'native') {
-            response = await handleGeminiRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
+            response = await handleGeminiRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
           } else {
-            response = await handleOpenAIRequest(request, targetUrl, authHeaders, requestId, modelId, env, logger);
+            response = await handleOpenAIRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
           }
           break;
 

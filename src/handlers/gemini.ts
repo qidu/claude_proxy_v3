@@ -268,8 +268,9 @@ async function handleGeminiToGeminiMode(
     }
 
     // Determine the target endpoint
-    const endpoint = determineGeminiEndpoint(request, geminiRequest, effectiveModelId);
-    const fullTargetUrl = endpoint ? `${targetUrl}${endpoint}` : targetUrl;
+    // Determine if targetUrl already contains :generateContent
+    const needsEndpoint = !targetUrl.includes(":generateContent");
+    const fullTargetUrl = needsEndpoint ? `${targetUrl}${determineGeminiEndpoint(request, geminiRequest, effectiveModelId)}` : targetUrl;
 
     // Log request info
     activeLogger.debug(requestId, `Gemini upstream request url: ${fullTargetUrl}`);
@@ -284,7 +285,7 @@ async function handleGeminiToGeminiMode(
     // Add API key from headers or environment
     const apiKey = extractGeminiApiKey(request, authHeaders, env, 'interactions');
     if (apiKey) {
-        geminiHeaders['Authorization'] = `Bearer ${apiKey}`;
+        geminiHeaders['x-goog-api-key'] = apiKey;
     }
 
     // Forward other auth headers
@@ -365,8 +366,9 @@ async function handleGeminiGenerateContentRequest(
     }
 
     // Determine the target endpoint
-    const endpoint = determineGeminiEndpoint(request, geminiRequest, effectiveModelId);
-    const fullTargetUrl = endpoint ? `${targetUrl}${endpoint}` : targetUrl;
+    // Determine if targetUrl already contains :generateContent
+    const needsEndpoint = !targetUrl.includes(":generateContent");
+    const fullTargetUrl = needsEndpoint ? `${targetUrl}${determineGeminiEndpoint(request, geminiRequest, effectiveModelId)}` : targetUrl;
 
     // Log request info
     activeLogger.debug(requestId, `Gemini upstream request url: ${fullTargetUrl}`);
@@ -381,7 +383,7 @@ async function handleGeminiGenerateContentRequest(
     // Add API key from headers or environment
     const apiKey = extractGeminiApiKey(request, authHeaders, env, 'interactions');
     if (apiKey) {
-        geminiHeaders['Authorization'] = `Bearer ${apiKey}`;
+        geminiHeaders['x-goog-api-key'] = apiKey;
     }
 
     // Forward other auth headers

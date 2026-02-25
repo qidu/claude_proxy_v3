@@ -96,33 +96,87 @@ Claude API  Compatible            Compatible            Compatible
             completions           completions           completions
 ```
 
-### Model-based Upstream Selection Examples
-```toml
-# Route specific models to different upstreams
-MODELS_UPSTREAM_MAPPING = '{
-  "claude-4": [
-    {"https://api..com": 30, "api-schema": "claude-messages"}, 
-    {"https://aws.com": 40, "api-schema": "openai-completions"}, 
-    {"https://googlecloud.com": 40, "api-schema": "openai-completions"}
-  ],
-  "gemini-2.5-pro": [
-    {"https://generativelanguage.googleapis.com":100, "gemini-contentgenerate"}
-  ],
-  "deepseek-v3.1": [
-    {"https://api.deepseek.com": 50, "api-schema": "openai-completions"},
-    {"https://api.qnaigc.com": 50, "api-schema": "openai-completions"}
-  ],
-  "defaults": [
-    {"https://api.qnaigc.com": 100, "api-schema": "openai-completions"}
-  ]
-}'
-# 'defaults` means all other models
+### Model-based Upstream Configuration
 
-NATIVE_UPSTREAM_MODES = '[
-  "claude-messages", "gemini-contentgenerate"
-]
-# 'openai-completions' is 'compatible', not 'native'
+Current implementation supports **single upstream per model** via `proxy_config.toml`:
+
+```toml
+# proxy_config.toml
+
+[upstream]
+default_url = "https://api.qnaigc.com"
+default_api_key = "sk-default-key"
+
+# Model-specific routing (single upstream per model)
+[models.deepseek-v3-1]
+mode = "openai-completions"
+base_url = "https://api.deepseek.com"
+api_key = "sk-deepseek-key"
+
+[models.gemini-2-5-flash]
+mode = "native"
+base_url = "https://api.yoosheen.com"
+api_key = "sk-gemini-key"
+
+[models.claude-3-5-sonnet]
+mode = "native"
+base_url = "https://api.anthropic.com"
+api_key = "sk-claude-key"
+
+[defaults]
+mode = "openai-completions"
+```
+
+### Future Feature: Multiple Upstreams per Model
+
+**Status**: 📋 Planned (not yet implemented)
+
+Load balancing and failover support with multiple upstreams:
+
+```toml
+# FUTURE FEATURE - Not currently supported
+[models.deepseek-v3-1]
+mode = "openai-completions"
+
+[[models.deepseek-v3-1.upstreams]]
+base_url = "https://api.deepseek.com"
+api_key = "sk-deepseek-key"
+weight = 50
+
+[[models.deepseek-v3-1.upstreams]]
+base_url = "https://api.qnaigc.com"
+api_key = "sk-qnaigc-key"
+weight = 50
+
+## Route specific models to different upstreams in future
+## MODELS_UPSTREAM_MAPPING = '{
+##   "claude-4": [
+##     {"https://api..com": 30, "api-schema": "claude-messages"},
+##     {"https://aws.com": 40, "api-schema": "openai-completions"},
+##     {"https://googlecloud.com": 40, "api-schema": "openai-completions"}
+##   ],
+##   "gemini-2.5-pro": [
+##     {"https://generativelanguage.googleapis.com":100, "gemini-contentgenerate"}
+##   ],
+##   "deepseek-v3.1": [
+##     {"https://api.deepseek.com": 50, "api-schema": "openai-completions"},
+##     {"https://api.qnaigc.com": 50, "api-schema": "openai-completions"}
+##   ],
+##   "defaults": [
+##     {"https://api.qnaigc.com": 100, "api-schema": "openai-completions"}
+##   ]
+## }'
+## 'defaults` means all other models
+
+## NATIVE_UPSTREAM_MODES = '[
+##   "claude-messages", "gemini-contentgenerate"
+## ]
+## 'openai-completions' is 'compatible', not 'native'
 '
+
+```
+
+See `docs/multiple_upstream_analysis.md` for implementation plan.
 
 ```
 

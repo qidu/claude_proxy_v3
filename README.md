@@ -16,6 +16,7 @@ A complete Claude API proxy that supports multiple AI model providers with unifi
   - Moonshot/Kimi (K2.5, K2-0905)
   - Qwen (Qwen3, Qwen-Max, Qwen-Turbo, Qwen-Coder)
   - Doubao (Seed-1.6-Thinking)
+  - Gemini (2.5-Flash with native API support)
 
 - **Extended Thinking Support**: Reasoning models with step-by-step explanations
   - DeepSeek R1 series (deepseek-r1, deepseek-r1-0528)
@@ -26,7 +27,8 @@ A complete Claude API proxy that supports multiple AI model providers with unifi
 - **Flexible Configuration**:
   - File-based config: `proxy_config.toml`
   - URL-based config: Eureka service discovery support
-  - Model-specific routing
+  - Model-specific routing with per-model upstreams
+  - Per-model API keys
   - Native and OpenAI-compatible modes
 
 - **Dynamic Routing**: Route requests to any OpenAI-compatible API
@@ -58,30 +60,32 @@ PROXY_CONFIG_PATH = "./proxy_config.toml"
 default_url = "https://api.qnaigc.com"
 default_api_key = "your-api-key"
 
+# Native API mode (direct pass-through)
 [models.gemini-2-5-flash]
 mode = "native"
 base_url = "https://api.example.com"
 api_key = "your-gemini-key"
 
+[models.claude-3-5-sonnet]
+mode = "native"
+base_url = "https://api.anthropic.com"
+api_key = "your-claude-key"
+
+# OpenAI-compatible mode (format conversion)
+[models.deepseek-v3-1]
+mode = "openai-completions"
+base_url = "https://api.deepseek.com"
+api_key = "your-deepseek-key"
+
+# Use default upstream (omit base_url)
+[models.qwen-max]
+mode = "openai-completions"
+
 [defaults]
 mode = "openai-completions"
 ```
 
-# Gemini API configuration
-GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
-GEMINI_API_VERSION = "v1beta"
-GEMINI_API_KEY = "your-gemini-api-key"
-
-# Gemini routing modes (choose 'openai' or 'gemini' for each endpoint)
-# 'openai' = convert to OpenAI format and route to OpenAI-compatible upstream
-# 'gemini' = convert to Gemini format and route to Gemini API
-GEMINI_INTERACTIONS_MODE = "gemini"           # /v1/interactions routing mode
-GEMINI_GENERATE_CONTENT_MODE = "gemini"       # /v1beta/models/{model}:generateContent routing mode
-
-# Fixed route configuration (for /v1/messages and OpenAI-compatible modes)
-FIXED_ROUTE_TARGET_URL = "https://api.example.com"
-FIXED_ROUTE_PATH_PREFIX = ""
-```
+**Note**: Each model supports one upstream. Multiple upstreams per model (load balancing) is a future feature.
 
 ### 3. Develop Locally
 
@@ -410,11 +414,18 @@ curl http://localhost:8788/v1/messages \
 ### Test Results
 
 See `docs/test_results_after_refactoring.md` for comprehensive test results:
-- ✅ 26 models tested successfully
+- ✅ 27 models tested successfully (including Gemini 2.5-Flash)
 - ✅ 10+ question types validated (math, coding, translation, reasoning, etc.)
-- ✅ 6 providers tested (DeepSeek, MiniMax, GLM, Moonshot, Qwen, Doubao)
+- ✅ 7 providers tested (DeepSeek, MiniMax, GLM, Moonshot, Qwen, Doubao, Gemini)
 - ✅ Extended thinking/reasoning models validated
+- ✅ Model-specific routing with per-model upstreams
 - ✅ 100% success rate
+
+### Gemini Endpoints Tested:
+- ✅ `/v1/messages` - Claude API format with Gemini backend
+- ✅ `/v1beta/models/gemini-2.5-flash:generateContent` - Native Gemini endpoint
+- ✅ Model-specific routing to custom upstream (api.yoosheen.com)
+- ✅ Complex questions (1235 tokens generated)
 
 ### Reasoning Models Tested:
 - deepseek-r1, deepseek-r1-0528 - Step-by-step mathematical reasoning

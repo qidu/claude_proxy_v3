@@ -37,11 +37,10 @@ export async function handleMessagesRequest(
 
   if (isOpenAIFormat) {
     // Request is already in OpenAI format, pass through directly
-    const openaiRequest = requestBody;
+    const model = (requestBody.model as string) || modelId || 'unknown';
     const isStreaming = requestBody.stream === true;
 
     // Log request info
-    console.debug(requestId, `Upstream request url: ${targetUrl}`);
     activeLogger.debug(requestId, `Upstream request url: ${targetUrl}`);
     activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
 
@@ -51,7 +50,7 @@ export async function handleMessagesRequest(
         'Content-Type': 'application/json',
         ...authHeaders,
       },
-      body: JSON.stringify(openaiRequest),
+      body: JSON.stringify(requestBody),
     });
 
     // Handle target API errors
@@ -59,74 +58,33 @@ export async function handleMessagesRequest(
       handleTargetApiError(response, 'Messages API');
     }
 
-    // Handle streaming response
+    // For OpenAI format pass-through, convert response to Claude format
     if (isStreaming) {
-      const openaiResponse = await response.json();
-      const model = (openaiRequest.model as string) || 'deepseek-v3.1';
-      const reader = response.body?.getReader();
-      if (reader) {
-        const decoder = new TextDecoder();
-        const stream = new ReadableStream({
-          async start(controller) {
-            let buffer = '';
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split('\n');
-              buffer = lines.pop() || '';
-              for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                  const data = line.slice(6);
-                  if (data.trim() === '[DONE]') {
-                    controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
-                  } else {
-                    try {
-                      const chunk = JSON.parse(data);
-                      const claudeChunk = convertOpenAIToClaudeChunk(chunk, model, requestId);
-                      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(claudeChunk)}\n\n`));
-                    } catch {
-                      controller.enqueue(new TextEncoder().encode(`${line}\n`));
-                    }
-                  }
-                }
-              }
-            }
-            controller.close();
-          },
-        });
-        return new Response(stream, {
-          headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-          },
-        });
-      }
-      return response;
+      return handleStreamingResponse(response, model, requestId, activeLogger);
     }
-
-    // Non-streaming response
-    const openaiResponse = await response.json();
-    const model = (openaiRequest.model as string) || 'deepseek-v3.1';
-    const claudeResponse = convertOpenAIToClaudeResponse(openaiResponse, model, requestId);
-    return new Response(JSON.stringify(claudeResponse), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return handleNonStreamingResponse(response, model, requestId, activeLogger);
   }
 
   // Claude format - convert to OpenAI
-  const claudeRequest = requestBody as ClaudeMessagesRequest;
+  const claudeRequest = requestBody as unknown as ClaudeMessagesRequest;
+
+  // Validate Claude request
+  validateClaudeMessagesRequest(claudeRequest);
+
+  // Get target model ID
+  const targetModelId = modelId || claudeRequest.model;
+
+  // Convert to OpenAI format
+  const openaiRequest: OpenAIRequest = convertClaudeToOpenAIRequest(claudeRequest, targetModelId);
 
   // Check if streaming is requested
   const isStreaming = claudeRequest.stream === true;
 
-  // Log request info (without auth keys for security)
-  console.debug(requestId, `Upstream request url: ${targetUrl}`);
+  // Log request info
   activeLogger.debug(requestId, `Upstream request url: ${targetUrl}`);
   activeLogger.debug(requestId, `Has auth headers: ${!!authHeaders['Authorization'] || !!authHeaders['x-api-key']}`);
   activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
+  
   const response = await fetch(targetUrl, {
     method: 'POST',
     headers: {

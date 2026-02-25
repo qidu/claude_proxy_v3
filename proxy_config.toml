@@ -1,29 +1,57 @@
 # Proxy Configuration
+# Supports single upstream per model with mode-based routing
 
 [upstream]
 # Default upstream for openai-completions mode
 default_url = "https://api.qnaigc.com"
 default_api_key = "sk-87abde0542f46913036******"
 
-# Model-specific routing
+# ============================================
+# Model-specific routing examples
+# ============================================
+
+# Example 1: Native Gemini API
 [models.gemini-2-5-flash]
-endpoint = "/v1beta/models/gemini-2.5-flash:generateContent"
 mode = "native"
 base_url = "https://api.example.com"
-api_key = "sk-rFaHPAoJidbsN2B******"
+api_key = "sk-rFaHPAoJidbs******"
 
+# Example 2: Native Claude API
+[models.claude-3-5-sonnet]
+mode = "native"
+base_url = "https://api.anthropic.com"
+api_key = "sk-claude-key-here"
+
+# Example 3: OpenAI-compatible using default upstream
 [models.deepseek-v3-1]
 mode = "openai-completions"
-# Uses default upstream
+# Uses default_url and default_api_key from [upstream]
 
+# Example 4: OpenAI-compatible using default upstream
 [models.minimax-m2-1]
 mode = "openai-completions"
-# Uses default upstream
+# Uses default_url and default_api_key from [upstream]
 
-[models.xiaomi-mimo-v2-flash]
+# Example 5: Another model using default upstream
+[models.qwen-max-2025-01-25]
 mode = "openai-completions"
-# Uses default upstream
+# Uses default_url and default_api_key from [upstream]
 
-# Default mode for all other models
+# ============================================
+# Default mode for all unconfigured models
+# ============================================
 [defaults]
 mode = "openai-completions"
+
+# ============================================
+# Notes:
+# ============================================
+# - Each model supports ONE upstream only (single base_url)
+# - mode = "native": Direct pass-through to native API (Claude/Gemini)
+# - mode = "openai-completions": Convert to OpenAI format
+# - If base_url is omitted, uses default_url from [upstream]
+# - If api_key is omitted, uses default_api_key from [upstream]
+# - Model names with "/" or "." are normalized (e.g., "z-ai/glm-5" → "z-ai-glm-5")
+#
+# Multiple upstreams per model (load balancing) is a future feature.
+# See docs/multiple_upstream_analysis.md for details.

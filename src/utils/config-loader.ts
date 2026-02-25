@@ -22,6 +22,47 @@ export interface ProxyConfig {
   };
 }
 
+export interface ModelRouteConfig {
+  targetUrl: string;
+  apiKey?: string;
+  mode: 'native' | 'openai-completions';
+}
+
+/**
+ * Get model-specific routing config
+ */
+export function getModelRouteConfig(
+  modelName: string,
+  proxyConfig: ProxyConfig,
+  env: Env
+): ModelRouteConfig {
+  // Normalize model name (replace / and . with -)
+  const normalizedModel = modelName.replace(/[/.]/g, '-');
+  
+  const modelConfig = proxyConfig.models?.[normalizedModel];
+  const defaultMode = proxyConfig.defaults?.mode || 'openai-completions';
+  
+  if (modelConfig) {
+    // Model-specific config exists
+    const mode = modelConfig.mode || defaultMode;
+    const baseUrl = modelConfig.base_url || proxyConfig.upstream?.default_url || env.FIXED_ROUTE_TARGET_URL || 'https://api.qnaigc.com';
+    const apiKey = modelConfig.api_key || proxyConfig.upstream?.default_api_key;
+    
+    return {
+      targetUrl: baseUrl,
+      apiKey,
+      mode,
+    };
+  }
+  
+  // Use default upstream
+  return {
+    targetUrl: proxyConfig.upstream?.default_url || env.FIXED_ROUTE_TARGET_URL || 'https://api.qnaigc.com',
+    apiKey: proxyConfig.upstream?.default_api_key,
+    mode: defaultMode,
+  };
+}
+
 let cachedConfig: ProxyConfig | null = null;
 
 /**
