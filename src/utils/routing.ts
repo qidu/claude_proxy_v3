@@ -101,12 +101,12 @@ function parseDynamicRoute(url: string): ParsedRoute {
 
   // Look for Claude endpoint patterns from the end
   for (let i = parts.length - 1; i >= 2; i--) {
-    if (parts[i] === 'v1') {
+    if (parts[i] === 'v1' || parts[i] === 'v1beta') {
       // Check if this is a Claude endpoint
       const nextPart = i + 1 < parts.length ? parts[i + 1] : null;
       const twoPartsAhead = i + 2 < parts.length ? parts[i + 2] : null;
 
-      if (nextPart === 'models' || nextPart === 'messages') {
+      if (nextPart === 'models' || nextPart === 'messages' || nextPart === 'interactions') {
         // Found a potential Claude endpoint
         targetPathEndIndex = i - 1;
         claudeEndpointStartIndex = i;
@@ -238,7 +238,7 @@ function extractAuthHeaders(request: Request): Record<string, string> {
 /**
  * Determine handler type based on Claude endpoint
  */
-function getHandlerType(claudeEndpoint: string): 'models' | 'token-counting' | 'messages' | 'gemini' {
+function getHandlerType(claudeEndpoint: string): 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' {
   if (claudeEndpoint === 'v1/models') {
     return 'models';
   }
@@ -253,7 +253,12 @@ function getHandlerType(claudeEndpoint: string): 'models' | 'token-counting' | '
 
   // Gemini Interactions API endpoints
   if (claudeEndpoint.startsWith('v1/interactions') || claudeEndpoint.startsWith('v1beta/interactions')) {
-    return 'gemini';
+    return 'interactions';
+  }
+
+  // Gemini generateContent endpoints
+  if (claudeEndpoint.startsWith('v1beta/models/') && claudeEndpoint.includes(':generateContent')) {
+    return 'generateContent';
   }
 
   throw new Error(`Unknown Claude endpoint: ${claudeEndpoint}`);

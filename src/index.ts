@@ -343,6 +343,9 @@ export default {
             // Get model-specific routing config
             const modelRoute = getModelRouteConfig(modelName, proxyConfig, env);
             
+            // Use model alias if configured, otherwise use original model name
+            const upstreamModelName = modelRoute.modelAlias || modelName;
+            
             // Override auth headers if model has specific API key
             if (modelRoute.apiKey) {
               modelAuthHeaders = {
@@ -365,8 +368,8 @@ export default {
               handlerType = 'interactions';
               if (modelRoute.mode === 'native') {
                 // Native Gemini API - route to generateContent endpoint
-                // Use original model name (don't normalize for URL)
-                targetUrl = `${modelRoute.targetUrl}/v1beta/models/${modelName}:generateContent`;
+                // Use upstream model name (with alias if configured)
+                targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
                 upstreamMode = 'native';
               } else {
                 // OpenAI-compatible mode
@@ -376,7 +379,7 @@ export default {
             } else if (path.startsWith('/v1beta/models/') && path.includes(':generateContent')) {
               handlerType = 'generateContent';
               const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):generateContent/);
-              const pathModelId = modelMatch ? modelMatch[1] : modelName;
+              const pathModelId = modelMatch ? modelMatch[1] : upstreamModelName;
               if (modelRoute.mode === 'native') {
                 targetUrl = `${modelRoute.targetUrl}/v1beta/models/${pathModelId}:generateContent`;
                 upstreamMode = 'native';
@@ -386,7 +389,7 @@ export default {
               }
             }
             
-            modelId = modelName;
+            modelId = upstreamModelName;
             
             logger.debug(requestId, `Model-specific routing: ${modelName} -> ${targetUrl} (${modelRoute.mode}) [${handlerType}]`);
             

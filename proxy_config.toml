@@ -4,7 +4,7 @@
 [upstream]
 # Default upstream for openai-completions mode
 default_url = "https://api.qnaigc.com"
-default_api_key = "sk-87abde0542f469130364cc3de48977a71883d8ec81987d3f7e46ee360985dd02"
+default_api_key = "sk-87abde0542f469******"
 
 # ============================================
 # Model-specific routing examples
@@ -20,19 +20,30 @@ default_api_key = "sk-87abde0542f469130364cc3de48977a71883d8ec81987d3f7e46ee3609
 # Config section uses: [models.gemini-2-5-flash]
 [models.gemini-2-5-flash]
 mode = "native"
-base_url = "https://api.yoosheen.com"
-api_key = "sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0"
+base_url = "https://api.example1.com"
+api_key = "sk-rFaHPAoJid******"
 
-# Example 2: Native Claude API
-[models.claude-3-5-sonnet]
+# Example 2: Native Claude API with model alias
+[models.claude-4-5-sonnet]
 mode = "native"
-base_url = "https://api.anthropic.com"
-api_key = "sk-claude-key-here"
+# model_alias = "claude-opus-4-1-20250805"
+# model_alias = "claude-3-5-sonnet-20240620
+# model_alias = "claude-3-5-sonnet-20241022
+# model_alias = "claude-3-7-sonnet-20250219
+model_alias = "claude-3-7-sonnet-20250219-thinking"
+# model_alias = "claude-haiku-4-5-20251001
+# model_alias = "claude-haiku-4-5-20251001-thinking
+# model_alias = "claude-opus-4-1-20250805
+# model_alias = "claude-opus-4-1-20250805-thinking
+# model_alias = "claude-opus-4-20250514
+# model_alias = "claude-opus-4-20250514-thinking
+base_url = "https://api.example2.com"
+api_key = "sk-NzBalLnHTBdlL23pQH******"
 
 # Example 3: DeepSeek with "/" in name
 # API request uses: "model": "deepseek/deepseek-v3.2-exp"
 # Config section uses: [models.deepseek-deepseek-v3-2-exp]
-[models.deepseek-deepseek-v3-2-exp]
+[models.deepseek-deepseek-v3-2]
 mode = "openai-completions"
 
 # Example 4: MiniMax with "/" in name
@@ -51,11 +62,7 @@ mode = "openai-completions"
 [models.gpt-oss-120b]
 mode = "openai-completions"
 
-# Example 7: Claude (uses default upstream)
-[models.claude-4-5-haiku]
-mode = "openai-completions"
-
-# Example 8: DeepSeek R1 (reasoning model, uses default upstream)
+# Example 7: DeepSeek R1 (reasoning model, uses default upstream)
 [models.deepseek-r1]
 mode = "openai-completions"
 

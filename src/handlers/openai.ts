@@ -17,6 +17,18 @@ function isGeminiInteractionsRequest(body: Record<string, unknown>): boolean {
 function convertGeminiInteractionsToOpenAI(geminiRequest: Record<string, unknown>): Record<string, unknown> {
   const model = (geminiRequest.model as string) || 'gemini-pro';
   
+  // Handle input.messages format (Interactions API)
+  if (geminiRequest.input && typeof geminiRequest.input === 'object') {
+    const input = geminiRequest.input as Record<string, unknown>;
+    if (Array.isArray(input.messages)) {
+      return {
+        model,
+        messages: input.messages,
+        stream: geminiRequest.stream || false,
+      };
+    }
+  }
+  
   // Handle simple input format
   if (typeof geminiRequest.input === 'string') {
     return {

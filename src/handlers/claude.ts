@@ -25,6 +25,11 @@ export async function handleClaudeRequest(
     const requestBody = await request.json() as Record<string, unknown>;
     const isStreaming = requestBody.stream === true;
 
+    // Use modelId (which may be an alias) if provided
+    if (modelId) {
+        requestBody.model = modelId;
+    }
+
     activeLogger.debug(requestId, `Claude native upstream: ${targetUrl}`);
     activeLogger.debug(requestId, `Model: ${modelId || requestBody.model}`);
     activeLogger.debug(requestId, `Streaming: ${isStreaming}`);

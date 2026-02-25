@@ -30,27 +30,27 @@ test_endpoint() {
 
 BASE="http://localhost:8788"
 
-echo "Testing deepseek/deepseek-v3.2 (openai-completions mode)"
-echo "========================================================="
-echo "Config: Uses default upstream (https://api.qnaigc.com)"
+echo "Testing claude-4.5-sonnet with native upstream"
+echo "==============================================="
+echo "Config: mode=native, base_url=https://api.wenwen-ai.com"
 echo
 
-echo "Model: deepseek/deepseek-v3.2"
+echo "Model: claude-4.5-sonnet (native mode)"
 echo "---"
 test_endpoint "1. /v1/messages" \
   "$BASE/v1/messages" \
-  '{"model":"deepseek/deepseek-v3.2","messages":[{"role":"user","content":"2+2?"}],"max_tokens":50}'
+  '{"model":"claude-4.5-sonnet","messages":[{"role":"user","content":"2+2?"}],"max_tokens":50}'
 
 test_endpoint "2. /v1/interactions" \
   "$BASE/v1/interactions" \
-  '{"model":"deepseek/deepseek-v3.2","input":{"messages":[{"role":"user","content":"3+3?"}]}}'
+  '{"model":"claude-4.5-sonnet","input":{"messages":[{"role":"user","content":"3+3?"}]}}'
 
-test_endpoint "3. /v1beta/models/deepseek/deepseek-v3.2:generateContent" \
-  "$BASE/v1beta/models/deepseek/deepseek-v3.2:generateContent" \
+test_endpoint "3. /v1beta/models/claude-4.5-sonnet:generateContent" \
+  "$BASE/v1beta/models/claude-4.5-sonnet:generateContent" \
   '{"contents":[{"role":"user","parts":[{"text":"4+4?"}]}]}'
 
 echo
-echo "========================================================="
+echo "==============================================="
 echo "Results: $PASS passed, $FAIL failed out of 3 tests"
 echo "Success rate: $(( PASS * 100 / 3 ))%"
 

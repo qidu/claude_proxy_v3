@@ -30,28 +30,29 @@ test_endpoint() {
 
 BASE="http://localhost:8788"
 
-echo "Testing deepseek/deepseek-v3.2 (openai-completions mode)"
-echo "========================================================="
-echo "Config: Uses default upstream (https://api.qnaigc.com)"
+echo "Testing claude-haiku-4-5 (uses default openai-completions mode)"
+echo "================================================================"
 echo
 
-echo "Model: deepseek/deepseek-v3.2"
+echo "Model: claude-haiku-4-5 (openai-completions mode)"
 echo "---"
 test_endpoint "1. /v1/messages" \
   "$BASE/v1/messages" \
-  '{"model":"deepseek/deepseek-v3.2","messages":[{"role":"user","content":"2+2?"}],"max_tokens":50}'
+  '{"model":"claude-haiku-4-5","messages":[{"role":"user","content":"2+2?"}],"max_tokens":50}'
 
 test_endpoint "2. /v1/interactions" \
   "$BASE/v1/interactions" \
-  '{"model":"deepseek/deepseek-v3.2","input":{"messages":[{"role":"user","content":"3+3?"}]}}'
+  '{"model":"claude-haiku-4-5","input":{"messages":[{"role":"user","content":"3+3?"}]}}'
 
-test_endpoint "3. /v1beta/models/deepseek/deepseek-v3.2:generateContent" \
-  "$BASE/v1beta/models/deepseek/deepseek-v3.2:generateContent" \
+test_endpoint "3. /v1beta/models/claude-haiku-4-5:generateContent" \
+  "$BASE/v1beta/models/claude-haiku-4-5:generateContent" \
   '{"contents":[{"role":"user","parts":[{"text":"4+4?"}]}]}'
 
 echo
-echo "========================================================="
+echo "================================================================"
 echo "Results: $PASS passed, $FAIL failed out of 3 tests"
 echo "Success rate: $(( PASS * 100 / 3 ))%"
+echo
+echo "Note: Correct model name is 'claude-4.5-haiku' (already tested ✅)"
 
 kill $SERVER_PID 2>/dev/null

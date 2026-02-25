@@ -16,6 +16,7 @@ export interface ProxyConfig {
     mode?: 'native' | 'openai-completions';
     base_url?: string;
     api_key?: string;
+    model_alias?: string;
   }>;
   defaults?: {
     mode?: 'native' | 'openai-completions';
@@ -26,6 +27,7 @@ export interface ModelRouteConfig {
   targetUrl: string;
   apiKey?: string;
   mode: 'native' | 'openai-completions';
+  modelAlias?: string;
 }
 
 /**
@@ -47,11 +49,13 @@ export function getModelRouteConfig(
     const mode = modelConfig.mode || defaultMode;
     const baseUrl = modelConfig.base_url || proxyConfig.upstream?.default_url || env.FIXED_ROUTE_TARGET_URL || 'https://api.qnaigc.com';
     const apiKey = modelConfig.api_key || proxyConfig.upstream?.default_api_key;
+    const modelAlias = modelConfig.model_alias;
     
     return {
       targetUrl: baseUrl,
       apiKey,
       mode,
+      modelAlias,
     };
   }
   

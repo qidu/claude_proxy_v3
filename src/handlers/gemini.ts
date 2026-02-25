@@ -106,9 +106,22 @@ async function handleGeminiInteractionsRequest(
         contents: []
     };
     
-    // Handle input field (string, Content, array of Content, or array of Turn)
+    // Handle input field (string, object with messages, Content, array of Content, or array of Turn)
     if (typeof requestBody.input === 'string') {
         geminiRequest.contents = [{ role: 'user', parts: [{ text: requestBody.input }] }];
+    } else if (requestBody.input && typeof requestBody.input === 'object' && 'messages' in requestBody.input) {
+        // Handle input.messages format (Interactions API standard)
+        const input = requestBody.input as Record<string, unknown>;
+        if (Array.isArray(input.messages)) {
+            geminiRequest.contents = input.messages.map((msg: any) => ({
+                role: msg.role === 'assistant' ? 'model' : msg.role,
+                parts: typeof msg.content === 'string' 
+                    ? [{ text: msg.content }]
+                    : Array.isArray(msg.content)
+                        ? msg.content.map((c: any) => c.type === 'text' ? { text: c.text } : c)
+                        : [{ text: String(msg.content) }]
+            }));
+        }
     } else if (Array.isArray(requestBody.input)) {
         // Check if it's array of Turn (has role field) or array of Content
         const firstItem = requestBody.input[0] as any;
@@ -230,7 +243,19 @@ async function handleGeminiToOpenAIMode(
     let openaiRequest: Record<string, unknown>;
     const model = modelId || (requestBody.model as string) || 'gemini-pro';
     
-    if (typeof requestBody.input === 'string') {
+    // Handle input.messages format (Interactions API)
+    if (requestBody.input && typeof requestBody.input === 'object') {
+        const input = requestBody.input as Record<string, unknown>;
+        if (Array.isArray(input.messages)) {
+            openaiRequest = {
+                model,
+                messages: input.messages,
+                stream: requestBody.stream || false,
+            };
+        } else {
+            throw new Error('Invalid Gemini Interactions request format');
+        }
+    } else if (typeof requestBody.input === 'string') {
         openaiRequest = {
             model,
             messages: [{ role: 'user', content: requestBody.input }],
