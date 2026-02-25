@@ -1,0 +1,29 @@
+# Proxy Configuration
+
+[upstream]
+# Default upstream for openai-completions mode
+default_url = "https://api.qnaigc.com"
+default_api_key = "sk-87abde0542f46913036*"
+
+# Model-specific routing
+[models.gemini-2-5-flash]
+endpoint = "/v1beta/models/gemini-2.5-flash:generateContent"
+mode = "native"
+base_url = "https://api.example.com"
+api_key = "sk-rFaHPAoJidbsN2B*"
+
+[models.deepseek-v3-1]
+mode = "openai-completions"
+# Uses default upstream
+
+[models.minimax-m2-1]
+mode = "openai-completions"
+# Uses default upstream
+
+[models.xiaomi-mimo-v2-flash]
+mode = "openai-completions"
+# Uses default upstream
+
+# Default mode for all other models
+[defaults]
+mode = "openai-completions"

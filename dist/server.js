@@ -22,6 +22,8 @@ const env = {
     MESSAGES_UPSTREAM_MODE: process.env.MESSAGES_UPSTREAM_MODE || 'openai-completions',
     INTERACTIONS_UPSTREAM_MODE: process.env.INTERACTIONS_UPSTREAM_MODE || 'native',
     GENERATE_CONTENT_UPSTREAM_MODE: process.env.GENERATE_CONTENT_UPSTREAM_MODE || 'native',
+    PROXY_CONFIG_PATH: process.env.PROXY_CONFIG_PATH || './proxy_config.toml',
+    PROXY_CONFIG_URL: process.env.PROXY_CONFIG_URL,
 };
 const server = createServer(async (req, res) => {
     try {

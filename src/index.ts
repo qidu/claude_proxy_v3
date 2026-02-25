@@ -15,6 +15,7 @@ import { handleMessagesRequest } from './handlers/messages.js';
 import { handleGeminiRequest } from './handlers/gemini.js';
 import { handleOpenAIRequest } from './handlers/openai.js';
 import { handleClaudeRequest } from './handlers/claude.js';
+import { loadProxyConfig } from './utils/config-loader.js';
 
 /**
  * Generate a unique request ID
@@ -247,6 +248,12 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const requestId = generateRequestId();
     const logger = createLogger(env as Record<string, unknown>);
+
+    // Load proxy config on first request
+    const proxyConfig = await loadProxyConfig(env);
+    if (proxyConfig.upstream) {
+      logger.debug(requestId, `Loaded proxy config with ${Object.keys(proxyConfig.models || {}).length} model configs`);
+    }
 
     try {
       // Handle CORS preflight

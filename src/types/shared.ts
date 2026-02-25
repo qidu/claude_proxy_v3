@@ -114,6 +114,14 @@ export interface Env {
      * Default: 'native'
      */
     GENERATE_CONTENT_UPSTREAM_MODE?: 'native' | 'openai-completions';
+
+    /**
+     * Proxy config file path or URL.
+     * Path: "./proxy_config.toml"
+     * URL: "http://eureka-server/config/proxy_config.toml"
+     */
+    PROXY_CONFIG_PATH?: string;
+    PROXY_CONFIG_URL?: string;
 }
 
 
