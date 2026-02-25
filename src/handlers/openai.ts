@@ -15,7 +15,7 @@ function isGeminiInteractionsRequest(body: Record<string, unknown>): boolean {
  * Convert Gemini Interactions request to OpenAI format
  */
 function convertGeminiInteractionsToOpenAI(geminiRequest: Record<string, unknown>): Record<string, unknown> {
-  const model = (geminiRequest.model as string) || 'gemini-pro';
+  const model = (geminiRequest.model as string) || 'gemini-no-id-at-proxy';
   
   // Handle input.messages format (Interactions API)
   if (geminiRequest.input && typeof geminiRequest.input === 'object') {
@@ -59,7 +59,7 @@ function convertGeminiInteractionsToOpenAI(geminiRequest: Record<string, unknown
  * Convert Gemini generateContent request to OpenAI format
  */
 function convertGeminiGenerateContentToOpenAI(geminiRequest: Record<string, unknown>): Record<string, unknown> {
-  const model = (geminiRequest.model as string) || 'gemini-pro';
+  const model = (geminiRequest.model as string) || 'gemini-no-id-at-proxy';
   
   // Handle contents format
   if (Array.isArray(geminiRequest.contents)) {
@@ -68,11 +68,14 @@ function convertGeminiGenerateContentToOpenAI(geminiRequest: Record<string, unkn
       content: content.parts?.map((p: any) => p.text).join('') || '',
     }));
     
+    // Check for stream parameter in both top-level and generationConfig
     const config = geminiRequest.generationConfig as Record<string, unknown> | undefined;
+    const stream = geminiRequest.stream === true || config?.stream === true;
+    
     return {
       model,
       messages,
-      stream: config?.stream || false,
+      stream,
     };
   }
   

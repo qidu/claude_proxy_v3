@@ -144,6 +144,9 @@ async function handleGeminiInteractionsRequest(
         }
     }
     
+    // Check for streaming
+    const isStreaming = requestBody.stream === true;
+    
     // Copy generation config
     if (requestBody.generation_config) {
         geminiRequest.generationConfig = requestBody.generation_config;
@@ -155,7 +158,13 @@ async function handleGeminiInteractionsRequest(
         geminiRequest.tools = requestBody.tools;
     }
     
+    // Add stream parameter to gemini request
+    if (isStreaming) {
+        geminiRequest.stream = true;
+    }
+    
     activeLogger.debug(requestId, `Converted request: ${JSON.stringify(geminiRequest).substring(0, 200)}...`);
+    activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
     
     // Prepare Gemini API headers
     const geminiHeaders: Record<string, string> = {
@@ -183,12 +192,17 @@ async function handleGeminiInteractionsRequest(
         handleTargetApiError(response, 'Gemini API');
     }
     
+    // Handle streaming response
+    if (isStreaming) {
+        return handleGeminiStreamingResponse(response, requestBody.model as string || modelId || 'gemini-no-id-at-proxy', requestId, activeLogger, 'interactions');
+    }
+    
     // Convert generateContent response to Interactions format
     const geminiResponse = await response.json() as any;
     
     const interactionResponse = {
         id: `v1_${Date.now()}_${requestId}`,
-        model: requestBody.model || modelId || 'gemini-2.5-flash',
+        model: requestBody.model || modelId || 'gemini-no-id-at-proxy',
         status: 'completed',
         object: 'interaction',
         created: new Date().toISOString(),
@@ -241,7 +255,7 @@ async function handleGeminiToOpenAIMode(
 
     // Convert Gemini Interactions format to OpenAI format
     let openaiRequest: Record<string, unknown>;
-    const model = modelId || (requestBody.model as string) || 'gemini-pro';
+    const model = modelId || (requestBody.model as string) || 'gemini-no-id-at-proxy';
     
     // Handle input.messages format (Interactions API)
     if (requestBody.input && typeof requestBody.input === 'object') {
@@ -390,7 +404,7 @@ async function handleGeminiToGeminiMode(
         // Convert native format (input: string) to generateContent format (contents: [...])
         if (typeof geminiRequest.input === 'string') {
             geminiRequest = {
-                model: effectiveModelId || geminiRequest.model || 'gemini-pro',
+                model: effectiveModelId || geminiRequest.model || 'gemini-no-id-at-proxy',
                 contents: [{ role: 'user', parts: [{ text: geminiRequest.input }] }],
                 stream: isStreaming,
             };
@@ -411,7 +425,7 @@ async function handleGeminiToGeminiMode(
 
     // Log request info
     activeLogger.debug(requestId, `Gemini upstream request url: ${fullTargetUrl}`);
-    activeLogger.debug(requestId, `Gemini model: ${effectiveModelId || 'gemini-pro'}`);
+    activeLogger.debug(requestId, `Gemini model: ${effectiveModelId || 'gemini-no-id-at-proxy'}`);
     activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
 
     // Prepare headers for Gemini API
@@ -444,11 +458,11 @@ async function handleGeminiToGeminiMode(
 
         // Handle streaming response
         if (isStreaming) {
-            return handleGeminiStreamingResponse(response, effectiveModelId || 'gemini-pro', requestId, activeLogger, 'interactions');
+            return handleGeminiStreamingResponse(response, effectiveModelId || 'gemini-no-id-at-proxy', requestId, activeLogger, 'interactions');
         }
 
         // Handle non-streaming response
-        return handleGeminiNonStreamingResponse(response, effectiveModelId || 'gemini-pro', requestId, activeLogger, 'interactions');
+        return handleGeminiNonStreamingResponse(response, effectiveModelId || 'gemini-no-id-at-proxy', requestId, activeLogger, 'interactions');
 
     } catch (error) {
         activeLogger.error(requestId, `Gemini API error: ${(error as Error).message}`);
@@ -488,7 +502,7 @@ async function handleGeminiGenerateContentRequest(
         // Convert native format (input: string) to generateContent format (contents: [...])
         if (typeof geminiRequest.input === 'string') {
             geminiRequest = {
-                model: effectiveModelId || geminiRequest.model || 'gemini-pro',
+                model: effectiveModelId || geminiRequest.model || 'gemini-no-id-at-proxy',
                 contents: [{ role: 'user', parts: [{ text: geminiRequest.input }] }],
                 stream: isStreaming,
             };
@@ -509,7 +523,7 @@ async function handleGeminiGenerateContentRequest(
 
     // Log request info
     activeLogger.debug(requestId, `Gemini upstream request url: ${fullTargetUrl}`);
-    activeLogger.debug(requestId, `Gemini model: ${effectiveModelId || 'gemini-pro'}`);
+    activeLogger.debug(requestId, `Gemini model: ${effectiveModelId || 'gemini-no-id-at-proxy'}`);
     activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
 
     // Prepare headers for Gemini API
@@ -542,11 +556,11 @@ async function handleGeminiGenerateContentRequest(
 
         // Handle streaming response
         if (isStreaming) {
-            return handleGeminiStreamingResponse(response, effectiveModelId || 'gemini-pro', requestId, activeLogger, 'interactions');
+            return handleGeminiStreamingResponse(response, effectiveModelId || 'gemini-no-id-at-proxy', requestId, activeLogger, 'interactions');
         }
 
         // Handle non-streaming response
-        return handleGeminiNonStreamingResponse(response, effectiveModelId || 'gemini-pro', requestId, activeLogger, 'interactions');
+        return handleGeminiNonStreamingResponse(response, effectiveModelId || 'gemini-no-id-at-proxy', requestId, activeLogger, 'interactions');
 
     } catch (error) {
         activeLogger.error(requestId, `Gemini API error: ${(error as Error).message}`);
@@ -559,7 +573,7 @@ async function handleGeminiGenerateContentRequest(
  */
 function determineGeminiEndpoint(request: Request, geminiRequest: Record<string, unknown>, modelId?: string): string {
     // Default: generateContent endpoint
-    const model = modelId || (geminiRequest.model as string) || 'gemini-pro';
+    const model = modelId || (geminiRequest.model as string) || 'gemini-no-id-at-proxy';
     return `/${model}:generateContent`;
 }
 
