@@ -228,7 +228,7 @@ api_key = "sk-deepseek-key"
 
 [models.gemini-2-5-flash]
 mode = "native"
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-gemini-key"
 
 [defaults]

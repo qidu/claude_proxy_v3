@@ -11,7 +11,7 @@ Does model_alias work for gemini-2-5-flash native mode?
 [models.gemini-2-5-flash]
 mode = "native"
 model_alias = "gemini-2.5-flash-exp"  # Testing with alias
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-..."
 ```
 
@@ -171,14 +171,14 @@ if (modelRoute.mode === 'native') {
 # ✅ Correct - No alias needed
 [models.gemini-2-5-flash]
 mode = "native"
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-..."
 
 # ❌ Incorrect - Will break /v1/messages and /v1/interactions
 [models.gemini-2-5-flash]
 mode = "native"
 model_alias = "gemini-2.5-flash-exp"  # Don't do this!
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-..."
 ```
 

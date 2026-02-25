@@ -3,11 +3,11 @@
 BASE_URL="http://localhost:8788"
 
 # Gemini native
-GEMINI_BASE="https/api.yoosheen.com"
+GEMINI_BASE="https/api.example1.com"
 GEMINI_KEY="sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0"
 
 # Claude native
-CLAUDE_BASE="https/api.wenwen-ai.com"
+CLAUDE_BASE="https/api.example2-ai.com"
 CLAUDE_KEY="sk-NzBalLnHTBdlL23pQHFSzRZXA36HRio3s666mOcLxFfdmAfK"
 
 # OpenAI-compatible

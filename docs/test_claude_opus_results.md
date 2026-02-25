@@ -9,7 +9,7 @@
 [models.claude-4-1-opus]
 mode = "native"
 model_alias = "claude-opus-4-1-20250805"
-base_url = "https://api.wenwen-ai.com"
+base_url = "https://api.example2-ai.com"
 api_key = "sk-NzBalLnHTBdlL23pQHFSzRZXA36HRio3s666mOcLxFfdmAfK"
 ```
 
@@ -47,7 +47,7 @@ Uses dynamic routing to default upstream (https://api.qnaigc.com)
 1. **Native mode with model_alias** ✅
    - Client sends: `"model": "claude-4.1-opus"`
    - Proxy translates to: `"model": "claude-opus-4-1-20250805"`
-   - Upstream: https://api.wenwen-ai.com/v1/messages
+   - Upstream: https://api.example2-ai.com/v1/messages
    - Result: Success
 
 2. **OpenAI-compatible mode** ✅
@@ -88,7 +88,7 @@ The failures are due to endpoint limitations, not proxy bugs.
 | /v1/interactions | ❌ Not supported (Gemini endpoint) | ❌ Upstream 404 |
 | generateContent | ❌ Not supported (Gemini endpoint) | ❌ Upstream 404 |
 | model_alias | ✅ Supported | N/A |
-| Upstream | api.wenwen-ai.com | api.qnaigc.com |
+| Upstream | api.example2-ai.com | api.qnaigc.com |
 
 ## Recommendation
 
@@ -99,7 +99,7 @@ The failures are due to endpoint limitations, not proxy bugs.
 [models.claude-4-1-opus]
 mode = "native"
 model_alias = "claude-opus-4-1-20250805"
-base_url = "https://api.wenwen-ai.com"
+base_url = "https://api.example2-ai.com"
 api_key = "sk-..."
 ```
 

@@ -3,7 +3,7 @@
 cd /home/teric/win/e/dev/bot/claude_proxy_v3
 
 echo "Starting server..."
-ALLOWED_HOSTS="127.0.0.1,localhost,api.qnaigc.com,api.yoosheen.com,api.wenwen-ai.com" \
+ALLOWED_HOSTS="127.0.0.1,localhost,api.qnaigc.com,api.example1.com,api.example2-ai.com" \
 PROXY_CONFIG_PATH=./proxy_config.toml \
 node dist/server.js > /tmp/proxy_test.log 2>&1 &
 SERVER_PID=$!
@@ -41,17 +41,17 @@ echo
 echo "Model: gemini-2.5-flash"
 echo "---"
 test_endpoint "1. Native /v1/messages" \
-  "$BASE/https/api.yoosheen.com/v1/messages" \
+  "$BASE/https/api.example1.com/v1/messages" \
   "x-api-key: sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0" \
   '{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"2+2?"}],"max_tokens":50}'
 
 test_endpoint "2. Native /v1/interactions" \
-  "$BASE/https/api.yoosheen.com/v1/interactions" \
+  "$BASE/https/api.example1.com/v1/interactions" \
   "x-api-key: sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0" \
   '{"model":"gemini-2.5-flash","input":{"messages":[{"role":"user","content":"3+3?"}]}}'
 
 test_endpoint "3. Native /v1beta/models/gemini-2.5-flash:generateContent" \
-  "$BASE/https/api.yoosheen.com/v1beta/models/gemini-2.5-flash:generateContent" \
+  "$BASE/https/api.example1.com/v1beta/models/gemini-2.5-flash:generateContent" \
   "x-api-key: sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0" \
   '{"contents":[{"role":"user","parts":[{"text":"4+4?"}]}]}'
 
@@ -76,17 +76,17 @@ echo
 echo "Model: claude-4.5-haiku"
 echo "---"
 test_endpoint "1. Native /v1/messages" \
-  "$BASE/https/api.wenwen-ai.com/v1/messages" \
+  "$BASE/https/api.example2-ai.com/v1/messages" \
   "x-api-key: sk-NzBalLnHTBdlL23pQHFSzRZXA36HRio3s666mOcLxFfdmAfK" \
   '{"model":"claude-4.5-haiku","messages":[{"role":"user","content":"2+2?"}],"max_tokens":50}'
 
 test_endpoint "2. Native /v1/interactions" \
-  "$BASE/https/api.wenwen-ai.com/v1/interactions" \
+  "$BASE/https/api.example2-ai.com/v1/interactions" \
   "x-api-key: sk-NzBalLnHTBdlL23pQHFSzRZXA36HRio3s666mOcLxFfdmAfK" \
   '{"model":"claude-4.5-haiku","input":{"messages":[{"role":"user","content":"3+3?"}]}}'
 
 test_endpoint "3. Native /v1beta/models/claude-4.5-haiku:generateContent" \
-  "$BASE/https/api.wenwen-ai.com/v1beta/models/claude-4.5-haiku:generateContent" \
+  "$BASE/https/api.example2-ai.com/v1beta/models/claude-4.5-haiku:generateContent" \
   "x-api-key: sk-NzBalLnHTBdlL23pQHFSzRZXA36HRio3s666mOcLxFfdmAfK" \
   '{"contents":[{"role":"user","parts":[{"text":"4+4?"}]}]}'
 

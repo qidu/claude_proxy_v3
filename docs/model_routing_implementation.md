@@ -57,7 +57,7 @@ default_api_key = "sk-default-key"
 # Model with custom upstream (native mode)
 [models.gemini-2-5-flash]
 mode = "native"
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-gemini-key"
 
 # Model using default upstream
@@ -74,7 +74,7 @@ mode = "openai-completions"
 All tests passing (see `tests/test_model_routing.sh`):
 
 ✅ **Gemini (gemini-2.5-flash)**
-- Uses custom upstream: `https://api.yoosheen.com`
+- Uses custom upstream: `https://api.example1.com`
 - Mode: `native`
 - Custom API key works
 - Complex questions work

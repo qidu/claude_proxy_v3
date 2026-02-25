@@ -10,8 +10,8 @@
 ## Test Configuration
 
 **Native Upstreams**:
-- Gemini: https://api.yoosheen.com (x-api-key)
-- Claude: https://api.wenwen-ai.com (x-api-key)
+- Gemini: https://api.example1.com (x-api-key)
+- Claude: https://api.example2-ai.com (x-api-key)
 
 **OpenAI-Compatible Upstream**:
 - Base URL: https://api.qnaigc.com
@@ -31,7 +31,7 @@
 
 ### ✅ gemini-2.5-flash - Native /v1/messages
 - **Response ID**: chatcmpl-20260225165537391778950D0jTfYEU
-- **Upstream**: https://api.yoosheen.com/v1/messages
+- **Upstream**: https://api.example1.com/v1/messages
 - **Format**: Native Claude API → Native upstream
 
 ### ✅ gemini-2.5-flash - OpenAI /v1/messages

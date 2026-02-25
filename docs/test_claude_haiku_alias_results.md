@@ -20,7 +20,7 @@ Added support for `model_alias` configuration parameter that allows mapping a cl
 [models.claude-4-5-haiku]
 mode = "native"
 model_alias = "claude-haiku-4-5-20251001"
-base_url = "https://api.wenwen-ai.com"
+base_url = "https://api.example2-ai.com"
 api_key = "sk-NzBalLnHTBdlL23pQHFSzRZXA36HRio3s666mOcLxFfdmAfK"
 ```
 
@@ -80,7 +80,7 @@ The failures are due to endpoint incompatibility, not proxy bugs.
 [models.claude-4-5-haiku]
 mode = "native"
 model_alias = "claude-haiku-4-5-20251001"
-base_url = "https://api.wenwen-ai.com"
+base_url = "https://api.example2-ai.com"
 api_key = "sk-..."
 ```
 

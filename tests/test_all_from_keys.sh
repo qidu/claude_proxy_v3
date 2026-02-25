@@ -107,7 +107,7 @@ test_model() {
 }
 
 # Test 1: gemini-2.5-flash (native)
-test_model "gemini-2.5-flash" "native" "https://api.yoosheen.com"
+test_model "gemini-2.5-flash" "native" "https://api.example1.com"
 
 # Test 2: minimax/minimax-m2.1 (OpenAI-compatible)
 test_model "minimax/minimax-m2.1" "openai-completions" "https://api.qnaigc.com"

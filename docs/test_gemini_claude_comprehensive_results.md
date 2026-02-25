@@ -24,7 +24,7 @@
 ```toml
 [models.gemini-2-5-flash]
 mode = "native"
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0"
 ```
 
@@ -48,7 +48,7 @@ api_key = "sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0"
 ```toml
 [models.gemini-2-0-flash]
 mode = "native"
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0"
 ```
 
@@ -73,7 +73,7 @@ api_key = "sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0"
 [models.claude-4-5-sonnet]
 mode = "native"
 model_alias = "claude-sonnet-4-5-20250929"
-base_url = "https://api.wenwen-ai.com"
+base_url = "https://api.example2-ai.com"
 api_key = "sk-NzBalLnHTBdlL23pQHFSzRZXA36HRio3s666mOcLxFfdmAfK"
 ```
 
@@ -122,7 +122,7 @@ api_key = "sk-87abde0542f469130364cc3de48977a71883d8ec81987d3f7e46ee360985dd02"
 [models.claude-4-5-haiku]
 mode = "native"
 model_alias = "claude-haiku-4-5-20251001"
-base_url = "https://api.wenwen-ai.com"
+base_url = "https://api.example2-ai.com"
 api_key = "sk-NzBalLnHTBdlL23pQHFSzRZXA36HRio3s666mOcLxFfdmAfK"
 ```
 
@@ -183,7 +183,7 @@ api_key = "sk-87abde0542f469130364cc3de48977a71883d8ec81987d3f7e46ee360985dd02"
 - 100% success rate with native mode
 - All 3 endpoints work perfectly
 - No model_alias needed
-- Same upstream (api.yoosheen.com)
+- Same upstream (api.example1.com)
 
 ### ⚠️ Claude Models: Mode Matters
 
@@ -250,12 +250,12 @@ All conversions successful:
 # Use native mode for both
 [models.gemini-2-5-flash]
 mode = "native"
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-..."
 
 [models.gemini-2-0-flash]
 mode = "native"
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-..."
 ```
 
@@ -280,7 +280,7 @@ api_key = "sk-..."
 [models.claude-4-5-sonnet]
 mode = "native"
 model_alias = "claude-sonnet-4-5-20250929"
-base_url = "https://api.wenwen-ai.com"
+base_url = "https://api.example2-ai.com"
 api_key = "sk-..."
 # Note: Only /v1/messages will work
 ```

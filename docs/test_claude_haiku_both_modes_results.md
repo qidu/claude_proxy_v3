@@ -21,7 +21,7 @@
 [models.claude-4-5-haiku]
 mode = "native"
 model_alias = "claude-haiku-4-5-20251001"
-base_url = "https://api.wenwen-ai.com"
+base_url = "https://api.example2-ai.com"
 api_key = "sk-NzBalLnHTBdlL23pQHFSzRZXA36HRio3s666mOcLxFfdmAfK"
 ```
 
@@ -71,7 +71,7 @@ api_key = "sk-87abde0542f469130364cc3de48977a71883d8ec81987d3f7e46ee360985dd02"
 
 ## Available Models on Native Upstream
 
-**api.wenwen-ai.com supports:**
+**api.example2-ai.com supports:**
 - claude-haiku-4-5-20251001 ✅ (used in model_alias)
 - claude-haiku-4-5-20251001-thinking
 
@@ -122,7 +122,7 @@ api_key = "sk-..."
 [models.claude-4-5-haiku]
 mode = "native"
 model_alias = "claude-haiku-4-5-20251001"
-base_url = "https://api.wenwen-ai.com"
+base_url = "https://api.example2-ai.com"
 api_key = "sk-..."
 ```
 

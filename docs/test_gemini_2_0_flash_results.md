@@ -7,7 +7,7 @@
 ```toml
 [models.gemini-2-0-flash]
 mode = "native"
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0"
 ```
 
@@ -31,17 +31,17 @@ api_key = "sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0"
 
 **1. /v1/messages** ✅
 - Format: Claude format → Native Gemini format → Claude format
-- Upstream: https://api.yoosheen.com/v1/messages
+- Upstream: https://api.example1.com/v1/messages
 - Result: Success
 
 **2. /v1/interactions** ✅
 - Format: Interactions format → Native Gemini generateContent → Interactions format
-- Upstream: https://api.yoosheen.com/v1beta/models/gemini-2.0-flash:generateContent
+- Upstream: https://api.example1.com/v1beta/models/gemini-2.0-flash:generateContent
 - Result: Success
 
 **3. /v1beta/models/gemini-2.0-flash:generateContent** ✅
 - Format: Native Gemini format → Native Gemini format → Claude format
-- Upstream: https://api.yoosheen.com/v1beta/models/gemini-2.0-flash:generateContent
+- Upstream: https://api.example1.com/v1beta/models/gemini-2.0-flash:generateContent
 - Result: Success
 
 ## Proxy Features Validated
@@ -77,7 +77,7 @@ All conversions successful:
 
 ## Upstream Compatibility
 
-**api.yoosheen.com supports:**
+**api.example1.com supports:**
 - ✅ gemini-2.5-flash
 - ✅ gemini-2.0-flash
 - Both models use native Gemini API format
@@ -99,7 +99,7 @@ Use the same configuration pattern as gemini-2.5-flash:
 ```toml
 [models.gemini-2-0-flash]
 mode = "native"
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-..."
 ```
 
@@ -143,6 +143,6 @@ Run: `bash tests/test_gemini_2_0_flash.sh`
 ## Notes
 
 - gemini-2.0-flash is NOT available in OpenAI-compatible upstream (api.qnaigc.com)
-- Only available in native Gemini upstream (api.yoosheen.com)
+- Only available in native Gemini upstream (api.example1.com)
 - Works identically to gemini-2.5-flash
 - No model_alias needed (upstream accepts gemini-2.0-flash directly)

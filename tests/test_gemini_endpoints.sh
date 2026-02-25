@@ -97,6 +97,6 @@ echo "✅ /v1beta/models/{model}:generateContent - Works with model-specific rou
 echo "⚠️  /v1/interactions - Has issues (needs investigation)"
 echo ""
 echo "Model-specific routing successfully routes gemini-2.5-flash to:"
-echo "  - Upstream: https://api.yoosheen.com"
+echo "  - Upstream: https://api.example1.com"
 echo "  - Mode: native"
 echo "  - API Key: From config"

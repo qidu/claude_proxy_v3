@@ -20,7 +20,7 @@
 ```toml
 [models.gemini-2-5-flash]
 mode = "native"
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0"
 ```
 
@@ -53,14 +53,14 @@ api_key = "sk-87abde0542f469130364cc3de48977a71883d8ec81987d3f7e46ee360985dd02"
 - SSE events properly generated
 
 **❌ Fails for: /v1/interactions and generateContent**
-- **Root Cause:** Native Gemini upstream (api.yoosheen.com) doesn't support streaming
+- **Root Cause:** Native Gemini upstream (api.example1.com) doesn't support streaming
 - Upstream returns complete JSON response even with `stream:true`
 - Not a proxy issue - upstream limitation
 
 **Evidence:**
 ```bash
 # Direct upstream test
-curl -N "https://api.yoosheen.com/v1beta/models/gemini-2.5-flash:generateContent" \
+curl -N "https://api.example1.com/v1beta/models/gemini-2.5-flash:generateContent" \
   -H "x-goog-api-key: ..." \
   -d '{"contents":[...],"stream":true}'
 # Returns: Complete JSON (not SSE)
@@ -82,7 +82,7 @@ curl -N "https://api.yoosheen.com/v1beta/models/gemini-2.5-flash:generateContent
 
 | Upstream | Mode | /v1/messages | /v1/interactions | generateContent |
 |----------|------|--------------|------------------|-----------------|
-| api.yoosheen.com | Native | ✅ SSE | ❌ No SSE | ❌ No SSE |
+| api.example1.com | Native | ✅ SSE | ❌ No SSE | ❌ No SSE |
 | api.qnaigc.com | OpenAI | ✅ SSE | ✅ SSE | ✅ SSE |
 
 ## Proxy Features Validated
@@ -96,7 +96,7 @@ curl -N "https://api.yoosheen.com/v1beta/models/gemini-2.5-flash:generateContent
 
 ## Upstream Limitations
 
-### Native Gemini Upstream (api.yoosheen.com)
+### Native Gemini Upstream (api.example1.com)
 
 **Streaming Support:**
 - ✅ /v1/messages: Supports streaming
@@ -147,7 +147,7 @@ api_key = "sk-..."
 ```toml
 [models.gemini-2-5-flash]
 mode = "native"
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-..."
 ```
 

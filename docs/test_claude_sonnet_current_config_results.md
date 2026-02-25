@@ -8,7 +8,7 @@
 [models.claude-4-5-sonnet]
 mode = "native"
 model_alias = "claude-3-7-sonnet-20250219-thinking"
-base_url = "https://api.wenwen-ai.com"
+base_url = "https://api.example2-ai.com"
 api_key = "sk-NzBalLnHTBdlL23pQHFSzRZXA36HRio3s666mOcLxFfdmAfK"
 ```
 
@@ -29,7 +29,7 @@ api_key = "sk-NzBalLnHTBdlL23pQHFSzRZXA36HRio3s666mOcLxFfdmAfK"
 **Configuration:**
 - Mode: native
 - Model alias: claude-3-7-sonnet-20250219-thinking
-- Upstream: https://api.wenwen-ai.com/v1/messages
+- Upstream: https://api.example2-ai.com/v1/messages
 
 **Result:** Success ✅
 - Uses Claude native API format

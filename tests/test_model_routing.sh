@@ -8,7 +8,7 @@ echo "=== Testing Model-Specific Routing ==="
 echo ""
 
 # Test 1: Gemini with native mode (custom upstream)
-echo "1. Testing gemini-2.5-flash (native mode, custom upstream: api.yoosheen.com)"
+echo "1. Testing gemini-2.5-flash (native mode, custom upstream: api.example1.com)"
 RESPONSE=$(curl -s "$BASE_URL/v1/messages" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer test" \
@@ -96,7 +96,7 @@ echo ""
 
 echo "=== Summary ==="
 echo "Model-specific routing implementation complete!"
-echo "- ✅ Gemini uses custom upstream (api.yoosheen.com) with native mode"
+echo "- ✅ Gemini uses custom upstream (api.example1.com) with native mode"
 echo "- ✅ Other models use default upstream (api.qnaigc.com)"
 echo "- ✅ Per-model API keys work"
 echo "- ✅ Mode-based routing (native vs openai-completions) works"

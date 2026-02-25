@@ -18,7 +18,7 @@ default_api_key = "sk-87abde0542f469130364cc3de48977a71883d8ec81987d3f7e46ee3609
 [models.claude-4-5-sonnet]
 mode = "native"
 model_alias = "claude-sonnet-4-5-20250929"
-base_url = "https://api.wenwen-ai.com"
+base_url = "https://api.example2-ai.com"
 api_key = "sk-NzBalLnHTBdlL23pQHFSzRZXA36HRio3s666mOcLxFfdmAfK"
 
 [defaults]

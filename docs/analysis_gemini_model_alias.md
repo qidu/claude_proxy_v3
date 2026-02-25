@@ -6,7 +6,7 @@
 ```toml
 [models.gemini-2-5-flash]
 mode = "native"
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0"
 ```
 
@@ -22,7 +22,7 @@ api_key = "sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0"
 **Reasons**:
 
 1. **Upstream accepts the model name directly**
-   - The upstream (api.yoosheen.com) accepts "gemini-2.5-flash" as-is
+   - The upstream (api.example1.com) accepts "gemini-2.5-flash" as-is
    - No version-specific naming required (unlike Claude models)
 
 2. **Already working perfectly**
@@ -64,7 +64,7 @@ api_key = "sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0"
 ```toml
 [models.gemini-2-5-flash]
 mode = "native"
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-..."
 # No model_alias needed - upstream accepts gemini-2.5-flash directly
 ```

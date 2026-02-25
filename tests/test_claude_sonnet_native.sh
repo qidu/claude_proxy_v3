@@ -32,7 +32,7 @@ BASE="http://localhost:8788"
 
 echo "Testing claude-4.5-sonnet with native upstream"
 echo "==============================================="
-echo "Config: mode=native, base_url=https://api.wenwen-ai.com"
+echo "Config: mode=native, base_url=https://api.example2-ai.com"
 echo
 
 echo "Model: claude-4.5-sonnet (native mode)"

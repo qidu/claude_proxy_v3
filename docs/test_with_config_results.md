@@ -13,7 +13,7 @@ default_api_key = "sk-87abde0542f469130364cc3de48977a71883d8ec81987d3f7e46ee3609
 
 [models.gemini-2-5-flash]
 mode = "native"
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0"
 
 [models.claude-4-5-haiku]

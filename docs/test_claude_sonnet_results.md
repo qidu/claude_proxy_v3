@@ -5,12 +5,12 @@
 ## Issue Found & Fixed
 
 **Problem 1**: Config had incorrect base_url with endpoint path included
-- Wrong: `base_url = "https://api.wenwen-ai.com/v1/messages"`
-- Correct: `base_url = "https://api.wenwen-ai.com"`
-- Result: URL was `https://api.wenwen-ai.com/v1/messages/v1/messages` (404 error)
+- Wrong: `base_url = "https://api.example2-ai.com/v1/messages"`
+- Correct: `base_url = "https://api.example2-ai.com"`
+- Result: URL was `https://api.example2-ai.com/v1/messages/v1/messages` (404 error)
 
 **Problem 2**: Native upstream doesn't support claude-4.5-sonnet
-- Native mode with https://api.wenwen-ai.com returns "Service error"
+- Native mode with https://api.example2-ai.com returns "Service error"
 - Solution: Use openai-completions mode with default upstream
 
 **Fix Applied**: Changed config to use openai-completions mode
@@ -50,7 +50,7 @@ mode = "openai-completions"
 
 ### ❌ Native Mode Not Supported
 
-**claude-4.5-sonnet with native upstream (https://api.wenwen-ai.com)**:
+**claude-4.5-sonnet with native upstream (https://api.example2-ai.com)**:
 - All endpoints return "Service error from Claude API"
 - Root cause: Upstream API doesn't support claude-4.5-sonnet model
 - Recommendation: Use openai-completions mode instead
@@ -77,8 +77,8 @@ mode = "openai-completions"
 ## Lessons Learned
 
 1. **base_url should not include endpoint paths** - Only the base domain
-   - ✅ Correct: `https://api.wenwen-ai.com`
-   - ❌ Wrong: `https://api.wenwen-ai.com/v1/messages`
+   - ✅ Correct: `https://api.example2-ai.com`
+   - ❌ Wrong: `https://api.example2-ai.com/v1/messages`
 
 2. **Native mode requires upstream support** - Not all upstreams support all models
    - Use openai-completions mode for broader compatibility
@@ -107,4 +107,4 @@ mode = "openai-completions"
 # Uses default upstream (https://api.qnaigc.com)
 ```
 
-Do NOT use native mode with https://api.wenwen-ai.com as it doesn't support this model.
+Do NOT use native mode with https://api.example2-ai.com as it doesn't support this model.

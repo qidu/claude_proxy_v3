@@ -51,7 +51,7 @@ PROXY_CONFIG_PATH = "./proxy_config.toml"
 
 #### Round 4: Gemini with Model-Specific Routing (1 model)
 27. ✅ gemini-2.5-flash - Model-specific routing to custom upstream
-    - Upstream: https://api.yoosheen.com
+    - Upstream: https://api.example1.com
     - Mode: native
     - `/v1/messages`: "Hello!" ✅
     - `/v1/interactions`: Simple input, multi-turn, complex questions ✅
@@ -188,7 +188,7 @@ PROXY_CONFIG_PATH = "./proxy_config.toml"
 ## Model-Specific Routing
 
 ### Gemini 2.5-Flash with Custom Upstream:
-- ✅ **Upstream**: https://api.yoosheen.com (custom)
+- ✅ **Upstream**: https://api.example1.com (custom)
 - ✅ **Mode**: native
 - ✅ **Endpoints Tested**:
   - `/v1/messages` - Claude API format → Gemini backend

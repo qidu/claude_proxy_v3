@@ -57,7 +57,7 @@ default_api_key = "sk-87abde..."
 [models.gemini-2-5-flash]
 endpoint = "/v1beta/models/gemini-2.5-flash:generateContent"
 mode = "native"
-base_url = "https://api.yoosheen.com"
+base_url = "https://api.example1.com"
 api_key = "sk-rFaH..."
 
 [models.deepseek-v3-1]

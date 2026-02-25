@@ -7,7 +7,7 @@
 **Model**: claude-4.5-sonnet
 
 **Native Upstream**:
-- Base URL: https://api.wenwen-ai.com
+- Base URL: https://api.example2-ai.com
 - API Key: sk-NzBalLnHTBdlL23pQHFSzRZXA36HRio3s666mOcLxFfdmAfK
 
 **OpenAI-Compatible Upstream**:
@@ -44,7 +44,7 @@ This test successfully demonstrated:
 ### ❌ Test #1: Native /v1/messages
 **Status**: Failed  
 **Error**: Service error from Messages API  
-**Upstream**: https://api.wenwen-ai.com/v1/messages  
+**Upstream**: https://api.example2-ai.com/v1/messages  
 
 The upstream API returned an error, suggesting either:
 - Invalid API key
@@ -54,7 +54,7 @@ The upstream API returned an error, suggesting either:
 ### ❌ Test #2: Native /v1/interactions
 **Status**: Failed  
 **Error**: Invalid Gemini Interactions request format  
-**Upstream**: https://api.wenwen-ai.com/v1/interactions  
+**Upstream**: https://api.example2-ai.com/v1/interactions  
 
 The proxy attempted to convert Claude format to Gemini Interactions format, but the upstream rejected the request. This suggests:
 - The upstream may not support Interactions API format
@@ -63,7 +63,7 @@ The proxy attempted to convert Claude format to Gemini Interactions format, but 
 ### ❌ Test #3: Native /v1beta/models/{model}:generateContent
 **Status**: Failed  
 **Error**: model_not_found - No available channel for model claude-4.5-sonnet  
-**Upstream**: https://api.wenwen-ai.com/v1beta/models/claude-4.5-sonnet:generateContent  
+**Upstream**: https://api.example2-ai.com/v1beta/models/claude-4.5-sonnet:generateContent  
 
 The upstream API doesn't have claude-4.5-sonnet available on the generateContent endpoint.
 
@@ -83,7 +83,7 @@ The upstream doesn't have this route available.
 
 ## Proxy Improvements Made
 
-1. **Added api.wenwen-ai.com to ALLOWED_HOSTS** - Enabled routing to native Claude upstream
+1. **Added api.example2-ai.com to ALLOWED_HOSTS** - Enabled routing to native Claude upstream
 2. **Updated routing parser** - Added support for v1/interactions and v1beta endpoints
 3. **Fixed getHandlerType()** - Returns 'interactions' and 'generateContent' types correctly
 

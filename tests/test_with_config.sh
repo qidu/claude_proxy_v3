@@ -34,7 +34,7 @@ echo "Testing with proxy_config.toml (2 models × 3 endpoints = 6 tests)"
 echo "=================================================================="
 echo
 echo "Config:"
-echo "- gemini-2.5-flash: mode=native, base_url=https://api.yoosheen.com"
+echo "- gemini-2.5-flash: mode=native, base_url=https://api.example1.com"
 echo "- claude-4.5-haiku: mode=openai-completions, uses default upstream"
 echo
 
