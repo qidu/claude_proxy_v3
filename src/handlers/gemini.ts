@@ -48,8 +48,8 @@ function getGeminiConfig(env: Env): GeminiConfig {
  * Check if request is in native Gemini format
  */
 function isNativeGeminiRequest(body: Record<string, unknown>): boolean {
-    // Native Gemini requests have 'input' field, Claude requests have 'messages'
-    return 'input' in body && !('messages' in body);
+    // Native Gemini requests have 'input' or 'contents' field, Claude requests have 'messages'
+    return ('input' in body || 'contents' in body) && !('messages' in body);
 }
 
 /**
@@ -67,15 +67,18 @@ export async function handleGeminiRequest(
 ): Promise<Response> {
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
-    // Determine which Gemini endpoint to use based on URL
-    if (targetUrl.includes(':generateContent')) {
-        activeLogger.debug(requestId, 'Routing to Gemini generateContent handler');
-        return handleGeminiGenerateContentRequest(
+    // Determine which handler to use based on original request path
+    const url = new URL(request.url);
+    const path = url.pathname;
+    
+    if (path === '/v1/interactions' || path.startsWith('/v1/interactions?')) {
+        activeLogger.debug(requestId, 'Routing to Gemini Interactions handler');
+        return handleGeminiInteractionsRequest(
             request, targetUrl, authHeaders, requestId, modelId, env, logger
         );
     } else {
-        activeLogger.debug(requestId, 'Routing to Gemini Interactions handler');
-        return handleGeminiInteractionsRequest(
+        activeLogger.debug(requestId, 'Routing to Gemini generateContent handler');
+        return handleGeminiGenerateContentRequest(
             request, targetUrl, authHeaders, requestId, modelId, env, logger
         );
     }
@@ -94,9 +97,118 @@ async function handleGeminiInteractionsRequest(
     logger?: Logger
 ): Promise<Response> {
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
-
-    // Native mode - pass through to Gemini API
-    return handleGeminiToGeminiMode(request, targetUrl, authHeaders, requestId, modelId, env, activeLogger);
+    const requestBody = await request.json() as Record<string, unknown>;
+    
+    activeLogger.debug(requestId, `Interactions request to: ${targetUrl}`);
+    
+    // Convert Interactions format to generateContent format
+    const geminiRequest: Record<string, unknown> = {
+        contents: []
+    };
+    
+    // Handle input field (string, Content, array of Content, or array of Turn)
+    if (typeof requestBody.input === 'string') {
+        geminiRequest.contents = [{ role: 'user', parts: [{ text: requestBody.input }] }];
+    } else if (Array.isArray(requestBody.input)) {
+        // Check if it's array of Turn (has role field) or array of Content
+        const firstItem = requestBody.input[0] as any;
+        if (firstItem && 'role' in firstItem) {
+            // Array of Turn format
+            geminiRequest.contents = requestBody.input.map((turn: any) => ({
+                role: turn.role === 'model' ? 'model' : 'user',
+                parts: typeof turn.content === 'string' 
+                    ? [{ text: turn.content }]
+                    : Array.isArray(turn.content)
+                        ? turn.content.map((c: any) => c.type === 'text' ? { text: c.text } : c)
+                        : [{ text: String(turn.content) }]
+            }));
+        } else {
+            // Array of Content format
+            geminiRequest.contents = [{ 
+                role: 'user', 
+                parts: requestBody.input.map((c: any) => c.type === 'text' ? { text: c.text } : c)
+            }];
+        }
+    }
+    
+    // Copy generation config
+    if (requestBody.generation_config) {
+        geminiRequest.generationConfig = requestBody.generation_config;
+    }
+    if (requestBody.system_instruction) {
+        geminiRequest.systemInstruction = { parts: [{ text: requestBody.system_instruction as string }] };
+    }
+    if (requestBody.tools) {
+        geminiRequest.tools = requestBody.tools;
+    }
+    
+    activeLogger.debug(requestId, `Converted request: ${JSON.stringify(geminiRequest).substring(0, 200)}...`);
+    
+    // Prepare Gemini API headers
+    const geminiHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+    };
+    
+    const apiKey = extractGeminiApiKey(request, authHeaders, env, 'interactions');
+    if (apiKey) {
+        geminiHeaders['x-goog-api-key'] = apiKey;
+        activeLogger.debug(requestId, `Using API key: ${apiKey.substring(0, 10)}...`);
+    }
+    
+    // Forward request to Gemini API
+    const response = await fetch(targetUrl, {
+        method: 'POST',
+        headers: geminiHeaders,
+        body: JSON.stringify(geminiRequest),
+    });
+    
+    activeLogger.debug(requestId, `Response status: ${response.status}`);
+    
+    if (!response.ok) {
+        const errorText = await response.text();
+        activeLogger.error(requestId, `Gemini API error: ${errorText}`);
+        handleTargetApiError(response, 'Gemini API');
+    }
+    
+    // Convert generateContent response to Interactions format
+    const geminiResponse = await response.json() as any;
+    
+    const interactionResponse = {
+        id: `v1_${Date.now()}_${requestId}`,
+        model: requestBody.model || modelId || 'gemini-2.5-flash',
+        status: 'completed',
+        object: 'interaction',
+        created: new Date().toISOString(),
+        updated: new Date().toISOString(),
+        role: 'model',
+        outputs: [] as any[],
+        usage: {
+            total_input_tokens: geminiResponse.usageMetadata?.promptTokenCount || 0,
+            total_output_tokens: geminiResponse.usageMetadata?.candidatesTokenCount || 0,
+            total_tokens: geminiResponse.usageMetadata?.totalTokenCount || 0,
+        }
+    };
+    
+    // Convert candidates to outputs
+    if (geminiResponse.candidates && geminiResponse.candidates.length > 0) {
+        const candidate = geminiResponse.candidates[0];
+        if (candidate.content && candidate.content.parts) {
+            interactionResponse.outputs = candidate.content.parts.map((part: any) => {
+                if (part.text) {
+                    return { type: 'text', text: part.text };
+                }
+                return part;
+            });
+        }
+    }
+    
+    return new Response(JSON.stringify(interactionResponse), {
+        status: 200,
+        headers: {
+            'Content-Type': 'application/json',
+            'x-request-id': requestId,
+        },
+    });
 }
 
 /**

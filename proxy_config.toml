@@ -4,17 +4,24 @@
 [upstream]
 # Default upstream for openai-completions mode
 default_url = "https://api.qnaigc.com"
-default_api_key = "sk-87abde0542f46913036******"
+default_api_key = "sk-87abde0542f469130364cc3de48977a71883d8ec81987d3f7e46ee360985dd02"
 
 # ============================================
 # Model-specific routing examples
 # ============================================
+# IMPORTANT: Model IDs in config must be normalized:
+# - Replace "/" with "-" (e.g., "deepseek/deepseek-v3.2-exp" → "deepseek-deepseek-v3-2-exp")
+# - Replace "." with "-" (e.g., "gemini-2.5-flash" → "gemini-2-5-flash")
+# - The proxy automatically normalizes model names from API requests
+# - Original model names are preserved in upstream API calls
 
 # Example 1: Native Gemini API
+# API request uses: "model": "gemini-2.5-flash"
+# Config section uses: [models.gemini-2-5-flash]
 [models.gemini-2-5-flash]
 mode = "native"
-base_url = "https://api.example.com"
-api_key = "sk-rFaHPAoJidbs******"
+base_url = "https://api.yoosheen.com"
+api_key = "sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0"
 
 # Example 2: Native Claude API
 [models.claude-3-5-sonnet]
@@ -22,20 +29,35 @@ mode = "native"
 base_url = "https://api.anthropic.com"
 api_key = "sk-claude-key-here"
 
-# Example 3: OpenAI-compatible using default upstream
-[models.deepseek-v3-1]
+# Example 3: DeepSeek with "/" in name
+# API request uses: "model": "deepseek/deepseek-v3.2-exp"
+# Config section uses: [models.deepseek-deepseek-v3-2-exp]
+[models.deepseek-deepseek-v3-2-exp]
 mode = "openai-completions"
-# Uses default_url and default_api_key from [upstream]
 
-# Example 4: OpenAI-compatible using default upstream
-[models.minimax-m2-1]
+# Example 4: MiniMax with "/" in name
+# API request uses: "model": "minimax/minimax-m2.1"
+# Config section uses: [models.minimax-minimax-m2-1]
+[models.minimax-minimax-m2-1]
 mode = "openai-completions"
-# Uses default_url and default_api_key from [upstream]
 
-# Example 5: Another model using default upstream
-[models.qwen-max-2025-01-25]
+# Example 5: GLM with "/" in name
+# API request uses: "model": "z-ai/glm-5"
+# Config section uses: [models.z-ai-glm-5]
+[models.z-ai-glm-5]
 mode = "openai-completions"
-# Uses default_url and default_api_key from [upstream]
+
+# Example 6: GPT-OSS (uses default upstream)
+[models.gpt-oss-120b]
+mode = "openai-completions"
+
+# Example 7: Claude (uses default upstream)
+[models.claude-4-5-haiku]
+mode = "openai-completions"
+
+# Example 8: DeepSeek R1 (reasoning model, uses default upstream)
+[models.deepseek-r1]
+mode = "openai-completions"
 
 # ============================================
 # Default mode for all unconfigured models
@@ -51,7 +73,11 @@ mode = "openai-completions"
 # - mode = "openai-completions": Convert to OpenAI format
 # - If base_url is omitted, uses default_url from [upstream]
 # - If api_key is omitted, uses default_api_key from [upstream]
-# - Model names with "/" or "." are normalized (e.g., "z-ai/glm-5" → "z-ai-glm-5")
+# - Model names with "/" or "." are normalized for config keys:
+#   * "deepseek/deepseek-v3.2-exp" → [models.deepseek-deepseek-v3-2-exp]
+#   * "gemini-2.5-flash" → [models.gemini-2-5-flash]
+#   * "z-ai/glm-5" → [models.z-ai-glm-5]
+# - Original model names are preserved in API calls to upstream
 #
 # Multiple upstreams per model (load balancing) is a future feature.
 # See docs/multiple_upstream_analysis.md for details.

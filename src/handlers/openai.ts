@@ -8,7 +8,7 @@ import type { Env, Logger } from '../types/shared.js';
  * Check if request is in Gemini Interactions format
  */
 function isGeminiInteractionsRequest(body: Record<string, unknown>): boolean {
-  return 'input' in body || ('model' in body && 'contents' in body);
+  return 'input' in body || 'contents' in body;
 }
 
 /**
@@ -81,8 +81,15 @@ export async function handleOpenAIRequest(
 ): Promise<Response> {
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
+    // Check original request path for response format
+    const url = new URL(request.url);
+    const isInteractionsRequest = url.pathname === '/v1/interactions' || url.pathname.startsWith('/v1/interactions?');
+    
+    activeLogger.debug(requestId, `OpenAI handler - path: ${url.pathname}, isInteractions: ${isInteractionsRequest}`);
+
     // Parse request body
     const requestBody = await request.json() as Record<string, unknown>;
+    activeLogger.debug(requestId, `Request body keys: ${Object.keys(requestBody).join(', ')}`);
 
     let openaiRequest: Record<string, unknown>;
     let isStreaming: boolean;
@@ -93,8 +100,10 @@ export async function handleOpenAIRequest(
       
       // Check if it's generateContent format (has contents array)
       if (Array.isArray(requestBody.contents)) {
+        activeLogger.debug(requestId, 'Detected generateContent format with contents array');
         openaiRequest = convertGeminiGenerateContentToOpenAI(requestBody);
       } else {
+        activeLogger.debug(requestId, 'Detected Interactions format with input field');
         openaiRequest = convertGeminiInteractionsToOpenAI(requestBody);
       }
       
@@ -140,11 +149,11 @@ export async function handleOpenAIRequest(
 
         // Handle streaming response
         if (isStreaming) {
-            return handleOpenAIStreamingResponse(response, openaiRequest.model as string, requestId, activeLogger);
+            return handleOpenAIStreamingResponse(response, openaiRequest.model as string, requestId, activeLogger, isInteractionsRequest);
         }
 
         // Handle non-streaming response
-        return handleOpenAINonStreamingResponse(response, openaiRequest.model as string, requestId, activeLogger);
+        return handleOpenAINonStreamingResponse(response, openaiRequest.model as string, requestId, activeLogger, isInteractionsRequest);
 
     } catch (error) {
         activeLogger.error(requestId, `OpenAI API error: ${(error as Error).message}`);
@@ -159,7 +168,8 @@ async function handleOpenAIStreamingResponse(
     response: Response,
     modelId: string,
     requestId: string,
-    logger: Logger
+    logger: Logger,
+    isInteractionsRequest: boolean = false
 ): Promise<Response> {
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
@@ -208,9 +218,47 @@ async function handleOpenAINonStreamingResponse(
     response: Response,
     modelId: string,
     requestId: string,
-    logger: Logger
+    logger: Logger,
+    isInteractionsRequest: boolean = false
 ): Promise<Response> {
     const openaiResponse = await response.json() as Record<string, unknown>;
+    
+    if (isInteractionsRequest) {
+        // Convert to Interactions format
+        const interactionResponse = {
+            id: `v1_${Date.now()}_${requestId}`,
+            model: modelId,
+            status: 'completed',
+            object: 'interaction',
+            created: new Date().toISOString(),
+            updated: new Date().toISOString(),
+            role: 'model',
+            outputs: [] as any[],
+            usage: {
+                total_input_tokens: (openaiResponse.usage as any)?.prompt_tokens || 0,
+                total_output_tokens: (openaiResponse.usage as any)?.completion_tokens || 0,
+                total_tokens: (openaiResponse.usage as any)?.total_tokens || 0,
+            }
+        };
+        
+        // Extract text from OpenAI response
+        const choices = (openaiResponse.choices as any[]) || [];
+        if (choices.length > 0 && choices[0].message?.content) {
+            interactionResponse.outputs = [{
+                type: 'text',
+                text: choices[0].message.content
+            }];
+        }
+        
+        return new Response(JSON.stringify(interactionResponse), {
+            headers: {
+                'Content-Type': 'application/json',
+                'x-request-id': requestId,
+            },
+        });
+    }
+    
+    // Convert to Claude format
     const claudeResponse = convertOpenAIToClaudeResponse(openaiResponse as any, modelId, requestId);
 
     return new Response(JSON.stringify(claudeResponse), {

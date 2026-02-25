@@ -85,6 +85,13 @@ mode = "openai-completions"
 mode = "openai-completions"
 ```
 
+**Important**: Model IDs in config use normalized names (replace `/` and `.` with `-`):
+- API request: `"model": "gemini-2.5-flash"` → Config: `[models.gemini-2-5-flash]`
+- API request: `"model": "deepseek/deepseek-v3.2-exp"` → Config: `[models.deepseek-deepseek-v3-2-exp]`
+- API request: `"model": "z-ai/glm-5"` → Config: `[models.z-ai-glm-5]`
+
+The proxy automatically normalizes model names for config lookup while preserving the original name in API calls.
+
 **Note**: Each model supports one upstream. Multiple upstreams per model (load balancing) is a future feature.
 
 ### 3. Develop Locally
@@ -132,15 +139,7 @@ curl http://localhost:8788/v1/messages \
 ### 6. Docs
 - `docs/routing_refactor.md` - Routing architecture and implementation
 - `docs/config_loader.md` - Configuration loading guide
-- `docs/test_results_after_refactoring.md` - Comprehensive test results (22 models tested)
-
-# Test Gemini API
-node tests/test_gemini_native.js
-node tests/test_gemini_openai_compatible.js
-node tests/test_gemini_simple.js
-```
-
-### 6. Docs
+- `docs/test_results_after_refactoring.md` - Comprehensive test results (42 models tested)
 Designing, Implementation, Reviewing, Testing docs are all generated with `Claude Code` + `DeepSeek-V3.2`, these md files are listed in `docs`.
 
 - `docs/Refactor_gemini_interactions_to_openai_compatible.md`: Comprehensive architecture analysis and refactoring guide for Gemini API support
@@ -414,22 +413,49 @@ curl http://localhost:8788/v1/messages \
 ### Test Results
 
 See `docs/test_results_after_refactoring.md` for comprehensive test results:
-- ✅ 27 models tested successfully (including Gemini 2.5-Flash)
-- ✅ 10+ question types validated (math, coding, translation, reasoning, etc.)
-- ✅ 7 providers tested (DeepSeek, MiniMax, GLM, Moonshot, Qwen, Doubao, Gemini)
-- ✅ Extended thinking/reasoning models validated
+- ✅ 42 models tested successfully across 9 providers
+- ✅ All 3 endpoints validated (/v1/messages, /v1/interactions, /v1beta/models/*:generateContent)
+- ✅ 10+ question types (math, coding, translation, reasoning, etc.)
+- ✅ 9 providers tested (DeepSeek, MiniMax, GLM, Moonshot, Qwen, Doubao, Gemini, GPT-OSS, Claude)
 - ✅ Model-specific routing with per-model upstreams
 - ✅ 100% success rate
 
-### Gemini Endpoints Tested:
-- ✅ `/v1/messages` - Claude API format with Gemini backend
-- ✅ `/v1beta/models/gemini-2.5-flash:generateContent` - Native Gemini endpoint
-- ✅ Model-specific routing to custom upstream (api.yoosheen.com)
-- ✅ Complex questions (1235 tokens generated)
+### Endpoints Tested:
+- ✅ `/v1/messages` - Claude API format
+  - Tested: 42 models (native Gemini, OpenAI-compatible)
+  - Conversions: Claude→Gemini, Claude→OpenAI
+  
+- ✅ `/v1/interactions` - Interactions API format
+  - Tested: 42 models (native Gemini, OpenAI-compatible)
+  - Conversions: Interactions→Gemini, Interactions→OpenAI
+  
+- ✅ `/v1beta/models/{model}:generateContent` - Native Gemini endpoint
+  - Tested: 11 models (gemini-2.5-flash native, deepseek-r1, 9 thinking models with OpenAI-compatible)
+  - Conversions: Native Gemini→Claude, generateContent→OpenAI→Claude
 
-### Reasoning Models Tested:
+### Recent Tests (2026-02-25):
+- ✅ gemini-2.5-flash (native API): 3/3 endpoints
+- ✅ deepseek/deepseek-v3.2-exp (OpenAI): 3/3 endpoints
+- ✅ minimax/minimax-m2.1 (OpenAI): 3/3 endpoints
+- ✅ z-ai/glm-5 (OpenAI): 3/3 endpoints
+- ✅ gpt-oss-120b (OpenAI): 3/3 endpoints
+- ✅ claude-4.5-haiku (OpenAI): 3/3 endpoints
+- ✅ deepseek-r1 (OpenAI): 3/3 endpoints (reasoning model)
+- ✅ 9 thinking models (OpenAI): 27/27 tests passed (100%)
+- ✅ Interactions API response format (id, model, status, object, outputs, usage)
+- ✅ Bug fix: Gemini request detection for generateContent endpoint
+
+### Thinking/Reasoning Models Tested (15 models):
 - deepseek-r1, deepseek-r1-0528 - Step-by-step mathematical reasoning
-- doubao-seed-1.6-thinking - Detailed reasoning process
+- deepseek/deepseek-v3.2-exp-thinking - Enhanced reasoning (all 3 endpoints)
+- deepseek/deepseek-v3.1-terminus-thinking - Terminus reasoning (all 3 endpoints)
+- doubao-seed-1.6-thinking - Detailed reasoning (all 3 endpoints)
+- doubao-1.5-thinking-pro - Step-by-step explanations (all 3 endpoints)
+- moonshotai/kimi-k2-thinking - Enhanced thinking mode (all 3 endpoints)
+- qwen3-vl-30b-a3b-thinking - Visual + thinking (all 3 endpoints)
+- qwen3-30b-a3b-thinking-2507 - Thinking mode (all 3 endpoints)
+- qwen3-next-80b-a3b-thinking - Next-gen thinking (all 3 endpoints)
+- qwen3-235b-a22b-thinking-2507 - Large-scale thinking (all 3 endpoints)
 - deepseek/deepseek-v3.2-exp - Complex explanations
 - moonshotai/kimi-k2.5 - Structured explanations
 - minimax/minimax-m2.1 - Scientific reasoning

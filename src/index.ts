@@ -322,7 +322,15 @@ export default {
         try {
           const bodyText = await request.text();
           const body = JSON.parse(bodyText);
-          const modelName = body.model;
+          let modelName = body.model;
+          
+          // For generateContent endpoint, extract model from URL if not in body
+          if (!modelName && path.startsWith('/v1beta/models/') && path.includes(':generateContent')) {
+            const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):generateContent/);
+            if (modelMatch) {
+              modelName = modelMatch[1];
+            }
+          }
           
           if (modelName && proxyConfig.models) {
             // Get model-specific routing config
@@ -349,11 +357,12 @@ export default {
             } else if (path === '/v1/interactions' || path.startsWith('/v1/interactions?')) {
               handlerType = 'interactions';
               if (modelRoute.mode === 'native') {
-                // Native Gemini API - need to extract model ID from path or use model name
-                const geminiModelId = modelName.replace(/[/.]/g, '-');
-                targetUrl = `${modelRoute.targetUrl}/v1beta/models/${geminiModelId}:generateContent`;
+                // Native Gemini API - route to generateContent endpoint
+                // Use original model name (don't normalize for URL)
+                targetUrl = `${modelRoute.targetUrl}/v1beta/models/${modelName}:generateContent`;
                 upstreamMode = 'native';
               } else {
+                // OpenAI-compatible mode
                 targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
                 upstreamMode = 'openai-completions';
               }
