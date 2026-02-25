@@ -1,23 +1,5 @@
 # Routing Refactoring
 
-## Requirements
-
-### 1. `/v1/messages` → OpenAI-compatible upstream
-- Handler: `messages.ts`
-- Converts: Claude → OpenAI
-- Target: `/v1/chat/completions`
-
-### 2. `/v1/interactions` → 2 upstream modes
-- Mode 1 (openai): Handler `openai.ts` → `/v1/chat/completions`
-- Mode 2 (gemini): Handler `gemini.ts` → Gemini generateContent
-
-### 3. `/v1beta/models/{model}:generateContent` → 2 upstream modes
-- Mode 1 (openai): Handler `openai.ts` → `/v1/chat/completions`
-- Mode 2 (gemini): Handler `gemini.ts` → Gemini generateContent
-
-### 4. `/v1/chat/completions` → BLOCKED
-- Returns error: "Direct access to /v1/chat/completions is not allowed. Use /v1/messages instead."
-
 ## Implementation
 
 ### Main Router (src/index.ts)
@@ -58,10 +40,10 @@ case 'openai-completions':
 ## Routing Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         User Request                             │
-│  /v1/messages | /v1/interactions | /v1beta/models/{model}:...   │
-└────────────────────────────┬────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│                       Users Requests                                       │
+│  /v1/messages | /v1/interactions | /v1beta/models/{model}:contentGenerate  │
+└────────────────────────────┬───────────────────────────────────────────────┘
                              │
                              ▼
                     parseFixedRoute()
@@ -91,9 +73,10 @@ Request()   Request()   Request()   Request()   Request()   Request()
    │         │          │         │          │         │
    ▼         ▼          ▼         ▼          ▼         ▼
 AWS/Vertex  OpenAI    Gemini API  OpenAI    Gemini API  OpenAI
-Claude API  upstream               upstream               upstream
-            /v1/chat/              /v1/chat/              /v1/chat/
-            completions            completions            completions
+Claude API  Compatible            Compatible            Compatible
+            upstream              upstream              upstream
+            /v1/chat/             /v1/chat/             /v1/chat/
+            completions           completions           completions
 ```
 
 ### Model-based Upstream Selection Examples
@@ -101,7 +84,7 @@ Claude API  upstream               upstream               upstream
 # Route specific models to different upstreams
 MODELS_UPSTREAM_MAPPING = '{
   "claude-4": [
-    {"https://api.anthropic.com": 30, "api-schema": "anthropic-messages"}, 
+    {"https://api..com": 30, "api-schema": "claude-messages"}, 
     {"https://aws.com": 40, "api-schema": "openai-completions"}, 
     {"https://googlecloud.com": 40, "api-schema": "openai-completions"}
   ],
@@ -116,6 +99,16 @@ MODELS_UPSTREAM_MAPPING = '{
     {"https://api.qnaigc.com": 100, "api-schema": "openai-completions"}
   ]
 }'
-
 # 'defaults` means all other models
+
+NATIVE_UPSTREAM_MODES = '[
+  "claude-messages", "gemini-contentgenerate"
+]
+# 'openai-completions' is 'compatible', not 'native'
+'
+
 ```
+
+### Other Requirements
+- Gemini '/v1/interactions' spec refer to docs/interactions.md
+- Claude '/v1/messages' spec refer to files in docs/claude_api_docs/* , espetially the 'messages-api.md' and  'token-counting-api.md'
