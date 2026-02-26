@@ -27,7 +27,7 @@
 ```toml
 [upstream]
 default_url = "https://api.qnaigc.com/v1"
-default_api_key = "sk-28f417e15b4643913bce23520d5948327c5986d4ca84647052703b2fa41af3dc"
+default_api_key = "sk-28f417e15b4643913bce23520d5948327c======"
 
 [models.gemini-3-1-pro-preview]
 mode = "openai-completions"

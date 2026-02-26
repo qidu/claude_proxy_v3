@@ -64,7 +64,7 @@
 
 1. **API Key Issue**
    - Old key: `sk-4d01851a07d9e51729be98f9427c7f4023a58f41494f530458253b7692961ddf`
-   - New key: `sk-28f417e15b4643913bce23520d5948327c5986d4ca84647052703b2fa41af3dc`
+   - New key: `sk-28f417e15b4643913bce23520d5948327c======`
    - Different key has better access/quota
 
 2. **Timeout Issue**
@@ -188,7 +188,7 @@ Different API keys have different:
 ```toml
 [upstream]
 default_url = "https://api.qnaigc.com/v1"
-default_api_key = "sk-28f417e15b4643913bce23520d5948327c5986d4ca84647052703b2fa41af3dc"
+default_api_key = "sk-28f417e15b4643913bce23520d5948327c======"
 
 [defaults]
 mode = "openai-completions"

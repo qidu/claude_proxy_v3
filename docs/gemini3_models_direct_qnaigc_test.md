@@ -31,7 +31,7 @@
 **Request format:**
 ```bash
 POST https://api.qnaigc.com/v1/chat/completions
-Authorization: Bearer sk-28f417e15b4643913bce23520d5948327c5986d4ca84647052703b2fa41af3dc
+Authorization: Bearer sk-28f417e15b4643913bce23520d5948327c======
 {
   "model": "gemini-3.1-pro-preview",
   "messages": [{"role": "user", "content": "Hi"}],
@@ -75,7 +75,7 @@ Authorization: Bearer sk-28f417e15b4643913bce23520d5948327c5986d4ca84647052703b2
 ```toml
 [upstream]
 default_url = "https://api.qnaigc.com"
-default_api_key = "sk-28f417e15b4643913bce23520d5948327c5986d4ca84647052703b2fa41af3dc"
+default_api_key = "sk-28f417e15b4643913bce23520d5948327c======"
 
 [defaults]
 mode = "openai-completions"

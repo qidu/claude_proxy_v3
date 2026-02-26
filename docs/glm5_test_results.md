@@ -162,7 +162,7 @@ curl "https://api.qnaigc.com/v1/chat/completions" \
 ## Test Configuration
 
 **Upstream:** https://api.qnaigc.com/v1  
-**API Key:** sk-28f417e15b4643913bce23520d5948327c5986d4ca84647052703b2fa41af3dc  
+**API Key:** sk-28f417e15b4643913bce23520d5948327c======  
 **Mode:** openai-completions  
 **Timeout:** 10s (non-streaming), 20s (streaming)
 
