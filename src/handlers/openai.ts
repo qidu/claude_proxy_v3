@@ -92,12 +92,14 @@ export async function handleOpenAIRequest(
     requestId: string,
     modelId?: string,
     env?: Env,
-    logger?: Logger
+    logger?: Logger,
+    forceStreaming?: boolean
 ): Promise<Response> {
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
     // Check original request path for response format
     const url = new URL(request.url);
+    const isStreamRequest = url.searchParams.get('alt') === 'sse' || url.pathname.includes(':streamGenerateContent');
     const isInteractionsRequest = url.pathname === '/v1/interactions' || url.pathname.startsWith('/v1/interactions?');
     
     activeLogger.debug(requestId, `OpenAI handler - path: ${url.pathname}, isInteractions: ${isInteractionsRequest}`);
@@ -135,6 +137,12 @@ export async function handleOpenAIRequest(
     // Override model if provided
     if (modelId) {
       openaiRequest.model = modelId;
+    }
+
+    // Force streaming for ?alt=sse query parameter
+    if (forceStreaming || isStreamRequest) {
+      openaiRequest.stream = true;
+      isStreaming = true;
     }
 
     // Log request info

@@ -3,3 +3,4 @@
 node_modules/
 dist/
 docs/test_keys.md
+.git_audit_before_commiting

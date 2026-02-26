@@ -28,7 +28,26 @@ test_endpoint() {
   fi
 }
 
+test_stream_endpoint() {
+  local name=$1
+  local url=$2
+  local data=$3
+  
+  RESP=$(timeout 10 curl -s -N "$url" -H "Content-Type: application/json" -d "$data" 2>/dev/null | head -1)
+  
+  if echo "$RESP" | grep -q "data:"; then
+    echo "✅ $name (stream)"
+    ((PASS++))
+  else
+    echo "❌ $name (stream): No SSE"
+    ((FAIL++))
+  fi
+}
+
 BASE="http://localhost:8788"
+
+# Complex question for streaming tests
+COMPLEX_Q="Explain step by step how to solve this problem: A train travels 120 km in 2 hours, then 180 km in 3 hours. What is the average speed for the entire journey?"
 
 # Test all thinking models
 MODELS=(
@@ -43,7 +62,7 @@ MODELS=(
   "moonshotai/kimi-k2-thinking"
 )
 
-echo "Testing ${#MODELS[@]} thinking models on all 3 endpoints"
+echo "Testing ${#MODELS[@]} thinking models - Non-Stream (simple) & Stream (complex)"
 echo "========================================================="
 echo
 
@@ -51,6 +70,7 @@ for MODEL in "${MODELS[@]}"; do
   echo "Model: $MODEL"
   echo "---"
   
+  # Non-streaming tests with simple questions
   test_endpoint "  /v1/messages" \
     "$BASE/v1/messages" \
     "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"2+2?\"}],\"max_tokens\":100}"
@@ -63,11 +83,24 @@ for MODEL in "${MODELS[@]}"; do
     "$BASE/v1beta/models/$MODEL:generateContent" \
     '{"contents":[{"role":"user","parts":[{"text":"4+4?"}]}]}'
   
+  # Streaming tests with complex question
+  test_stream_endpoint "  /v1/messages" \
+    "$BASE/v1/messages" \
+    "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"$COMPLEX_Q\"}],\"max_tokens\":500,\"stream\":true}"
+  
+  test_stream_endpoint "  /v1/interactions" \
+    "$BASE/v1/interactions" \
+    "{\"model\":\"$MODEL\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"$COMPLEX_Q\"}]},\"stream\":true}"
+  
+  test_stream_endpoint "  streamGenerateContent" \
+    "$BASE/v1beta/models/$MODEL:streamGenerateContent" \
+    "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"$COMPLEX_Q\"}]}]}"
+  
   echo
 done
 
 echo "========================================================="
-echo "Total: $PASS passed, $FAIL failed out of $(( ${#MODELS[@]} * 3 )) tests"
-echo "Success rate: $(( PASS * 100 / (${#MODELS[@]} * 3) ))%"
+echo "Total: $PASS passed, $FAIL failed out of $(( ${#MODELS[@]} * 6 )) tests"
+echo "Success rate: $(( PASS * 100 / (${#MODELS[@]} * 6) ))%"
 
 kill $SERVER_PID 2>/dev/null

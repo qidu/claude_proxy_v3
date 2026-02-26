@@ -126,6 +126,7 @@ function parseFixedRoute(path: string, env: Env): {
   handlerType: 'messages' | 'interactions' | 'generateContent' | 'models' | 'token-counting';
   upstreamMode?: 'native' | 'openai-completions';
   modelId?: string;
+  forceStreaming?: boolean;
 } {
   // 1. /v1/messages → 2 upstream modes
   if (path === '/v1/messages' || path.startsWith('/v1/messages?')) {
@@ -180,19 +181,26 @@ function parseFixedRoute(path: string, env: Env): {
     }
   }
 
-  // 3. /v1beta/models/{model}:generateContent → 2 upstream modes
-  if (path.startsWith('/v1beta/models/') && path.includes(':generateContent')) {
-    const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):generateContent/);
-    const modelId = modelMatch ? modelMatch[1] : 'gemini-pro';
+  // 3. /v1beta/models/{model}:generateContent or :streamGenerateContent → 2 upstream modes
+  if (path.startsWith('/v1beta/models/') && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
+    const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
+    const modelId = modelMatch ? modelMatch[1] : 'gemini-no-id-at-proxy';
+    const isStreamEndpoint = path.includes(':streamGenerateContent');
     const mode = (env.GENERATE_CONTENT_UPSTREAM_MODE || 'native') as 'native' | 'openai-completions';
     
     if (mode === 'native') {
-      // Native Gemini generateContent
+      // Native Gemini - pass through the exact endpoint
       const baseUrl = env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com';
       const apiVersion = env.GEMINI_API_VERSION || 'v1beta';
+      const endpoint = isStreamEndpoint ? 'streamGenerateContent' : 'generateContent';
+      // Preserve query string if present, or add ?alt=sse for streamGenerateContent
+      let queryString = path.includes('?') ? path.substring(path.indexOf('?')) : '';
+      if (isStreamEndpoint && !queryString.includes('alt=sse')) {
+        queryString = queryString ? `${queryString}&alt=sse` : '?alt=sse';
+      }
       return {
-        targetUrl: `${baseUrl}/${apiVersion}/models/${modelId}:generateContent`,
-        targetEndpoint: 'v1beta/models/generateContent',
+        targetUrl: `${baseUrl}/${apiVersion}/models/${modelId}:${endpoint}${queryString}`,
+        targetEndpoint: `v1beta/models/${endpoint}`,
         handlerType: 'generateContent',
         upstreamMode: 'native',
         modelId,
@@ -207,6 +215,7 @@ function parseFixedRoute(path: string, env: Env): {
         handlerType: 'generateContent',
         upstreamMode: 'openai-completions',
         modelId,
+        forceStreaming: isStreamEndpoint,
       };
     }
   }
@@ -316,6 +325,7 @@ export default {
       let handlerType: 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' = 'messages';
       let modelId: string | undefined;
       let upstreamMode: 'native' | 'openai-completions' | undefined;
+      let forceStreaming: boolean = false;
       let isGeminiBypass = false;
       
       // Extract authentication headers early
@@ -325,15 +335,15 @@ export default {
       // For endpoints that need model-specific routing, extract model from request body
       if (path === '/v1/messages' || path.startsWith('/v1/messages?') ||
           path === '/v1/interactions' || path.startsWith('/v1/interactions?') ||
-          (path.startsWith('/v1beta/models/') && path.includes(':generateContent'))) {
+          (path.startsWith('/v1beta/models/') && (path.includes(':generateContent') || path.includes(':streamGenerateContent')))) {
         try {
           const bodyText = await request.text();
           const body = JSON.parse(bodyText);
           let modelName = body.model;
           
           // For generateContent endpoint, extract model from URL if not in body
-          if (!modelName && path.startsWith('/v1beta/models/') && path.includes(':generateContent')) {
-            const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):generateContent/);
+          if (!modelName && path.startsWith('/v1beta/models/') && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
+            const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
             if (modelMatch) {
               modelName = modelMatch[1];
             }
@@ -376,16 +386,25 @@ export default {
                 targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
                 upstreamMode = 'openai-completions';
               }
-            } else if (path.startsWith('/v1beta/models/') && path.includes(':generateContent')) {
+            } else if (path.startsWith('/v1beta/models/') && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
               handlerType = 'generateContent';
-              const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):generateContent/);
+              const isStreamEndpoint = path.includes(':streamGenerateContent');
+              const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
               const pathModelId = modelMatch ? modelMatch[1] : upstreamModelName;
+              
               if (modelRoute.mode === 'native') {
-                targetUrl = `${modelRoute.targetUrl}/v1beta/models/${pathModelId}:generateContent`;
+                const endpoint = isStreamEndpoint ? 'streamGenerateContent' : 'generateContent';
+                // Preserve query string if present, or add ?alt=sse for streamGenerateContent
+                let queryString = path.includes('?') ? path.substring(path.indexOf('?')) : '';
+                if (isStreamEndpoint && !queryString.includes('alt=sse')) {
+                  queryString = queryString ? `${queryString}&alt=sse` : '?alt=sse';
+                }
+                targetUrl = `${modelRoute.targetUrl}/v1beta/models/${pathModelId}:${endpoint}${queryString}`;
                 upstreamMode = 'native';
               } else {
                 targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
                 upstreamMode = 'openai-completions';
+                forceStreaming = isStreamEndpoint;
               }
             }
             
@@ -406,6 +425,7 @@ export default {
             handlerType = fixedRoute.handlerType;
             upstreamMode = fixedRoute.upstreamMode;
             modelId = fixedRoute.modelId;
+            forceStreaming = fixedRoute.forceStreaming || false;
             
             // Recreate request with body
             request = new Request(request.url, {
@@ -467,16 +487,16 @@ export default {
           if (upstreamMode === 'native') {
             response = await handleGeminiRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
           } else {
-            response = await handleOpenAIRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
+            response = await handleOpenAIRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, forceStreaming);
           }
           break;
 
         case 'generateContent':
-          // /v1beta/models/{model}:generateContent routes based on upstream mode
+          // /v1beta/models/{model}:generateContent or :streamGenerateContent routes based on upstream mode
           if (upstreamMode === 'native') {
             response = await handleGeminiRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
           } else {
-            response = await handleOpenAIRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
+            response = await handleOpenAIRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, forceStreaming);
           }
           break;
 

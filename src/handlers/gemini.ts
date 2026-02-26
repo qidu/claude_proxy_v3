@@ -420,8 +420,14 @@ async function handleGeminiToGeminiMode(
 
     // Determine the target endpoint
     // Determine if targetUrl already contains :generateContent
-    const needsEndpoint = !targetUrl.includes(":generateContent");
+    const needsEndpoint = !targetUrl.match(/:(?:stream)?[Gg]enerateContent/);
     const fullTargetUrl = needsEndpoint ? `${targetUrl}${determineGeminiEndpoint(request, geminiRequest, effectiveModelId)}` : targetUrl;
+
+    // Check if upstream will return SSE (based on URL)
+    const upstreamIsStreaming = fullTargetUrl.includes(":streamGenerateContent");
+    if (upstreamIsStreaming) {
+        isStreaming = true;
+    }
 
     // Log request info
     activeLogger.debug(requestId, `Gemini upstream request url: ${fullTargetUrl}`);
@@ -518,8 +524,14 @@ async function handleGeminiGenerateContentRequest(
 
     // Determine the target endpoint
     // Determine if targetUrl already contains :generateContent
-    const needsEndpoint = !targetUrl.includes(":generateContent");
+    const needsEndpoint = !targetUrl.match(/:(?:stream)?[Gg]enerateContent/);
     const fullTargetUrl = needsEndpoint ? `${targetUrl}${determineGeminiEndpoint(request, geminiRequest, effectiveModelId)}` : targetUrl;
+
+    // Check if upstream will return SSE (based on URL)
+    const upstreamIsStreaming = fullTargetUrl.includes(":streamGenerateContent");
+    if (upstreamIsStreaming) {
+        isStreaming = true;
+    }
 
     // Log request info
     activeLogger.debug(requestId, `Gemini upstream request url: ${fullTargetUrl}`);
