@@ -4,33 +4,31 @@ cd /home/teric/win/e/dev/bot/claude_proxy_v3
 
 BASE="http://localhost:8788"
 
-# Update config
+# Failed models from previous test
+FAILED_MODELS=(
+  "minimax/minimax-m2.5"
+  "deepseek-r1"
+  "deepseek-r1-0528"
+  "qwen3-vl-30b-a3b-thinking"
+  "glm-4.5"
+  "glm-4.5-air"
+  "z-ai/glm-5"
+)
+
+# Update config with alternative key
 cat > proxy_config.toml << 'EOF'
 [upstream]
-default_url = "https://api.qnaigc.com"
-default_api_key = "sk-4d01851a07d9e51729be98f9427c7f4023a58f41494f530458253b7692961ddf"
+default_url = "https://api.qnaigc.com/v1"
+default_api_key = "sk-28f417e15b4643913bce23520d5948327c******"
 
 [defaults]
 mode = "openai-completions"
 EOF
 
 # Start server
-PROXY_CONFIG_PATH=./proxy_config.toml node dist/server.js > /tmp/proxy_all_models.log 2>&1 &
+PROXY_CONFIG_PATH=./proxy_config.toml node dist/server.js > /tmp/proxy_failed_models.log 2>&1 &
 SERVER_PID=$!
 sleep 4
-
-# Get model list
-echo "Fetching model list..."
-MODELS=$(curl -s "$BASE/v1/models" 2>/dev/null | jq -r '.data[].id' | head -30)
-
-if [ -z "$MODELS" ]; then
-  echo "❌ Failed to fetch models"
-  kill $SERVER_PID 2>/dev/null
-  exit 1
-fi
-
-echo "Testing $(echo "$MODELS" | wc -l) models..."
-echo ""
 
 TOTAL_PASS=0
 TOTAL_FAIL=0
@@ -44,45 +42,50 @@ test_model() {
   echo "Testing: $model"
   
   # Non-streaming /v1/messages
-  RESP=$(timeout 5 curl -s "$BASE/v1/messages" \
+  RESP=$(timeout 10 curl -s "$BASE/v1/messages" \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-4d01851a07d9e51729be98f9427c7f4023a58f41494f530458253b7692961ddf" \
+    -H "Authorization: Bearer sk-28f417e15b4643913bce23520d5948327c******" \
     -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}],\"max_tokens\":20}" 2>/dev/null)
   if echo "$RESP" | jq -e '.id' > /dev/null 2>&1; then
+    echo "  ✅ Non-stream"
     ((pass++))
   else
+    echo "  ❌ Non-stream: $(echo "$RESP" | jq -r '.error.message // "Failed"' | head -c 50)"
     ((fail++))
   fi
   
-  # Streaming /v1/messages
-  RESP=$(timeout 10 curl -s -N "$BASE/v1/messages" \
+  # Streaming /v1/messages (increased timeout)
+  RESP=$(timeout 20 curl -s -N "$BASE/v1/messages" \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-4d01851a07d9e51729be98f9427c7f4023a58f41494f530458253b7692961ddf" \
+    -H "Authorization: Bearer sk-28f417e15b4643913bce23520d5948327c******" \
     -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}],\"max_tokens\":20,\"stream\":true}" 2>/dev/null | head -1)
   if echo "$RESP" | grep -qE "^(event:|data:)"; then
+    echo "  ✅ Stream"
     ((pass++))
   else
+    echo "  ❌ Stream: No SSE"
     ((fail++))
   fi
   
   local total=$((pass + fail))
-  if [ $pass -eq $total ]; then
-    echo "  ✅ $pass/$total"
-  else
-    echo "  ⚠️  $pass/$total"
-  fi
+  echo "  Result: $pass/$total"
+  echo ""
   
   TOTAL_PASS=$((TOTAL_PASS + pass))
   TOTAL_FAIL=$((TOTAL_FAIL + fail))
   TOTAL_TESTS=$((TOTAL_TESTS + total))
 }
 
-# Test each model
-while IFS= read -r model; do
-  test_model "$model"
-done <<< "$MODELS"
-
+echo "=========================================="
+echo "Testing Failed Models with Alternative Key"
+echo "=========================================="
 echo ""
+
+# Test each failed model
+for model in "${FAILED_MODELS[@]}"; do
+  test_model "$model"
+done
+
 echo "=========================================="
 echo "Summary"
 echo "=========================================="

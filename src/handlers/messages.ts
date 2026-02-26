@@ -81,6 +81,7 @@ export async function handleMessagesRequest(
   const isStreaming = claudeRequest.stream === true;
 
   // Log request info
+  activeLogger.info(requestId, `Calling upstream: ${targetUrl}`);
   activeLogger.debug(requestId, `Upstream request url: ${targetUrl}`);
   activeLogger.debug(requestId, `Has auth headers: ${!!authHeaders['Authorization'] || !!authHeaders['x-api-key']}`);
   activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);

@@ -48,7 +48,17 @@ export function getModelRouteConfig(
     // Model-specific config exists
     const mode = modelConfig.mode || defaultMode;
     const baseUrl = modelConfig.base_url || proxyConfig.upstream?.default_url || env.FIXED_ROUTE_TARGET_URL || 'https://api.qnaigc.com';
-    const apiKey = modelConfig.api_key || proxyConfig.upstream?.default_api_key;
+    let apiKey = modelConfig.api_key || proxyConfig.upstream?.default_api_key;
+    
+    // Parse API key if it contains header format (e.g., "x-api-key: sk-...")
+    if (apiKey && apiKey.includes(':')) {
+      const parts = apiKey.split(':');
+      if (parts.length >= 2) {
+        // Extract the key part after the colon, trim whitespace
+        apiKey = parts.slice(1).join(':').trim();
+      }
+    }
+    
     const modelAlias = modelConfig.model_alias;
     
     return {

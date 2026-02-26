@@ -353,33 +353,74 @@ export default {
             // Get model-specific routing config
             const modelRoute = getModelRouteConfig(modelName, proxyConfig, env);
             
+            logger.info(requestId, `Model: ${modelName}, Mode: ${modelRoute.mode}, TargetURL: ${modelRoute.targetUrl}`);
+            
             // Use model alias if configured, otherwise use original model name
             const upstreamModelName = modelRoute.modelAlias || modelName;
             
             // Override auth headers if model has specific API key
             if (modelRoute.apiKey) {
-              modelAuthHeaders = {
-                ...authHeaders,
-                'Authorization': `Bearer ${modelRoute.apiKey}`,
-              };
+              // Check if it's a Claude model (starts with claude-)
+              const isClaudeModel = modelName.toLowerCase().startsWith('claude-') || 
+                                   (upstreamModelName && upstreamModelName.toLowerCase().startsWith('claude-'));
+              
+              if (isClaudeModel && modelRoute.mode === 'native') {
+                // For Claude native, use x-api-key header
+                modelAuthHeaders = {
+                  ...authHeaders,
+                  'x-api-key': modelRoute.apiKey,
+                };
+              } else {
+                // For others, use Authorization Bearer
+                modelAuthHeaders = {
+                  ...authHeaders,
+                  'Authorization': `Bearer ${modelRoute.apiKey}`,
+                };
+              }
             }
             
             // Determine handler type and build target URL based on endpoint and mode
             if (path === '/v1/messages' || path.startsWith('/v1/messages?')) {
               handlerType = 'messages';
               if (modelRoute.mode === 'native') {
-                targetUrl = `${modelRoute.targetUrl}/v1/messages`;
+                // Check if streaming is requested
+                const requestBody = JSON.parse(bodyText) as Record<string, unknown>;
+                const isStreaming = requestBody.stream === true;
+                
+                // Check if it's a Gemini model (starts with gemini-)
+                const isGeminiModel = modelName.toLowerCase().startsWith('gemini-') || 
+                                     (upstreamModelName && upstreamModelName.toLowerCase().startsWith('gemini-'));
+                
+                if (isGeminiModel) {
+                  // For Gemini native, route to generateContent endpoints
+                  if (isStreaming) {
+                    targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:streamGenerateContent?alt=sse`;
+                  } else {
+                    targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
+                  }
+                } else {
+                  // For Claude/other native, route to /v1/messages
+                  targetUrl = `${modelRoute.targetUrl}/v1/messages`;
+                }
                 upstreamMode = 'native';
               } else {
                 targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
                 upstreamMode = 'openai-completions';
               }
+              logger.info(requestId, `Final targetUrl for /v1/messages: ${targetUrl}`);
             } else if (path === '/v1/interactions' || path.startsWith('/v1/interactions?')) {
               handlerType = 'interactions';
               if (modelRoute.mode === 'native') {
-                // Native Gemini API - route to generateContent endpoint
-                // Use upstream model name (with alias if configured)
-                targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
+                // Native Gemini API - check if streaming is requested
+                const requestBody = JSON.parse(bodyText) as Record<string, unknown>;
+                const isStreaming = requestBody.stream === true;
+                
+                // Route to appropriate endpoint based on streaming
+                if (isStreaming) {
+                  targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:streamGenerateContent?alt=sse`;
+                } else {
+                  targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
+                }
                 upstreamMode = 'native';
               } else {
                 // OpenAI-compatible mode
@@ -476,7 +517,12 @@ export default {
         case 'messages':
           // /v1/messages routes based on upstream mode
           if (upstreamMode === 'native') {
-            response = await handleClaudeRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
+            // Check if routing to Gemini generateContent endpoint
+            if (targetUrl.includes(':generateContent') || targetUrl.includes(':streamGenerateContent')) {
+              response = await handleGeminiRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
+            } else {
+              response = await handleClaudeRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
+            }
           } else {
             response = await handleMessagesRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
           }

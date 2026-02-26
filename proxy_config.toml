@@ -1,8 +1,12 @@
 [upstream]
 default_url = "https://api.qnaigc.com"
-default_api_key = "sk-4d01851a07d9e51729be98f9427c7f4023a58f41494f530458253b7692961ddf"
+default_api_key = "sk-28f417e15b4643913bce23520d5948327c5986d4ca84647052703b2fa41af3dc"
 
-[models.gemini-2-5-flash]
-mode = "native"
-base_url = "https://api.yoosheen.com"
-api_key = "sk-qeFSCTmVW61oSbOTFdrxiFoPdyEf48OmU4PSMvZkBhDAlRwf"
+[defaults]
+mode = "openai-completions"
+
+[models.gemini-3-1-pro-preview]
+mode = "openai-completions"
+
+[models.gemini-3-0-flash-preview]
+mode = "openai-completions"
