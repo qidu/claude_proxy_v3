@@ -353,7 +353,7 @@ export default {
             // Get model-specific routing config
             const modelRoute = getModelRouteConfig(modelName, proxyConfig, env);
             
-            logger.info(requestId, `Model: ${modelName}, Mode: ${modelRoute.mode}, TargetURL: ${modelRoute.targetUrl}`);
+            logger.info(requestId, `Model: ${modelName}, Mode: ${modelRoute.upstreamMode}, TargetURL: ${modelRoute.targetUrl}`);
             
             // Use model alias if configured, otherwise use original model name
             const upstreamModelName = modelRoute.modelAlias || modelName;
@@ -364,7 +364,7 @@ export default {
               const isClaudeModel = modelName.toLowerCase().startsWith('claude-') || 
                                    (upstreamModelName && upstreamModelName.toLowerCase().startsWith('claude-'));
               
-              if (isClaudeModel && modelRoute.mode === 'native') {
+              if (isClaudeModel && (modelRoute.upstreamMode === 'anthropic-messages')) {
                 // For Claude native, use x-api-key header
                 modelAuthHeaders = {
                   ...authHeaders,
@@ -379,19 +379,19 @@ export default {
               }
             }
             
-            // Determine handler type and build target URL based on endpoint and mode
+            // Determine handler type and build target URL based on endpoint and upstream_mode
+            const isNativeMode = modelRoute.upstreamMode === 'anthropic-messages' || 
+                                modelRoute.upstreamMode === 'gemini-generatecontent' || 
+                                modelRoute.upstreamMode === 'gemini-interactions';
+            
             if (path === '/v1/messages' || path.startsWith('/v1/messages?')) {
               handlerType = 'messages';
-              if (modelRoute.mode === 'native') {
+              if (isNativeMode) {
                 // Check if streaming is requested
                 const requestBody = JSON.parse(bodyText) as Record<string, unknown>;
                 const isStreaming = requestBody.stream === true;
                 
-                // Check if it's a Gemini model (starts with gemini-)
-                const isGeminiModel = modelName.toLowerCase().startsWith('gemini-') || 
-                                     (upstreamModelName && upstreamModelName.toLowerCase().startsWith('gemini-'));
-                
-                if (isGeminiModel) {
+                if (modelRoute.upstreamMode === 'gemini-generatecontent' || modelRoute.upstreamMode === 'gemini-interactions') {
                   // For Gemini native, route to generateContent endpoints
                   if (isStreaming) {
                     targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:streamGenerateContent?alt=sse`;
@@ -399,7 +399,7 @@ export default {
                     targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
                   }
                 } else {
-                  // For Claude/other native, route to /v1/messages
+                  // For Claude native (anthropic-messages), route to /v1/messages
                   targetUrl = `${modelRoute.targetUrl}/v1/messages`;
                 }
                 upstreamMode = 'native';
@@ -410,7 +410,7 @@ export default {
               logger.info(requestId, `Final targetUrl for /v1/messages: ${targetUrl}`);
             } else if (path === '/v1/interactions' || path.startsWith('/v1/interactions?')) {
               handlerType = 'interactions';
-              if (modelRoute.mode === 'native') {
+              if (isNativeMode) {
                 // Native Gemini API - check if streaming is requested
                 const requestBody = JSON.parse(bodyText) as Record<string, unknown>;
                 const isStreaming = requestBody.stream === true;
@@ -433,14 +433,15 @@ export default {
               const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
               const pathModelId = modelMatch ? modelMatch[1] : upstreamModelName;
               
-              if (modelRoute.mode === 'native') {
+              if (isNativeMode) {
                 const endpoint = isStreamEndpoint ? 'streamGenerateContent' : 'generateContent';
                 // Preserve query string if present, or add ?alt=sse for streamGenerateContent
                 let queryString = path.includes('?') ? path.substring(path.indexOf('?')) : '';
                 if (isStreamEndpoint && !queryString.includes('alt=sse')) {
                   queryString = queryString ? `${queryString}&alt=sse` : '?alt=sse';
                 }
-                targetUrl = `${modelRoute.targetUrl}/v1beta/models/${pathModelId}:${endpoint}${queryString}`;
+                // Use upstreamModelName (alias) instead of pathModelId (client name)
+                targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:${endpoint}${queryString}`;
                 upstreamMode = 'native';
               } else {
                 targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
@@ -451,7 +452,7 @@ export default {
             
             modelId = upstreamModelName;
             
-            logger.debug(requestId, `Model-specific routing: ${modelName} -> ${targetUrl} (${modelRoute.mode}) [${handlerType}]`);
+            logger.debug(requestId, `Model-specific routing: ${modelName} -> ${targetUrl} (${modelRoute.upstreamMode}) [${handlerType}]`);
             
             // Recreate request with body
             request = new Request(request.url, {

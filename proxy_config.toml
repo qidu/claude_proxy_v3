@@ -1,12 +1,14 @@
 [upstream]
-default_url = "https://api.qnaigc.com"
-default_api_key = "sk-28f417e15b4643913bce23520d5948327c5986d4ca84647052703b2fa41af3dc"
+default_base_url = "https://api.qnaigc.com"
+default_api_key = "sk-28f417e15b4643913bce23520d5948327c======"
 
-[defaults]
-mode = "openai-completions"
+[models.gemini]
+upstream_mode = "gemini-generatecontent"
+base_url = "https://api.yoosheen.com"
+api_key = "sk-qeFSCTmVW61oSbOTFdrxi======"
+"gemini-3.1-pro-preview" = ["", "", ""]
+"gemini-3.0-flash-preview" = ["gemini-3-flash-preview", "", ""]
+"gemini-2.5-flash" = ["", "", ""]
 
-[models.gemini-3-1-pro-preview]
-mode = "openai-completions"
-
-[models.gemini-3-0-flash-preview]
-mode = "openai-completions"
+[models.default]
+upstream_mode = "openai-completions"

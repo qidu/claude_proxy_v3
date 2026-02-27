@@ -419,9 +419,7 @@ async function handleGeminiToGeminiMode(
     }
 
     // Determine the target endpoint
-    // Determine if targetUrl already contains :generateContent
-    const needsEndpoint = !targetUrl.match(/:(?:stream)?[Gg]enerateContent/);
-    const fullTargetUrl = needsEndpoint ? `${targetUrl}${determineGeminiEndpoint(request, geminiRequest, effectiveModelId)}` : targetUrl;
+    const fullTargetUrl = constructGeminiUrl(targetUrl, request, geminiRequest, effectiveModelId);
 
     // Check if upstream will return SSE (based on URL)
     const upstreamIsStreaming = fullTargetUrl.includes(":streamGenerateContent");
@@ -430,7 +428,7 @@ async function handleGeminiToGeminiMode(
     }
 
     // Log request info
-    activeLogger.debug(requestId, `Gemini upstream request url: ${fullTargetUrl}`);
+    activeLogger.info(requestId, `[DEBUG] Full URL: ${fullTargetUrl}`);
     activeLogger.debug(requestId, `Gemini model: ${effectiveModelId || 'gemini-no-id-at-proxy'}`);
     activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
 
@@ -523,9 +521,7 @@ async function handleGeminiGenerateContentRequest(
     }
 
     // Determine the target endpoint
-    // Determine if targetUrl already contains :generateContent
-    const needsEndpoint = !targetUrl.match(/:(?:stream)?[Gg]enerateContent/);
-    const fullTargetUrl = needsEndpoint ? `${targetUrl}${determineGeminiEndpoint(request, geminiRequest, effectiveModelId)}` : targetUrl;
+    const fullTargetUrl = constructGeminiUrl(targetUrl, request, geminiRequest, effectiveModelId);
 
     // Check if upstream will return SSE (based on URL)
     const upstreamIsStreaming = fullTargetUrl.includes(":streamGenerateContent");
@@ -534,7 +530,7 @@ async function handleGeminiGenerateContentRequest(
     }
 
     // Log request info
-    activeLogger.debug(requestId, `Gemini upstream request url: ${fullTargetUrl}`);
+    activeLogger.info(requestId, `[DEBUG] Full URL: ${fullTargetUrl}`);
     activeLogger.debug(requestId, `Gemini model: ${effectiveModelId || 'gemini-no-id-at-proxy'}`);
     activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
 
@@ -586,7 +582,28 @@ async function handleGeminiGenerateContentRequest(
 function determineGeminiEndpoint(request: Request, geminiRequest: Record<string, unknown>, modelId?: string): string {
     // Default: generateContent endpoint
     const model = modelId || (geminiRequest.model as string) || 'gemini-no-id-at-proxy';
-    return `/${model}:generateContent`;
+    return `/v1/models/${model}:generateContent`;
+}
+
+/**
+ * Construct full Gemini API URL, handling v1beta vs v1 path differences
+ */
+function constructGeminiUrl(targetUrl: string, request: Request, geminiRequest: Record<string, unknown>, effectiveModelId?: string): string {
+    // Extract model from targetUrl if it contains :generateContent
+    const urlMatch = targetUrl.match(/\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
+    if (urlMatch) {
+        // URL already contains model and endpoint, reconstruct with correct base
+        const urlModel = urlMatch[1];
+        const isStream = urlMatch[2] === 'stream';
+        const endpoint = isStream ? 'streamGenerateContent' : 'generateContent';
+        const queryString = targetUrl.includes('?') ? targetUrl.substring(targetUrl.indexOf('?')) : '';
+        // Remove the path part and reconstruct with /v1/models/
+        const baseOnly = targetUrl.split('/v1')[0].split('/models')[0];
+        return `${baseOnly}/v1/models/${urlModel}:${endpoint}${queryString}`;
+    } else {
+        // Need to add endpoint
+        return `${targetUrl}${determineGeminiEndpoint(request, geminiRequest, effectiveModelId)}`;
+    }
 }
 
 /**

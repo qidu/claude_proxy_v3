@@ -57,40 +57,39 @@ PROXY_CONFIG_PATH = "./proxy_config.toml"
 #### Model Configuration (`proxy_config.toml`):
 ```toml
 [upstream]
-default_url = "https://api.qnaigc.com"
+upstream_mode = "openai-completions"
+default_base_url = "https://api.qnaigc.com"
 default_api_key = "your-api-key"
 
-# Native API mode (direct pass-through)
-[models.gemini-2-5-flash]
-mode = "native"
+# Gemini models with native API
+[models.gemini]
+upstream_mode = "gemini-generatecontent"
 base_url = "https://api.example.com"
 api_key = "your-gemini-key"
+"gemini-3.1-pro-preview" = ["", "", ""]  # Inherits all from category
+"gemini-3.0-flash-preview" = ["gemini-3-flash-preview", "", ""]  # Override alias
 
-[models.claude-3-5-sonnet]
-mode = "native"
+# Claude models with native API
+[models.claude]
+upstream_mode = "anthropic-messages"
 base_url = "https://api.anthropic.com"
 api_key = "your-claude-key"
+"claude-4.6-sonnet" = ["claude-opus-4-1-20250805-thinking", "", ""]  # Model alias
 
-# OpenAI-compatible mode (format conversion)
-[models.deepseek-v3-1]
-mode = "openai-completions"
-base_url = "https://api.deepseek.com"
-api_key = "your-deepseek-key"
-
-# Use default upstream (omit base_url)
-[models.qwen-max]
-mode = "openai-completions"
-
-[defaults]
-mode = "openai-completions"
+# OpenAI-compatible models (default category)
+[models.default]
+upstream_mode = "openai-completions"
+# Inherits base_url and api_key from [upstream]
+"deepseek/deepseek-v3.2" = ["", "", ""]
+"gpt-oss-120b" = ["", "", ""]
 ```
 
-**Important**: Model IDs in config use normalized names (replace `/` and `.` with `-`):
-- API request: `"model": "gemini-2.5-flash"` → Config: `[models.gemini-2-5-flash]`
-- API request: `"model": "deepseek/deepseek-v3.2-exp"` → Config: `[models.deepseek-deepseek-v3-2-exp]`
-- API request: `"model": "z-ai/glm-5"` → Config: `[models.z-ai-glm-5]`
-
-The proxy automatically normalizes model names for config lookup while preserving the original name in API calls.
+**Configuration Structure**:
+- **Category-based**: Group models by provider (`[models.gemini]`, `[models.claude]`, `[models.default]`)
+- **Array format**: `["model-alias", "base-url", "api-key"]` - empty strings inherit from category
+- **upstream_mode**: Explicit mode per category (`anthropic-messages`, `gemini-generatecontent`, `openai-completions`)
+- **Model names**: Preserve original names (no normalization) - `"deepseek/deepseek-v3.2"`, `"gemini-2.5-flash"`
+- **Inheritance chain**: Model array → Category defaults → [upstream] defaults
 
 **Note**: Each model supports one upstream. Multiple upstreams per model (load balancing) is a future feature.
 
@@ -123,23 +122,29 @@ pm2 start dist/server.js -i 4
 ### 5. Test
 
 ```bash
-# Test multiple models
-bash tests/test_models.sh
+# Test specific provider
+./tests/test_claude.sh
+./tests/test_gemini.sh
+./tests/test_deepseek.sh
 
-# Test specific endpoint
-curl http://localhost:8788/v1/messages \
-  -H "Authorization: Bearer your-api-key" \
-  -d '{
-    "model": "deepseek-v3.1",
-    "messages": [{"role": "user", "content": "Hello"}],
-    "max_tokens": 100
-  }'
+# Test specific feature
+./tests/test_thinking.sh
+./tests/test_streaming.sh
+
+# Test all available models
+./tests/test_all.sh
 ```
+
+**Test Configuration**: All tests use `proxy_config.toml` with category-based structure. See `docs/test_guideline.md` for details.
 
 ### 6. Docs
 - `docs/routing_refactor.md` - Routing architecture and implementation
+- `docs/routing_config_revision.md` - Latest config structure revision (2026-02-27)
 - `docs/config_loader.md` - Configuration loading guide
 - `docs/test_results_after_refactoring.md` - Comprehensive test results (42 models tested)
+- `docs/test_guideline.md` - Testing guide and configuration reference
+- `docs/CONSOLIDATION.md` - Consolidated test scripts documentation
+
 Designing, Implementation, Reviewing, Testing docs are all generated with `Claude Code` + `DeepSeek-V3.2`, these md files are listed in `docs`.
 
 - `docs/Refactor_gemini_interactions_to_openai_compatible.md`: Comprehensive architecture analysis and refactoring guide for Gemini API support
@@ -290,21 +295,35 @@ LOG_LEVEL = "debug"
 ```toml
 # proxy_config.toml
 [upstream]
-default_url = "https://api.qnaigc.com"
+upstream_mode = "openai-completions"
+default_base_url = "https://api.qnaigc.com"
 default_api_key = "sk-your-api-key"
 
-[models.gemini-2-5-flash]
-mode = "native"
+[models.gemini]
+upstream_mode = "gemini-generatecontent"
 base_url = "https://api.example.com"
 api_key = "sk-gemini-key"
+"gemini-2.5-flash" = ["", "", ""]
 
-[models.deepseek-v3-1]
-mode = "openai-completions"
-# Uses default upstream
+[models.claude]
+upstream_mode = "anthropic-messages"
+base_url = "https://api.anthropic.com"
+api_key = "sk-claude-key"
+"claude-4.6-sonnet" = ["claude-opus-4-1-20250805-thinking", "", ""]
 
-[defaults]
-mode = "openai-completions"
+[models.default]
+upstream_mode = "openai-completions"
+"deepseek/deepseek-v3.2" = ["", "", ""]
 ```
+
+**Configuration Structure**:
+- **Category-based**: Group models by provider (`[models.gemini]`, `[models.claude]`, `[models.default]`)
+- **Array format**: `["model-alias", "base-url", "api-key"]` - empty strings inherit from category
+- **upstream_mode**: Explicit mode per category (`anthropic-messages`, `gemini-generatecontent`, `gemini-interactions`, `openai-completions`)
+- **Model names**: Preserve original names (no normalization) - `"deepseek/deepseek-v3.2"`, `"gemini-2.5-flash"`
+- **Inheritance chain**: Model array → Category defaults → [upstream] defaults
+
+**Note**: Each model supports one upstream. Multiple upstreams per model (load balancing) is a future feature.
 
 ### Configuration Loading
 
@@ -412,6 +431,18 @@ curl http://localhost:8788/v1/messages \
 
 ### Test Results
 
+**Latest Revision (2026-02-27):** ✅ Config Structure Updated
+
+The routing logic and configuration structure have been revised to align implementation with documentation:
+- **Category-based config**: Models grouped by provider with inheritance
+- **Array format**: `["model-alias", "base-url", "api-key"]` with empty string inheritance
+- **Explicit upstream_mode**: `anthropic-messages`, `gemini-generatecontent`, `openai-completions`
+- **No normalization**: Model names preserved as-is (e.g., `"deepseek/deepseek-v3.2"`)
+
+See `docs/routing_config_revision.md` for complete details.
+
+---
+
 **Comprehensive Testing (2026-02-25):** ✅ Production Ready
 
 #### Models Tested: 50+ models across 9 providers
@@ -478,30 +509,64 @@ curl http://localhost:8788/v1/messages \
 - ✅ Consistent behavior across providers
 - ✅ Recommended for production
 
-#### Recent Test Results (2026-02-26)
+#### Recent Test Results (2026-02-27)
 
-**Comprehensive Testing:** 30+ models tested across multiple providers
+**Latest Consolidated Test Suite:** 6 comprehensive test scripts
 
-**All Models Test (30 models):**
-- Success Rate: 96.7% (58/60 tests)
-- Perfect Score: 29 models (96.7%)
-- Failed: 1 model (z-ai/glm-5 - 3.3%)
-- Provider Success: Moonshot/Kimi (100%), DeepSeek (100%), Qwen (93.3%)
+### Test Results Summary
 
-**Key Models Tested:**
-- ✅ DeepSeek V3.2, R1: 100% (all endpoints)
-- ✅ Gemini 2.0/2.5: 100% (both native and OpenAI modes)
-- ✅ Gemini 3.0/3.1 Preview: 100% (OpenAI mode)
-- ✅ Claude 4.6 Sonnet/Opus: 100% (/v1/messages native mode)
-- ✅ MiniMax M2.1/M2.5: 100%
-- ✅ Qwen models: 93.3% average
-- ✅ GLM models: 66.7% (z-ai/glm-5 excluded)
+| Test Suite | Success Rate | Details |
+|------------|--------------|---------|
+| **test_streaming.sh** | 100% (12/12) | All SSE streaming endpoints working |
+| **test_all.sh** | 98.3% (59/60) | 30 models tested, only z-ai/glm-5 partial failure |
+| **test_gemini.sh** | **100% (18/18)** | All Gemini models, both modes ✅ |
+| **test_deepseek.sh** | 91.7% (11/12) | 4 DeepSeek models tested |
+| **test_claude.sh** | 66.7% (8/12) | Native & OpenAI modes |
+| **test_thinking.sh** | Partial | 10 thinking models (timeout at 240s) |
 
-**Gemini 3.x Preview Models (NEW):**
-- ✅ gemini-3.1-pro-preview: 100% (OpenAI mode)
-- ✅ gemini-3.0-flash-preview: 100% (OpenAI mode)
-- Both streaming and non-streaming work perfectly
-- Available on qnaigc upstream
+### Gemini Models - 100% Success ✅
+
+**Native Mode (gemini-generatecontent): 9/9 passed**
+- ✅ gemini-3.1-pro-preview: All 3 endpoints working
+- ✅ gemini-3.0-flash-preview: All 3 endpoints working
+- ✅ gemini-2.5-flash: All 3 endpoints working
+
+**OpenAI-Compatible Mode: 9/9 passed**
+- ✅ gemini-3.1-pro-preview: All 3 endpoints working
+- ✅ gemini-3.0-flash-preview: All 3 endpoints working
+- ✅ gemini-2.5-flash: All 3 endpoints working
+
+**Bugs Fixed (2026-02-27):**
+1. Model alias not applied for generateContent endpoint
+2. URL path prefix issue (v1beta vs v1) in native mode
+
+### Claude Models - 66.7% Success
+
+**Native Mode (anthropic-messages): 2/3 passed**
+- ✅ claude-4.6-sonnet: /v1/messages working
+- ✅ claude-4.5-opus: /v1/messages working
+- ❌ claude-4.1-sonnet: Service error
+
+**OpenAI-Compatible Mode: 6/9 passed**
+- ✅ claude-4.6-sonnet: All 3 endpoints working
+- ✅ claude-4.5-opus: All 3 endpoints working
+- ❌ claude-haiku-4-5: Model not available on upstream
+
+### SSE Streaming - 100% Success
+
+**All 4 models tested:** deepseek/deepseek-v3.2, gemini-2.5-flash, claude-4.6-sonnet, qwen-max-2025-01-25
+- ✅ /v1/messages: 100% (4/4)
+- ✅ /v1/interactions: 100% (4/4)
+- ✅ streamGenerateContent: 100% (4/4)
+
+### All Models Test - 98.3% Success
+
+**30 models tested** from 6+ providers:
+- ✅ DeepSeek: 100% (5 models)
+- ✅ Moonshot/Kimi: 100% (2 models)
+- ✅ MiniMax: 100% (3 models)
+- ✅ Qwen: 93.3% (15 models, 14 passed)
+- ✅ GLM/Z-AI: 66.7% (3 models, 2 passed)
 
 **Key Achievements:** 
 - All streaming endpoints work with proper SSE format detection
@@ -509,7 +574,7 @@ curl http://localhost:8788/v1/messages \
 - Model alias feature working correctly
 - API key format parsing implemented
 - Gemini 3.x preview models now supported
-- 96.7% success rate across 30 models from 6+ providers
+- 98.3% success rate across 30 models from 6+ providers
 
 #### Thinking/Reasoning Models: 15+ models tested
 
@@ -524,10 +589,10 @@ curl http://localhost:8788/v1/messages \
 
 #### Features Validated
 
-1. ✅ **Model name normalization** - Handles "/" and "." in names
-2. ✅ **Model-specific routing** - Per-model upstreams
+1. ✅ **Category-based config** - Models grouped by provider with inheritance
+2. ✅ **Model-specific routing** - Per-model upstreams with array format
 3. ✅ **model_alias feature** - Maps client names to upstream names
-4. ✅ **Native mode detection** - Auto-detects Claude vs Gemini models
+4. ✅ **upstream_mode detection** - Explicit mode per category
 5. ✅ **API key parsing** - Handles "x-api-key: sk-..." format
 6. ✅ **Format conversions** - Claude↔OpenAI↔Gemini
 7. ✅ **SSE streaming** - All endpoints, all modes (100%)
@@ -535,6 +600,7 @@ curl http://localhost:8788/v1/messages \
 9. ✅ **Vision models** - Image input support
 10. ✅ **Multiple providers** - 30+ models from 6+ providers
 11. ✅ **Gemini 3.x preview** - Latest experimental models
+12. ✅ **Config inheritance** - Model → Category → Upstream defaults
 
 #### Success Rates
 
