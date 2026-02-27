@@ -204,8 +204,9 @@ function extractAuthHeaders(request: Request): Record<string, string> {
   // Extract Authorization header
   let authHeader = request.headers.get('Authorization');
 
-  // Extract API key header
+  // Extract API key headers
   const apiKeyHeader = request.headers.get('x-api-key');
+  const googApiKeyHeader = request.headers.get('x-goog-api-key');
 
   // If X-Api-Key is provided but Authorization is missing, convert it
   if (apiKeyHeader && !authHeader) {
@@ -217,6 +218,11 @@ function extractAuthHeaders(request: Request): Record<string, string> {
     }
   } else if (authHeader) {
     headers['Authorization'] = authHeader;
+  }
+
+  // If x-goog-api-key is provided, convert to Authorization for OpenAI-compatible upstreams
+  if (googApiKeyHeader && !authHeader && !apiKeyHeader) {
+    headers['Authorization'] = `Bearer ${googApiKeyHeader}`;
   }
 
   // Forward beta feature headers
