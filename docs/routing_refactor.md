@@ -1,6 +1,6 @@
 # Routing Refactoring
 
-**Date**: 2026-02-25  
+**Date**: 2026-02-27  
 **Status**: ✅ Complete
 
 ## Implementation
@@ -9,8 +9,8 @@
 
 ```typescript
 case 'messages':
-  // /v1/messages routes based on upstream mode
-  if (upstreamMode === 'native') {
+  // /v1/messages routes based on upstream_mode
+  if (upstreamMode === 'anthropic-messages') {
     response = await handleClaudeRequest(...); // pass through to Claude API
   } else { // upstreamMode === 'openai-completions'
     response = await handleMessagesRequest(...); // convert to OpenAI format
@@ -18,8 +18,8 @@ case 'messages':
   break;
 
 case 'interactions':
-  // /v1/interactions routes based on upstream mode
-  if (upstreamMode === 'native') {
+  // /v1/interactions routes based on upstream_mode
+  if (upstreamMode === 'gemini-interactions') {
     response = await handleGeminiRequest(...); // pass through to Gemini API
   } else { // upstreamMode === 'openai-completions'
     response = await handleOpenAIRequest(...); // convert to OpenAI format
@@ -27,154 +27,218 @@ case 'interactions':
   break;
 
 case 'generateContent':
-  // /v1beta/models/{model}:generateContent routes based on upstream mode
-  if (upstreamMode === 'native') {
+  // /v1beta/models/{model}:generateContent routes based on upstream_mode
+  if (upstreamMode === 'gemini-generatecontent') {
     response = await handleGeminiRequest(...); // pass through to Gemini API
   } else { // upstreamMode === 'openai-completions'
     response = await handleOpenAIRequest(...); // convert to OpenAI format
   }
   break;
+case 'streamGenerateContent':
+  // /v1beta/models/{model}:streamGenerateContent routes based on upstream_mode
+  // same as 'generateContent' but with SSE support
 ```
 
-### Configuration (wrangler.toml)
+## Upstream URI Mappings
 
-```toml
-# Upstream routing modes
-MESSAGES_UPSTREAM_MODE = "openai-completions"  # or "native"
-INTERACTIONS_UPSTREAM_MODE = "native"          # or "openai-completions"
-GENERATE_CONTENT_UPSTREAM_MODE = "native"      # or "openai-completions"
+Each `upstream_mode` maps to a specific upstream API endpoint:
 
-# OpenAI-compatible upstream (for openai-completions mode)
-FIXED_ROUTE_TARGET_URL = "https://api.qnaigc.com"
-FIXED_ROUTE_PATH_PREFIX = ""
+- **`openai-completions`** → `/v1/chat/completions`
+- **`anthropic-messages`** → `/v1/messages`
+- **`gemini-generatecontent`** → `/v1/models/{model}:generateContent` (non-streaming) or `/v1/models/{model}:streamGenerateContent` (streaming)
+- **`gemini-interactions`** → `/v1/interactions`
 
-# Native API endpoints
-CLAUDE_BASE_URL = "https://api.anthropic.com"
-GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
-GEMINI_API_VERSION = "v1beta"
-```
+The proxy automatically constructs the full upstream URL by combining `base_url` + URI path based on the configured `upstream_mode`.
 
 ## Routing Flow
 
 ```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                       Users Requests                                       │
-│  /v1/messages | /v1/interactions | /v1beta/models/{model}:contentGenerate  │
-└────────────────────────────┬───────────────────────────────────────────────┘
-                             │
-                             ▼
-                    parseFixedRoute()
-                             │
-                             ▼
-              { handlerType, upstreamMode, targetUrl }
-                             │
-                             ▼
-                    switch(handlerType)
-                             │
-        ┌────────────────────┼────────────────────┬────────────────┐
-        │                    │                    │                │
-        ▼                    ▼                    ▼                ▼
-   'messages'          'interactions'      'generateContent'  'openai-completions'
-        │                    │                    │                │
-   check mode           check mode           check mode            ▼
-        │                    │                    │           ❌ BLOCKED
-   ┌────┴────┐          ┌────┴────┐          ┌────┴────┐
-   ▼         ▼          ▼         ▼          ▼         ▼
-'native' 'openai-   'native' 'openai-   'native' 'openai-
-          completions'        completions'        completions'
-   │         │          │         │          │         │
-   ▼         ▼          ▼         ▼          ▼         ▼
-handleClaude handleOpenAI handleGemini handleOpenAI handleGemini handleOpenAI
-Request()   Request()   Request()   Request()   Request()   Request()
-   │         │          │         │          │         │
-   │         │          │         │          │         │
-   ▼         ▼          ▼         ▼          ▼         ▼
-AWS/Vertex  OpenAI    Gemini API  OpenAI    Gemini API  OpenAI
-Claude API  Compatible            Compatible            Compatible
-            upstream              upstream              upstream
-            /v1/chat/             /v1/chat/             /v1/chat/
-            completions           completions           completions
+    ┌────────────────────────────────────────────────────────────────────────────┐
+    │                       Users Requests                                       │
+    │  /v1/messages | /v1/interactions | /v1beta/models/{model}:contentGenerate  │
+    └────────────────────────────┬───────────────────────────────────────────────┘
+                                 │
+                                 ▼
+                        parseFixedRoute()
+                                 │
+                                 ▼
+                  { handlerType, upstreamMode, targetUrl }
+                                 │
+                                 ▼
+                        switch(handlerType)
+                                 │
+        ┌────────────────────────┼───────────────────────────┬────────────────┐
+        │                        │                           │                │
+        ▼                        ▼                           ▼                ▼
+   'messages'              'interactions'             'generateContent'  'openai-completions'
+        │                        │                           │                │
+ check upstream_mode      check upstream_mode          check upstream_mode    ▼
+        │                        │                           │             ❌ BLOCKED
+   ┌────┴────┐              ┌────┴───────┐            ┌──────┴─────────┐
+   ▼         ▼              ▼            ▼            ▼                ▼
+'anthropic' 'openai-     'gemini-      'openai-     'gemini-          'openai-
+'-messages' completions' interactions' completions' generatecontent'  completions'
+   │         │              │            │            │                │
+   ▼         ▼              ▼            ▼            ▼                ▼
+handleClaude handleMessages handleGemini handleOpenAI handleGemini   handleOpenAI
+Request()    Request()      Request()    Request()    Request()        Request()
+   │         │              │            │              │              │
+   │         │              │            │              │              │
+   ▼         ▼              ▼            ▼              ▼              ▼
+AWS/Vertex  OpenAI        Gemini API  OpenAI        Gemini API     OpenAI
+Claude API  Compatible    /v1/         Compatible    /v1/models/    Compatible
+/v1/        /v1/chat/     interactions /v1/chat/     {model}:       /v1/chat/
+messages    completions                completions   generate       completions
+                                                     Content
+
+# 
+# "gemini-*" stands for both "gemini-generatecontent" and "gemini-interactions"
 ```
 
 ### Model-based Upstream Configuration
 
 Current implementation supports **single upstream per model** via `proxy_config.toml`:
 
+#### What is a "Category"?
+
+A **category** is a `[models.<name>]` section in the config that groups related models sharing the same upstream configuration. Each category defines:
+
+1. **Shared defaults**: `upstream_mode`, `base_url`, `api_key` that apply to all models in the category
+2. **Per-model overrides**: Individual models can override any of these defaults using the array format
+
+**Key characteristics:**
+- Category name (e.g., `gemini`, `claude`, `default`) is arbitrary - you choose it for organizational purposes
+- Models within a category inherit the category's `base_url`, `api_key`, and `upstream_mode` unless explicitly overridden
+- A model can only belong to one category (the section where it's defined)
+- Special category `[models.default]` acts as fallback for models not explicitly configured elsewhere
+
+**Example:**
 ```toml
-# proxy_config.toml
-
-[upstream]
-default_url = "https://api.qnaigc.com"
-default_api_key = "sk-default-key"
-
-# Model-specific routing (single upstream per model)
-[models.deepseek-v3-1]
-mode = "openai-completions"
-base_url = "https://api.deepseek.com"
-api_key = "sk-deepseek-key"
-
-[models.gemini-2-5-flash]
-mode = "native"
-base_url = "https://api.example1.com"
+[models.gemini]  # ← Category name: "gemini"
+upstream_mode = "gemini-generatecontent"
+base_url = "https://api.example.com"  # ← Category defaults
 api_key = "sk-gemini-key"
 
-[models.claude-3-5-sonnet]
-mode = "native"
+# All these models inherit the category's base_url and api_key:
+"gemini-3.1-pro-preview" = ["", "", ""]
+```
+
+#### Per-Model Configuration Array Format
+
+Each model within a category can be configured using a **3-element array**:
+
+```toml
+"<model-id>" = ["<model-alias>", "<base-url>", "<api-key>"]
+```
+
+**Array elements:**
+1. **model-alias**: Upstream model name (empty `""` = use original model ID)
+2. **base-url**: Override category base_url (empty `""` = inherit from category)
+3. **api-key**: Override category api_key (empty `""` = inherit from category)
+
+**Inheritance rules:**
+- **REQUIRED format**: `["", "", ""]` - MUST use 3-element array with empty strings to inherit from category
+- **Empty array `[]` is INVALID** - Parser will reject this format
+- **Partial override**: `["custom-name", "", ""]` - Override alias only, inherit base_url and api_key
+- **Full override**: `["alias", "https://url", "sk-key"]` - Override all three values
+
+**Fallback chain:**
+```
+Model array value → Category default → [upstream] default → Error
+```
+
+**Examples:**
+
+```toml
+# ✅ Correct: Inherit all from category
+"gemini-2.5-flash" = ["", "", ""]
+
+# ✅ Correct: Override model alias only
+"claude-4.6-sonnet" = ["claude-opus-4-1-20250805-thinking", "", ""]
+
+# ✅ Correct: Override all three
+"gemini-3.0-flash-preview" = ["gemini-3-flash-preview", "https://custom.com", "sk-custom"]
+
+# ❌ INVALID: Empty array not supported
+"gemini-2.5-flash" = []
+
+# ❌ INVALID: Missing elements
+"model-name" = ["alias"]
+```
+
+#### Configuration Structure
+
+```toml
+# proxy_config.toml
+[upstream]
+# Global defaults for models without explicit category configuration
+# upstream_mode is OPTIONAL here - only used if [models.default] is missing
+upstream_mode = "openai-completions"
+default_base_url = "https://api.qnaigc.com"
+default_api_key = "sk-default-key"
+
+# Category for OpenAI-compatible models (fallback)
+# IMPORTANT: This category's upstream_mode takes precedence over [upstream].upstream_mode
+# Precedence chain: [models.default].upstream_mode → [upstream].upstream_mode
+[models.default]
+upstream_mode = "openai-completions"
+
+# Category for Gemini models
+# IMPORTANT: Choose ONE upstream_mode per category (mutually exclusive):
+# - "gemini-generatecontent" for /v1/models/{model}:generateContent endpoint
+# - "gemini-interactions" for /v1/interactions endpoint
+# Cannot use both modes simultaneously in the same category
+[models.gemini]
+upstream_mode = "gemini-generatecontent"
+# upstream_mode = "gemini-interactions"  # Alternative mode (comment out one)
+base_url = "https://api.example1.com"
+api_key = "sk-gemini-key"
+# Models inherit category defaults using ["", "", ""] format
+"gemini-2.5-flash" = ["", "", ""]  # Inherits all from category
+"gemini-3.1-pro-preview" = ["", "", ""]  # Inherits all from category
+"gemini-3.0-flash-preview" = ["gemini-3-flash-preview", "https://custom.com", "sk-custom"]  # Overrides all
+
+[models.claude]
+upstream_mode = "anthropic-messages"
 base_url = "https://api.anthropic.com"
 api_key = "sk-claude-key"
+# Model alias example: map client name to upstream name
+"claude-4.6-sonnet" = ["claude-opus-4-1-20250805-thinking", "", ""]  # Override alias only
+# Available upstream model names (can be used as aliases):
+# - claude-opus-4-1-20250805
+# - claude-opus-4-1-20250805-thinking
+# - claude-3-5-sonnet-20240620
+# - claude-haiku-4-5-20251001-thinking
 
-[defaults]
-mode = "openai-completions"
+[models.list]
+# Model list configuration for /v1/models endpoint
+default_list = "/v1/models"  # Fetch from default upstream
+test_list = ["custom-model-1", "custom-model-2"]  # Append custom models
 ```
+
+**Model Naming Convention:**
+- **Section names** use simplified category prefixes: `[models.gemini]`, `[models.claude]`, `[models.default]`
+- **Model IDs** (config keys) preserve original names with `/` and `.`: `"deepseek/deepseek-v3.2"`, `"gemini-2.5-flash"`
+- No normalization is applied to model IDs in configuration
+
+#### Model List Configuration
+
+The `[models.list]` section controls the `/v1/models` endpoint response:
+
+```toml
+[models.list]
+default_list = "/v1/models"  # Endpoint to fetch base model list
+test_list = ["model-a", "model-b"]  # Additional models to append
+```
+
+- **default_list**: Upstream endpoint path to fetch models from
+- **test_list**: Array of custom model IDs to append to the response
 
 ### Future Feature: Multiple Upstreams per Model
 
 **Status**: 📋 Planned (not yet implemented)
 
-Load balancing and failover support with multiple upstreams:
-
-```toml
-# FUTURE FEATURE - Not currently supported
-[models.deepseek-v3-1]
-mode = "openai-completions"
-
-[[models.deepseek-v3-1.upstreams]]
-base_url = "https://api.deepseek.com"
-api_key = "sk-deepseek-key"
-weight = 50
-
-[[models.deepseek-v3-1.upstreams]]
-base_url = "https://api.qnaigc.com"
-api_key = "sk-qnaigc-key"
-weight = 50
-
-## Route specific models to different upstreams in future
-## MODELS_UPSTREAM_MAPPING = '{
-##   "claude-4": [
-##     {"https://api..com": 30, "api-schema": "claude-messages"},
-##     {"https://aws.com": 40, "api-schema": "openai-completions"},
-##     {"https://googlecloud.com": 40, "api-schema": "openai-completions"}
-##   ],
-##   "gemini-2.5-pro": [
-##     {"https://generativelanguage.googleapis.com":100, "gemini-contentgenerate"}
-##   ],
-##   "deepseek-v3.1": [
-##     {"https://api.deepseek.com": 50, "api-schema": "openai-completions"},
-##     {"https://api.qnaigc.com": 50, "api-schema": "openai-completions"}
-##   ],
-##   "defaults": [
-##     {"https://api.qnaigc.com": 100, "api-schema": "openai-completions"}
-##   ]
-## }'
-## 'defaults` means all other models
-
-## NATIVE_UPSTREAM_MODES = '[
-##   "claude-messages", "gemini-contentgenerate"
-## ]
-## 'openai-completions' is 'compatible', not 'native'
-'
-
-```
+Load balancing and failover support with multiple upstreams.
 
 See `docs/multiple_upstream_analysis.md` for implementation plan.
 
@@ -191,30 +255,21 @@ See `docs/multiple_upstream_analysis.md` for implementation plan.
 
 ### Changes Made
 
-1. **New Handler**: Created `src/handlers/claude.ts` for native Claude API pass-through
-2. **Updated Router**: Modified `src/index.ts` to support `native` and `openai-completions` modes
-3. **Updated Types**: Added new config variables to `src/types/shared.ts`
-4. **Updated Config**: Modified `wrangler.toml` and `src/server.ts` with new variables
-5. **Simplified Gemini**: Removed dual-mode logic from `gemini.ts` (now native-only)
-
-### New Config Variables
-
-```toml
-MESSAGES_UPSTREAM_MODE = "openai-completions"  # /v1/messages routing
-INTERACTIONS_UPSTREAM_MODE = "native"          # /v1/interactions routing
-GENERATE_CONTENT_UPSTREAM_MODE = "native"      # /v1beta/models/{model}:generateContent routing
-CLAUDE_BASE_URL = "https://api.anthropic.com"  # Native Claude API
-```
+1. **Handler**: Created `src/handlers/claude.ts` for anthropic-messages Claude API pass-through
+2. **Router**: Modified `src/index.ts` to support `gemini-*` and `openai-completions` modes
+3. **Types**: Added new config variables to `src/types/shared.ts`
+4. **Config**: Modified `wrangler.toml` and `src/server.ts` with new variables
+5. **Simplified Gemini**: Removed dual-mode logic from `gemini.ts` (now genimi-* native-only)
 
 ### Handler Matrix
 
 | Endpoint | Mode | Handler | Target |
 |----------|------|---------|--------|
-| `/v1/messages` | native | claude.ts | Claude API |
+| `/v1/messages` | anthropic-messages | claude.ts | Claude API |
 | `/v1/messages` | openai-completions | messages.ts | OpenAI upstream |
-| `/v1/interactions` | native | gemini.ts | Gemini API |
+| `/v1/interactions` | gemini-interactions | gemini.ts | Gemini API |
 | `/v1/interactions` | openai-completions | openai.ts | OpenAI upstream |
-| `/v1beta/models/{model}:generateContent` | native | gemini.ts | Gemini API |
+| `/v1beta/models/{model}:generateContent` | gemini-generatecontent | gemini.ts | Gemini API |
 | `/v1beta/models/{model}:generateContent` | openai-completions | openai.ts | OpenAI upstream |
 
 ### Type Safety
