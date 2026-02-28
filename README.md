@@ -1,12 +1,15 @@
-# Claude Proxy v3
+# Model Proxy v3
 
-A complete Claude API proxy that supports multiple AI model providers with unified Claude API format.
+A complete Claude and Gemini API Proxy Endpoints that supports multiple AI model providers with Claude and Gemini API format.
 
 ## ✨ Features
 
-- **Unified Claude API Format**: All models respond in Claude API format
+- **Unified API Format**: All models respond in Claude API format
   - `GET /v1/models` - List available models
   - `POST /v1/messages` - Send messages (supports 49+ models)
+  - `POST /v1/interactions` - Send messages
+  - `POST /v1/models/{model}:generateContent` - Send messages 
+  - `POST /v1/models/{model}:streamGenerateContent` - Send messages 
   - `POST /v1/messages/count_tokens` - Count tokens in messages
 
 - **Multiple Model Providers**: Support for 6+ providers:
@@ -50,7 +53,6 @@ npm install
 ```toml
 [vars]
 LOCAL_TOKEN_COUNTING = "false"
-FIXED_ROUTE_TARGET_URL = "https://api.qnaigc.com"
 PROXY_CONFIG_PATH = "./proxy_config.toml"
 ```
 
@@ -160,8 +162,7 @@ List available models from the target API.
 
 **Example URL**:
 ```
-/GET /https/api.qnaigc.com/openai/v1/models/v1/models
-/GET /https/api.qnaigc.com/v1/models
+/GET /v1/models
 ```
 
 **Response**:
@@ -189,7 +190,7 @@ Send messages with optional thinking configuration.
 
 **Example URL**:
 ```
-/POST /https/api.qnaigc.com/v1/messages
+/POST /v1/messages
 ```
 
 **Request with Thinking**:
@@ -239,7 +240,7 @@ Count tokens in messages, including thinking configuration.
 
 **Example URL**:
 ```
-/POST /https/api.qnaigc.com/v1/messages/count_tokens
+/POST /v1/messages/count_tokens
 ```
 
 **Request**:
@@ -277,8 +278,6 @@ Count tokens in messages, including thinking configuration.
 # wrangler.toml
 [vars]
 # OpenAI-compatible upstream
-FIXED_ROUTE_TARGET_URL = "https://api.qnaigc.com"
-FIXED_ROUTE_PATH_PREFIX = ""
 
 # Config file path or URL
 PROXY_CONFIG_PATH = "./proxy_config.toml"

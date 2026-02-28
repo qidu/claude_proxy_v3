@@ -1,6 +1,6 @@
 #!/bin/bash
 
-cd /home/teric/win/e/dev/bot/claude_proxy_v3
+cd /home/teric/win/e/dev/bot/model_proxy_v3
 
 BASE="http://localhost:8788"
 

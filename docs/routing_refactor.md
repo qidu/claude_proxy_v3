@@ -244,9 +244,11 @@ See `docs/multiple_upstream_analysis.md` for implementation plan.
 
 ```
 
-### Other Requirements
-- Gemini '/v1/interactions' spec refer to docs/interactions.md
-- Claude '/v1/messages' spec refer to files in docs/claude_api_docs/* , espetially the 'messages-api.md' and  'token-counting-api.md'
+### API Spec Requirements
+- "gemini-interactions" Gemini '/v1/interactions' spec refer to docs/interactions.md
+- "gemini-generatecontent" Gemini '/v1beta/models/{model}:generateContent' spec refer to docs/vertex-ai-gemini-api.md without `/v1/projects/{project}/locations/{location}/publishers` in URI
+- "gemini-generatecontent" Gemini stream '/v1beta/models/{model}:streamGenerateContent' spec refer to docs/vertex-ai-gemini-api.md without `/v1/projects/{project}/locations/{location}/publishers` in URI
+- "anthropic-messages": Claude '/v1/messages' spec refer to files in docs/claude_api_docs/* , espetially the 'messages-api.md' and  'token-counting-api.md' and "versioning.md"
 
 
 ## Summary

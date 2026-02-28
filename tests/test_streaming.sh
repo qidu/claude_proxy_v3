@@ -1,6 +1,6 @@
 #!/bin/bash
 
-cd /home/teric/win/e/dev/bot/claude_proxy_v3
+cd /home/teric/win/e/dev/bot/model_proxy_v3
 
 echo "Starting server..."
 PROXY_CONFIG_PATH=./proxy_config.toml node dist/server.js > /tmp/proxy_streaming.log 2>&1 &
