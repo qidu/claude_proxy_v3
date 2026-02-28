@@ -1,6 +1,7 @@
 name = "model-proxy-v3"
 main = "src/index.ts"
 compatibility_date = "2025-01-21"
+compatibility_flags = ["nodejs_compat"]
 
 [vars]
 VERSION = "dev"  # Set to commit id, tag, or branch name

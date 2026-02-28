@@ -453,7 +453,74 @@ curl http://localhost:8788/v1/messages \
 
 ### Test Results
 
-**Latest Revision (2026-02-28):** ✅ Unconfigured Models Validated
+**Latest Revision (2026-02-28):** ✅ Gemini CLI Config Integration
+
+Successfully tested proxy using **Gemini CLI configuration** from `~/.gemini/.env`. All models work with the CLI's base URL and API key settings.
+
+**Gemini CLI Config Test Results:**
+
+| Test Suite | Models Tested | Passed | Success Rate |
+|------------|---------------|--------|--------------|
+| Basic Models | 10 | 9 | 90% |
+| Gemini Models | 3 | 3 | 100% |
+| Claude Models | 6 | 5 | 83.3% |
+| Thinking Models | 10 | 7 | 70% |
+| **Total** | **29** | **24** | **82.8%** |
+
+**Basic Models (90% success):**
+- ✅ deepseek/deepseek-v3.1
+- ✅ deepseek-r1
+- ✅ minimax/minimax-m2.1
+- ✅ moonshotai/kimi-k2.5
+- ✅ minimax/minimax-m2.5
+- ✅ qwen3-32b
+- ✅ deepseek/deepseek-v3.2-exp
+- ✅ z-ai/glm-4.7
+- ✅ moonshotai/kimi-k2-0905
+- ❌ z-ai/glm-5 (upstream issue)
+
+**Gemini Models (100% success):**
+- ✅ gemini-2.5-flash
+- ✅ gemini-3.1-pro-preview
+- ✅ gemini-3.0-flash-preview
+
+**Claude Models (83.3% success):**
+- ✅ claude-4.6-sonnet
+- ✅ claude-4.5-opus
+- ✅ claude-4.5-haiku
+- ✅ claude-4.0-sonnet
+- ✅ claude-3.7-sonnet
+- ❌ claude-4.1-sonnet (invalid request)
+
+**Thinking Models (70% success):**
+- ✅ deepseek/deepseek-v3.2-exp-thinking
+- ✅ deepseek/deepseek-v3.1-terminus-thinking
+- ✅ deepseek-r1-0528
+- ✅ qwen3-30b-a3b-thinking-2507
+- ✅ qwen3-next-80b-a3b-thinking
+- ✅ doubao-1.5-thinking-pro
+- ✅ moonshotai/kimi-k2-thinking
+- ❌ qwen3-vl-30b-a3b-thinking (upstream unavailable)
+- ❌ qwen3-235b-a22b-thinking-2507 (upstream unavailable)
+- ❌ doubao-seed-1.6-thinking (upstream unavailable)
+
+**Key Findings:**
+- ✅ Proxy works seamlessly with Gemini CLI config (`~/.gemini/.env`)
+- ✅ Uses `GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_KEY` from CLI config
+- ✅ 82.8% overall success rate across 29 models from 6+ providers
+- ✅ All Gemini models (100%) and most Claude models (83.3%) working
+- ✅ All thinking models show step-by-step reasoning
+- ✅ 5 failures: 1 upstream issue, 1 invalid request, 3 unavailable models
+
+**Test Scripts:**
+- `test_gemini_cli.sh` - Basic models test (10 models)
+- `test_gemini_models_cli.sh` - Gemini models test (3 models)
+- `test_claude_models_cli.sh` - Claude models test (6 models)
+- `test_thinking_cli.sh` - Thinking models test (10 models)
+
+---
+
+**Previous Revision (2026-02-28):** ✅ Unconfigured Models Validated
 
 Successfully tested proxy with **no specific model IDs configured** in `proxy_config.toml`. All models used fallback configuration from `[models.default]` and `[upstream]` sections.
 

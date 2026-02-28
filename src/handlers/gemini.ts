@@ -487,6 +487,7 @@ async function handleGeminiGenerateContentRequest(
     logger?: Logger
 ): Promise<Response> {
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
+    activeLogger.debug(requestId, `[DEBUG] handleGeminiGenerateContentRequest authHeaders: ${JSON.stringify(authHeaders)}`);
 
     // Parse request body
     const requestBody = await request.json() as Record<string, unknown>;
@@ -645,6 +646,12 @@ function extractGeminiApiKey(
         }
     } else {
         // Native Gemini API: x-goog-api-key or Authorization: Bearer
+        // Check authHeaders first (from config)
+        const authHeaderKey = authHeaders['x-goog-api-key'];
+        if (authHeaderKey) {
+            return authHeaderKey;
+        }
+
         const headerKey = request.headers.get('x-goog-api-key');
         if (headerKey) {
             return headerKey;

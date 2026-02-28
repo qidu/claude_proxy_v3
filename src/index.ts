@@ -358,12 +358,20 @@ export default {
               // Check if it's a Claude model (starts with claude-)
               const isClaudeModel = modelName.toLowerCase().startsWith('claude-') || 
                                    (upstreamModelName && upstreamModelName.toLowerCase().startsWith('claude-'));
+              const isGeminiModel = modelName.toLowerCase().startsWith('gemini-') ||
+                                   (upstreamModelName && upstreamModelName.toLowerCase().startsWith('gemini-'));
               
               if (isClaudeModel && (modelRoute.upstreamMode === 'anthropic-messages')) {
                 // For Claude native, use x-api-key header
                 modelAuthHeaders = {
                   ...authHeaders,
                   'x-api-key': modelRoute.apiKey,
+                };
+              } else if (isGeminiModel && (modelRoute.upstreamMode === 'gemini-generatecontent' || modelRoute.upstreamMode === 'gemini-interactions')) {
+                // For Gemini native, use x-goog-api-key header
+                modelAuthHeaders = {
+                  ...authHeaders,
+                  'x-goog-api-key': modelRoute.apiKey,
                 };
               } else {
                 // For others, use Authorization Bearer
