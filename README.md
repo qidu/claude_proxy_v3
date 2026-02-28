@@ -1,15 +1,15 @@
 # Model Proxy v3
 
-A complete Claude and Gemini API Proxy Endpoints that supports multiple AI model providers with Claude and Gemini API format.
+A complete Claude and Gemini API Proxy Endpoints that supports multiple AI models and providers with Claude and Gemini API format.
 
 ## ✨ Features
 
-- **Unified API Format**: All models respond in Claude API format
+- **Unified API Format**: 
   - `GET /v1/models` - List available models
-  - `POST /v1/messages` - Send messages (supports 49+ models)
-  - `POST /v1/interactions` - Send messages
-  - `POST /v1/models/{model}:generateContent` - Send messages 
-  - `POST /v1/models/{model}:streamGenerateContent` - Send messages 
+  - `POST /v1/messages` - Process claude messages (supports 49+ models)
+  - `POST /v1/interactions` -  Process gemini interactions messages
+  - `POST /v1beta/models/{model}:generateContent` - Process gemini content messages 
+  - `POST /v1beta/models/{model}:streamGenerateContent` - Process gemini content messages with SSE
   - `POST /v1/messages/count_tokens` - Count tokens in messages
 
 - **Multiple Model Providers**: Support for 6+ providers:
@@ -147,12 +147,16 @@ pm2 start dist/server.js -i 4
 - `docs/test_guideline.md` - Testing guide and configuration reference
 - `docs/CONSOLIDATION.md` - Consolidated test scripts documentation
 
-Designing, Implementation, Reviewing, Testing docs are all generated with `Claude Code` + `DeepSeek-V3.2`, these md files are listed in `docs`.
-
-- `docs/Refactor_gemini_interactions_to_openai_compatible.md`: Comprehensive architecture analysis and refactoring guide for Gemini API support
-- `tests/README.md`: Gemini API testing guide covering both native and OpenAI-compatible modes
-
 ## 📚 API Reference
+
+## API Specifications
+this proxy implements claude and gemini API formats for multiple models:
+- **Claude Messages API**: See `docs/claude_api_docs/messages-api.md`
+- **Gemini Interactions API**: See `docs/interactions.md`
+- **Gemini GenerateContent API**: See `docs/vertex-ai-gemini-api.md`
+- **OpenAI Chat Completions**: Standard `/v1/chat/completions` format not for endpoints, just for upstream to Compatible API
+
+For detailed routing behavior, see `docs/routing_refactor.md`.
 
 ### Models API
 
@@ -162,7 +166,7 @@ List available models from the target API.
 
 **Example URL**:
 ```
-/GET /v1/models
+GET /v1/models
 ```
 
 **Response**:
@@ -190,7 +194,7 @@ Send messages with optional thinking configuration.
 
 **Example URL**:
 ```
-/POST /v1/messages
+POST /v1/messages
 ```
 
 **Request with Thinking**:
@@ -240,7 +244,7 @@ Count tokens in messages, including thinking configuration.
 
 **Example URL**:
 ```
-/POST /v1/messages/count_tokens
+POST /v1/messages/count_tokens
 ```
 
 **Request**:
@@ -556,7 +560,7 @@ See `docs/routing_config_revision.md` for complete details.
 **All 4 models tested:** deepseek/deepseek-v3.2, gemini-2.5-flash, claude-4.6-sonnet, qwen-max-2025-01-25
 - ✅ /v1/messages: 100% (4/4)
 - ✅ /v1/interactions: 100% (4/4)
-- ✅ streamGenerateContent: 100% (4/4)
+- ✅ /v1beta/models/{model}:streamGenerateContent: 100% (4/4)
 
 ### All Models Test - 98.3% Success
 
@@ -629,20 +633,6 @@ See `docs/routing_config_revision.md` for complete details.
 
 #### Detailed Test Documentation
 
-- `docs/test_results_after_refactoring.md` - Initial 42 models
-- `docs/all_models_test_results.md` - 30 models comprehensive test (96.7% success)
-- `docs/failed_models_retest_results.md` - Retest with alternative key (92.9% → 100%)
-- `docs/deepseek_models_test_results.md` - DeepSeek V3.2 & R1 (100% success)
-- `docs/gemini_both_modes_test_results.md` - Gemini native & OpenAI modes (100% both)
-- `docs/gemini3_models_proxy_bug_fix.md` - Gemini 3.x preview models (100% success)
-- `docs/minimax_model_test_results.md` - MiniMax M2.5 (100% success)
-- `docs/messages_streaming_fix.md` - SSE format detection fix
-- `docs/gemini_messages_streaming_fix.md` - Native mode /v1/messages streaming fix
-- `docs/gemini_interactions_streaming_fix.md` - Native mode /v1/interactions streaming fix
-- `docs/test_thinking_models_all_results.md` - 9 thinking models
-- `docs/test_results_summary.md` - Comprehensive summary
-- `docs/sse_streaming_review.md` - SSE implementation review
-
 ## 📄 License
 
 MIT
@@ -659,5 +649,3 @@ MIT
 - [Claude API Documentation](https://docs.anthropic.com/claude/reference/)
 - [OpenAI API Documentation](https://platform.openai.com/docs/api-reference)
 - [Google Gemini API Documentation](https://ai.google.dev/gemini-api/docs)
-- [Cloudflare Workers Documentation](https://developers.cloudflare.com/workers/)
-- [Claude Proxy (v0)](https://github.com/tingxifa/claude_proxy) and a [fork(v0.1)](https://github.com/qidu/claude_proxy)

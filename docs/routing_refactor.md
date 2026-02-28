@@ -43,10 +43,10 @@ case 'streamGenerateContent':
 
 Each `upstream_mode` maps to a specific upstream API endpoint:
 
-- **`openai-completions`** → `/v1/chat/completions`
-- **`anthropic-messages`** → `/v1/messages`
-- **`gemini-generatecontent`** → `/v1/models/{model}:generateContent` (non-streaming) or `/v1/models/{model}:streamGenerateContent` (streaming)
-- **`gemini-interactions`** → `/v1/interactions`
+- **`openai-completions`** → `/v1/chat/completions` both streaming and non-streaming
+- **`anthropic-messages`** → `/v1/messages` both streaming and non-streaming
+- **`gemini-generatecontent`** → `/v1beta/models/{model}:generateContent` (non-streaming) or `/v1beta/models/{model}:streamGenerateContent` (streaming)
+- **`gemini-interactions`** → `/v1/interactions` both streaming and non-streaming
 
 The proxy automatically constructs the full upstream URL by combining `base_url` + URI path based on the configured `upstream_mode`.
 
@@ -121,6 +121,7 @@ api_key = "sk-gemini-key"
 
 # All these models inherit the category's base_url and api_key:
 "gemini-3.1-pro-preview" = ["", "", ""]
+
 ```
 
 #### Per-Model Configuration Array Format
@@ -171,7 +172,7 @@ Model array value → Category default → [upstream] default → Error
 ```toml
 # proxy_config.toml
 [upstream]
-# Global defaults for models without explicit category configuration
+# Global defaults upstream for models in list and test list but without explicit single or explicit category configuration
 # upstream_mode is OPTIONAL here - only used if [models.default] is missing
 upstream_mode = "openai-completions"
 default_base_url = "https://api.qnaigc.com"
@@ -244,16 +245,16 @@ See `docs/multiple_upstream_analysis.md` for implementation plan.
 
 ```
 
-### API Spec Requirements
-- "gemini-interactions" Gemini '/v1/interactions' spec refer to docs/interactions.md
-- "gemini-generatecontent" Gemini '/v1beta/models/{model}:generateContent' spec refer to docs/vertex-ai-gemini-api.md without `/v1/projects/{project}/locations/{location}/publishers` in URI
-- "gemini-generatecontent" Gemini stream '/v1beta/models/{model}:streamGenerateContent' spec refer to docs/vertex-ai-gemini-api.md without `/v1/projects/{project}/locations/{location}/publishers` in URI
-- "anthropic-messages": Claude '/v1/messages' spec refer to files in docs/claude_api_docs/* , espetially the 'messages-api.md' and  'token-counting-api.md' and "versioning.md"
-
+### API Specifications
+- **`gemini-interactions`** : Support Gemini '/v1/interactions' input and output,  Spec refered to docs/interactions.md
+- **`gemini-generatecontent`** : Support Gemini '/v1beta/models/{model}:generateContent' input and output, Spec refered to docs/vertex-ai-gemini-api.md without `/v1/projects/{project}/locations/{location}/publishers` in URI
+- **`gemini-streamGeneratecontent`** : Support Gemini SSE stream '/v1beta/models/{model}:streamGenerateContent' input and output, Spec refered to docs/vertex-ai-gemini-api.md without `/v1/projects/{project}/locations/{location}/publishers` in URI
+- **`anthropic-messages`** : Support Claude '/v1/messages' Spec refered to files in docs/claude_api_docs/*.md , espetially the 'messages-api.md' and  'token-counting-api.md' and "versioning.md"
+- **`openai-completions`** → `/v1/chat/completions` Blocked from Endpoint
 
 ## Summary
 
-✅ **Refactoring Complete**
+✅ **Refactoring **
 
 ### Changes Made
 
@@ -261,18 +262,17 @@ See `docs/multiple_upstream_analysis.md` for implementation plan.
 2. **Router**: Modified `src/index.ts` to support `gemini-*` and `openai-completions` modes
 3. **Types**: Added new config variables to `src/types/shared.ts`
 4. **Config**: Modified `wrangler.toml` and `src/server.ts` with new variables
-5. **Simplified Gemini**: Removed dual-mode logic from `gemini.ts` (now genimi-* native-only)
 
 ### Handler Matrix
 
-| Endpoint | Mode | Handler | Target |
-|----------|------|---------|--------|
-| `/v1/messages` | anthropic-messages | claude.ts | Claude API |
-| `/v1/messages` | openai-completions | messages.ts | OpenAI upstream |
-| `/v1/interactions` | gemini-interactions | gemini.ts | Gemini API |
-| `/v1/interactions` | openai-completions | openai.ts | OpenAI upstream |
-| `/v1beta/models/{model}:generateContent` | gemini-generatecontent | gemini.ts | Gemini API |
-| `/v1beta/models/{model}:generateContent` | openai-completions | openai.ts | OpenAI upstream |
+| Endpoint | Mode | Handler | Target Upstream | Endpoint Input | Endpoint Ouput |
+|----------|------|---------|-----------------|----------------|----------------|
+| `/v1/messages` | anthropic-messages | claude.ts | Claude API | Claude Format | Claude Format |
+| `/v1/messages` | openai-completions | messages.ts | OpenAI upstream | Claude Format | Claude Format | 
+| `/v1/interactions` | gemini-interactions | gemini.ts | Gemini API | Gemini interactions Format | Gemini interactions Format |
+| `/v1/interactions` | openai-completions | openai.ts | OpenAI upstream | Gemini interactions Format | Gemini interactions Format |
+| `/v1beta/models/{model}:generateContent` | gemini-generatecontent | gemini.ts | Gemini API | Gemini content Format | Gemini content Format |
+| `/v1beta/models/{model}:generateContent` | openai-completions | openai.ts | OpenAI upstream | Gemini content Format | Gemini content Format |
 
 ### Type Safety
 
