@@ -13,8 +13,6 @@ const env = {
     LOCAL_TOKEN_COUNTING: process.env.LOCAL_TOKEN_COUNTING || 'false',
     ALLOWED_HOSTS: process.env.ALLOWED_HOSTS || '127.0.0.1,localhost,api.qnaigc.com',
     IMAGE_BLOCK_DATA_MAX_SIZE: process.env.IMAGE_BLOCK_DATA_MAX_SIZE || '10485760',
-    FIXED_ROUTE_TARGET_URL: process.env.FIXED_ROUTE_TARGET_URL || 'https://api.qnaigc.com',
-    FIXED_ROUTE_PATH_PREFIX: process.env.FIXED_ROUTE_PATH_PREFIX || '',
     LOG_LEVEL: process.env.LOG_LEVEL || 'info',
     GEMINI_BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
     GEMINI_API_VERSION: process.env.GEMINI_API_VERSION || 'v1beta',

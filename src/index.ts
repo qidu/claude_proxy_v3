@@ -118,9 +118,9 @@ function isDynamicRoute(path: string): boolean {
 /**
  * Parse fixed route and return target configuration
  * Fixed route: /v1/messages -> /v1/chat/completions
- * Uses FIXED_ROUTE_TARGET_URL and FIXED_ROUTE_PATH_PREFIX from env
+ * Uses [models.default] and [upstream] from proxy_config.toml
  */
-function parseFixedRoute(path: string, env: Env): { 
+function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): { 
   targetUrl: string; 
   targetEndpoint: string; 
   handlerType: 'messages' | 'interactions' | 'generateContent' | 'models' | 'token-counting';
@@ -128,25 +128,30 @@ function parseFixedRoute(path: string, env: Env): {
   modelId?: string;
   forceStreaming?: boolean;
 } {
+  // Get default config from [models.default] or [upstream]
+  const defaultCategory = proxyConfig.models?.default;
+  const defaultCategoryConfig = defaultCategory && !Array.isArray(defaultCategory) ? defaultCategory : undefined;
+  const defaultMode = (defaultCategoryConfig?.upstream_mode || 
+                      proxyConfig.upstream?.upstream_mode || 
+                      'openai-completions') as 'native' | 'openai-completions';
+  const defaultBaseUrl = defaultCategoryConfig?.base_url || 
+                        proxyConfig.upstream?.default_base_url || 
+                        'https://api.qnaigc.com';
+
   // 1. /v1/messages → 2 upstream modes
   if (path === '/v1/messages' || path.startsWith('/v1/messages?')) {
-    const mode = (env.MESSAGES_UPSTREAM_MODE || 'openai-completions') as 'native' | 'openai-completions';
-    
-    if (mode === 'native') {
-      // Native Claude API (AWS Bedrock or Vertex AI)
-      const baseUrl = env.CLAUDE_BASE_URL || 'https://api.anthropic.com';
+    if (defaultMode === 'native') {
+      // Native Claude API
       return {
-        targetUrl: `${baseUrl}/v1/messages`,
+        targetUrl: `${defaultBaseUrl}/v1/messages`,
         targetEndpoint: 'v1/messages',
         handlerType: 'messages',
         upstreamMode: 'native',
       };
     } else {
       // OpenAI-compatible upstream
-      const baseUrl = env.FIXED_ROUTE_TARGET_URL || 'https://api.example.com';
-      const pathPrefix = env.FIXED_ROUTE_PATH_PREFIX || '';
       return {
-        targetUrl: `${baseUrl}${pathPrefix}/v1/chat/completions`,
+        targetUrl: `${defaultBaseUrl}/v1/chat/completions`,
         targetEndpoint: 'v1/messages',
         handlerType: 'messages',
         upstreamMode: 'openai-completions',
@@ -156,24 +161,19 @@ function parseFixedRoute(path: string, env: Env): {
 
   // 2. /v1/interactions → 2 upstream modes
   if (path === '/v1/interactions' || path.startsWith('/v1/interactions?')) {
-    const mode = (env.INTERACTIONS_UPSTREAM_MODE || 'native') as 'native' | 'openai-completions';
-    
-    if (mode === 'native') {
+    if (defaultMode === 'native') {
       // Native Gemini API
-      const baseUrl = env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com';
       const apiVersion = env.GEMINI_API_VERSION || 'v1beta';
       return {
-        targetUrl: `${baseUrl}/${apiVersion}`,
+        targetUrl: `${defaultBaseUrl}/${apiVersion}`,
         targetEndpoint: 'v1/interactions',
         handlerType: 'interactions',
         upstreamMode: 'native',
       };
     } else {
       // OpenAI-compatible upstream
-      const baseUrl = env.FIXED_ROUTE_TARGET_URL || 'https://api.example.com';
-      const pathPrefix = env.FIXED_ROUTE_PATH_PREFIX || '';
       return {
-        targetUrl: `${baseUrl}${pathPrefix}/v1/chat/completions`,
+        targetUrl: `${defaultBaseUrl}/v1/chat/completions`,
         targetEndpoint: 'v1/interactions',
         handlerType: 'interactions',
         upstreamMode: 'openai-completions',
@@ -186,11 +186,9 @@ function parseFixedRoute(path: string, env: Env): {
     const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
     const modelId = modelMatch ? modelMatch[1] : 'gemini-no-id-at-proxy';
     const isStreamEndpoint = path.includes(':streamGenerateContent');
-    const mode = (env.GENERATE_CONTENT_UPSTREAM_MODE || 'native') as 'native' | 'openai-completions';
     
-    if (mode === 'native') {
+    if (defaultMode === 'native') {
       // Native Gemini - pass through the exact endpoint
-      const baseUrl = env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com';
       const apiVersion = env.GEMINI_API_VERSION || 'v1beta';
       const endpoint = isStreamEndpoint ? 'streamGenerateContent' : 'generateContent';
       // Preserve query string if present, or add ?alt=sse for streamGenerateContent
@@ -199,7 +197,7 @@ function parseFixedRoute(path: string, env: Env): {
         queryString = queryString ? `${queryString}&alt=sse` : '?alt=sse';
       }
       return {
-        targetUrl: `${baseUrl}/${apiVersion}/models/${modelId}:${endpoint}${queryString}`,
+        targetUrl: `${defaultBaseUrl}/${apiVersion}/models/${modelId}:${endpoint}${queryString}`,
         targetEndpoint: `v1beta/models/${endpoint}`,
         handlerType: 'generateContent',
         upstreamMode: 'native',
@@ -207,10 +205,8 @@ function parseFixedRoute(path: string, env: Env): {
       };
     } else {
       // OpenAI-compatible upstream
-      const baseUrl = env.FIXED_ROUTE_TARGET_URL || 'https://api.example.com';
-      const pathPrefix = env.FIXED_ROUTE_PATH_PREFIX || '';
       return {
-        targetUrl: `${baseUrl}${pathPrefix}/v1/chat/completions`,
+        targetUrl: `${defaultBaseUrl}/v1/chat/completions`,
         targetEndpoint: 'v1beta/models/generateContent',
         handlerType: 'generateContent',
         upstreamMode: 'openai-completions',
@@ -227,10 +223,8 @@ function parseFixedRoute(path: string, env: Env): {
 
   // Token counting endpoint
   if (path === '/v1/messages/count_tokens' || path.startsWith('/v1/messages/count_tokens?')) {
-    const baseUrl = env.FIXED_ROUTE_TARGET_URL || 'https://api.example.com';
-    const pathPrefix = env.FIXED_ROUTE_PATH_PREFIX || '';
     return {
-      targetUrl: `${baseUrl}${pathPrefix}/v1/messages/count_tokens`,
+      targetUrl: `${defaultBaseUrl}/v1/messages/count_tokens`,
       targetEndpoint: 'v1/messages/count_tokens',
       handlerType: 'token-counting',
     };
@@ -238,10 +232,8 @@ function parseFixedRoute(path: string, env: Env): {
 
   // Models endpoint
   if (path === '/v1/models' || path.startsWith('/v1/models?')) {
-    const baseUrl = env.FIXED_ROUTE_TARGET_URL || 'https://api.example.com';
-    const pathPrefix = env.FIXED_ROUTE_PATH_PREFIX || '';
     return {
-      targetUrl: `${baseUrl}${pathPrefix}/v1/models`,
+      targetUrl: `${defaultBaseUrl}/v1/models`,
       targetEndpoint: 'v1/models',
       handlerType: 'models',
     };
@@ -280,9 +272,12 @@ export default {
 
       // Health check endpoint (also for root path)
       if (path === '/health' || path === '/') {
-        const healthUrl = env.FIXED_ROUTE_TARGET_URL 
-          ? `${env.FIXED_ROUTE_TARGET_URL}/v1/models`
-          : 'https://api.qnaigc.com/v1/models';
+        const defaultCategory = proxyConfig.models?.default;
+        const defaultCategoryConfig = defaultCategory && !Array.isArray(defaultCategory) ? defaultCategory : undefined;
+        const healthBaseUrl = defaultCategoryConfig?.base_url || 
+                             proxyConfig.upstream?.default_base_url || 
+                             'https://api.qnaigc.com';
+        const healthUrl = `${healthBaseUrl}/v1/models`;
         const healthAuth = extractAuthHeaders(request);
         
         try {
@@ -462,7 +457,7 @@ export default {
             });
           } else {
             // No model-specific config, use default routing
-            const fixedRoute = parseFixedRoute(path, env);
+            const fixedRoute = parseFixedRoute(path, proxyConfig, env);
             targetUrl = fixedRoute.targetUrl;
             handlerType = fixedRoute.handlerType;
             upstreamMode = fixedRoute.upstreamMode;
@@ -497,7 +492,7 @@ export default {
         targetUrl = buildTargetUrl(targetConfig, claudeEndpoint, modelId);
       } else {
         // Fixed routing: /v1/messages -> /v1/chat/completions
-        const fixedRoute = parseFixedRoute(path, env);
+        const fixedRoute = parseFixedRoute(path, proxyConfig, env);
         targetUrl = fixedRoute.targetUrl;
         handlerType = fixedRoute.handlerType;
         upstreamMode = fixedRoute.upstreamMode;

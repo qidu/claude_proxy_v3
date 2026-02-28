@@ -55,12 +55,10 @@ export function getModelRouteConfig(
   env: Env
 ): ModelRouteConfig {
   if (!proxyConfig.models) {
-    // No models config, use defaults
-    const defaultMode = proxyConfig.defaults?.upstream_mode || 
-                       proxyConfig.upstream?.upstream_mode || 
-                       'openai-completions';
+    // No models config, use defaults from [upstream]
+    const defaultMode = proxyConfig.upstream?.upstream_mode || 'openai-completions';
     return {
-      targetUrl: proxyConfig.upstream?.default_base_url || env.FIXED_ROUTE_TARGET_URL || 'https://api.qnaigc.com',
+      targetUrl: proxyConfig.upstream?.default_base_url || 'https://api.qnaigc.com',
       apiKey: proxyConfig.upstream?.default_api_key,
       upstreamMode: defaultMode,
     };
@@ -79,12 +77,10 @@ export function getModelRouteConfig(
     if (modelEntry !== undefined) {
       // Found the model in this category
       const categoryUpstreamMode = categoryConfig.upstream_mode || 
-                                   proxyConfig.defaults?.upstream_mode || 
                                    proxyConfig.upstream?.upstream_mode || 
                                    'openai-completions';
       const categoryBaseUrl = categoryConfig.base_url || 
                              proxyConfig.upstream?.default_base_url || 
-                             env.FIXED_ROUTE_TARGET_URL || 
                              'https://api.qnaigc.com';
       const categoryApiKey = categoryConfig.api_key || 
                             proxyConfig.upstream?.default_api_key;
@@ -111,14 +107,21 @@ export function getModelRouteConfig(
     }
   }
 
-  // Model not found in any category, use defaults
-  const defaultMode = proxyConfig.defaults?.upstream_mode || 
+  // Model not found in any category, use [models.default] or [upstream] defaults
+  const defaultCategory = proxyConfig.models.default;
+  const defaultCategoryConfig = defaultCategory && !Array.isArray(defaultCategory) ? defaultCategory : undefined;
+  const defaultMode = defaultCategoryConfig?.upstream_mode || 
                      proxyConfig.upstream?.upstream_mode || 
                      'openai-completions';
+  const defaultBaseUrl = defaultCategoryConfig?.base_url || 
+                        proxyConfig.upstream?.default_base_url || 
+                        'https://api.qnaigc.com';
+  const defaultApiKey = defaultCategoryConfig?.api_key || 
+                       proxyConfig.upstream?.default_api_key;
   
   return {
-    targetUrl: proxyConfig.upstream?.default_base_url || env.FIXED_ROUTE_TARGET_URL || 'https://api.qnaigc.com',
-    apiKey: parseApiKey(proxyConfig.upstream?.default_api_key),
+    targetUrl: defaultBaseUrl,
+    apiKey: parseApiKey(defaultApiKey),
     upstreamMode: defaultMode,
   };
 }

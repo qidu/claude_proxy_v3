@@ -55,18 +55,6 @@ export interface Env {
     IMAGE_BLOCK_DATA_MAX_SIZE?: string;
 
     /**
-     * Fixed route target URL for routing requests.
-     * Example: "https://api.example.com"
-     */
-    FIXED_ROUTE_TARGET_URL?: string;
-
-    /**
-     * Fixed route path prefix for routing requests.
-     * Example: "/api"
-     */
-    FIXED_ROUTE_PATH_PREFIX?: string;
-
-    /**
      * Log level for the logger.
      * Options: debug, info, warn, error
      * Default: info

@@ -111,8 +111,8 @@ PROXY_CONFIG_PATH=./proxy_config.toml npx tsx dist/server.js
 
 #### Docker
 ```bash
-docker build -t claude-proxy-v3 .
-docker run -p 8788:8788 -v $(pwd)/proxy_config.toml:/app/proxy_config.toml claude-proxy-v3
+docker build -t model-proxy-v3 .
+docker run -p 8788:8788 -v $(pwd)/proxy_config.toml:/app/proxy_config.toml model-proxy-v3
 ```
 
 #### PM2 (High Performance)
@@ -295,6 +295,25 @@ LOG_LEVEL = "debug"
 
 ### Model Configuration
 
+#### Minimal Configuration (Unconfigured Models)
+
+For models without specific configuration, use this minimal setup:
+
+```toml
+# proxy_config.toml
+[upstream]
+default_base_url = "https://api.qnaigc.com"
+default_api_key = "sk-..."
+upstream_mode = "openai-completions"
+
+[models.default]
+upstream_mode = "openai-completions"
+```
+
+All unconfigured models will automatically use these defaults. No need to list every model explicitly.
+
+#### Full Configuration Example
+
 ```toml
 # proxy_config.toml
 [upstream]
@@ -434,7 +453,48 @@ curl http://localhost:8788/v1/messages \
 
 ### Test Results
 
-**Latest Revision (2026-02-27):** ✅ Config Structure Updated
+**Latest Revision (2026-02-28):** ✅ Unconfigured Models Validated
+
+Successfully tested proxy with **no specific model IDs configured** in `proxy_config.toml`. All models used fallback configuration from `[models.default]` and `[upstream]` sections.
+
+**Test Results: 100% Success (24/24 tests passed)**
+
+| Test Suite | Models | Tests | Passed | Success Rate |
+|------------|--------|-------|--------|--------------|
+| DeepSeek Models | 2 | 6 | 6 | 100% |
+| Thinking Models | 4 | 12 | 12 | 100% |
+| SSE Streaming | 2 | 6 | 6 | 100% |
+| **Total** | **8** | **24** | **24** | **100%** |
+
+**Key Findings:**
+- ✅ Unconfigured models work perfectly with default settings
+- ✅ All 3 endpoints supported: `/v1/messages`, `/v1/interactions`, `generateContent`
+- ✅ SSE streaming works for all endpoints
+- ✅ Thinking/reasoning models work without special configuration
+- ✅ Fallback chain validated: `[models.default]` → `[upstream]` → hardcoded defaults
+
+See `docs/test_results_unconfigured_models.md` for complete details.
+
+---
+
+**Config Refactor (2026-02-28):** ✅ ENV Variables Removed
+
+Removed `FIXED_ROUTE_TARGET_URL` and `FIXED_ROUTE_PATH_PREFIX` environment variables. All configuration now in `proxy_config.toml`:
+
+**Configuration hierarchy for unconfigured models:**
+```
+1. [models.default].upstream_mode / base_url / api_key
+   ↓ (if missing)
+2. [upstream].upstream_mode / default_base_url / default_api_key
+   ↓ (if missing)
+3. Hardcoded defaults: "openai-completions" / "https://api.qnaigc.com"
+```
+
+See `docs/config_env_removal.md` for migration guide.
+
+---
+
+**Previous Revision (2026-02-27):** ✅ Config Structure Updated
 
 The routing logic and configuration structure have been revised to align implementation with documentation:
 - **Category-based config**: Models grouped by provider with inheritance
@@ -604,11 +664,13 @@ See `docs/routing_config_revision.md` for complete details.
 10. ✅ **Multiple providers** - 30+ models from 6+ providers
 11. ✅ **Gemini 3.x preview** - Latest experimental models
 12. ✅ **Config inheritance** - Model → Category → Upstream defaults
+13. ✅ **Unconfigured models** - Automatic fallback to defaults
 
 #### Success Rates
 
 | Test Category | Success Rate | Notes |
 |---------------|--------------|-------|
+| Unconfigured models | 100% (24/24 tests) | All endpoints, streaming, thinking |
 | All models (30 models) | 96.7% (58/60 tests) | OpenAI-compatible mode |
 | Perfect score models | 96.7% (29/30 models) | All tests pass |
 | DeepSeek models | 100% | All variants |
