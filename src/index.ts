@@ -12,7 +12,7 @@ import { createLogger } from './utils/logger.js';
 import { handleModelsRequest } from './handlers/models.js';
 import { handleTokenCountingRequest } from './handlers/token-counting.js';
 import { handleMessagesRequest } from './handlers/messages.js';
-import { handleGeminiRequest } from './handlers/gemini.js';
+import { handleGeminiRequest, handleGeminiRequestForMessages } from './handlers/gemini.js';
 import { handleOpenAIRequest } from './handlers/openai.js';
 import { handleClaudeRequest } from './handlers/claude.js';
 import { loadProxyConfig, getModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
@@ -523,7 +523,7 @@ export default {
           if (upstreamMode === 'native') {
             // Check if routing to Gemini generateContent endpoint
             if (targetUrl.includes(':generateContent') || targetUrl.includes(':streamGenerateContent')) {
-              response = await handleGeminiRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
+              response = await handleGeminiRequestForMessages(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
             } else {
               response = await handleClaudeRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
             }

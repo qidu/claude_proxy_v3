@@ -1,11 +1,11 @@
 [upstream]
 default_base_url = "https://api.qnaigc.com"
-default_api_key = "sk-28f417e15b4643913bce23520d5948327c======"
+default_api_key = "sk-28f417e15b4643913bce23520d5948327c5986d4ca84647052703b2fa41af3dc"
 
 [models.gemini]
 upstream_mode = "gemini-generatecontent"
 base_url = "https://api.yoosheen.com"
-api_key = "sk-qeFSCTmVW61oSbOTFdrxi======"
+api_key = "sk-qeFSCTmVW61oSbOTFdrxiFoPdyEf48OmU4PSMvZkBhDAlRwf"
 "gemini-3.1-pro-preview" = ["", "", ""]
 "gemini-3.0-flash-preview" = ["gemini-3-flash-preview", "", ""]
 "gemini-2.5-flash" = ["", "", ""]

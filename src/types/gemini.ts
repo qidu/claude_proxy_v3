@@ -221,6 +221,7 @@ export interface GeminiInteractionRequest {
     agent_config?: GeminiAgentConfig;
     previous_interaction_id?: string;
     response_modalities?: Array<'text' | 'image' | 'audio'>;
+    cached_content?: string;
 }
 
 // --- Response Types ---

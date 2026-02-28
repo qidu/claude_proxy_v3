@@ -30,6 +30,13 @@ export async function handleMessagesRequest(
   // Parse request body
   const requestBody = await request.json() as Record<string, unknown>;
   
+  // Detect Gemini CLI and force non-streaming to avoid JSON parsing issues
+  const userAgent = request.headers.get('user-agent') || '';
+  if (userAgent.includes('gemini-cli') && requestBody.stream !== false) {
+    activeLogger.debug(requestId, 'Gemini CLI detected, forcing stream=false');
+    requestBody.stream = false;
+  }
+  
   // Check if request is already in OpenAI format
   // OpenAI format: { model, messages, stream, temperature, ... }
   // Claude format: { model, messages, max_tokens, thinking, system, ... }

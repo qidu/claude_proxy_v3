@@ -18,6 +18,21 @@ interface StreamingState {
 }
 
 /**
+ * Create a pass-through transform stream for native Gemini SSE format
+ */
+export function createNativeGeminiStreamTransformer(
+    model: string,
+    requestId: string
+): TransformStream<string, string> {
+    return new TransformStream({
+        transform(chunk: string, controller: TransformStreamDefaultController<string>) {
+            // Pass through the original Gemini SSE format without conversion
+            controller.enqueue(chunk);
+        }
+    });
+}
+
+/**
  * Create a transform stream for converting Gemini SSE to Claude SSE format
  */
 export function createGeminiStreamTransformer(
@@ -32,42 +47,51 @@ export function createGeminiStreamTransformer(
         hasStarted: false,
         hasEnded: false,
     };
+    
+    let buffer = '';
 
     return new TransformStream({
         transform(chunk: string, controller: TransformStreamDefaultController<string>) {
-            const lines = chunk.split('\n');
-            let buffer = '';
+            buffer += chunk;
+            const events = buffer.split('\n\n');
+            buffer = events.pop() || '';
 
-            for (const line of lines) {
-                if (line.startsWith('event:')) {
-                    // Process event header if we have buffered data
-                    if (buffer.trim() && state.hasStarted) {
-                        processContentDelta(buffer, controller, model, requestId, state);
-                        buffer = '';
-                    }
-                    continue;
-                }
+            for (const event of events) {
+                if (!event.trim()) continue;
+                
+                for (const line of event.split('\n')) {
+                    if (line.startsWith('data:')) {
+                        const data = line.slice(5).trim();
+                        if (!data) continue;
 
-                if (line.startsWith('data:')) {
-                    const data = line.slice(5).trim();
-                    if (!data) continue;
-
-                    try {
-                        const event: GeminiSSEEvent = JSON.parse(data);
-                        handleGeminiEvent(event, controller, model, requestId, state);
-                    } catch (e) {
-                        // Skip invalid JSON
+                        try {
+                            const geminiEvent: GeminiSSEEvent = JSON.parse(data);
+                            handleGeminiEvent(geminiEvent, controller, model, requestId, state);
+                        } catch (e) {
+                            // Skip invalid JSON
+                        }
                     }
                 }
-            }
-
-            if (buffer.trim() && state.hasStarted) {
-                processContentDelta(buffer, controller, model, requestId, state);
             }
         },
         flush(controller: TransformStreamDefaultController<string>) {
+            if (buffer.trim()) {
+                for (const line of buffer.split('\n')) {
+                    if (line.startsWith('data:')) {
+                        const data = line.slice(5).trim();
+                        if (!data) continue;
+
+                        try {
+                            const geminiEvent: GeminiSSEEvent = JSON.parse(data);
+                            handleGeminiEvent(geminiEvent, controller, model, requestId, state);
+                        } catch (e) {
+                            // Skip invalid JSON
+                        }
+                    }
+                }
+            }
+            
             if (state.hasStarted && !state.hasEnded) {
-                // Send message stop event
                 const messageStop = `event: message_stop\ndata: {"type":"message_stop","index":0}\n\n`;
                 controller.enqueue(messageStop);
             }

@@ -106,6 +106,14 @@ export async function handleOpenAIRequest(
 
     // Parse request body
     const requestBody = await request.json() as Record<string, unknown>;
+    
+    // Detect Gemini CLI and force non-streaming to avoid JSON parsing issues
+    const userAgent = request.headers.get('user-agent') || '';
+    if (userAgent.includes('gemini-cli') && requestBody.stream !== false) {
+        activeLogger.debug(requestId, 'Gemini CLI detected, forcing stream=false');
+        requestBody.stream = false;
+    }
+    
     activeLogger.debug(requestId, `Request body keys: ${Object.keys(requestBody).join(', ')}`);
 
     let openaiRequest: Record<string, unknown>;
@@ -206,15 +214,28 @@ async function handleOpenAIStreamingResponse(
                 throw new Error('No response body');
             }
 
+            let buffer = '';
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
 
-                // Convert OpenAI streaming format to Claude format
-                const text = new TextDecoder().decode(value);
-                const claudeChunk = convertOpenAIStreamToClaude(text, modelId, requestId);
-                if (claudeChunk) {
-                    await writer.write(encoder.encode(claudeChunk));
+                // Append to buffer
+                buffer += new TextDecoder().decode(value);
+                
+                // Process complete SSE events
+                const { processed, remaining } = processSSEBuffer(buffer, modelId, requestId);
+                buffer = remaining;
+                
+                if (processed) {
+                    await writer.write(encoder.encode(processed));
+                }
+            }
+
+            // Process any remaining buffer
+            if (buffer.trim()) {
+                const { processed } = processSSEBuffer(buffer + '\n\n', modelId, requestId);
+                if (processed) {
+                    await writer.write(encoder.encode(processed));
                 }
             }
 
@@ -294,6 +315,44 @@ async function handleOpenAINonStreamingResponse(
 /**
  * Convert OpenAI streaming chunk to Claude format
  */
+/**
+ * Process SSE buffer and extract complete events
+ */
+function processSSEBuffer(buffer: string, modelId: string, requestId: string): { processed: string; remaining: string } {
+    let result = '';
+    let remaining = buffer;
+    
+    // Split by double newline (SSE event separator)
+    const events = buffer.split('\n\n');
+    
+    // Last element might be incomplete, keep it in buffer
+    remaining = events.pop() || '';
+    
+    for (const event of events) {
+        if (!event.trim()) continue;
+        
+        const lines = event.split('\n');
+        for (const line of lines) {
+            if (line.startsWith('data: ')) {
+                const data = line.slice(6).trim();
+                if (data === '[DONE]') {
+                    result += 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+                } else {
+                    try {
+                        const parsed = JSON.parse(data);
+                        const claudeChunk = convertOpenAIToClaudeResponse(parsed, modelId, requestId);
+                        result += `data: ${JSON.stringify(claudeChunk)}\n\n`;
+                    } catch {
+                        // Skip invalid JSON
+                    }
+                }
+            }
+        }
+    }
+    
+    return { processed: result, remaining };
+}
+
 function convertOpenAIStreamToClaude(chunk: string, modelId: string, requestId: string): string | null {
     // Parse and convert OpenAI SSE format to Claude format
     const lines = chunk.split('\n');

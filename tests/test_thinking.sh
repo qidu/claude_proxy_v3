@@ -2,10 +2,27 @@
 
 cd /home/teric/win/e/dev/bot/model_proxy_v3
 
-echo "Starting server..."
-PROXY_CONFIG_PATH=./proxy_config.toml node dist/server.js > /tmp/proxy_thinking.log 2>&1 &
-SERVER_PID=$!
-sleep 3
+BASE="http://localhost:8788"
+
+# Check if server is already running
+if curl -s "$BASE/health" > /dev/null 2>&1; then
+  echo "Server already running, using existing instance"
+  SERVER_PID=""
+else
+  echo "Starting server..."
+  PROXY_CONFIG_PATH=./proxy_config.toml node dist/server.js > /tmp/proxy_thinking.log 2>&1 &
+  SERVER_PID=$!
+  sleep 3
+  
+  # Wait for server to be ready
+  for i in {1..10}; do
+    if curl -s "$BASE/health" > /dev/null 2>&1; then
+      echo "Server ready"
+      break
+    fi
+    sleep 1
+  done
+fi
 
 PASS=0
 FAIL=0
@@ -102,4 +119,7 @@ echo "=========================================="
 echo "Total: $PASS passed, $FAIL failed out of $(( ${#MODELS[@]} * 6 )) tests"
 echo "Success rate: $(awk "BEGIN {printf \"%.1f\", ($PASS/($PASS+$FAIL))*100}")%"
 
-kill $SERVER_PID 2>/dev/null
+# Only kill if we started it
+if [ -n "$SERVER_PID" ]; then
+  kill $SERVER_PID 2>/dev/null
+fi

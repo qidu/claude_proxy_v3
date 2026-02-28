@@ -66,6 +66,11 @@ export function convertClaudeToGeminiRequest(
         request.generation_config = config;
     }
 
+    // Add cached content
+    if (claudeRequest.cached_content) {
+        request.cachedContent = claudeRequest.cached_content;
+    }
+
     return request;
 }
 

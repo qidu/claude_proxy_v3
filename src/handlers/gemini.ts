@@ -12,7 +12,7 @@ import { GeminiInteractionRequest, GeminiInteractionResponse } from '../types/ge
 import { convertClaudeToGeminiRequest } from '../converters/claude-to-gemini.js';
 import { convertGeminiToClaudeResponse } from '../converters/gemini-to-claude.js';
 import { convertGeminiGenerateContentToClaude } from '../converters/gemini-to-claude.js';
-import { createGeminiStreamTransformer } from '../converters/gemini-streaming.js';
+import { createGeminiStreamTransformer, createNativeGeminiStreamTransformer } from '../converters/gemini-streaming.js';
 import { convertClaudeToOpenAIRequest } from '../converters/claude-to-openai.js';
 import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
 import { createStreamTransformer } from '../converters/streaming.js';
@@ -50,6 +50,27 @@ function getGeminiConfig(env: Env): GeminiConfig {
 function isNativeGeminiRequest(body: Record<string, unknown>): boolean {
     // Native Gemini requests have 'input' or 'contents' field, Claude requests have 'messages'
     return ('input' in body || 'contents' in body) && !('messages' in body);
+}
+
+/**
+ * Handle Gemini API request for /v1/messages endpoint (returns Claude format)
+ */
+export async function handleGeminiRequestForMessages(
+    request: Request,
+    targetUrl: string,
+    authHeaders: Record<string, string>,
+    requestId: string,
+    modelId?: string,
+    env?: Env,
+    logger?: Logger
+): Promise<Response> {
+    const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
+    activeLogger.debug(requestId, 'Routing to Gemini generateContent handler for /v1/messages (Claude format output)');
+    
+    // Always use generateContent handler but return Claude format
+    return handleGeminiGenerateContentRequest(
+        request, targetUrl, authHeaders, requestId, modelId, env, logger, 'claude-format'
+    );
 }
 
 /**
@@ -98,6 +119,13 @@ async function handleGeminiInteractionsRequest(
 ): Promise<Response> {
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
     const requestBody = await request.json() as Record<string, unknown>;
+    
+    // Detect Gemini CLI and force non-streaming to avoid JSON parsing issues
+    const userAgent = request.headers.get('user-agent') || '';
+    if (userAgent.includes('gemini-cli') && requestBody.stream !== false) {
+        activeLogger.debug(requestId, 'Gemini CLI detected, forcing stream=false');
+        requestBody.stream = false;
+    }
     
     activeLogger.debug(requestId, `Interactions request to: ${targetUrl}`);
     
@@ -156,6 +184,9 @@ async function handleGeminiInteractionsRequest(
     }
     if (requestBody.tools) {
         geminiRequest.tools = requestBody.tools;
+    }
+    if (requestBody.cached_content) {
+        geminiRequest.cachedContent = requestBody.cached_content;
     }
     
     // Add stream parameter to gemini request
@@ -332,30 +363,55 @@ async function handleOpenAIStreamingToClaude(
             if (!reader) throw new Error('No response body');
 
             const decoder = new TextDecoder();
+            let buffer = '';
+            
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
 
-                const text = decoder.decode(value);
-                const lines = text.split('\n');
+                buffer += decoder.decode(value);
+                const events = buffer.split('\n\n');
+                buffer = events.pop() || '';
                 
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const data = line.slice(6);
-                        if (data.trim() === '[DONE]') {
-                            await writer.write(encoder.encode('event: message_stop\ndata: {"type":"message_stop"}\n\n'));
-                        } else {
-                            try {
-                                const parsed = JSON.parse(data);
-                                const claudeChunk = convertOpenAIToClaudeResponse(parsed, model, requestId);
-                                await writer.write(encoder.encode(`data: ${JSON.stringify(claudeChunk)}\n\n`));
-                            } catch {
-                                // Skip invalid chunks
+                for (const event of events) {
+                    if (!event.trim()) continue;
+                    
+                    for (const line of event.split('\n')) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6).trim();
+                            if (data === '[DONE]') {
+                                await writer.write(encoder.encode('event: message_stop\ndata: {"type":"message_stop"}\n\n'));
+                            } else {
+                                try {
+                                    const parsed = JSON.parse(data);
+                                    const claudeChunk = convertOpenAIToClaudeResponse(parsed, model, requestId);
+                                    await writer.write(encoder.encode(`data: ${JSON.stringify(claudeChunk)}\n\n`));
+                                } catch {
+                                    // Skip invalid JSON
+                                }
                             }
                         }
                     }
                 }
             }
+            
+            if (buffer.trim()) {
+                for (const line of buffer.split('\n')) {
+                    if (line.startsWith('data: ')) {
+                        const data = line.slice(6).trim();
+                        if (data && data !== '[DONE]') {
+                            try {
+                                const parsed = JSON.parse(data);
+                                const claudeChunk = convertOpenAIToClaudeResponse(parsed, model, requestId);
+                                await writer.write(encoder.encode(`data: ${JSON.stringify(claudeChunk)}\n\n`));
+                            } catch {
+                                // Skip invalid JSON
+                            }
+                        }
+                    }
+                }
+            }
+            
             await writer.close();
         } catch (error) {
             logger.error(requestId, `Streaming error: ${(error as Error).message}`);
@@ -484,13 +540,21 @@ async function handleGeminiGenerateContentRequest(
     requestId: string,
     modelId?: string,
     env?: Env,
-    logger?: Logger
+    logger?: Logger,
+    outputFormat: 'native-gemini' | 'claude-format' = 'native-gemini'
 ): Promise<Response> {
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
     activeLogger.debug(requestId, `[DEBUG] handleGeminiGenerateContentRequest authHeaders: ${JSON.stringify(authHeaders)}`);
 
     // Parse request body
     const requestBody = await request.json() as Record<string, unknown>;
+    
+    // Detect Gemini CLI and force non-streaming to avoid JSON parsing issues
+    const userAgent = request.headers.get('user-agent') || '';
+    if (userAgent.includes('gemini-cli') && requestBody.stream !== false) {
+        activeLogger.debug(requestId, 'Gemini CLI detected, forcing stream=false');
+        requestBody.stream = false;
+    }
 
     // Determine if this is a native Gemini request or needs conversion from Claude format
     let geminiRequest: Record<string, unknown>;
@@ -565,11 +629,13 @@ async function handleGeminiGenerateContentRequest(
 
         // Handle streaming response
         if (isStreaming) {
-            return handleGeminiStreamingResponse(response, effectiveModelId || 'gemini-no-id-at-proxy', requestId, activeLogger, 'interactions');
+            const endpointType = outputFormat === 'claude-format' ? 'interactions' : 'native-gemini';
+            return handleGeminiStreamingResponse(response, effectiveModelId || 'gemini-no-id-at-proxy', requestId, activeLogger, endpointType);
         }
 
         // Handle non-streaming response
-        return handleGeminiNonStreamingResponse(response, effectiveModelId || 'gemini-no-id-at-proxy', requestId, activeLogger, 'interactions');
+        const endpointType = outputFormat === 'claude-format' ? 'interactions' : 'native-gemini';
+        return handleGeminiNonStreamingResponse(response, effectiveModelId || 'gemini-no-id-at-proxy', requestId, activeLogger, endpointType);
 
     } catch (error) {
         activeLogger.error(requestId, `Gemini API error: ${(error as Error).message}`);
@@ -683,13 +749,22 @@ async function handleGeminiNonStreamingResponse(
     model: string,
     requestId: string,
     logger: Logger,
-    endpointType: 'interactions' | 'openai-compatible' = 'interactions'
+    endpointType: 'interactions' | 'openai-compatible' | 'native-gemini' = 'interactions'
 ): Promise<Response> {
     try {
         const responseText = await response.text();
         logger.debug(requestId, 'Gemini response received');
 
-        if (endpointType === 'openai-compatible') {
+        if (endpointType === 'native-gemini') {
+            // Native Gemini format - return as-is
+            return new Response(responseText, {
+                status: response.status,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-request-id': requestId,
+                },
+            });
+        } else if (endpointType === 'openai-compatible') {
             // Parse OpenAI-compatible response
             const openaiResponse = JSON.parse(responseText);
             const claudeResponse = convertOpenAIToClaudeResponse(
@@ -733,7 +808,7 @@ async function handleGeminiStreamingResponse(
     model: string,
     requestId: string,
     logger: Logger,
-    endpointType: 'interactions' | 'openai-compatible' = 'interactions'
+    endpointType: 'interactions' | 'openai-compatible' | 'native-gemini' = 'interactions'
 ): Promise<Response> {
     if (!response.body) {
         throw new Error('Response body is not readable');
@@ -745,7 +820,9 @@ async function handleGeminiStreamingResponse(
         logger.debug(requestId, 'Gemini streaming response started');
 
         // Create streaming transformer based on endpoint type
-        const transformer = endpointType === 'openai-compatible'
+        const transformer = endpointType === 'native-gemini'
+            ? createNativeGeminiStreamTransformer(model, requestId)
+            : endpointType === 'openai-compatible'
             ? createStreamTransformer(model, requestId)
             : createGeminiStreamTransformer(model, requestId);
 

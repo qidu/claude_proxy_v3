@@ -125,6 +125,7 @@ export interface ClaudeMessagesRequest {
     metadata?: {
         user_id?: string;
     };
+    cached_content?: string;
 }
 
 export interface ClaudeTokenCountingRequest {
