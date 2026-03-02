@@ -10,7 +10,6 @@ FAIL=0
 
 BASE="http://localhost:8788"
 API_KEY="sk-28f417e15b46439*"
-API_KEY="sk-e86b76b64132588eac588c0530f6914f41c0452c86eac3629a0c09d9a55723f2"
 
 # Test more models including different providers
 MODELS=(
