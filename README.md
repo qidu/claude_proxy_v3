@@ -510,6 +510,7 @@ Successfully tested proxy using **Gemini CLI configuration** from `~/.gemini/.en
 - ✅ 82.8% overall success rate across 29 models from 6+ providers
 - ✅ All Gemini models (100%) and most Claude models (83.3%) working
 - ✅ All thinking models show step-by-step reasoning
+- ✅ SSE streaming: Complete message boundaries guaranteed (fixed 2026-03-02)
 - ✅ 5 failures: 1 upstream issue, 1 invalid request, 3 unavailable models
 
 **Test Scripts:**
@@ -620,6 +621,12 @@ See `docs/routing_config_revision.md` for complete details.
 - ✅ /v1/interactions: SSE works (100% - OpenAI mode)
 - ✅ /v1beta/models/*:generateContent: SSE works (100% - all modes)
 - ✅ /v1beta/models/*:streamGenerateContent: SSE works (100% - all modes)
+
+**SSE Implementation Details:**
+- **Multi-token chunking**: Efficient batched streaming (recommended)
+- **Complete message boundaries**: Proper `data: {...}\n\n` formatting
+- **Buffer handling**: Ensures no partial SSE messages sent to clients
+- **No `[DONE]` marker**: Streams end naturally via connection close (standard behavior)
 
 **Note:** OpenAI-compatible mode provides consistent 100% SSE streaming across all endpoints.
 

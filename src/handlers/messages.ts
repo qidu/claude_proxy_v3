@@ -62,7 +62,11 @@ export async function handleMessagesRequest(
 
     // Handle target API errors
     if (!response.ok) {
-      handleTargetApiError(response, 'Messages API');
+      const bodyPreview = typeof requestBody === 'string'
+        ? requestBody
+        : JSON.stringify(requestBody).substring(0, 1000);
+      activeLogger.error(requestId, `Messages API error: ${response.status}, URL: ${targetUrl}, Body: ${bodyPreview.substring(0, 500)}`);
+      handleTargetApiError(response, 'Messages API', { url: targetUrl, body: bodyPreview });
     }
 
     // For OpenAI format pass-through, convert response to Claude format
@@ -104,7 +108,11 @@ export async function handleMessagesRequest(
 
   // Handle target API errors
   if (!response.ok) {
-    handleTargetApiError(response, 'Messages API');
+    const bodyPreview = typeof openaiRequest === 'string'
+      ? openaiRequest
+      : JSON.stringify(openaiRequest).substring(0, 1000);
+    activeLogger.error(requestId, `Messages API error: ${response.status}, URL: ${targetUrl}, Body: ${bodyPreview.substring(0, 500)}`);
+    handleTargetApiError(response, 'Messages API', { url: targetUrl, body: bodyPreview });
   }
 
   // Handle streaming response

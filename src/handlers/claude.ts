@@ -45,7 +45,8 @@ export async function handleClaudeRequest(
     });
 
     if (!response.ok) {
-        handleTargetApiError(response, 'Claude API');
+        const bodyPreview = JSON.stringify(requestBody).substring(0, 1000);
+        handleTargetApiError(response, 'Claude API', { url: targetUrl, body: bodyPreview });
     }
 
     // Return response as-is (pass-through)

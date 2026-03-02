@@ -36,9 +36,16 @@ const server = createServer(async (req, res) => {
                     req.on('error', (err) => controller.error(err));
                 },
             });
+        // Get client connection info from Node.js socket
+        const clientAddress = req.socket.remoteAddress || 'unknown';
+        const clientPort = req.socket.remotePort?.toString() || 'unknown';
+        // Create headers with client info
+        const headers = { ...req.headers };
+        headers['x-client-address'] = clientAddress;
+        headers['x-client-port'] = clientPort;
         const requestInit = {
             method: req.method,
-            headers: req.headers,
+            headers,
             body: bodyStream,
         };
         if (bodyStream) {

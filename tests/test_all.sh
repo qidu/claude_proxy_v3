@@ -3,6 +3,7 @@
 cd /home/teric/win/e/dev/bot/model_proxy_v3
 
 BASE="http://localhost:8788"
+API_KEY="sk-28f417e15b4643913bce23520d5948327c5986d4ca84647052703b2fa41af3dc"
 
 echo "Starting server..."
 PROXY_CONFIG_PATH=./proxy_config.toml node dist/server.js > /tmp/proxy_all_models.log 2>&1 &
@@ -34,6 +35,7 @@ test_model() {
   # Non-streaming /v1/messages
   RESP=$(timeout 10 curl -s "$BASE/v1/messages" \
     -H "Content-Type: application/json" \
+    -H "Authorization: Baerer <API_KEY>" \
     -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}],\"max_tokens\":20}" 2>/dev/null)
   if echo "$RESP" | jq -e '.id' > /dev/null 2>&1; then
     ((pass++))

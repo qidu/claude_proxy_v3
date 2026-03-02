@@ -190,18 +190,14 @@ async function handleGeminiInteractionsRequest(
     activeLogger.debug(requestId, `Converted request: ${JSON.stringify(geminiRequest).substring(0, 200)}...`);
     activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
     
-    // Prepare Gemini API headers
+    // Prepare headers for Gemini API - authHeaders already contains the correct format
+    // from the main router (x-goog-api-key for native Gemini mode)
     const geminiHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
+        ...authHeaders,  // Already has correct x-goog-api-key from router
     };
-    
-    const apiKey = extractGeminiApiKey(request, authHeaders, env, 'interactions');
-    if (apiKey) {
-        geminiHeaders['x-goog-api-key'] = apiKey;
-        activeLogger.debug(requestId, `Using API key: ${apiKey.substring(0, 10)}...`);
-    }
-    
-    // Forward request to Gemini API
+
+    activeLogger.debug(requestId, `Using auth headers: ${Object.keys(geminiHeaders).join(', ')}`);
     const response = await fetch(targetUrl, {
         method: 'POST',
         headers: geminiHeaders,
@@ -213,7 +209,8 @@ async function handleGeminiInteractionsRequest(
     if (!response.ok) {
         const errorText = await response.text();
         activeLogger.error(requestId, `Gemini API error: ${errorText}`);
-        handleTargetApiError(response, 'Gemini API');
+        const bodyPreview = JSON.stringify(geminiRequest).substring(0, 1000);
+        handleTargetApiError(response, 'Gemini API', { url: targetUrl, body: bodyPreview });
     }
     
     // Handle streaming response
@@ -322,7 +319,8 @@ async function handleGeminiToOpenAIMode(
     });
 
     if (!response.ok) {
-        handleTargetApiError(response, 'OpenAI API');
+        const bodyPreview = JSON.stringify(openaiRequest).substring(0, 1000);
+        handleTargetApiError(response, 'OpenAI API', { url: targetUrl, body: bodyPreview });
     }
 
     // Convert OpenAI response back to Claude format
@@ -481,21 +479,14 @@ async function handleGeminiToGeminiMode(
     activeLogger.debug(requestId, `Gemini model: ${effectiveModelId || 'gemini-no-id-at-proxy'}`);
     activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
 
-    // Prepare headers for Gemini API
+    // Prepare headers for Gemini API - authHeaders already contains the correct format
+    // from the main router (x-goog-api-key for native Gemini mode)
     const geminiHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
+        ...authHeaders,
     };
 
-    // Add API key from headers or environment
-    const apiKey = extractGeminiApiKey(request, authHeaders, env, 'interactions');
-    if (apiKey) {
-        geminiHeaders['x-goog-api-key'] = apiKey;
-    }
-
-    // Forward other auth headers
-    if (authHeaders['Authorization']) {
-        // Keep Authorization for backward compatibility
-    }
+    activeLogger.debug(requestId, `Using auth headers: ${Object.keys(geminiHeaders).join(', ')}`);
 
     try {
         const response = await fetch(fullTargetUrl, {
@@ -506,7 +497,8 @@ async function handleGeminiToGeminiMode(
 
         // Handle target API errors
         if (!response.ok) {
-            handleTargetApiError(response, 'Gemini API');
+            const bodyPreview = JSON.stringify(geminiRequest).substring(0, 1000);
+            handleTargetApiError(response, 'Gemini API', { url: fullTargetUrl, body: bodyPreview });
         }
 
         // Handle streaming response
@@ -585,21 +577,14 @@ async function handleGeminiGenerateContentRequest(
     activeLogger.debug(requestId, `Gemini model: ${effectiveModelId || 'gemini-no-id-at-proxy'}`);
     activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
 
-    // Prepare headers for Gemini API
+    // Prepare headers for Gemini API - authHeaders already contains the correct format
+    // from the main router (x-goog-api-key for native Gemini mode)
     const geminiHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
+        ...authHeaders,
     };
 
-    // Add API key from headers or environment
-    const apiKey = extractGeminiApiKey(request, authHeaders, env, 'interactions');
-    if (apiKey) {
-        geminiHeaders['x-goog-api-key'] = apiKey;
-    }
-
-    // Forward other auth headers
-    if (authHeaders['Authorization']) {
-        // Keep Authorization for backward compatibility
-    }
+    activeLogger.debug(requestId, `Using auth headers: ${Object.keys(geminiHeaders).join(', ')}`);
 
     try {
         const response = await fetch(fullTargetUrl, {
@@ -610,7 +595,8 @@ async function handleGeminiGenerateContentRequest(
 
         // Handle target API errors
         if (!response.ok) {
-            handleTargetApiError(response, 'Gemini API');
+            const bodyPreview = JSON.stringify(geminiRequest).substring(0, 1000);
+            handleTargetApiError(response, 'Gemini API', { url: fullTargetUrl, body: bodyPreview });
         }
 
         // Handle streaming response
@@ -669,62 +655,6 @@ function extractInteractionId(path: string): string {
         return parts[interactionIndex + 1];
     }
     throw new Error('Invalid interaction path');
-}
-
-/**
- * Extract Gemini API key from request or environment
- */
-function extractGeminiApiKey(
-    request: Request,
-    authHeaders: Record<string, string>,
-    env?: Env,
-    endpointType: 'interactions' | 'openai-compatible' = 'interactions'
-): string | undefined {
-    if (endpointType === 'openai-compatible') {
-        // OpenAI-compatible endpoints: Authorization: Bearer or x-api-key
-        const authHeader = authHeaders['Authorization'];
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-            return authHeader.slice(7);
-        }
-
-        const apiKeyHeader = request.headers.get('x-api-key');
-        if (apiKeyHeader) {
-            return apiKeyHeader;
-        }
-
-        // Check environment variable
-        if (env?.GEMINI_API_KEY) {
-            return env.GEMINI_API_KEY;
-        }
-    } else {
-        // Native Gemini API: x-goog-api-key or Authorization: Bearer
-        // Check authHeaders first (from config)
-        const authHeaderKey = authHeaders['x-goog-api-key'];
-        if (authHeaderKey) {
-            return authHeaderKey;
-        }
-
-        const headerKey = request.headers.get('x-goog-api-key');
-        if (headerKey) {
-            return headerKey;
-        }
-
-        const authHeader = authHeaders['Authorization'];
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-            return authHeader.slice(7);
-        }
-
-        const apiKeyHeader = request.headers.get('x-api-key');
-        if (apiKeyHeader) {
-            return apiKeyHeader;
-        }
-
-        if (env?.GEMINI_API_KEY) {
-            return env.GEMINI_API_KEY;
-        }
-    }
-
-    return undefined;
 }
 
 /**

@@ -2,6 +2,13 @@
 default_base_url = "https://api.qnaigc.com"
 default_api_key = "sk-28f417e15b4643913bce23520d5948327c5986d4ca84647052703b2fa41af3dc"
 
+[models.claude]
+upstream_mode = "anthropic-messages"
+base_url = "https://api.wenwen-ai.com"
+api_key = "sk-cJESnlELbBSsytvgIgCevJWqBYrDjg1CoHotH6EGtVU12KKk"
+"claude-4.5-sonnet" = ["claude-opus-4-20250514", "", ""]
+"claude-4.6-sonnet" = ["claude-opus-4-1-20250805", "", ""]
+
 [models.gemini]
 upstream_mode = "gemini-generatecontent"
 base_url = "https://api.yoosheen.com"
@@ -11,4 +18,5 @@ api_key = "sk-qeFSCTmVW61oSbOTFdrxiFoPdyEf48OmU4PSMvZkBhDAlRwf"
 "gemini-2.5-flash" = ["", "", ""]
 
 [models.default]
+"deepseek/deepseek-v3.2-251201" = ["", "", ""]
 upstream_mode = "openai-completions"

@@ -111,7 +111,8 @@ export function createErrorResponse(
  */
 export function handleTargetApiError(
   response: Response,
-  targetApiName: string
+  targetApiName: string,
+  requestInfo?: { url: string; body?: string }
 ): never {
   const status = response.status;
 
@@ -122,6 +123,17 @@ export function handleTargetApiError(
     case 400:
       errorType = 'invalid_request_error';
       errorMessage = `Invalid request to ${targetApiName}`;
+      // Include request details in error message for debugging
+      if (requestInfo) {
+        errorMessage += ` [URL: ${requestInfo.url}]`;
+        if (requestInfo.body) {
+          // Truncate body if too long
+          const bodyPreview = requestInfo.body.length > 500
+            ? requestInfo.body.substring(0, 500) + '...'
+            : requestInfo.body;
+          errorMessage += ` [Body: ${bodyPreview}]`;
+        }
+      }
       break;
     case 401:
       errorType = 'authentication_error';

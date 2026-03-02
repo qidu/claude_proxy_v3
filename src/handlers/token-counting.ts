@@ -178,7 +178,8 @@ async function handleApiBasedTokenCounting(
 
   // Handle target API errors
   if (!response.ok) {
-    handleTargetApiError(response, 'Token Counting API');
+    const bodyPreview = JSON.stringify(openaiRequest).substring(0, 1000);
+    handleTargetApiError(response, 'Token Counting API', { url: targetUrl, body: bodyPreview });
   }
 
   // Parse target API response

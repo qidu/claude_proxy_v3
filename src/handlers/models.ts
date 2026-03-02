@@ -51,7 +51,7 @@ export async function handleModelsRequest(
 
   // Handle target API errors
   if (!response.ok) {
-    handleTargetApiError(response, 'Models API');
+    handleTargetApiError(response, 'Models API', { url: targetApiUrl.toString() });
   }
 
   // Parse target API response
