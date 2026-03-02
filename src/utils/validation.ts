@@ -301,11 +301,18 @@ export function validateThinkingConfig(
     throw new ValidationError(`${context}.type is required`);
   }
 
-  if (thinking.type !== 'enabled' && thinking.type !== 'disabled') {
-    throw new ValidationError(`${context}.type must be 'enabled' or 'disabled'`);
+  // Accept boolean values (true = enabled, false = disabled) in addition to string values
+  const isValidType = thinking.type === 'enabled' || thinking.type === 'disabled' ||
+                     thinking.type === true || thinking.type === false;
+
+  if (!isValidType) {
+    throw new ValidationError(`${context}.type must be 'enabled', 'disabled', true, or false`);
   }
 
-  if (thinking.type === 'enabled') {
+  // Check if thinking is enabled (either string 'enabled' or boolean true)
+  const isEnabled = thinking.type === 'enabled' || thinking.type === true;
+
+  if (isEnabled) {
     if (thinking.budget_tokens !== undefined) {
       if (typeof thinking.budget_tokens !== 'number') {
         throw new ValidationError(`${context}.budget_tokens must be a number`);
@@ -316,6 +323,8 @@ export function validateThinkingConfig(
       if (thinking.budget_tokens > 100000) {
         throw new ValidationError(`${context}.budget_tokens cannot exceed 100,000`);
       }
+    } else {
+      throw new ValidationError(`${context}.budget_tokens is required when thinking is enabled`);
     }
   }
 }

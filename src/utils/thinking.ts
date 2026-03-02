@@ -7,18 +7,57 @@
 import { ThinkingConfigParam } from '../types/claude.js';
 
 /**
+ * Normalize thinking configuration to standard string format
+ * Converts boolean values to string equivalents
+ */
+export function normalizeThinkingConfig(
+  thinking: any
+): ThinkingConfigParam | undefined {
+  if (!thinking || typeof thinking !== 'object') {
+    return undefined;
+  }
+
+  if (thinking.type === undefined) {
+    return undefined;
+  }
+
+  // Handle boolean true
+  if (thinking.type === true) {
+    return {
+      type: 'enabled',
+      budget_tokens: thinking.budget_tokens
+    };
+  }
+
+  // Handle boolean false
+  if (thinking.type === false) {
+    return {
+      type: 'disabled'
+    };
+  }
+
+  // Already in string format, return as-is
+  if (thinking.type === 'enabled' || thinking.type === 'disabled') {
+    return thinking as ThinkingConfigParam;
+  }
+
+  return undefined;
+}
+
+/**
  * Validate thinking budget tokens
  */
 export function validateThinkingBudget(
   thinking: ThinkingConfigParam | undefined,
   maxTokens?: number
 ): void {
-  if (!thinking || thinking.type === 'disabled') {
+  const normalizedThinking = thinking ? normalizeThinkingConfig(thinking) : undefined;
+  if (!normalizedThinking || normalizedThinking.type === 'disabled') {
     return;
   }
 
-  if (thinking.type === 'enabled') {
-    const budgetTokens = thinking.budget_tokens;
+  if (normalizedThinking.type === 'enabled') {
+    const budgetTokens = normalizedThinking.budget_tokens;
 
     // Validate budget tokens
     if (budgetTokens < 1) {
@@ -43,12 +82,13 @@ export function validateThinkingBudget(
 export function getEffectiveThinkingBudget(
   thinking: ThinkingConfigParam | undefined
 ): number | undefined {
-  if (!thinking || thinking.type === 'disabled') {
+  const normalizedThinking = thinking ? normalizeThinkingConfig(thinking) : undefined;
+  if (!normalizedThinking || normalizedThinking.type === 'disabled') {
     return undefined;
   }
 
-  if (thinking.type === 'enabled') {
-    return thinking.budget_tokens;
+  if (normalizedThinking.type === 'enabled') {
+    return normalizedThinking.budget_tokens;
   }
 
   return undefined;
@@ -60,7 +100,8 @@ export function getEffectiveThinkingBudget(
 export function isThinkingEnabled(
   thinking: ThinkingConfigParam | undefined
 ): boolean {
-  return !!(thinking && thinking.type === 'enabled');
+  const normalizedThinking = thinking ? normalizeThinkingConfig(thinking) : undefined;
+  return !!(normalizedThinking && normalizedThinking.type === 'enabled');
 }
 
 /**
@@ -91,16 +132,17 @@ export function adjustThinkingBudget(
   availableTokens: number,
   minBudgetTokens: number = 100
 ): ThinkingConfigParam | undefined {
-  if (!thinking || thinking.type === 'disabled') {
+  const normalizedThinking = thinking ? normalizeThinkingConfig(thinking) : undefined;
+  if (!normalizedThinking || normalizedThinking.type === 'disabled') {
     return undefined;
   }
 
-  if (thinking.type === 'enabled') {
-    const currentBudget = thinking.budget_tokens;
+  if (normalizedThinking.type === 'enabled') {
+    const currentBudget = normalizedThinking.budget_tokens;
 
     // If current budget is within available tokens, keep it
     if (currentBudget <= availableTokens) {
-      return thinking;
+      return normalizedThinking;
     }
 
     // If we can allocate at least minBudgetTokens, adjust budget
@@ -128,13 +170,14 @@ export function estimateThinkingTokens(
   thinking: ThinkingConfigParam | undefined,
   defaultEstimate: number = 1000
 ): number {
-  if (!thinking || thinking.type === 'disabled') {
+  const normalizedThinking = thinking ? normalizeThinkingConfig(thinking) : undefined;
+  if (!normalizedThinking || normalizedThinking.type === 'disabled') {
     return 0;
   }
 
-  if (thinking.type === 'enabled') {
+  if (normalizedThinking.type === 'enabled') {
     // Use budget tokens as estimate, but cap at default if budget is very high
-    return Math.min(thinking.budget_tokens, defaultEstimate);
+    return Math.min(normalizedThinking.budget_tokens, defaultEstimate);
   }
 
   return 0;
@@ -148,14 +191,18 @@ export function mergeThinkingConfigs(
   primary: ThinkingConfigParam | undefined,
   secondary: ThinkingConfigParam | undefined
 ): ThinkingConfigParam | undefined {
+  // Normalize both configs
+  const normalizedPrimary = primary ? normalizeThinkingConfig(primary) : undefined;
+  const normalizedSecondary = secondary ? normalizeThinkingConfig(secondary) : undefined;
+
   // If primary is defined, use it
-  if (primary) {
-    return primary;
+  if (normalizedPrimary) {
+    return normalizedPrimary;
   }
 
   // Otherwise use secondary if defined
-  if (secondary) {
-    return secondary;
+  if (normalizedSecondary) {
+    return normalizedSecondary;
   }
 
   return undefined;
@@ -184,12 +231,13 @@ export function createThinkingBlock(
 export function validateThinkingForTokenCounting(
   thinking: ThinkingConfigParam | undefined
 ): void {
-  if (!thinking) {
+  const normalizedThinking = thinking ? normalizeThinkingConfig(thinking) : undefined;
+  if (!normalizedThinking) {
     return;
   }
 
-  if (thinking.type === 'enabled') {
-    const budgetTokens = thinking.budget_tokens;
+  if (normalizedThinking.type === 'enabled') {
+    const budgetTokens = normalizedThinking.budget_tokens;
 
     // For token counting, budget tokens should be reasonable
     if (budgetTokens < 1) {

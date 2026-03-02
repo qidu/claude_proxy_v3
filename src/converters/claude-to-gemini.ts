@@ -261,7 +261,7 @@ function convertClaudeConfigToGemini(claudeRequest: ClaudeMessagesRequest): Gemi
     }
 
     // Handle thinking config
-    if (claudeRequest.thinking && claudeRequest.thinking.type === 'enabled') {
+    if (claudeRequest.thinking && (claudeRequest.thinking.type === 'enabled' || claudeRequest.thinking.type === true)) {
         config.thinking_level = 'medium';
         config.max_output_tokens = claudeRequest.thinking.budget_tokens || config.max_output_tokens;
     }

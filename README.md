@@ -4,12 +4,14 @@ A complete Claude and Gemini API Proxy Endpoints that supports multiple AI model
 
 ## ✨ Features
 
-- **Unified API Format**: 
+- **Unified API Format**:
   - `GET /v1/models` - List available models
   - `POST /v1/messages` - Process claude messages (supports 49+ models)
   - `POST /v1/interactions` -  Process gemini interactions messages
-  - `POST /v1beta/models/{model}:generateContent` - Process gemini content messages 
+  - `POST /v1beta/models/{model}:generateContent` - Process gemini content messages
   - `POST /v1beta/models/{model}:streamGenerateContent` - Process gemini content messages with SSE
+  - `POST /v1/models/{model}:generateContent` - Alternative Gemini v1 endpoint (added 2026-03-03)
+  - `POST /v1/models/{model}:streamGenerateContent` - Alternative Gemini v1 endpoint with SSE (added 2026-03-03)
   - `POST /v1/messages/count_tokens` - Count tokens in messages
 
 - **Multiple Model Providers**: Support for 6+ providers:
@@ -26,6 +28,7 @@ A complete Claude and Gemini API Proxy Endpoints that supports multiple AI model
   - Doubao Thinking (doubao-seed-1.6-thinking)
   - Qwen Thinking variants (qwen3-*-thinking)
   - Natural reasoning without special parameters
+  - Supports boolean values (`true`/`false`) in addition to string values (`"enabled"`/`"disabled"`) for thinking config
 
 - **Flexible Configuration**:
   - File-based config: `proxy_config.toml`
@@ -197,7 +200,7 @@ Send messages with optional thinking configuration.
 POST /v1/messages
 ```
 
-**Request with Thinking**:
+**Request with Thinking (String Format)**:
 ```json
 {
   "model": "deepseek-v3.1",
@@ -211,6 +214,41 @@ POST /v1/messages
   "thinking": {
     "type": "enabled",
     "budget_tokens": 10000
+  }
+}
+```
+
+**Request with Thinking (Boolean Format - New)**:
+```json
+{
+  "model": "deepseek-v3.1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the capital of France?"
+    }
+  ],
+  "max_tokens": 1000,
+  "thinking": {
+    "type": true,
+    "budget_tokens": 10000
+  }
+}
+```
+
+**Request with Thinking Disabled (Boolean Format)**:
+```json
+{
+  "model": "deepseek-v3.1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the capital of France?"
+    }
+  ],
+  "max_tokens": 1000,
+  "thinking": {
+    "type": false
   }
 }
 ```
@@ -258,7 +296,7 @@ POST /v1/messages/count_tokens
     }
   ],
   "thinking": {
-    "type": "enabled",
+    "type": "enabled",  // or "type": true
     "budget_tokens": 10000
   }
 }
@@ -361,15 +399,30 @@ Config is loaded on startup and cached for performance.
 Forward authentication headers from the original request:
 - `Authorization: Bearer <token>`
 - `x-api-key: <key>`
+- `x-goog-api-key: <key>` (for Gemini endpoints)
+
+#### API Key Priority (Enhanced 2026-03-03)
+
+The proxy now intelligently prioritizes API keys based on upstream mode:
+
+1. **For `openai-completions` upstream mode**:
+   - Configuration API keys take priority over client-provided headers
+   - This ensures compatibility with OpenAI-compatible APIs when clients send Gemini/Claude API keys
+   - Uses `Authorization: Bearer <api-key>` header format
+
+2. **For other upstream modes** (`anthropic-messages`, `gemini-generatecontent`, `gemini-interactions`):
+   - Configuration API keys override request headers when available
+   - Falls back to client-provided headers when no config API key is set
 
 #### Gemini API Authentication
 For Gemini API endpoints, authentication headers are automatically mapped:
 - **OpenAI-Compatible Mode**: Uses `Authorization: Bearer <api-key>` header
 - **Native Interactions Mode**: Uses `x-goog-api-key: <api-key>` header
+- **Native GenerateContent Mode**: Uses `x-goog-api-key: <api-key>` header
 - API keys can be provided via:
-  - Request headers: `Authorization: Bearer <key>` or `x-api-key: <key>`
-  - Environment variable: `GEMINI_API_KEY`
-  - For native Gemini: `x-goog-api-key: <key>` header
+  - Request headers: `Authorization: Bearer <key>`, `x-api-key: <key>`, or `x-goog-api-key: <key>`
+  - Configuration file: `api_key` in model or category config
+  - Environment variable: `GEMINI_API_KEY` (for Gemini CLI compatibility)
 
 ## 🏗️ Architecture
 
@@ -453,7 +506,34 @@ curl http://localhost:8788/v1/messages \
 
 ### Test Results
 
-**Latest Revision (2026-02-28):** ✅ Gemini CLI Config Integration
+**Latest Revision (2026-03-03):** ✅ Enhanced Thinking Config & API Key Priority
+
+**Key Enhancements:**
+
+1. **Boolean Thinking Config Support**: Thinking configuration now accepts boolean values (`true`/`false`) in addition to string values (`"enabled"`/`"disabled"`), providing more intuitive API usage.
+
+2. **Gemini `/v1/models/` Endpoint Support**: Added support for Gemini `/v1/models/{model}:generateContent` endpoints (in addition to existing `/v1beta/models/` support).
+
+3. **API Key Priority for OpenAI-Compatible Upstream**: For `openai-completions` upstream mode, the proxy now prioritizes API keys from configuration over client-provided headers, ensuring compatibility with OpenAI-compatible APIs.
+
+4. **Enhanced Auth Header Handling**: Added `formatApiKeyForUpstream()` utility for consistent API key formatting across different upstream modes.
+
+**Thinking Config Examples:**
+```json
+// String format (existing)
+"thinking": {
+  "type": "enabled",
+  "budget_tokens": 10000
+}
+
+// Boolean format (new)
+"thinking": {
+  "type": true,
+  "budget_tokens": 10000
+}
+```
+
+**Previous Revision (2026-02-28):** ✅ Gemini CLI Config Integration
 
 Successfully tested proxy using **Gemini CLI configuration** from `~/.gemini/.env`. All models work with the CLI's base URL and API key settings.
 
@@ -779,6 +859,35 @@ MIT
 2. Create a feature branch
 3. Make your changes
 4. Submit a pull request
+
+## 🛠️ Technical Implementation (2026-03-03 Updates)
+
+### Enhanced Thinking Configuration
+- **Type Definitions**: Updated `ThinkingConfigParam` type to accept `boolean` values (`true`/`false`) in addition to string values (`"enabled"`/`"disabled"`)
+- **Normalization Utility**: Added `normalizeThinkingConfig()` function to standardize thinking config across the codebase
+- **Token Counting**: Updated token counting logic to handle boolean thinking types
+- **Validation**: Enhanced validation to accept boolean values while maintaining backward compatibility
+
+### Gemini v1 Endpoint Support
+- **Path Pattern Matching**: Updated regex patterns to support both `/v1beta/models/` and `/v1/models/` endpoints
+- **URL Building**: Enhanced URL construction logic for both v1beta and v1 endpoints
+- **Model Extraction**: Improved model ID extraction from both endpoint versions
+
+### API Key Management
+- **Priority Logic**: Added intelligent API key priority based on upstream mode
+- **Format Utility**: Created `formatApiKeyForUpstream()` function for consistent header formatting
+- **Header Transformation**: Enhanced `transformAuthHeadersForUpstream()` to handle `Bearer` prefix stripping
+- **Configuration Integration**: Better integration of config API keys with request processing
+
+### Files Modified:
+- `src/converters/claude-to-gemini.ts` - Added boolean thinking support for Gemini conversion
+- `src/converters/claude-to-openai.ts` - Added boolean thinking support for OpenAI conversion
+- `src/index.ts` - Enhanced routing for v1 endpoints, API key priority logic
+- `src/types/claude.ts` - Updated ThinkingConfigParam type definition
+- `src/utils/routing.ts` - Added formatApiKeyForUpstream(), enhanced path matching
+- `src/utils/thinking.ts` - Added normalization utility, updated all thinking functions
+- `src/utils/token-counting.ts` - Updated to handle boolean thinking types
+- `src/utils/validation.ts` - Enhanced validation for boolean thinking values
 
 ## 🔗 Links
 

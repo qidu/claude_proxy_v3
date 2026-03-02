@@ -20,6 +20,7 @@ import p50k_base from 'js-tiktoken/ranks/p50k_base';
 import p50k_edit from 'js-tiktoken/ranks/p50k_edit';
 import r50k_base from 'js-tiktoken/ranks/r50k_base';
 import gpt2 from 'js-tiktoken/ranks/gpt2';
+import { ThinkingConfigParam } from '../types/claude.js';
 
 export interface TokenCountingOptions {
   /** Whether to use local token counting (default: false, use API) */
@@ -285,7 +286,7 @@ export function countClaudeRequestTokens(
     system?: string | Array<{ type: string; text?: string }>;
     tools?: Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>;
     tool_choice?: { type: string; name?: string };
-    thinking?: { type: string; budget_tokens?: number };
+    thinking?: ThinkingConfigParam;
   },
   options: TokenCountingOptions = DEFAULT_OPTIONS
 ): number {
@@ -332,8 +333,12 @@ export function countClaudeRequestTokens(
 
   // Estimate thinking config tokens
   if (requestBody.thinking) {
-    totalTokens += countStringTokens(`thinking: ${requestBody.thinking.type}`, options) + 2;
-    if (requestBody.thinking.budget_tokens) {
+    // Convert boolean values to string equivalents for token counting
+    const thinkingType = requestBody.thinking.type === true ? 'enabled' :
+                        requestBody.thinking.type === false ? 'disabled' :
+                        requestBody.thinking.type as string;
+    totalTokens += countStringTokens(`thinking: ${thinkingType}`, options) + 2;
+    if ('budget_tokens' in requestBody.thinking && requestBody.thinking.budget_tokens) {
       totalTokens += countStringTokens(`budget: ${requestBody.thinking.budget_tokens}`, options);
     }
   }

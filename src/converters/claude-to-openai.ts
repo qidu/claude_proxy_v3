@@ -113,12 +113,13 @@ function convertClaudeThinkingToOpenAI(thinking: ThinkingConfigParam | undefined
         return undefined;
     }
 
-    if (thinking.type === 'enabled') {
+    // Handle boolean values (true = enabled, false = disabled)
+    if (thinking.type === true || thinking.type === 'enabled') {
         return {
             enabled: true,
             budget_tokens: thinking.budget_tokens
         };
-    } else if (thinking.type === 'disabled') {
+    } else if (thinking.type === false || thinking.type === 'disabled') {
         return {
             enabled: false
         };

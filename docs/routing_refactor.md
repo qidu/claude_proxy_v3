@@ -5,14 +5,16 @@
 
 ## Implementation
 
-### Main Router (src/index.ts)
+### Main Router
 
 ```typescript
 case 'messages':
   // /v1/messages routes based on upstream_mode
   if (upstreamMode === 'anthropic-messages') {
+    // using keys (`x-api-key` first) from endpoint as `x-api-key` for upstream
     response = await handleClaudeRequest(...); // pass through to Claude API
   } else { // upstreamMode === 'openai-completions'
+    // using keys from endpoint as `Authorization: Bearer` for upstream
     response = await handleMessagesRequest(...); // convert to OpenAI format
   }
   break;
@@ -20,8 +22,10 @@ case 'messages':
 case 'interactions':
   // /v1/interactions routes based on upstream_mode
   if (upstreamMode === 'gemini-interactions') {
+    // using keys (`x-goog-api-key` first) from endpoint as `x-goog-api-key` for upstream
     response = await handleGeminiRequest(...); // pass through to Gemini API
   } else { // upstreamMode === 'openai-completions'
+    // using keys from endpoint as `Authorization: Bearer` for upstream
     response = await handleOpenAIRequest(...); // convert to OpenAI format
   }
   break;
@@ -29,8 +33,10 @@ case 'interactions':
 case 'generateContent':
   // /v1beta/models/{model}:generateContent routes based on upstream_mode
   if (upstreamMode === 'gemini-generatecontent') {
+    // using keys (`x-goog-api-key` first) from endpoint as `x-goog-api-key` for upstream
     response = await handleGeminiRequest(...); // pass through to Gemini API
   } else { // upstreamMode === 'openai-completions'
+    // using keys from endpoint as `Authorization: Bearer` for upstream
     response = await handleOpenAIRequest(...); // convert to OpenAI format
   }
   break;
@@ -85,10 +91,10 @@ Request()    Request()      Request()    Request()    Request()        Request()
    │         │              │            │              │              │
    │         │              │            │              │              │
    ▼         ▼              ▼            ▼              ▼              ▼
-AWS/Vertex  OpenAI        Gemini API  OpenAI        Gemini API     OpenAI
-Claude API  Compatible    /v1/         Compatible    /v1/models/    Compatible
-/v1/        /v1/chat/     interactions /v1/chat/     {model}:       /v1/chat/
-messages    completions                completions   generate       completions
+AWS/Vertex  OpenAI        Gemini API  OpenAI        Gemini API       OpenAI
+Claude API  Compatible    /v1/         Compatible    /v1beta/models/  Compatible
+/v1/        /v1/chat/     interactions /v1/chat/     {model}:         /v1/chat/
+messages    completions                completions   generate         completions
                                                      Content
 
 # 
@@ -118,9 +124,19 @@ A **category** is a `[models.<name>]` section in the config that groups related 
 upstream_mode = "gemini-generatecontent"
 base_url = "https://api.example.com"  # ← Category defaults
 api_key = "sk-gemini-key"
-
-# All these models inherit the category's base_url and api_key:
+# gemini models in the section inherit the category's base_url and api_key:
 "gemini-3.1-pro-preview" = ["", "", ""]
+# gemini models NOT in the section fall back to default upstream
+
+[models.claude]  # ← Category name: "claude"
+upstream_mode = "anthropic-messages"
+# claude models in the section inherit the category's base_url and api_key:
+"claude-4.5-sonnet" = ["claude-opus-4-1-20250805-thinking", "", ""]  # Override alias only
+# claude models NOT in the section fall back to default upstream
+
+[models.default]
+# models in the section inherit the category's base_url and api_key:
+# models NOT in the section fall back to default upstream
 
 ```
 
@@ -186,7 +202,7 @@ upstream_mode = "openai-completions"
 
 # Category for Gemini models
 # IMPORTANT: Choose ONE upstream_mode per category (mutually exclusive):
-# - "gemini-generatecontent" for /v1/models/{model}:generateContent endpoint
+# - "gemini-generatecontent" for /v1beta/models/{model}:generateContent endpoint
 # - "gemini-interactions" for /v1/interactions endpoint
 # Cannot use both modes simultaneously in the same category
 [models.gemini]
@@ -204,7 +220,7 @@ upstream_mode = "anthropic-messages"
 base_url = "https://api.anthropic.com"
 api_key = "sk-claude-key"
 # Model alias example: map client name to upstream name
-"claude-4.6-sonnet" = ["claude-opus-4-1-20250805-thinking", "", ""]  # Override alias only
+"claude-4.5-sonnet" = ["claude-opus-4-1-20250805-thinking", "", ""]  # Override alias only
 # Available upstream model names (can be used as aliases):
 # - claude-opus-4-1-20250805
 # - claude-opus-4-1-20250805-thinking
@@ -247,20 +263,23 @@ See `docs/multiple_upstream_analysis.md` for implementation plan.
 ### API Specifications
 - **`gemini-interactions`** : Support Gemini '/v1/interactions' input and output,  Spec refered to docs/interactions.md
 - **`gemini-generatecontent`** : Support Gemini '/v1beta/models/{model}:generateContent' input and output, Spec refered to docs/vertex-ai-gemini-api.md without `/v1/projects/{project}/locations/{location}/publishers` in URI
-- **`gemini-streamGeneratecontent`** : Support Gemini SSE stream '/v1beta/models/{model}:streamGenerateContent' input and output, Spec refered to docs/vertex-ai-gemini-api.md without `/v1/projects/{project}/locations/{location}/publishers` in URI
+- **stream `gemini-generatecontent`** : Support Gemini SSE stream '/v1beta/models/{model}:streamGenerateContent' input and output, Spec refered to docs/vertex-ai-gemini-api.md without `/v1/projects/{project}/locations/{location}/publishers` in URI
 - **`anthropic-messages`** : Support Claude '/v1/messages' Spec refered to files in docs/claude_api_docs/*.md , espetially the 'messages-api.md' and  'token-counting-api.md' and "versioning.md"
 - **`openai-completions`** → `/v1/chat/completions` Blocked from Endpoint
 
 ### Authentications
-#### API Keys in reqeusts Headers from Endpoints
+#### API Keys in reqeusts Headers got from Endpoints
 - `x-api-key` : for `/v1/messages` endpoint
 - `x-goog-api-key` : for both `/v1beta/models/{model}:` and `/v1/interactions`
-- `Authorization: Bearer` : fall back for all Endpoints
+- `Authorization: Bearer` : using this key from all endpointfor all models if no `x-api-key` and no `x-goog-api-key`
 
-#### API Keys in reqeust Headers to Uptreams
-- `x-api-key` : only for `anthropic-messages`
-- `x-goog-api-key` : only for `gemini-generatecontent` ( `gemini-streamGeneratecontent` ) and `gemini-interactions`
-- `Authorization: Bearer` : only for `openai-completions`
+#### API Keys in reqeust Headers sendig to Uptreams
+- `x-api-key` : set it only for `anthropic-messages`
+- `x-goog-api-key` : set it only for `gemini-generatecontent` ( stream `gemini-generatecontent` ) and `gemini-interactions`
+- `Authorization: Bearer` : set it only for `openai-completions`
+- using `x-api-key` from `/v1/messages` as `Authorization: Bearer` for `openai-completions` upstream
+- using `x-goog-api-key` from `/v1beta/models/{model}:` and `/v1/interactions` as `Authorization: Bearer` for `openai-completions` upstream
+- config keys from proxy_config.toml override client headers for openai-completions upstream
 
 ## Summary
 
@@ -281,8 +300,8 @@ See `docs/multiple_upstream_analysis.md` for implementation plan.
 | `/v1/messages` | openai-completions | messages.ts | OpenAI upstream | Claude Format | Claude Format | 
 | `/v1/interactions` | gemini-interactions | gemini.ts | Gemini API | Gemini interactions Format | Gemini interactions Format |
 | `/v1/interactions` | openai-completions | openai.ts | OpenAI upstream | Gemini interactions Format | Gemini interactions Format |
-| `/v1beta/models/{model}:generateContent` | gemini-generatecontent | gemini.ts | Gemini API | Gemini content Format | Gemini content Format |
-| `/v1beta/models/{model}:generateContent` | openai-completions | openai.ts | OpenAI upstream | Gemini content Format | Gemini content Format |
+| `/v1beta/models/{model}:` | gemini-generatecontent | gemini.ts | Gemini API | Gemini content Format | Gemini content Format |
+| `/v1beta/models/{model}:` | openai-completions | openai.ts | OpenAI upstream | Gemini content Format | Gemini content Format |
 
 ### Type Safety
 

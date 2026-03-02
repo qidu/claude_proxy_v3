@@ -1,5 +1,6 @@
 [upstream]
 default_base_url = "https://api.qnaigc.com"
+# Use client API keys (x-goog-api-key, x-api-key) as 'Authorization: Baerer' token for openai-completions
 
 [models.claude]
 upstream_mode = "anthropic-messages"
@@ -8,11 +9,12 @@ upstream_mode = "anthropic-messages"
 
 [models.gemini]
 upstream_mode = "gemini-generatecontent"
-base_url = "https://api.example.com"
-"gemini-3.1-pro-preview" = ["", "", ""]
+base_url = "https://generativelanguage.googleapis.com"
+#"gemini-3.1-pro-preview" = ["", "", ""]
 "gemini-3.0-flash-preview" = ["gemini-3-flash-preview", "", ""]
-"gemini-2.5-flash" = ["", "", ""]
+# "gemini-2.5-flash" = ["", "", ""]
 
 [models.default]
+# "llama" = ["llama3.1-8B", "https://chatjimmy.ai/api/chat", ""]
 "deepseek/deepseek-v3.2-251201" = ["", "", ""]
 upstream_mode = "openai-completions"

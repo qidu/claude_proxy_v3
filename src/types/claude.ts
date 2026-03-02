@@ -12,10 +12,10 @@ export interface ClaudeTool {
 }
 
 export type ThinkingConfigParam = {
-    type: "enabled";
+    type: "enabled" | true;
     budget_tokens: number;
 } | {
-    type: "disabled";
+    type: "disabled" | false;
 };
 
 export type ClaudeContent =

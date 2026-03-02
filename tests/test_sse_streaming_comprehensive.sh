@@ -1,7 +1,5 @@
 #!/bin/bash
 
-cd /home/teric/win/e/dev/bot/model_proxy_v3
-
 echo "Starting server..."
 PROXY_CONFIG_PATH=./proxy_config.toml node dist/server.js > /tmp/proxy_streaming_comprehensive.log 2>&1 &
 SERVER_PID=$!
@@ -12,14 +10,15 @@ FAIL=0
 
 BASE="http://localhost:8788"
 API_KEY="sk-28f417e15b46439*"
+API_KEY="sk-e86b76b64132588eac588c0530f6914f41c0452c86eac3629a0c09d9a55723f2"
 
 # Test more models including different providers
 MODELS=(
   "qwen3-32b"
-#  "qwen-max-2025-01-25"
+  "qwen-max-2025-01-25"
   "minimax/minimax-m2.1"
-#  "minimax/minimax-m2.5"
-#  "moonshotai/kimi-k2.5"
+  "minimax/minimax-m2.5"
+  "moonshotai/kimi-k2.5"
   "deepseek/deepseek-v3.2"
   "gemini-2.5-flash"
 #  "gemini-3.1-pro-preview"
@@ -33,7 +32,7 @@ test_sse_endpoint() {
   local url=$2
   local data=$3
   
-  RESP=$(timeout 10 curl -s -N "$url" \
+  RESP=$(curl -s -N "$url" \
     -H "Content-Type: application/json" \
     -H "x-api-key: $API_KEY" \
     -H "x-goog-api-key: $API_KEY" \
@@ -58,7 +57,7 @@ test_gemini_cli() {
   echo 'echo "# Testing Gemini CLI with model: $model" '
   
   echo "gemini -y -m '$model' -p 'What is 4 + 5 =? Answer in one word.' "
-  # RESP=$(timeout 10 gemini -y -m "$model" -p "What is 4 + 5 =? Answer in one word." 2>&1)
+  # RESP=$(gemini -y -m "$model" -p "What is 4 + 5 =? Answer in one word." 2>&1)
   
   # if echo "$RESP" | grep -qE "9|nine|Nine"; then
   #   echo "✅ Gemini CLI: Works with model $model"
@@ -95,9 +94,9 @@ for MODEL in "${MODELS[@]}"; do
   test_sse_endpoint "  streamGenerateContent" \
     "$BASE/v1beta/models/$MODEL:streamGenerateContent" \
     "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"What is 4 + 5 =\"}]}]}"
-  
+ 
   # Test Gemini CLI for Gemini models
-  test_gemini_cli "$MODEL"
+  # test_gemini_cli "$MODEL"
   echo
 done
 
@@ -106,7 +105,8 @@ echo "Results: $PASS passed, $FAIL failed out of $TOTAL_TESTS tests"
 echo "Success rate: $(awk "BEGIN {printf \"%.1f\", ($PASS/($PASS+$FAIL))*100}")%"
 
 for MODEL in "${MODELS[@]}"; do
-  test_gemini_cli "$MODEL"
+  # test_gemini_cli "$MODEL"
+  echo
 done
 
 kill $SERVER_PID 2>/dev/null

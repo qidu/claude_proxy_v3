@@ -6,7 +6,7 @@
  */
 
 import { Env } from './types/shared.js';
-import { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, transformAuthHeadersForUpstream, isHostAllowed } from './utils/routing.js';
+import { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, transformAuthHeadersForUpstream, isHostAllowed, formatApiKeyForUpstream } from './utils/routing.js';
 import { createErrorResponse } from './utils/errors.js';
 import { createLogger } from './utils/logger.js';
 import { handleModelsRequest } from './handlers/models.js';
@@ -190,9 +190,10 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
   }
 
   // 3. /v1beta/models/{model}:generateContent or :streamGenerateContent → multiple upstream modes
-  if (path.startsWith('/v1beta/models/') && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
-    const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
-    const modelId = modelMatch ? decodeURIComponent(modelMatch[1]) : 'gemini-no-id-at-proxy';
+  // Also support /v1/models/{model}:generateContent (some Gemini APIs use v1 instead of v1beta)
+  if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
+    const modelMatch = path.match(/\/(v1beta|v1)\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
+    const modelId = modelMatch ? decodeURIComponent(modelMatch[2]) : 'gemini-no-id-at-proxy';
     const isStreamEndpoint = path.includes(':streamGenerateContent');
     
     if (defaultMode === 'gemini-generatecontent' || defaultMode === 'gemini-interactions') {
@@ -338,17 +339,17 @@ export default {
       // For endpoints that need model-specific routing, extract model from request body
       if (path === '/v1/messages' || path.startsWith('/v1/messages?') ||
           path === '/v1/interactions' || path.startsWith('/v1/interactions?') ||
-          (path.startsWith('/v1beta/models/') && (path.includes(':generateContent') || path.includes(':streamGenerateContent')))) {
+          ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent')))) {
         try {
           const bodyText = await request.text();
           const body = JSON.parse(bodyText);
           let modelName = body.model;
           
           // For generateContent endpoint, extract model from URL if not in body
-          if (!modelName && path.startsWith('/v1beta/models/') && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
-            const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
+          if (!modelName && (path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
+            const modelMatch = path.match(/\/(v1beta|v1)\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
             if (modelMatch) {
-              modelName = decodeURIComponent(modelMatch[1]);
+              modelName = decodeURIComponent(modelMatch[2]);
             }
           }
           
@@ -368,6 +369,27 @@ export default {
             // Transform auth headers based on upstream mode and endpoint
             // Extract API key from request headers and format correctly for the target upstream
             modelAuthHeaders = transformAuthHeadersForUpstream(request, modelRoute.upstreamMode, path);
+
+            // For openai-completions upstream, prioritize config API key over client headers
+            // because client might send Gemini/Claude API keys that don't work with OpenAI upstream
+            if (modelRoute.upstreamMode === 'openai-completions') {
+                if (modelRoute.apiKey) {
+                    // Use config API key for OpenAI-compatible upstream
+                    const configHeaders = formatApiKeyForUpstream(modelRoute.apiKey, modelRoute.upstreamMode);
+                    // Override any headers from request transformation
+                    modelAuthHeaders = configHeaders;
+                    logger.debug(requestId, `Using config API key for openai-completions upstream: ${modelName}`);
+                } else {
+                    // No config API key - using client key which might not work
+                    logger.warn(requestId, `No API key in config for openai-completions upstream. Using client API key which may fail if it's not compatible with OpenAI upstream. Model: ${modelName}`);
+                }
+            } else if (modelRoute.apiKey) {
+                // For other upstream modes, config API key overrides request headers
+                const configHeaders = formatApiKeyForUpstream(modelRoute.apiKey, modelRoute.upstreamMode);
+                // Merge config headers (overriding any from request)
+                modelAuthHeaders = { ...modelAuthHeaders, ...configHeaders };
+                logger.debug(requestId, `Using API key from config for model: ${modelName}`);
+            }
             
             // Determine handler type and build target URL based on endpoint and upstream_mode
             const isNativeMode = modelRoute.upstreamMode === 'anthropic-messages' || 
@@ -425,11 +447,11 @@ export default {
                 targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
                 upstreamMode = 'openai-completions';
               }
-            } else if (path.startsWith('/v1beta/models/') && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
+            } else if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
               handlerType = 'generateContent';
               const isStreamEndpoint = path.includes(':streamGenerateContent');
-              const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
-              const pathModelId = modelMatch ? modelMatch[1] : upstreamModelName;
+              const modelMatch = path.match(/\/(v1beta|v1)\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
+              const pathModelId = modelMatch ? modelMatch[2] : upstreamModelName;
               
               if (isNativeMode) {
                 // Check if this is a Gemini model (only Gemini supports generateContent API natively)
@@ -513,6 +535,22 @@ export default {
         // Transform auth headers for fixed route based on upstream mode and endpoint
         if (upstreamMode) {
           modelAuthHeaders = transformAuthHeadersForUpstream(request, upstreamMode, path);
+
+          // For openai-completions upstream in fixed routing, check for default API key
+          if (upstreamMode === 'openai-completions') {
+            const defaultCategory = proxyConfig.models?.default;
+            const defaultCategoryConfig = defaultCategory && !Array.isArray(defaultCategory) ? defaultCategory : undefined;
+            const defaultApiKey = defaultCategoryConfig?.api_key || proxyConfig.upstream?.default_api_key;
+
+            if (defaultApiKey) {
+              // Use default API key for openai-completions upstream
+              const configHeaders = formatApiKeyForUpstream(defaultApiKey, upstreamMode);
+              modelAuthHeaders = configHeaders;
+              logger.debug(requestId, `Using default API key for openai-completions upstream in fixed routing`);
+            } else {
+              logger.warn(requestId, `No default API key configured for openai-completions upstream in fixed routing. Using client API key which may fail.`);
+            }
+          }
         }
       }
 
