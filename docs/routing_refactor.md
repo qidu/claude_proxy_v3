@@ -243,7 +243,6 @@ Load balancing and failover support with multiple upstreams.
 
 See `docs/multiple_upstream_analysis.md` for implementation plan.
 
-```
 
 ### API Specifications
 - **`gemini-interactions`** : Support Gemini '/v1/interactions' input and output,  Spec refered to docs/interactions.md
@@ -251,6 +250,17 @@ See `docs/multiple_upstream_analysis.md` for implementation plan.
 - **`gemini-streamGeneratecontent`** : Support Gemini SSE stream '/v1beta/models/{model}:streamGenerateContent' input and output, Spec refered to docs/vertex-ai-gemini-api.md without `/v1/projects/{project}/locations/{location}/publishers` in URI
 - **`anthropic-messages`** : Support Claude '/v1/messages' Spec refered to files in docs/claude_api_docs/*.md , espetially the 'messages-api.md' and  'token-counting-api.md' and "versioning.md"
 - **`openai-completions`** → `/v1/chat/completions` Blocked from Endpoint
+
+### Authentications
+#### API Keys in reqeusts Headers from Endpoints
+- `x-api-key` : for `/v1/messages` endpoint
+- `x-goog-api-key` : for both `/v1beta/models/{model}:` and `/v1/interactions`
+- `Authorization: Bearer` : fall back for all Endpoints
+
+#### API Keys in reqeust Headers to Uptreams
+- `x-api-key` : only for `anthropic-messages`
+- `x-goog-api-key` : only for `gemini-generatecontent` ( `gemini-streamGeneratecontent` ) and `gemini-interactions`
+- `Authorization: Bearer` : only for `openai-completions`
 
 ## Summary
 
