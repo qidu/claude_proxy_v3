@@ -11,7 +11,7 @@ PASS=0
 FAIL=0
 
 BASE="http://localhost:8788"
-API_KEY="sk-28f417e15b4643913bce23520d5948327c5986d4ca84647052703b2fa41af3dc"
+API_KEY="sk-28f417e15b46439*"
 
 # Test more models including different providers
 MODELS=(
@@ -35,7 +35,9 @@ test_sse_endpoint() {
   
   RESP=$(timeout 10 curl -s -N "$url" \
     -H "Content-Type: application/json" \
-    -H "Authorization: Baerer <API_KEY>" \
+    -H "x-api-key: $API_KEY" \
+    -H "x-goog-api-key: $API_KEY" \
+    -H "Authorization: Bearer $API_KEY" \
     -d "$data" | head -20)
   
   echo "$RESP"
