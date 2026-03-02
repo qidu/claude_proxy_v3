@@ -23,11 +23,35 @@ interface StreamingState {
 export function createNativeGeminiStreamTransformer(
     model: string,
     requestId: string
-): TransformStream<string, string> {
+): TransformStream<Uint8Array, Uint8Array> {
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    let buffer = '';
+    
     return new TransformStream({
-        transform(chunk: string, controller: TransformStreamDefaultController<string>) {
-            // Pass through the original Gemini SSE format without conversion
-            controller.enqueue(chunk);
+        transform(chunk: Uint8Array, controller: TransformStreamDefaultController<Uint8Array>) {
+            // Decode chunk and add to buffer
+            buffer += decoder.decode(chunk, { stream: true });
+            
+            // Split by double newline (SSE message boundary)
+            const messages = buffer.split('\n\n');
+            
+            // Keep last incomplete message in buffer
+            buffer = messages.pop() || '';
+            
+            // Enqueue complete messages
+            for (const message of messages) {
+                if (message.trim()) {
+                    controller.enqueue(encoder.encode(message + '\n\n'));
+                }
+            }
+        },
+        
+        flush(controller: TransformStreamDefaultController<Uint8Array>) {
+            // Flush remaining buffer
+            if (buffer.trim()) {
+                controller.enqueue(encoder.encode(buffer + '\n\n'));
+            }
         }
     });
 }
@@ -38,62 +62,34 @@ export function createNativeGeminiStreamTransformer(
 export function createGeminiStreamTransformer(
     model: string,
     requestId: string
-): TransformStream<string, string> {
-    const state: StreamingState = {
-        currentId: '',
-        currentRole: 'assistant',
-        contentIndex: 0,
-        accumulatedText: '',
-        hasStarted: false,
-        hasEnded: false,
-    };
-    
+): TransformStream<Uint8Array, Uint8Array> {
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
     let buffer = '';
-
+    
     return new TransformStream({
-        transform(chunk: string, controller: TransformStreamDefaultController<string>) {
-            buffer += chunk;
-            const events = buffer.split('\n\n');
-            buffer = events.pop() || '';
-
-            for (const event of events) {
-                if (!event.trim()) continue;
-                
-                for (const line of event.split('\n')) {
-                    if (line.startsWith('data:')) {
-                        const data = line.slice(5).trim();
-                        if (!data) continue;
-
-                        try {
-                            const geminiEvent: GeminiSSEEvent = JSON.parse(data);
-                            handleGeminiEvent(geminiEvent, controller, model, requestId, state);
-                        } catch (e) {
-                            // Skip invalid JSON
-                        }
-                    }
+        transform(chunk: Uint8Array, controller: TransformStreamDefaultController<Uint8Array>) {
+            // Decode chunk and add to buffer
+            buffer += decoder.decode(chunk, { stream: true });
+            
+            // Split by double newline (SSE message boundary)
+            const messages = buffer.split('\n\n');
+            
+            // Keep last incomplete message in buffer
+            buffer = messages.pop() || '';
+            
+            // Enqueue complete messages
+            for (const message of messages) {
+                if (message.trim()) {
+                    controller.enqueue(encoder.encode(message + '\n\n'));
                 }
             }
         },
-        flush(controller: TransformStreamDefaultController<string>) {
+        
+        flush(controller: TransformStreamDefaultController<Uint8Array>) {
+            // Flush remaining buffer
             if (buffer.trim()) {
-                for (const line of buffer.split('\n')) {
-                    if (line.startsWith('data:')) {
-                        const data = line.slice(5).trim();
-                        if (!data) continue;
-
-                        try {
-                            const geminiEvent: GeminiSSEEvent = JSON.parse(data);
-                            handleGeminiEvent(geminiEvent, controller, model, requestId, state);
-                        } catch (e) {
-                            // Skip invalid JSON
-                        }
-                    }
-                }
-            }
-            
-            if (state.hasStarted && !state.hasEnded) {
-                const messageStop = `event: message_stop\ndata: {"type":"message_stop","index":0}\n\n`;
-                controller.enqueue(messageStop);
+                controller.enqueue(encoder.encode(buffer + '\n\n'));
             }
         }
     });

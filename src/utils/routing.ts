@@ -220,9 +220,9 @@ function extractAuthHeaders(request: Request): Record<string, string> {
     headers['Authorization'] = authHeader;
   }
 
-  // If x-goog-api-key is provided, convert to Authorization for OpenAI-compatible upstreams
-  if (googApiKeyHeader && !authHeader && !apiKeyHeader) {
-    headers['Authorization'] = `Bearer ${googApiKeyHeader}`;
+  // If x-goog-api-key is provided, preserve it for Gemini native API
+  if (googApiKeyHeader) {
+    headers['x-goog-api-key'] = googApiKeyHeader;
   }
 
   // Forward beta feature headers

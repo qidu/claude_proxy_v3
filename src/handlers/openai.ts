@@ -1,6 +1,7 @@
 import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.js';
 import { convertClaudeToOpenAIRequest } from '../converters/claude-to-openai.js';
 import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
+import { convertOpenAIToGeminiGenerateContent, convertOpenAIToGeminiInteractions } from '../converters/openai-to-gemini.js';
 import { createLogger } from '../utils/logger.js';
 import type { Env, Logger } from '../types/shared.js';
 
@@ -101,8 +102,10 @@ export async function handleOpenAIRequest(
     const url = new URL(request.url);
     const isStreamRequest = url.searchParams.get('alt') === 'sse' || url.pathname.includes(':streamGenerateContent');
     const isInteractionsRequest = url.pathname === '/v1/interactions' || url.pathname.startsWith('/v1/interactions?');
+    const isGenerateContentRequest = url.pathname.includes(':generateContent') || url.pathname.includes(':streamGenerateContent');
+    const isGeminiEndpoint = isInteractionsRequest || isGenerateContentRequest;
     
-    activeLogger.debug(requestId, `OpenAI handler - path: ${url.pathname}, isInteractions: ${isInteractionsRequest}`);
+    activeLogger.debug(requestId, `OpenAI handler - path: ${url.pathname}, isGeminiEndpoint: ${isGeminiEndpoint}`);
 
     // Parse request body
     const requestBody = await request.json() as Record<string, unknown>;
@@ -175,16 +178,35 @@ export async function handleOpenAIRequest(
         if (!response.ok) {
             const errorText = await response.text();
             activeLogger.error(requestId, `OpenAI API error: ${response.status} ${errorText}`);
+            
+            // For streaming requests, return error as SSE
+            if (isStreaming) {
+                const errorResponse = {
+                    error: {
+                        code: response.status,
+                        message: `Upstream API error: ${response.status}`,
+                        status: 'ERROR'
+                    }
+                };
+                return new Response(`data: ${JSON.stringify(errorResponse)}\n\n`, {
+                    status: 200,
+                    headers: {
+                        'Content-Type': 'text/event-stream',
+                        'Cache-Control': 'no-cache',
+                    },
+                });
+            }
+            
             throw new Error(`OpenAI API error: ${response.status} ${errorText}`);
         }
 
         // Handle streaming response
         if (isStreaming) {
-            return handleOpenAIStreamingResponse(response, openaiRequest.model as string, requestId, activeLogger, isInteractionsRequest);
+            return handleOpenAIStreamingResponse(response, openaiRequest.model as string, requestId, activeLogger, isInteractionsRequest, isGenerateContentRequest);
         }
 
         // Handle non-streaming response
-        return handleOpenAINonStreamingResponse(response, openaiRequest.model as string, requestId, activeLogger, isInteractionsRequest);
+        return handleOpenAINonStreamingResponse(response, openaiRequest.model as string, requestId, activeLogger, isInteractionsRequest, isGenerateContentRequest);
 
     } catch (error) {
         activeLogger.error(requestId, `OpenAI API error: ${(error as Error).message}`);
@@ -200,41 +222,52 @@ async function handleOpenAIStreamingResponse(
     modelId: string,
     requestId: string,
     logger: Logger,
-    isInteractionsRequest: boolean = false
+    isInteractionsRequest: boolean = false,
+    isGenerateContentRequest: boolean = false
 ): Promise<Response> {
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
     const encoder = new TextEncoder();
+
+    logger.debug(requestId, `OpenAI streaming response started, status: ${response.status}, ok: ${response.ok}`);
 
     // Process stream
     (async () => {
         try {
             const reader = response.body?.getReader();
             if (!reader) {
+                logger.error(requestId, 'No response body in streaming response');
                 throw new Error('No response body');
             }
 
             let buffer = '';
+            let chunkCount = 0;
             while (true) {
                 const { done, value } = await reader.read();
-                if (done) break;
+                if (done) {
+                    logger.debug(requestId, `Stream ended, processed ${chunkCount} chunks`);
+                    break;
+                }
 
                 // Append to buffer
                 buffer += new TextDecoder().decode(value);
+                chunkCount++;
                 
                 // Process complete SSE events
-                const { processed, remaining } = processSSEBuffer(buffer, modelId, requestId);
+                const { processed, remaining } = processSSEBuffer(buffer, modelId, requestId, isInteractionsRequest, isGenerateContentRequest);
                 buffer = remaining;
                 
                 if (processed) {
+                    logger.debug(requestId, `OpenAI SSE chunk ${chunkCount}: ${processed.substring(0, 200)}...`);
                     await writer.write(encoder.encode(processed));
                 }
             }
 
             // Process any remaining buffer
             if (buffer.trim()) {
-                const { processed } = processSSEBuffer(buffer + '\n\n', modelId, requestId);
+                const { processed } = processSSEBuffer(buffer + '\n\n', modelId, requestId, isInteractionsRequest, isGenerateContentRequest);
                 if (processed) {
+                    logger.debug(requestId, `Final buffer processed: ${processed.substring(0, 200)}...`);
                     await writer.write(encoder.encode(processed));
                 }
             }
@@ -263,36 +296,32 @@ async function handleOpenAINonStreamingResponse(
     modelId: string,
     requestId: string,
     logger: Logger,
-    isInteractionsRequest: boolean = false
+    isInteractionsRequest: boolean = false,
+    isGenerateContentRequest: boolean = false
 ): Promise<Response> {
     const openaiResponse = await response.json() as Record<string, unknown>;
     
-    if (isInteractionsRequest) {
-        // Convert to Interactions format
-        const interactionResponse = {
-            id: `v1_${Date.now()}_${requestId}`,
-            model: modelId,
-            status: 'completed',
-            object: 'interaction',
-            created: new Date().toISOString(),
-            updated: new Date().toISOString(),
-            role: 'model',
-            outputs: [] as any[],
-            usage: {
-                total_input_tokens: (openaiResponse.usage as any)?.prompt_tokens || 0,
-                total_output_tokens: (openaiResponse.usage as any)?.completion_tokens || 0,
-                total_tokens: (openaiResponse.usage as any)?.total_tokens || 0,
-            }
-        };
+    if (isGenerateContentRequest) {
+        // Convert to Gemini generateContent format
+        const geminiResponse = convertOpenAIToGeminiGenerateContent(
+            openaiResponse as any,
+            modelId,
+            requestId
+        );
         
-        // Extract text from OpenAI response
-        const choices = (openaiResponse.choices as any[]) || [];
-        if (choices.length > 0 && choices[0].message?.content) {
-            interactionResponse.outputs = [{
-                type: 'text',
-                text: choices[0].message.content
-            }];
-        }
+        return new Response(JSON.stringify(geminiResponse), {
+            headers: {
+                'Content-Type': 'application/json',
+                'x-request-id': requestId,
+            },
+        });
+    } else if (isInteractionsRequest) {
+        // Convert to Interactions format
+        const interactionResponse = convertOpenAIToGeminiInteractions(
+            openaiResponse as any,
+            modelId,
+            requestId
+        );
         
         return new Response(JSON.stringify(interactionResponse), {
             headers: {
@@ -318,7 +347,7 @@ async function handleOpenAINonStreamingResponse(
 /**
  * Process SSE buffer and extract complete events
  */
-function processSSEBuffer(buffer: string, modelId: string, requestId: string): { processed: string; remaining: string } {
+function processSSEBuffer(buffer: string, modelId: string, requestId: string, isInteractionsRequest: boolean = false, isGenerateContentRequest: boolean = false): { processed: string; remaining: string } {
     let result = '';
     let remaining = buffer;
     
@@ -336,12 +365,35 @@ function processSSEBuffer(buffer: string, modelId: string, requestId: string): {
             if (line.startsWith('data: ')) {
                 const data = line.slice(6).trim();
                 if (data === '[DONE]') {
-                    result += 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+                    if (isGenerateContentRequest) {
+                        // Gemini generateContent doesn't need explicit end marker
+                        continue;
+                    } else {
+                        result += 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+                    }
                 } else {
                     try {
                         const parsed = JSON.parse(data);
-                        const claudeChunk = convertOpenAIToClaudeResponse(parsed, modelId, requestId);
-                        result += `data: ${JSON.stringify(claudeChunk)}\n\n`;
+                        
+                        let convertedChunk: Record<string, any> | null = null;
+                        
+                        if (isGenerateContentRequest) {
+                            // Convert to Gemini generateContent format
+                            convertedChunk = convertOpenAIToGeminiGenerateContent(parsed, modelId, requestId);
+                        } else if (isInteractionsRequest) {
+                            // Convert to Gemini Interactions format
+                            convertedChunk = convertOpenAIToGeminiInteractions(parsed, modelId, requestId);
+                        } else {
+                            // Convert to Claude format
+                            convertedChunk = convertOpenAIToClaudeResponse(parsed, modelId, requestId);
+                        }
+                        
+                        // Skip chunks with no candidates/content
+                        if (!convertedChunk || (!convertedChunk.candidates && !convertedChunk.content)) {
+                            continue;
+                        }
+                        
+                        result += `data: ${JSON.stringify(convertedChunk)}\n\n`;
                     } catch {
                         // Skip invalid JSON
                     }

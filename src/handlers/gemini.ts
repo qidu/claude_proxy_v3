@@ -120,13 +120,6 @@ async function handleGeminiInteractionsRequest(
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
     const requestBody = await request.json() as Record<string, unknown>;
     
-    // Detect Gemini CLI and force non-streaming to avoid JSON parsing issues
-    const userAgent = request.headers.get('user-agent') || '';
-    if (userAgent.includes('gemini-cli') && requestBody.stream !== false) {
-        activeLogger.debug(requestId, 'Gemini CLI detected, forcing stream=false');
-        requestBody.stream = false;
-    }
-    
     activeLogger.debug(requestId, `Interactions request to: ${targetUrl}`);
     
     // Convert Interactions format to generateContent format
@@ -548,13 +541,6 @@ async function handleGeminiGenerateContentRequest(
 
     // Parse request body
     const requestBody = await request.json() as Record<string, unknown>;
-    
-    // Detect Gemini CLI and force non-streaming to avoid JSON parsing issues
-    const userAgent = request.headers.get('user-agent') || '';
-    if (userAgent.includes('gemini-cli') && requestBody.stream !== false) {
-        activeLogger.debug(requestId, 'Gemini CLI detected, forcing stream=false');
-        requestBody.stream = false;
-    }
 
     // Determine if this is a native Gemini request or needs conversion from Claude format
     let geminiRequest: Record<string, unknown>;
