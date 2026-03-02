@@ -6,7 +6,7 @@
  */
 
 import { Env } from './types/shared.js';
-import { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, isHostAllowed } from './utils/routing.js';
+import { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, transformAuthHeadersForUpstream, isHostAllowed } from './utils/routing.js';
 import { createErrorResponse } from './utils/errors.js';
 import { createLogger } from './utils/logger.js';
 import { handleModelsRequest } from './handlers/models.js';
@@ -124,29 +124,37 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
   targetUrl: string; 
   targetEndpoint: string; 
   handlerType: 'messages' | 'interactions' | 'generateContent' | 'models' | 'token-counting';
-  upstreamMode?: 'native' | 'openai-completions';
+  upstreamMode?: string;
   modelId?: string;
   forceStreaming?: boolean;
 } {
   // Get default config from [models.default] or [upstream]
   const defaultCategory = proxyConfig.models?.default;
   const defaultCategoryConfig = defaultCategory && !Array.isArray(defaultCategory) ? defaultCategory : undefined;
-  const defaultMode = (defaultCategoryConfig?.upstream_mode || 
+  const defaultMode = defaultCategoryConfig?.upstream_mode || 
                       proxyConfig.upstream?.upstream_mode || 
-                      'openai-completions') as 'native' | 'openai-completions';
+                      'openai-completions';
   const defaultBaseUrl = defaultCategoryConfig?.base_url || 
                         proxyConfig.upstream?.default_base_url || 
                         'https://api.qnaigc.com';
 
-  // 1. /v1/messages → 2 upstream modes
+  // 1. /v1/messages → multiple upstream modes
   if (path === '/v1/messages' || path.startsWith('/v1/messages?')) {
-    if (defaultMode === 'native') {
+    if (defaultMode === 'anthropic-messages') {
       // Native Claude API
       return {
         targetUrl: `${defaultBaseUrl}/v1/messages`,
         targetEndpoint: 'v1/messages',
         handlerType: 'messages',
-        upstreamMode: 'native',
+        upstreamMode: 'anthropic-messages',
+      };
+    } else if (defaultMode === 'gemini-generatecontent' || defaultMode === 'gemini-interactions') {
+      // Native Gemini API - not typically used for /v1/messages but supported
+      return {
+        targetUrl: `${defaultBaseUrl}/v1beta/models`,
+        targetEndpoint: 'v1/messages',
+        handlerType: 'messages',
+        upstreamMode: defaultMode,
       };
     } else {
       // OpenAI-compatible upstream
@@ -159,16 +167,16 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     }
   }
 
-  // 2. /v1/interactions → 2 upstream modes
+  // 2. /v1/interactions → multiple upstream modes
   if (path === '/v1/interactions' || path.startsWith('/v1/interactions?')) {
-    if (defaultMode === 'native') {
+    if (defaultMode === 'gemini-generatecontent' || defaultMode === 'gemini-interactions') {
       // Native Gemini API
       const apiVersion = env.GEMINI_API_VERSION || 'v1beta';
       return {
         targetUrl: `${defaultBaseUrl}/${apiVersion}`,
         targetEndpoint: 'v1/interactions',
         handlerType: 'interactions',
-        upstreamMode: 'native',
+        upstreamMode: defaultMode,
       };
     } else {
       // OpenAI-compatible upstream
@@ -181,13 +189,13 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     }
   }
 
-  // 3. /v1beta/models/{model}:generateContent or :streamGenerateContent → 2 upstream modes
+  // 3. /v1beta/models/{model}:generateContent or :streamGenerateContent → multiple upstream modes
   if (path.startsWith('/v1beta/models/') && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
     const modelMatch = path.match(/\/v1beta\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
     const modelId = modelMatch ? decodeURIComponent(modelMatch[1]) : 'gemini-no-id-at-proxy';
     const isStreamEndpoint = path.includes(':streamGenerateContent');
     
-    if (defaultMode === 'native') {
+    if (defaultMode === 'gemini-generatecontent' || defaultMode === 'gemini-interactions') {
       // Native Gemini - pass through the exact endpoint
       const apiVersion = env.GEMINI_API_VERSION || 'v1beta';
       const endpoint = isStreamEndpoint ? 'streamGenerateContent' : 'generateContent';
@@ -200,7 +208,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
         targetUrl: `${defaultBaseUrl}/${apiVersion}/models/${modelId}:${endpoint}${queryString}`,
         targetEndpoint: `v1beta/models/${endpoint}`,
         handlerType: 'generateContent',
-        upstreamMode: 'native',
+        upstreamMode: defaultMode,
         modelId,
       };
     } else {
@@ -319,7 +327,7 @@ export default {
       let targetUrl: string = '';
       let handlerType: 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' = 'messages';
       let modelId: string | undefined;
-      let upstreamMode: 'native' | 'openai-completions' | undefined;
+      let upstreamMode: string | undefined;
       let forceStreaming: boolean = false;
       let isGeminiBypass = false;
       
@@ -357,46 +365,9 @@ export default {
             // Use model alias if configured, otherwise use original model name
             const upstreamModelName = modelRoute.modelAlias || modelName;
             
-            // Override auth headers if model has specific API key
-            if (modelRoute.apiKey) {
-              // Check if it's a Claude model (starts with claude-)
-              const isClaudeModel = modelName.toLowerCase().startsWith('claude-') || 
-                                   (upstreamModelName && upstreamModelName.toLowerCase().startsWith('claude-'));
-              const isGeminiModel = modelName.toLowerCase().startsWith('gemini-') ||
-                                   (upstreamModelName && upstreamModelName.toLowerCase().startsWith('gemini-'));
-              
-              if (isClaudeModel && (modelRoute.upstreamMode === 'anthropic-messages')) {
-                // For Claude models with anthropic-messages mode, use x-api-key header
-                modelAuthHeaders = {
-                  ...authHeaders,
-                  'x-api-key': modelRoute.apiKey,
-                };
-              } else if (isGeminiModel && (modelRoute.upstreamMode === 'gemini-generatecontent' || modelRoute.upstreamMode === 'gemini-interactions')) {
-                // For Gemini models with native mode, use x-goog-api-key header
-                // Remove Authorization header if present, use x-goog-api-key instead
-                const { Authorization, ...otherHeaders } = authHeaders;
-                modelAuthHeaders = {
-                  ...otherHeaders,
-                  'x-goog-api-key': modelRoute.apiKey,
-                };
-              } else {
-                // For others, check upstream mode to determine header format
-                if (modelRoute.upstreamMode === 'gemini-generatecontent' || modelRoute.upstreamMode === 'gemini-interactions') {
-                  // For Gemini native mode, use x-goog-api-key
-                  const { Authorization, ...otherHeaders } = authHeaders;
-                  modelAuthHeaders = {
-                    ...otherHeaders,
-                    'x-goog-api-key': modelRoute.apiKey,
-                  };
-                } else {
-                  // For OpenAI-compatible mode, use Authorization Bearer
-                  modelAuthHeaders = {
-                    ...authHeaders,
-                    'Authorization': `Bearer ${modelRoute.apiKey}`,
-                  };
-                }
-              }
-            }
+            // Transform auth headers based on upstream mode and endpoint
+            // Extract API key from request headers and format correctly for the target upstream
+            modelAuthHeaders = transformAuthHeadersForUpstream(request, modelRoute.upstreamMode, path);
             
             // Determine handler type and build target URL based on endpoint and upstream_mode
             const isNativeMode = modelRoute.upstreamMode === 'anthropic-messages' || 
@@ -421,7 +392,7 @@ export default {
                   // For Claude native (anthropic-messages), route to /v1/messages
                   targetUrl = `${modelRoute.targetUrl}/v1/messages`;
                 }
-                upstreamMode = 'native';
+                upstreamMode = modelRoute.upstreamMode;
               } else {
                 targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
                 upstreamMode = 'openai-completions';
@@ -442,7 +413,7 @@ export default {
                   } else {
                     targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
                   }
-                  upstreamMode = 'native';
+                  upstreamMode = modelRoute.upstreamMode;
                 } else {
                   // Claude models don't support interactions API in native mode
                   // Fall back to OpenAI-compatible mode
@@ -471,7 +442,7 @@ export default {
                   }
                   // Use upstreamModelName (alias) instead of pathModelId (client name)
                   targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:${endpoint}${queryString}`;
-                  upstreamMode = 'native';
+                  upstreamMode = modelRoute.upstreamMode;
                 } else {
                   // Claude models don't support generateContent API in native mode
                   // Fall back to OpenAI-compatible mode
@@ -538,6 +509,11 @@ export default {
         handlerType = fixedRoute.handlerType;
         upstreamMode = fixedRoute.upstreamMode;
         modelId = fixedRoute.modelId;
+        
+        // Transform auth headers for fixed route based on upstream mode and endpoint
+        if (upstreamMode) {
+          modelAuthHeaders = transformAuthHeadersForUpstream(request, upstreamMode, path);
+        }
       }
 
       // Route to appropriate handler
@@ -553,32 +529,36 @@ export default {
 
         case 'messages':
           // /v1/messages routes based on upstream mode
-          if (upstreamMode === 'native') {
-            // Check if routing to Gemini generateContent endpoint
-            if (targetUrl.includes(':generateContent') || targetUrl.includes(':streamGenerateContent')) {
-              response = await handleGeminiRequestForMessages(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
-            } else {
-              response = await handleClaudeRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
-            }
+          if (upstreamMode === 'anthropic-messages') {
+            // Native Claude API
+            response = await handleClaudeRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
+          } else if (upstreamMode === 'gemini-generatecontent' || upstreamMode === 'gemini-interactions') {
+            // Native Gemini API (routed to generateContent endpoint)
+            response = await handleGeminiRequestForMessages(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
           } else {
+            // OpenAI-compatible mode
             response = await handleMessagesRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
           }
           break;
 
         case 'interactions':
           // /v1/interactions routes based on upstream mode
-          if (upstreamMode === 'native') {
+          if (upstreamMode === 'gemini-generatecontent' || upstreamMode === 'gemini-interactions') {
+            // Native Gemini API
             response = await handleGeminiRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
           } else {
+            // OpenAI-compatible mode
             response = await handleOpenAIRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, forceStreaming);
           }
           break;
 
         case 'generateContent':
           // /v1beta/models/{model}:generateContent or :streamGenerateContent routes based on upstream mode
-          if (upstreamMode === 'native') {
+          if (upstreamMode === 'gemini-generatecontent' || upstreamMode === 'gemini-interactions') {
+            // Native Gemini API
             response = await handleGeminiRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
           } else {
+            // OpenAI-compatible mode
             response = await handleOpenAIRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, forceStreaming);
           }
           break;

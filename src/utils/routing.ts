@@ -12,7 +12,7 @@ import { validateBetaFeatures } from './beta-features.js';
 
 import { validateBetaFeatures as validateBetaFeaturesUtil } from './beta-features.js';
 
-export { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, isHostAllowed, getAllowedHosts };
+export { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, transformAuthHeadersForUpstream, isHostAllowed, getAllowedHosts };
 
 // Default allowed hosts for SSRF protection
 const DEFAULT_ALLOWED_HOSTS = ['127.0.0.1', 'localhost'];
@@ -238,6 +238,103 @@ function extractAuthHeaders(request: Request): Record<string, string> {
     }
   }
 
+  return headers;
+}
+
+/**
+ * Transform auth headers to match upstream mode requirements
+ * Extracts API key from request headers and formats it correctly for the target upstream
+ * Respects endpoint-specific header preferences
+ */
+function transformAuthHeadersForUpstream(
+  request: Request,
+  upstreamMode: string,
+  endpointPath?: string
+): Record<string, string> {
+  const headers: Record<string, string> = {};
+  
+  // Extract raw API key from headers with endpoint-specific priority
+  let apiKey: string | null = null;
+  
+  const googApiKey = request.headers.get('x-goog-api-key');
+  const xApiKey = request.headers.get('x-api-key');
+  const authHeader = request.headers.get('Authorization');
+  
+  // Determine priority based on endpoint
+  const isMessagesEndpoint = endpointPath?.startsWith('/v1/messages');
+  const isGeminiEndpoint = endpointPath?.startsWith('/v1/interactions') || 
+                          endpointPath?.startsWith('/v1beta/models/');
+  
+  if (isMessagesEndpoint) {
+    // /v1/messages prefers x-api-key
+    if (xApiKey) {
+      apiKey = xApiKey.startsWith('Bearer ') ? xApiKey.substring(7) : xApiKey;
+    } else if (googApiKey) {
+      apiKey = googApiKey;
+    } else if (authHeader) {
+      apiKey = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : authHeader;
+    }
+  } else if (isGeminiEndpoint) {
+    // Gemini endpoints prefer x-goog-api-key
+    if (googApiKey) {
+      apiKey = googApiKey;
+    } else if (xApiKey) {
+      apiKey = xApiKey.startsWith('Bearer ') ? xApiKey.substring(7) : xApiKey;
+    } else if (authHeader) {
+      apiKey = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : authHeader;
+    }
+  } else {
+    // Default priority: x-goog-api-key > x-api-key > Authorization
+    if (googApiKey) {
+      apiKey = googApiKey;
+    } else if (xApiKey) {
+      apiKey = xApiKey.startsWith('Bearer ') ? xApiKey.substring(7) : xApiKey;
+    } else if (authHeader) {
+      apiKey = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : authHeader;
+    }
+  }
+  
+  // If no API key found, return empty headers
+  if (!apiKey) {
+    return headers;
+  }
+  
+  // Format header based on upstream mode
+  switch (upstreamMode) {
+    case 'anthropic-messages':
+      // Claude API uses x-api-key header
+      headers['x-api-key'] = apiKey;
+      break;
+      
+    case 'gemini-generatecontent':
+    case 'gemini-interactions':
+      // Gemini native API uses x-goog-api-key header
+      headers['x-goog-api-key'] = apiKey;
+      break;
+      
+    case 'openai-completions':
+      // OpenAI-compatible uses Authorization Bearer
+      headers['Authorization'] = `Bearer ${apiKey}`;
+      break;
+      
+    default:
+      // Default to Authorization Bearer for unknown modes
+      headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+  
+  // Forward beta feature headers for Claude
+  if (upstreamMode === 'anthropic-messages') {
+    const betaVersionHeader = request.headers.get('anthropic-beta');
+    if (betaVersionHeader) {
+      const validatedFeatures = validateBetaFeaturesUtil(betaVersionHeader);
+      if (validatedFeatures) {
+        headers['anthropic-beta'] = JSON.stringify(validatedFeatures);
+      } else {
+        headers['anthropic-beta'] = betaVersionHeader;
+      }
+    }
+  }
+  
   return headers;
 }
 
