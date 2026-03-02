@@ -477,7 +477,7 @@ async function handleGeminiToGeminiMode(
     }
 
     // Log request info
-    activeLogger.info(requestId, `[DEBUG] Full URL: ${fullTargetUrl}`);
+    activeLogger.debug(requestId, `Full URL: ${fullTargetUrl}`);
     activeLogger.debug(requestId, `Gemini model: ${effectiveModelId || 'gemini-no-id-at-proxy'}`);
     activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
 
@@ -581,7 +581,7 @@ async function handleGeminiGenerateContentRequest(
     }
 
     // Log request info
-    activeLogger.info(requestId, `[DEBUG] Full URL: ${fullTargetUrl}`);
+    activeLogger.debug(requestId, `Full URL: ${fullTargetUrl}`);
     activeLogger.debug(requestId, `Gemini model: ${effectiveModelId || 'gemini-no-id-at-proxy'}`);
     activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
 
