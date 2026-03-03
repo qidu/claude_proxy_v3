@@ -1,10 +1,14 @@
 /**
  * Proxy configuration loader
  * Loads config from file or URL
+ * Compatible with both Node.js and Cloudflare Workers environments
  */
 
-import { readFileSync } from 'fs';
 import { Env } from '../types/shared.js';
+
+// Check if we're running in Node.js environment
+const isNodeEnvironment = (typeof process !== 'undefined' && process.versions?.node) ||
+                          (typeof globalThis !== 'undefined' && (globalThis as any).process?.versions?.node);
 
 export interface ProxyConfig {
   upstream?: {
@@ -168,8 +172,20 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
       }
       configContent = await response.text();
     } else if (configPath) {
-      // Load from file
-      configContent = readFileSync(configPath, 'utf-8');
+      // Load from file - handle both Node.js and Cloudflare Workers environments
+      if (isNodeEnvironment) {
+        // Node.js environment - use fs module
+        const fs = await import('fs');
+        configContent = fs.readFileSync(configPath, 'utf-8');
+      } else {
+        // Cloudflare Workers environment - fetch from relative URL
+        // In Workers, configPath should be a relative path that can be fetched
+        const response = await fetch(configPath);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch config from ${configPath}: ${response.status}`);
+        }
+        configContent = await response.text();
+      }
     } else {
       // No config specified, return empty config
       return {};

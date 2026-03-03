@@ -11,6 +11,7 @@
 import { validateBetaFeatures } from './beta-features.js';
 
 import { validateBetaFeatures as validateBetaFeaturesUtil } from './beta-features.js';
+import { createLogger } from './logger.js';
 
 export { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, transformAuthHeadersForUpstream, isHostAllowed, getAllowedHosts, formatApiKeyForUpstream };
 
@@ -249,16 +250,35 @@ function extractAuthHeaders(request: Request): Record<string, string> {
 function transformAuthHeadersForUpstream(
   request: Request,
   upstreamMode: string,
-  endpointPath?: string
+  endpointPath?: string,
+  requestId?: string
 ): Record<string, string> {
   const headers: Record<string, string> = {};
-  
+
   // Extract raw API key from headers with endpoint-specific priority
   let apiKey: string | null = null;
-  
+
   const googApiKey = request.headers.get('x-goog-api-key');
   const xApiKey = request.headers.get('x-api-key');
   const authHeader = request.headers.get('Authorization');
+
+  // Debug logging for header extraction
+  if (requestId) {
+    const logger = createLogger({ LOG_LEVEL: 'debug' });
+    if (googApiKey) {
+      const partialGoogKey = googApiKey.length > 8 ? `${googApiKey.substring(0, 4)}...${googApiKey.substring(googApiKey.length - 4)}` : '***';
+      logger.debug(requestId, `Found x-goog-api-key header: ${partialGoogKey}`);
+    }
+    if (xApiKey) {
+      const partialXApiKey = xApiKey.length > 8 ? `${xApiKey.substring(0, 4)}...${xApiKey.substring(xApiKey.length - 4)}` : '***';
+      logger.debug(requestId, `Found x-api-key header: ${partialXApiKey}`);
+    }
+    if (authHeader) {
+      const partialAuth = authHeader.length > 8 ? `${authHeader.substring(0, 4)}...${authHeader.substring(authHeader.length - 4)}` : '***';
+      logger.debug(requestId, `Found Authorization header: ${partialAuth}`);
+    }
+    logger.debug(requestId, `Endpoint path: ${endpointPath}, Upstream mode: ${upstreamMode}`);
+  }
   
   // Determine priority based on endpoint
   const isMessagesEndpoint = endpointPath?.startsWith('/v1/messages');

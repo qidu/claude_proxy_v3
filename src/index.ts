@@ -368,27 +368,45 @@ export default {
             
             // Transform auth headers based on upstream mode and endpoint
             // Extract API key from request headers and format correctly for the target upstream
-            modelAuthHeaders = transformAuthHeadersForUpstream(request, modelRoute.upstreamMode, path);
+            modelAuthHeaders = transformAuthHeadersForUpstream(request, modelRoute.upstreamMode, path, requestId);
 
-            // For openai-completions upstream, prioritize config API key over client headers
-            // because client might send Gemini/Claude API keys that don't work with OpenAI upstream
+            // Debug log: show auth header keys and partial values
+            const authKeys = Object.keys(modelAuthHeaders);
+            if (authKeys.length > 0) {
+              authKeys.forEach(key => {
+                const value = modelAuthHeaders[key];
+                const partialValue = value.length > 8 ? `${value.substring(0, 4)}...${value.substring(value.length - 4)}` : '***';
+                logger.debug(requestId, `Auth header for ${modelRoute.upstreamMode}: ${key}=${partialValue}`);
+              });
+            } else {
+              logger.debug(requestId, `No auth headers found for ${modelRoute.upstreamMode}`);
+            }
+
+            // For openai-completions upstream, always use client headers (transformed from x-goog-api-key or x-api-key)
+            // Config API keys should NOT override client headers for openai-completions upstream
+            // because client might send Gemini/Claude API keys that don't work with OpenAI upstream,
+            // but that's the client's responsibility
             if (modelRoute.upstreamMode === 'openai-completions') {
-                if (modelRoute.apiKey) {
-                    // Use config API key for OpenAI-compatible upstream
-                    const configHeaders = formatApiKeyForUpstream(modelRoute.apiKey, modelRoute.upstreamMode);
-                    // Override any headers from request transformation
-                    modelAuthHeaders = configHeaders;
-                    logger.debug(requestId, `Using config API key for openai-completions upstream: ${modelName}`);
-                } else {
-                    // No config API key - using client key which might not work
-                    logger.warn(requestId, `No API key in config for openai-completions upstream. Using client API key which may fail if it's not compatible with OpenAI upstream. Model: ${modelName}`);
-                }
+                // Always use transformed client headers for openai-completions upstream
+                // Do NOT use config API key even if present
+                logger.debug(requestId, `Using client API key for openai-completions upstream: ${modelName}`);
             } else if (modelRoute.apiKey) {
-                // For other upstream modes, config API key overrides request headers
+                // For native upstream modes (anthropic-messages, gemini-generatecontent, gemini-interactions),
+                // config API key overrides request headers
                 const configHeaders = formatApiKeyForUpstream(modelRoute.apiKey, modelRoute.upstreamMode);
                 // Merge config headers (overriding any from request)
                 modelAuthHeaders = { ...modelAuthHeaders, ...configHeaders };
                 logger.debug(requestId, `Using API key from config for model: ${modelName}`);
+
+                // Debug log: show auth header keys and partial values after config override
+                const authKeysAfterConfig = Object.keys(modelAuthHeaders);
+                if (authKeysAfterConfig.length > 0) {
+                  authKeysAfterConfig.forEach(key => {
+                    const value = modelAuthHeaders[key];
+                    const partialValue = value.length > 8 ? `${value.substring(0, 4)}...${value.substring(value.length - 4)}` : '***';
+                    logger.debug(requestId, `Auth header after config override for ${modelRoute.upstreamMode}: ${key}=${partialValue}`);
+                  });
+                }
             }
             
             // Determine handler type and build target URL based on endpoint and upstream_mode
@@ -534,22 +552,26 @@ export default {
         
         // Transform auth headers for fixed route based on upstream mode and endpoint
         if (upstreamMode) {
-          modelAuthHeaders = transformAuthHeadersForUpstream(request, upstreamMode, path);
+          modelAuthHeaders = transformAuthHeadersForUpstream(request, upstreamMode, path, requestId);
 
-          // For openai-completions upstream in fixed routing, check for default API key
+          // Debug log: show auth header keys and partial values for fixed routing
+          const authKeys = Object.keys(modelAuthHeaders);
+          if (authKeys.length > 0) {
+            authKeys.forEach(key => {
+              const value = modelAuthHeaders[key];
+              const partialValue = value.length > 8 ? `${value.substring(0, 4)}...${value.substring(value.length - 4)}` : '***';
+              logger.debug(requestId, `Auth header for fixed routing ${upstreamMode}: ${key}=${partialValue}`);
+            });
+          } else {
+            logger.debug(requestId, `No auth headers found for fixed routing ${upstreamMode}`);
+          }
+
+          // For openai-completions upstream in fixed routing, always use client headers
+          // Config API keys should NOT override client headers for openai-completions upstream
           if (upstreamMode === 'openai-completions') {
-            const defaultCategory = proxyConfig.models?.default;
-            const defaultCategoryConfig = defaultCategory && !Array.isArray(defaultCategory) ? defaultCategory : undefined;
-            const defaultApiKey = defaultCategoryConfig?.api_key || proxyConfig.upstream?.default_api_key;
-
-            if (defaultApiKey) {
-              // Use default API key for openai-completions upstream
-              const configHeaders = formatApiKeyForUpstream(defaultApiKey, upstreamMode);
-              modelAuthHeaders = configHeaders;
-              logger.debug(requestId, `Using default API key for openai-completions upstream in fixed routing`);
-            } else {
-              logger.warn(requestId, `No default API key configured for openai-completions upstream in fixed routing. Using client API key which may fail.`);
-            }
+            // Always use transformed client headers for openai-completions upstream
+            // Do NOT use config API key even if present
+            logger.debug(requestId, `Using client API key for openai-completions upstream in fixed routing`);
           }
         }
       }

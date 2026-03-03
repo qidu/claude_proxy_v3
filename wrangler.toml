@@ -7,7 +7,7 @@ compatibility_flags = ["nodejs_compat"]
 VERSION = "dev"  # Set to commit id, tag, or branch name
 LOCAL_TOKEN_COUNTING = "false"
 LOCAL_TOKEN_COUNTING_FACTOR = "4"
-ALLOWED_HOSTS="127.0.0.1,localhost,api.qnaigc.com,api.example1.com,api.example2-ai.com"
+ALLOWED_HOSTS="127.0.0.1,localhost,api.qnaigc.com,api.example1.com,api.example2-ai.com,api.yoosheen.com,api.wenwen-ai.com"
 DEV_MODE=true
 ALLOWED_ORIGINS="*"
 IMAGE_BLOCK_DATA_MAX_SIZE = "10485760"  # 10MB
@@ -16,7 +16,7 @@ IMAGE_BLOCK_DATA_MAX_SIZE = "10485760"  # 10MB
 PROXY_CONFIG_PATH = "./proxy_config.toml"
 # PROXY_CONFIG_URL = "http://eureka-server/config/proxy_config.toml"
 
-LOG_LEVEL = "debug"
+LOG_LEVEL = "info"
 
 [observability.logs]
 enabled = true
