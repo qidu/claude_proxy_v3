@@ -106,15 +106,27 @@ export async function handleOpenAIRequest(
     const isGeminiEndpoint = isInteractionsRequest || isGenerateContentRequest;
     
     activeLogger.debug(requestId, `OpenAI handler - path: ${url.pathname}, isGeminiEndpoint: ${isGeminiEndpoint}`);
+    const authTokenIn = request.headers.get('Authorization') || '';
+    const apiKey = request.headers.get('x-api-key') || '';
+    const googApiKey = request.headers.get('x-goog-api-key') || '';
+    activeLogger.debug(requestId, `Authorization: ${authTokenIn.substring(64)} at endpoint`);
+    activeLogger.debug(requestId, `x-api-key: ${apiKey.substring(32)}`);
+    activeLogger.debug(requestId, `x-goog-api-key: ${googApiKey.substring(32)}`);
+
+    if (isGeminiEndpoint) {
+        authHeaders['Authorization'] = googApiKey;
+    }
+    else {
+        authHeaders['Authorization'] = authTokenIn;
+    }
 
     // Parse request body
     const requestBody = await request.json() as Record<string, unknown>;
     
     // Detect Gemini CLI and force non-streaming to avoid JSON parsing issues
     const userAgent = request.headers.get('user-agent') || '';
-    if (userAgent.includes('gemini-cli') && requestBody.stream !== false) {
-        activeLogger.debug(requestId, 'Gemini CLI detected, forcing stream=false');
-        requestBody.stream = false;
+    if (userAgent.includes('gemini-cli')) {
+        activeLogger.debug(requestId, 'Gemini CLI detected');
     }
     
     activeLogger.debug(requestId, `Request body keys: ${Object.keys(requestBody).join(', ')}`);
@@ -157,9 +169,10 @@ export async function handleOpenAIRequest(
     }
 
     // Log request info
-    activeLogger.debug(requestId, `OpenAI upstream request url: ${targetUrl}`);
-    activeLogger.debug(requestId, `Model: ${openaiRequest.model}`);
-    activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
+    activeLogger.debug(requestId, `OpenAI upstream url: ${targetUrl}`);
+    activeLogger.debug(requestId, `Model: ${openaiRequest.model}, stream=${isStreaming}`);
+    const authBaerer = authHeaders['Authorization'] || '';
+    activeLogger.debug(requestId, `Authorization: ${authBaerer.substring(64)} upstream`);
 
     // Prepare headers
     const headers: Record<string, string> = {

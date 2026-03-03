@@ -279,7 +279,8 @@ See `docs/multiple_upstream_analysis.md` for implementation plan.
 - `Authorization: Bearer` : set it only for `openai-completions`
 - using `x-api-key` from `/v1/messages` as `Authorization: Bearer` for `openai-completions` upstream
 - using `x-goog-api-key` from `/v1beta/models/{model}:` and `/v1/interactions` as `Authorization: Bearer` for `openai-completions` upstream
-- config keys from proxy_config.toml override client headers for openai-completions upstream
+- If there are config keys in proxy_config.toml for specific models category, override client headers for `anthropic-messages` or `gemini-generatecontent` upstream accordingly
+- Never override client headers for the default `openai-completions` upstream
 
 ## Summary
 
