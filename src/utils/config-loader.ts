@@ -15,6 +15,9 @@ export interface ProxyConfig {
     upstream_mode?: string;
     default_base_url?: string;
     default_api_key?: string;
+    budget_to_effort_low?: number | string;
+    budget_to_effort_medium?: number | string;
+    budget_to_effort_high?: number | string;
   };
   models?: Record<string, ModelCategoryConfig | ModelArrayConfig>;
   defaults?: {
@@ -161,6 +164,8 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
   const configPath = env.PROXY_CONFIG_PATH;
   const configUrl = env.PROXY_CONFIG_URL;
 
+  console.log(`[INFO] Config path: ${configPath}, Config URL: ${configUrl}`);
+
   try {
     let configContent: string;
 
@@ -246,7 +251,7 @@ function parseSimpleToml(content: string): ProxyConfig {
     if (stringMatch) {
       const [, key, value] = stringMatch;
       const cleanKey = key.trim().replace(/^"|"$/g, '');
-      
+
       if (currentSection === 'upstream' && config.upstream) {
         (config.upstream as any)[cleanKey] = value;
       } else if (currentSection === 'models' && currentCategory && config.models) {
@@ -256,6 +261,26 @@ function parseSimpleToml(content: string): ProxyConfig {
         }
       } else if (currentSection === 'defaults' && config.defaults) {
         (config.defaults as any)[cleanKey] = value;
+      }
+      continue;
+    }
+
+    // Handle unquoted numbers and other values: key = value
+    const unquotedMatch = trimmed.match(/^([a-zA-Z0-9_-]+)\s*=\s*(.+)$/);
+    if (unquotedMatch) {
+      const [, key, value] = unquotedMatch;
+      const cleanKey = key.trim();
+      let cleanValue: string | number = value.trim();
+
+      // Try to parse as number
+      if (!isNaN(Number(cleanValue)) && cleanValue !== '') {
+        cleanValue = Number(cleanValue);
+      }
+
+      if (currentSection === 'upstream' && config.upstream) {
+        (config.upstream as any)[cleanKey] = cleanValue;
+      } else if (currentSection === 'defaults' && config.defaults) {
+        (config.defaults as any)[cleanKey] = cleanValue;
       }
       continue;
     }

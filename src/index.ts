@@ -16,6 +16,7 @@ import { handleGeminiRequest, handleGeminiRequestForMessages } from './handlers/
 import { handleOpenAIRequest } from './handlers/openai.js';
 import { handleClaudeRequest } from './handlers/claude.js';
 import { loadProxyConfig, getModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
+import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
 
 /**
  * Generate a unique request ID
@@ -260,9 +261,14 @@ export default {
     const logger = createLogger(env as Record<string, unknown>);
 
     // Load proxy config on first request
+    const configPath = env.PROXY_CONFIG_PATH;
+    const configUrl = env.PROXY_CONFIG_URL;
+    logger.debug(requestId, `Config path: ${configPath}, Config URL: ${configUrl}`);
+
     const proxyConfig = await loadProxyConfig(env);
+
     if (proxyConfig.upstream) {
-      logger.debug(requestId, `Loaded proxy config with ${Object.keys(proxyConfig.models || {}).length} model configs`);
+      logger.debug(requestId, `Upstream config: budget_to_effort_low=${proxyConfig.upstream.budget_to_effort_low}, budget_to_effort_medium=${proxyConfig.upstream.budget_to_effort_medium}, budget_to_effort_high=${proxyConfig.upstream.budget_to_effort_high}`);
     }
 
     try {
@@ -368,7 +374,7 @@ export default {
             
             // Transform auth headers based on upstream mode and endpoint
             // Extract API key from request headers and format correctly for the target upstream
-            modelAuthHeaders = transformAuthHeadersForUpstream(request, modelRoute.upstreamMode, path, requestId);
+            modelAuthHeaders = transformAuthHeadersForUpstream(request, modelRoute.upstreamMode, path, requestId, env as Record<string, unknown>);
 
             // Debug log: show auth header keys and partial values
             const authKeys = Object.keys(modelAuthHeaders);
@@ -552,7 +558,7 @@ export default {
         
         // Transform auth headers for fixed route based on upstream mode and endpoint
         if (upstreamMode) {
-          modelAuthHeaders = transformAuthHeadersForUpstream(request, upstreamMode, path, requestId);
+          modelAuthHeaders = transformAuthHeadersForUpstream(request, upstreamMode, path, requestId, env as Record<string, unknown>);
 
           // Debug log: show auth header keys and partial values for fixed routing
           const authKeys = Object.keys(modelAuthHeaders);
@@ -597,7 +603,25 @@ export default {
             response = await handleGeminiRequestForMessages(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
           } else {
             // OpenAI-compatible mode
-            response = await handleMessagesRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
+            // Build thinking conversion options from config
+            const conversionOptions: ThinkingConversionOptions = {};
+            const upstream = proxyConfig.upstream;
+            const low = upstream?.budget_to_effort_low;
+            if (low !== undefined && low !== '') {
+              const val = parseInt(String(low));
+              if (!isNaN(val)) conversionOptions.budget_to_effort_low = val;
+            }
+            const medium = upstream?.budget_to_effort_medium;
+            if (medium !== undefined && medium !== '') {
+              const val = parseInt(String(medium));
+              if (!isNaN(val)) conversionOptions.budget_to_effort_medium = val;
+            }
+            const high = upstream?.budget_to_effort_high;
+            if (high !== undefined && high !== '') {
+              const val = parseInt(String(high));
+              if (!isNaN(val)) conversionOptions.budget_to_effort_high = val;
+            }
+            response = await handleMessagesRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, conversionOptions);
           }
           break;
 

@@ -8,7 +8,7 @@ import { Env } from '../types/shared.js';
 import { Logger, createLogger } from '../utils/logger.js';
 import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.js';
 import { OpenAIRequest, OpenAIResponse } from '../types/openai.js';
-import { convertClaudeToOpenAIRequest } from '../converters/claude-to-openai.js';
+import { convertClaudeToOpenAIRequest, ThinkingConversionOptions } from '../converters/claude-to-openai.js';
 import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
 import { createStreamTransformer } from '../converters/streaming.js';
 import { validateClaudeMessagesRequest, validateAuthHeaders } from '../utils/validation.js';
@@ -24,7 +24,8 @@ export async function handleMessagesRequest(
   requestId: string,
   modelId?: string,
   env?: Env,
-  logger?: Logger
+  logger?: Logger,
+  conversionOptions?: ThinkingConversionOptions
 ): Promise<Response> {
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
   // Parse request body
@@ -32,10 +33,7 @@ export async function handleMessagesRequest(
   
   // Detect Gemini CLI and force non-streaming to avoid JSON parsing issues
   const userAgent = request.headers.get('user-agent') || '';
-  if (userAgent.includes('gemini-cli') && requestBody.stream !== false) {
-    activeLogger.debug(requestId, 'Gemini CLI detected, forcing stream=false');
-    requestBody.stream = false;
-  }
+  activeLogger.info(requestId, `UA: ${userAgent}, stream = ${requestBody.stream}`);
   
   // Check if request is already in OpenAI format
   // OpenAI format: { model, messages, stream, temperature, ... }
@@ -47,9 +45,18 @@ export async function handleMessagesRequest(
     const model = (requestBody.model as string) || modelId || 'unknown';
     const isStreaming = requestBody.stream === true;
 
+    // Log thinking configuration if present (OpenAI format)
+    const openaiThinking = requestBody.thinking as { enabled?: boolean; budget_tokens?: number } | undefined;
+    if (openaiThinking) {
+      const thinkingType = openaiThinking.enabled ? 'enabled' : 'disabled';
+      const budget = openaiThinking.budget_tokens ? `, budget_tokens: ${openaiThinking.budget_tokens}` : '';
+      activeLogger.info(requestId, `Thinking type: ${thinkingType} , budget: ${budget} extracted from OpenAI-Format`);
+    } else {
+      activeLogger.info(requestId, 'Thinking type: not specified');
+    }
+
     // Log request info
-    activeLogger.debug(requestId, `Upstream request url: ${targetUrl}`);
-    activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
+    activeLogger.info(requestId, `Upstream target url (stream = ${isStreaming}): ${targetUrl}`);
 
     const response = await fetch(targetUrl, {
       method: 'POST',
@@ -64,8 +71,8 @@ export async function handleMessagesRequest(
     if (!response.ok) {
       const bodyPreview = typeof requestBody === 'string'
         ? requestBody
-        : JSON.stringify(requestBody).substring(0, 1000);
-      activeLogger.error(requestId, `Messages API error: ${response.status}, URL: ${targetUrl}, Body: ${bodyPreview.substring(0, 500)}`);
+        : JSON.stringify(requestBody);
+      activeLogger.error(requestId, `Messages API error from upstream (openai-passthrough): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}`);
       handleTargetApiError(response, 'Messages API', { url: targetUrl, body: bodyPreview });
     }
 
@@ -82,20 +89,30 @@ export async function handleMessagesRequest(
   // Validate Claude request
   validateClaudeMessagesRequest(claudeRequest);
 
+  // Log thinking type configuration
+  const thinking = claudeRequest.thinking;
+  if (thinking) {
+    const thinkingType = thinking.type === true || thinking.type === 'enabled' ? 'enabled' : 'disabled';
+    const budget = 'budget_tokens' in thinking && thinking.budget_tokens ? `, budget_tokens: ${thinking.budget_tokens}` : '';
+    activeLogger.info(requestId, `Thinking type: ${thinkingType}, budget: ${budget} extracted from Claude-Format`);
+  } else {
+    activeLogger.info(requestId, 'Thinking type: not specified');
+  }
+
   // Get target model ID
   const targetModelId = modelId || claudeRequest.model;
 
   // Convert to OpenAI format
-  const openaiRequest: OpenAIRequest = convertClaudeToOpenAIRequest(claudeRequest, targetModelId);
+  const openaiRequest: OpenAIRequest = convertClaudeToOpenAIRequest(claudeRequest, targetModelId, conversionOptions);
+  const upstreamRequest = JSON.stringify(openaiRequest);
+  activeLogger.debug(requestId, `Converted request (claude->openai): ${upstreamRequest.substring(0, 250)} ... ${upstreamRequest.substring(upstreamRequest.length - 250)}`);
 
   // Check if streaming is requested
   const isStreaming = claudeRequest.stream === true;
 
   // Log request info
-  activeLogger.info(requestId, `Calling upstream: ${targetUrl}`);
-  activeLogger.debug(requestId, `Upstream request url: ${targetUrl}`);
+  activeLogger.info(requestId, `Upstream target url (stream =${isStreaming}) : ${targetUrl}`);
   activeLogger.debug(requestId, `Has auth headers: ${!!authHeaders['Authorization'] || !!authHeaders['x-api-key']}`);
-  activeLogger.debug(requestId, `Is streaming: ${isStreaming}`);
   
   const response = await fetch(targetUrl, {
     method: 'POST',
@@ -110,8 +127,8 @@ export async function handleMessagesRequest(
   if (!response.ok) {
     const bodyPreview = typeof openaiRequest === 'string'
       ? openaiRequest
-      : JSON.stringify(openaiRequest).substring(0, 1000);
-    activeLogger.error(requestId, `Messages API error: ${response.status}, URL: ${targetUrl}, Body: ${bodyPreview.substring(0, 500)}`);
+      : JSON.stringify(openaiRequest);
+    activeLogger.error(requestId, `Messages API error from upstream (claude->openai): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}`);
     handleTargetApiError(response, 'Messages API', { url: targetUrl, body: bodyPreview });
   }
 
@@ -136,7 +153,6 @@ async function handleNonStreamingResponse(
   try {
     // Parse target API response
     const responseText = await response.text();
-    logger.debug(requestId, 'Upstream response body.');
 
     const openaiResponse: OpenAIResponse = JSON.parse(responseText);
 
@@ -178,8 +194,6 @@ async function handleStreamingResponse(
   const decoder = new TextDecoder();
 
   try {
-    // Log streaming response
-    logger.debug(requestId, 'Upstream streaming response started');
 
     // Create streaming transformer
     const transformer = createStreamTransformer(model, requestId);

@@ -142,6 +142,24 @@ pm2 start dist/server.js -i 4
 
 **Test Configuration**: All tests use `proxy_config.toml` with category-based structure. See `docs/test_guideline.md` for details.
 
+### Test Scripts
+
+#### SSE Streaming Tests
+
+**`test_sse_streaming_comprehensive.sh`** - Full SSE streaming test suite
+- Tests 10 models across 4 endpoints:
+  - `/v1/messages` (x-api-key header)
+  - `/v1/chat/completions` (blocked - not allowed)
+  - `/v1beta/models/{model}:streamGenerateContent` (x-goog-api-key header)
+  - `/v1/interactions` (x-goog-api-key header)
+- Validates SSE event detection and streaming response format
+- Usage: `bash tests/test_sse_streaming_comprehensive.sh`
+
+**`test_sse_streaming_gemini_only.sh`** - Gemini CLI streaming test
+- Tests 9 models via Gemini CLI with streaming
+- Models: qwen3-32b, qwen-max, minimax-m2.1/m2.5, moonshotai/kimi-k2.5, deepseek-v3.2, gemini-2.5-flash, claude-4.5-sonnet, z-ai/glm-4.7
+- Usage: `bash tests/test_sse_streaming_gemini_only.sh`
+
 ### 6. Docs
 - `docs/routing_refactor.md` - Routing architecture and implementation
 - `docs/routing_config_revision.md` - Latest config structure revision (2026-02-27)
@@ -860,9 +878,51 @@ MIT
 3. Make your changes
 4. Submit a pull request
 
-## 🛠️ Technical Implementation (2026-03-03 Updates)
+## 🛠️ Technical Implementation (2026-03-04 Updates)
 
-### Enhanced Thinking Configuration
+### Thinking to reasoning_effort Conversion
+
+**New feature**: Convert Claude `thinking` config to OpenAI `reasoning_effort` format based on budget thresholds.
+
+**Configuration** (`proxy_config.toml`):
+```toml
+[upstream]
+budget_to_effort_low = 8000       # < 8000 tokens → "low"
+budget_to_effort_medium = 20000   # < 20000 tokens → "medium"
+budget_to_effort_high = 0         # >= threshold or 0 = always "high"
+```
+
+**Conversion Logic**:
+- Budget < `budget_to_effort_low` → `"low"`
+- Budget < `budget_to_effort_medium` → `"medium"`
+- Budget >= `budget_to_effort_high` (or `high=0`) → `"high"`
+
+**Example**:
+```json
+// Claude input
+"thinking": { "type": "enabled", "budget_tokens": 25000 }
+
+// ↓ converted to ↓
+
+// OpenAI output (with high=0)
+"reasoning_effort": "high"
+```
+
+**Behavior**:
+- If no thresholds configured → thinking field stripped entirely
+- If thresholds configured → converted to `reasoning_effort`
+- `thinking: { type: "disabled" }` → stripped
+
+**Files Modified**:
+- `src/utils/config-loader.ts` - Added budget_to_effort config parsing
+- `src/types/openai.ts` - Added `reasoning_effort` field
+- `src/converters/claude-to-openai.ts` - Added `ThinkingConversionOptions` interface and conversion logic
+- `src/handlers/messages.ts` - Pass conversion options to converter
+- `src/index.ts` - Build options from config, pass to handler
+
+---
+
+### Enhanced Thinking Configuration (2026-03-03)
 - **Type Definitions**: Updated `ThinkingConfigParam` type to accept `boolean` values (`true`/`false`) in addition to string values (`"enabled"`/`"disabled"`)
 - **Normalization Utility**: Added `normalizeThinkingConfig()` function to standardize thinking config across the codebase
 - **Token Counting**: Updated token counting logic to handle boolean thinking types

@@ -107,25 +107,54 @@ function convertClaudeToolChoiceToOpenAI(toolChoice: ClaudeMessagesRequest['tool
 
 /**
  * Convert Claude thinking config to OpenAI format
+ * Can optionally convert to reasoning_effort based on budget thresholds
  */
-function convertClaudeThinkingToOpenAI(thinking: ThinkingConfigParam | undefined): OpenAIRequest['thinking'] {
+export interface ThinkingConversionOptions {
+    budget_to_effort_low?: number;
+    budget_to_effort_medium?: number;
+    budget_to_effort_high?: number;
+}
+
+export function convertClaudeThinkingToOpenAI(
+    thinking: ThinkingConfigParam | undefined,
+    options?: ThinkingConversionOptions
+): { thinking?: OpenAIRequest['thinking']; reasoning_effort?: "low" | "medium" | "high" } {
     if (!thinking) {
-        return undefined;
+        return {};
     }
 
     // Handle boolean values (true = enabled, false = disabled)
     if (thinking.type === true || thinking.type === 'enabled') {
-        return {
-            enabled: true,
-            budget_tokens: thinking.budget_tokens
-        };
+        // Check if any budget thresholds are configured
+        const hasThresholds = options &&
+            (options.budget_to_effort_low !== undefined ||
+             options.budget_to_effort_medium !== undefined ||
+             options.budget_to_effort_high !== undefined);
+
+        // If no thresholds configured, strip thinking entirely (don't send to upstream)
+        if (!hasThresholds) {
+            return {};
+        }
+
+        // Convert to reasoning_effort based on thresholds
+        const budget = thinking.budget_tokens || 0;
+        let effort: "low" | "medium" | "high" = "low";
+        const highThreshold = options?.budget_to_effort_high;
+        const mediumThreshold = options?.budget_to_effort_medium;
+
+        if (highThreshold !== undefined && (budget >= highThreshold || highThreshold === 0)) {
+            effort = "high";
+        } else if (mediumThreshold !== undefined && (budget >= mediumThreshold || mediumThreshold === 0)) {
+            effort = "medium";
+        }
+
+        return { reasoning_effort: effort };
     } else if (thinking.type === false || thinking.type === 'disabled') {
-        return {
-            enabled: false
-        };
+        // For disabled, strip thinking entirely (don't send to upstream)
+        return {};
     }
 
-    return undefined;
+    return {};
 }
 
 /**
@@ -153,7 +182,8 @@ function extractNonToolContentFromClaudeContent(content: ClaudeContentBlock[]): 
 export function convertClaudeTokenCountingToOpenAI(
     claudeRequest: ClaudeTokenCountingRequest,
     modelName: string,
-    requestId?: string
+    requestId?: string,
+    conversionOptions?: ThinkingConversionOptions
 ): OpenAITokenCountingRequest {
     const openaiMessages: OpenAIMessage[] = [];
 
@@ -243,9 +273,12 @@ export function convertClaudeTokenCountingToOpenAI(
     }
 
     // Handle thinking
-    const convertedThinking = convertClaudeThinkingToOpenAI(claudeRequest.thinking);
-    if (convertedThinking !== undefined) {
-        openaiRequest.thinking = convertedThinking;
+    const convertedThinking = convertClaudeThinkingToOpenAI(claudeRequest.thinking, conversionOptions);
+    if (convertedThinking.thinking) {
+        openaiRequest.thinking = convertedThinking.thinking;
+    }
+    if (convertedThinking.reasoning_effort) {
+        openaiRequest.reasoning_effort = convertedThinking.reasoning_effort;
     }
 
     return openaiRequest;
@@ -256,7 +289,8 @@ export function convertClaudeTokenCountingToOpenAI(
  */
 export function convertClaudeToOpenAIRequest(
     claudeRequest: ClaudeMessagesRequest,
-    modelName: string
+    modelName: string,
+    conversionOptions?: ThinkingConversionOptions
 ): OpenAIRequest {
     const openaiMessages: OpenAIMessage[] = [];
 
@@ -357,9 +391,12 @@ export function convertClaudeToOpenAIRequest(
     }
 
     // Handle thinking
-    const convertedThinking = convertClaudeThinkingToOpenAI(claudeRequest.thinking);
-    if (convertedThinking !== undefined) {
-        openaiRequest.thinking = convertedThinking;
+    const convertedThinking = convertClaudeThinkingToOpenAI(claudeRequest.thinking, conversionOptions);
+    if (convertedThinking.thinking) {
+        openaiRequest.thinking = convertedThinking.thinking;
+    }
+    if (convertedThinking.reasoning_effort) {
+        openaiRequest.reasoning_effort = convertedThinking.reasoning_effort;
     }
 
     return openaiRequest;

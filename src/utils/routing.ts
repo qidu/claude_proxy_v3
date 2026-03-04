@@ -251,7 +251,8 @@ function transformAuthHeadersForUpstream(
   request: Request,
   upstreamMode: string,
   endpointPath?: string,
-  requestId?: string
+  requestId?: string,
+  env?: Record<string, unknown>
 ): Record<string, string> {
   const headers: Record<string, string> = {};
 
@@ -262,19 +263,19 @@ function transformAuthHeadersForUpstream(
   const xApiKey = request.headers.get('x-api-key');
   const authHeader = request.headers.get('Authorization');
 
-  // Debug logging for header extraction
+  // Logging for header extraction
   if (requestId) {
-    const logger = createLogger({ LOG_LEVEL: 'debug' });
+    const logger = createLogger(env ?? {});
     if (googApiKey) {
-      const partialGoogKey = googApiKey.length > 8 ? `${googApiKey.substring(0, 4)}...${googApiKey.substring(googApiKey.length - 4)}` : '***';
+      const partialGoogKey = googApiKey.length > 8 ? `${googApiKey.substring(0, 16)}...${googApiKey.substring(googApiKey.length - 8)}` : '***';
       logger.debug(requestId, `Found x-goog-api-key header: ${partialGoogKey}`);
     }
     if (xApiKey) {
-      const partialXApiKey = xApiKey.length > 8 ? `${xApiKey.substring(0, 4)}...${xApiKey.substring(xApiKey.length - 4)}` : '***';
+      const partialXApiKey = xApiKey.length > 8 ? `${xApiKey.substring(0, 16)}...${xApiKey.substring(xApiKey.length - 8)}` : '***';
       logger.debug(requestId, `Found x-api-key header: ${partialXApiKey}`);
     }
     if (authHeader) {
-      const partialAuth = authHeader.length > 8 ? `${authHeader.substring(0, 4)}...${authHeader.substring(authHeader.length - 4)}` : '***';
+      const partialAuth = authHeader.length > 8 ? `${authHeader.substring(0, 16)}...${authHeader.substring(authHeader.length - 8)}` : '***';
       logger.debug(requestId, `Found Authorization header: ${partialAuth}`);
     }
     logger.debug(requestId, `Endpoint path: ${endpointPath}, Upstream mode: ${upstreamMode}`);

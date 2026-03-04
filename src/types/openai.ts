@@ -84,6 +84,7 @@ export interface OpenAIRequest {
         enabled?: boolean;
         budget_tokens?: number;
     };
+    reasoning_effort?: "low" | "medium" | "high";
 }
 
 export interface OpenAITokenCountingRequest {
@@ -101,6 +102,7 @@ export interface OpenAITokenCountingRequest {
         enabled?: boolean;
         budget_tokens?: number;
     };
+    reasoning_effort?: "low" | "medium" | "high";
 }
 
 // --- Response Types ---
