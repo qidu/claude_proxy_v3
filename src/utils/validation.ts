@@ -306,7 +306,7 @@ export function validateThinkingConfig(
                      thinking.type === true || thinking.type === false;
 
   if (!isValidType) {
-    throw new ValidationError(`${context}.type must be 'enabled', 'disabled', true, or false`);
+    throw new ValidationError(`${context}.type (${thinking.type}) must be 'enabled', 'disabled', true, or false`);
   }
 
   // Check if thinking is enabled (either string 'enabled' or boolean true)
