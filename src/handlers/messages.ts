@@ -49,8 +49,8 @@ export async function handleMessagesRequest(
     const openaiThinking = requestBody.thinking as { enabled?: boolean; budget_tokens?: number } | undefined;
     if (openaiThinking) {
       const thinkingType = openaiThinking.enabled ? 'enabled' : 'disabled';
-      const budget = openaiThinking.budget_tokens ? `, budget_tokens: ${openaiThinking.budget_tokens}` : '';
-      activeLogger.info(requestId, `Thinking type: ${thinkingType} , budget: ${budget} extracted from OpenAI-Format`);
+      const budget = openaiThinking.budget_tokens ? ` budget_tokens: ${openaiThinking.budget_tokens}` : 'budget: unknown';
+      activeLogger.info(requestId, `Thinking type: ${thinkingType} , ${budget} extracted from OpenAI-Format`);
     } else {
       activeLogger.info(requestId, 'Thinking type: not specified');
     }
@@ -92,9 +92,9 @@ export async function handleMessagesRequest(
   // Log thinking type configuration
   const thinking = claudeRequest.thinking;
   if (thinking) {
-    const thinkingType = thinking.type === true || thinking.type === 'enabled' ? 'enabled' : 'disabled';
-    const budget = 'budget_tokens' in thinking && thinking.budget_tokens ? `, budget_tokens: ${thinking.budget_tokens}` : '';
-    activeLogger.info(requestId, `Thinking type: ${thinkingType}, budget: ${budget} extracted from Claude-Format`);
+    const thinkingType = thinking.type === true || thinking.type === 'enabled' || thinking.type === 'adaptive' ? 'enabled' : 'disabled';
+    const budget = 'budget_tokens' in thinking && thinking.budget_tokens ? `budget_tokens: ${thinking.budget_tokens}` : 'budget: unknown';
+    activeLogger.info(requestId, `Thinking type: ${thinkingType}, ${budget} extracted from Claude-Format`);
   } else {
     activeLogger.info(requestId, 'Thinking type: not specified');
   }

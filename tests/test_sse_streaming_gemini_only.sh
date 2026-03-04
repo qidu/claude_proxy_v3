@@ -1,7 +1,7 @@
-echo '
-GEMINI_API_KEY="sk-17ac71ed56aee***"
-GOOGLE_GEMINI_BASE_URL="http://localhost:8788"
-' > .env
+#echo '
+#GEMINI_API_KEY="sk-17ac71ed56aee***"
+#GOOGLE_GEMINI_BASE_URL="http://localhost:8788"
+#' > .env
 
 MODELS=(
   "qwen3-32b"

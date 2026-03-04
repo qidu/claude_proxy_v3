@@ -12,7 +12,7 @@ export interface ClaudeTool {
 }
 
 export type ThinkingConfigParam = {
-    type: "enabled" | true;
+    type: "enabled" | "adaptive" | true;
     budget_tokens: number;
 } | {
     type: "disabled" | false;

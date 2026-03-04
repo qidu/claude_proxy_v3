@@ -124,7 +124,7 @@ export function convertClaudeThinkingToOpenAI(
     }
 
     // Handle boolean values (true = enabled, false = disabled)
-    if (thinking.type === true || thinking.type === 'enabled') {
+    if (thinking.type === true || thinking.type === 'enabled' || thinking.type === 'adaptive') {
         // Check if any budget thresholds are configured
         const hasThresholds = options &&
             (options.budget_to_effort_low !== undefined ||

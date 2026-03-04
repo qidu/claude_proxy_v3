@@ -36,9 +36,16 @@ export function normalizeThinkingConfig(
     };
   }
 
-  // Already in string format, return as-is
-  if (thinking.type === 'enabled' || thinking.type === 'disabled') {
-    return thinking as ThinkingConfigParam;
+  // Handle string types
+  if (thinking.type === 'disabled') {
+      return { type: 'disabled' };
+  } 
+  else if (thinking.type === 'enabled' || thinking.type === 'adaptive') {
+    // 'enabled' or 'adaptive'
+    return {
+      type: thinking.type,
+      budget_tokens: thinking.budget_tokens
+    };
   }
 
   return undefined;
@@ -56,21 +63,26 @@ export function validateThinkingBudget(
     return;
   }
 
-  if (normalizedThinking.type === 'enabled') {
+  if (normalizedThinking.type === 'enabled' || normalizedThinking.type === 'adaptive') {
     const budgetTokens = normalizedThinking.budget_tokens;
 
-    // Validate budget tokens
-    if (budgetTokens < 1) {
-      throw new Error('thinking.budget_tokens must be at least 1');
-    }
-
-    if (budgetTokens > 100000) {
-      throw new Error('thinking.budget_tokens cannot exceed 100,000');
-    }
-
-    // Validate against max_tokens if provided
-    if (maxTokens !== undefined && budgetTokens > maxTokens) {
-      throw new Error('thinking.budget_tokens cannot exceed max_tokens');
+    // Validate budget tokens (optional for 'adaptive', required for 'enabled')
+    if (budgetTokens === undefined) {
+      if (normalizedThinking.type === 'enabled') {
+        throw new Error('thinking.budget_tokens is required when type is "enabled"');
+      }
+      // 'adaptive' without budget_tokens is OK, skip validation
+    } else {
+      if (budgetTokens < 1) {
+        throw new Error('thinking.budget_tokens must be at least 1');
+      }
+      if (budgetTokens > 100000) {
+        throw new Error('thinking.budget_tokens cannot exceed 100,000');
+      }
+      // Validate against max_tokens if provided
+      if (maxTokens !== undefined && budgetTokens > maxTokens) {
+        throw new Error('thinking.budget_tokens cannot exceed max_tokens');
+      }
     }
   }
 }
@@ -137,18 +149,18 @@ export function adjustThinkingBudget(
     return undefined;
   }
 
-  if (normalizedThinking.type === 'enabled') {
+  if (normalizedThinking.type === 'enabled' || normalizedThinking.type === 'adaptive') {
     const currentBudget = normalizedThinking.budget_tokens;
 
     // If current budget is within available tokens, keep it
-    if (currentBudget <= availableTokens) {
+    if (currentBudget !== undefined && currentBudget <= availableTokens) {
       return normalizedThinking;
     }
 
     // If we can allocate at least minBudgetTokens, adjust budget
-    if (availableTokens >= minBudgetTokens) {
+    if (availableTokens >= minBudgetTokens && currentBudget !== undefined) {
       return {
-        type: 'enabled',
+        type: normalizedThinking.type,
         budget_tokens: Math.min(currentBudget, availableTokens),
       };
     }

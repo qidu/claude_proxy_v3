@@ -132,7 +132,7 @@ export function validateClaudeMessage(
     throw new ValidationError(`${context}.role is required and must be a string`);
   }
 
-  const validRoles = ['user', 'assistant'];
+  const validRoles = ['user', 'assistant', 'system'];
   if (!validRoles.includes(message.role)) {
     throw new ValidationError(`${context}.role must be one of: ${validRoles.join(', ')}`);
   }
@@ -302,7 +302,7 @@ export function validateThinkingConfig(
   }
 
   // Accept boolean values (true = enabled, false = disabled) in addition to string values
-  const isValidType = thinking.type === 'enabled' || thinking.type === 'disabled' ||
+  const isValidType = (thinking.type === 'enabled' || thinking.type === 'adaptive') || thinking.type === 'disabled' ||
                      thinking.type === true || thinking.type === false;
 
   if (!isValidType) {
