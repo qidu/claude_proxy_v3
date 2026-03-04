@@ -1,14 +1,21 @@
 [upstream]
 default_base_url = "https://api.qnaigc.com"
 # Use client API keys (x-goog-api-key, x-api-key) as 'Authorization: Baerer' token for openai-completions
+budget_to_effort_low = 8000      # < 8000 tokens → "low"
+budget_to_effort_medium = 20000  # < 20000 tokens → "medium"
+budget_to_effort_high = 0        # >= 2000 or 0 = always "high" (or use a threshold)
 
 [models.claude]
 upstream_mode = "anthropic-messages"
-#"claude-4.5-sonnet" = ["claude-opus-4-20250514", "", ""]
+base_url = "https://api.example-ai.com"
+api_key = "sk-cJESnlELbBS****"
+"claude-4.5-sonnet" = ["claude-opus-4-20250514", "", ""]
 #"claude-4.6-sonnet" = ["claude-opus-4-1-20250805", "", ""]
 
 [models.gemini]
 upstream_mode = "gemini-generatecontent"
+base_url = "https://api.example.com"
+api_key = "sk-qeFSCTmVW61oSbOT****"
 base_url = "https://generativelanguage.googleapis.com"
 #"gemini-3.1-pro-preview" = ["", "", ""]
 "gemini-3.0-flash-preview" = ["gemini-3-flash-preview", "", ""]

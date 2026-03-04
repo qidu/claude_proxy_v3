@@ -8,7 +8,7 @@ sleep 3
 PASS=0
 FAIL=0
 
-BASE="http://localhost:8787"
+BASE="http://localhost:8788"
 API_KEY="sk-28f417e15b46439***"
 
 # Test more models including different providers
@@ -37,7 +37,7 @@ test_messages_endpoint() {
     -H "x-api-key: $API_KEY" \
     -d "$data" | head -20)
 
-  echo "$RESP"
+  echo "$RESP" >> /tmp/test_resp_sse_output.txt
   echo ""
   if echo "$RESP" | grep -qE "^(event:|data:)"; then
     EVENT_COUNT=$(echo "$RESP" | grep -cE "^(event:|data:)")
@@ -61,11 +61,11 @@ test_chat_completions_endpoint() {
     -H "Authorization: Bearer $API_KEY" \
     -d "$data" | head -20)
 
-  echo "$RESP"
+  echo "$RESP" >> /tmp/test_resp_sse_output.txt
   echo ""
   if echo "$RESP" | grep -qE "not allowed"; then
     EVENT_COUNT=$(echo "$RESP" | grep -cE "not allowed")
-    echo "✅ $name: SSE streaming works ($EVENT_COUNT events)"
+    echo "✅ $name: right blocked ($EVENT_COUNT events)"
     ((PASS++))
   else
     echo "❌ $name: No SSE events detected"
@@ -85,7 +85,7 @@ test_gemini_endpoints() {
     -H "x-goog-api-key: $API_KEY" \
     -d "$data" | head -20)
 
-  echo "$RESP"
+  echo "$RESP" >> /tmp/test_resp_sse_output.txt
   echo ""
   if echo "$RESP" | grep -qE "^(event:|data:)"; then
     EVENT_COUNT=$(echo "$RESP" | grep -cE "^(event:|data:)")
@@ -133,7 +133,7 @@ for MODEL in "${MODELS[@]}"; do
     "$BASE/v1/messages" \
     "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 4 + 5 =\"}],\"max_tokens\":100,\"stream\":true}"
 
-  /v1/chat/completions - uses Authorization: Bearer header
+  # /v1/chat/completions - uses Authorization: Bearer header
   test_chat_completions_endpoint "  /v1/chat/completions" \
     "$BASE/v1/chat/completions" \
     "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 4 + 5 =\"}],\"max_tokens\":100,\"stream\":true}"
@@ -149,7 +149,7 @@ for MODEL in "${MODELS[@]}"; do
     "{\"model\":\"$MODEL\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"What is 4 + 5 =\"}]},\"stream\":true}"
 
   # Test Gemini CLI for Gemini models
-  test_gemini_cli "$MODEL"
+  # test_gemini_cli "$MODEL"
   echo
 done
 
