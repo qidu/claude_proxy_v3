@@ -1,0 +1,326 @@
+/**
+ * SDK handler utility for Claude Proxy v3
+ *
+ * Handles sdk:// URLs by using chatjimmy SDK clients instead of HTTP fetch
+ */
+
+import { OpenAIRequest, OpenAIResponse } from '../types/openai.js';
+import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.js';
+import { Env, Logger } from '../types/shared.js';
+import { createLogger } from './logger.js';
+
+/**
+ * Check if target URL is an SDK URL (sdk://)
+ */
+export function isSdkUrl(targetUrl: string): boolean {
+  return targetUrl.startsWith('sdk://');
+}
+
+/**
+ * Parse SDK URL to get SDK configuration
+ */
+export function parseSdkUrl(targetUrl: string): {
+  sdkType: string;
+  host: string;
+  path?: string;
+} {
+  if (!isSdkUrl(targetUrl)) {
+    throw new Error(`Invalid SDK URL: ${targetUrl}`);
+  }
+
+  // Remove sdk:// prefix
+  const urlWithoutPrefix = targetUrl.substring(5);
+
+  // Parse like a normal URL
+  const match = urlWithoutPrefix.match(/^([^/]+)(\/.*)?$/);
+  if (!match) {
+    throw new Error(`Invalid SDK URL format: ${targetUrl}`);
+  }
+
+  const host = match[1];
+  const path = match[2] || undefined;
+
+  // Determine SDK type based on host
+  let sdkType = 'openai'; // Default
+
+  if (host.includes('anthropic') || host.includes('claude')) {
+    sdkType = 'anthropic';
+  } else if (host.includes('gemini') || host.includes('google')) {
+    sdkType = 'google';
+  }
+
+  return { sdkType, host, path };
+}
+
+/**
+ * Dynamically import chatjimmy SDK
+ */
+async function importChatJimmySdk() {
+  try {
+    // Try to import from dist first (built version)
+    const chatjimmy = await import('../../submodules/chatjimmy/dist/index.js');
+    return chatjimmy;
+  } catch (error) {
+    console.warn('Failed to import chatjimmy SDK from dist, trying src:', error);
+    try {
+      // Fall back to source
+      const chatjimmy = await import('../../submodules/chatjimmy/src/index.js');
+      return chatjimmy;
+    } catch (srcError) {
+      console.warn('Failed to import chatjimmy SDK from src:', srcError);
+      throw new Error('ChatJimmy SDK not available. Please build the chatjimmy submodule.');
+    }
+  }
+}
+
+/**
+ * Convert our OpenAI request to chatjimmy SDK OpenAI request
+ */
+function convertToChatJimmyOpenAIRequest(ourRequest: OpenAIRequest): any {
+  // Convert messages content from OpenAIContent to string
+  const messages = ourRequest.messages.map(msg => ({
+    role: msg.role,
+    content: typeof msg.content === 'string' ? msg.content :
+             Array.isArray(msg.content) ? msg.content.map(part => {
+               if (part.type === 'text') return part.text;
+               if (part.type === 'image_url') return `[Image: ${part.image_url.url}]`;
+               return '';
+             }).join(' ') : String(msg.content)
+  }));
+
+  // Create base object without properties we'll set explicitly
+  const { model, messages: _, stream, max_tokens, temperature, top_p, ...rest } = ourRequest;
+
+  return {
+    model,
+    messages,
+    stream,
+    max_tokens,
+    temperature,
+    top_p,
+    // Include other fields that might be present
+    ...rest
+  };
+}
+
+/**
+ * Convert our Claude request to OpenAI format for chatjimmy SDK
+ */
+function convertClaudeToOpenAIForChatJimmy(claudeRequest: ClaudeMessagesRequest): any {
+  // Convert Claude messages to OpenAI format
+  const messages = claudeRequest.messages.map(msg => ({
+    role: msg.role,
+    content: Array.isArray(msg.content) ? msg.content.map(block => {
+      if (block.type === 'text') return block.text;
+      if (block.type === 'image') return `[Image: ${block.source?.data}]`;
+      return '';
+    }).join(' ') : String(msg.content)
+  }));
+
+  // Create base object without properties we'll set explicitly
+  const { model, messages: _, stream, max_tokens, temperature, ...rest } = claudeRequest;
+
+  return {
+    model,
+    messages,
+    stream: stream === true,
+    max_tokens,
+    temperature,
+    // Include other fields
+    ...rest
+  };
+}
+
+/**
+ * Handle SDK request for OpenAI-compatible mode
+ */
+export async function handleSdkOpenAIRequest(
+  request: Request,
+  targetUrl: string,
+  requestId: string,
+  apiKey?: string,
+  modelAlias?: string,
+  logger?: Logger,
+  env?: Env
+): Promise<Response> {
+  const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
+  activeLogger.debug(requestId, `Using SDK client for OpenAI request model ${modelAlias} url=${request.url}, method=${request.method}`);
+
+  // Parse request body
+  const requestBody = await request.json() as Record<string, unknown>;
+  // Validate that request body has required fields
+  if (!requestBody.model || !requestBody.messages) {
+    throw new Error('Invalid OpenAI request: missing model or messages');
+  }
+  const openaiRequest = requestBody as unknown as OpenAIRequest;
+  const isStreaming = openaiRequest.stream === true;
+
+  // Import SDK
+  const sdk = await importChatJimmySdk();
+
+  // Create SDK client config
+  const config: any = {
+    baseURL: 'https://chatjimmy.ai/api', // ChatJimmy API endpoint
+    apiKey: apiKey || '',
+    timeout: 10000,
+    maxRetries: 3,
+    headers: {}
+  };
+
+  activeLogger.debug(requestId, `Using SDK client config: ${JSON.stringify(config)}`);
+  // Create client
+  const client = new sdk.OpenAICompatibleClient(config);
+
+  activeLogger.debug(requestId, `Using SDK client for OpenAI request: ${targetUrl}, streaming: ${isStreaming}`);
+
+  try {
+    // Convert request to chatjimmy SDK format
+    const chatJimmyRequest = convertToChatJimmyOpenAIRequest(openaiRequest);
+
+    if (isStreaming) {
+      // Handle streaming request
+      const stream = client.createChatCompletionStream(chatJimmyRequest);
+
+      // Convert stream to SSE response
+      const encoder = new TextEncoder();
+      const readable = new ReadableStream({
+        async start(controller) {
+          for await (const chunk of stream) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+          }
+          controller.close();
+        }
+      });
+
+      return new Response(readable, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+        },
+      });
+    } else {
+      // Handle non-streaming request
+      const response = await client.createChatCompletion(chatJimmyRequest);
+
+      return new Response(JSON.stringify(response), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+    }
+  } catch (error) {
+    activeLogger.error(requestId, `SDK client error: ${(error as Error).message}`);
+
+    // Return error response
+    return new Response(JSON.stringify({
+      error: {
+        message: (error as Error).message,
+        type: 'SDK_ERROR',
+        code: 500
+      }
+    }), {
+      status: 500,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+  }
+}
+
+/**
+ * Handle SDK request for Anthropic-compatible mode
+ */
+export async function handleSdkAnthropicRequest(
+  request: Request,
+  targetUrl: string,
+  requestId: string,
+  apiKey?: string,
+  modelAlias?: string,
+  logger?: Logger,
+  env?: Env
+): Promise<Response> {
+  const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
+
+  // Parse request body
+  const requestBody = await request.json() as Record<string, unknown>;
+  // Validate that request body has required fields
+  if (!requestBody.model || !requestBody.messages || !requestBody.max_tokens) {
+    throw new Error('Invalid Claude request: missing model, messages, or max_tokens');
+  }
+  const claudeRequest = requestBody as unknown as ClaudeMessagesRequest;
+  const isStreaming = claudeRequest.stream === true;
+
+  // Import SDK
+  const sdk = await importChatJimmySdk();
+
+  // Create SDK client config
+  const config: any = {
+    baseURL: 'https://chatjimmy.ai/api', // ChatJimmy API endpoint
+    apiKey: apiKey || '',
+    timeout: 30000,
+    maxRetries: 3,
+    headers: {}
+  };
+
+  // Create client - use OpenAI client for Anthropic requests (as fallback)
+  const client = new sdk.OpenAICompatibleClient(config);
+
+  activeLogger.debug(requestId, `Using SDK client for Anthropic request: ${targetUrl}, streaming: ${isStreaming}`);
+
+  try {
+    // Convert Claude request to OpenAI format for chatjimmy SDK
+    const chatJimmyRequest = convertClaudeToOpenAIForChatJimmy(claudeRequest);
+
+    if (isStreaming) {
+      // Handle streaming request
+      const stream = client.createChatCompletionStream(chatJimmyRequest);
+
+      // Convert stream to SSE response
+      const encoder = new TextEncoder();
+      const readable = new ReadableStream({
+        async start(controller) {
+          for await (const chunk of stream) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+          }
+          controller.close();
+        }
+      });
+
+      return new Response(readable, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+        },
+      });
+    } else {
+      // Handle non-streaming request
+      const response = await client.createChatCompletion(chatJimmyRequest);
+
+      return new Response(JSON.stringify(response), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+    }
+  } catch (error) {
+    activeLogger.error(requestId, `SDK client error: ${(error as Error).message}`);
+
+    // Return error response
+    return new Response(JSON.stringify({
+      error: {
+        message: (error as Error).message,
+        type: 'SDK_ERROR',
+        code: 500
+      }
+    }), {
+      status: 500,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+  }
+}

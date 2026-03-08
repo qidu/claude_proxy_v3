@@ -21,6 +21,6 @@ api_key = "sk-qeFSCTmVW61oSbOTFdrxiFoPdyEf48OmU4PSMvZkBhDAlRwf"
 # "gemini-2.5-flash" = ["", "", ""]
 
 [models.default]
-# "llama" = ["llama3.1-8B", "https://chatjimmy.ai/api/chat", ""]
+"llama" = ["llama3.1-8B", "sdk://localhost", ""]
 "deepseek/deepseek-v3.2-251201" = ["", "", ""]
 upstream_mode = "openai-completions"

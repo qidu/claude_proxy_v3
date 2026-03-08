@@ -13,6 +13,7 @@ import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js
 import { createStreamTransformer } from '../converters/streaming.js';
 import { validateClaudeMessagesRequest, validateAuthHeaders } from '../utils/validation.js';
 import { handleTargetApiError } from '../utils/errors.js';
+import { isSdkUrl, handleSdkOpenAIRequest, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
 
 /**
  * Handle messages API request
@@ -28,8 +29,10 @@ export async function handleMessagesRequest(
   conversionOptions?: ThinkingConversionOptions
 ): Promise<Response> {
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
-  // Parse request body
-  const requestBody = await request.json() as Record<string, unknown>;
+  // Clone request before parsing body to preserve body for SDK handler
+  const clonedRequest = request.clone();
+  // Parse request body from cloned request
+  const requestBody = await clonedRequest.json() as Record<string, unknown>;
   
   // Detect Gemini CLI and force non-streaming to avoid JSON parsing issues
   const userAgent = request.headers.get('user-agent') || '';
@@ -52,11 +55,36 @@ export async function handleMessagesRequest(
       const budget = openaiThinking.budget_tokens ? ` budget_tokens: ${openaiThinking.budget_tokens}` : 'budget: unknown';
       activeLogger.info(requestId, `Thinking type: ${thinkingType} , ${budget} extracted from OpenAI-Format`);
     } else {
-      activeLogger.info(requestId, 'Thinking type: not specified');
+      activeLogger.info(requestId, `Thinking type: not specified by req body format=${isOpenAIFormat}`);
     }
 
     // Log request info
-    activeLogger.info(requestId, `Upstream target url (stream = ${isStreaming}): ${targetUrl}`);
+    activeLogger.info(requestId, `Upstream target url (stream=${isStreaming}): ${targetUrl}`);
+
+    // Check if this is an SDK URL
+    if (isSdkUrl(targetUrl)) {
+        // Extract API key from auth headers
+        let apiKey: string | undefined;
+        if (authHeaders['Authorization']) {
+            apiKey = authHeaders['Authorization'].replace('Bearer ', '');
+        } else if (authHeaders['x-api-key']) {
+            apiKey = authHeaders['x-api-key'];
+        } else if (authHeaders['x-goog-api-key']) {
+            apiKey = authHeaders['x-goog-api-key'];
+        }
+
+        activeLogger.debug(requestId, `handle by sdk: url=${request.url}, method=${request.method}`);
+        // Use SDK handler for OpenAI requests
+        return handleSdkOpenAIRequest(
+            request,
+            targetUrl,
+            requestId,
+            apiKey,
+            model,
+            activeLogger,
+            env
+        );
+    }
 
     const response = await fetch(targetUrl, {
       method: 'POST',
@@ -97,7 +125,7 @@ export async function handleMessagesRequest(
     const budget = 'budget_tokens' in thinking && thinking.budget_tokens ? `budget_tokens: ${thinking.budget_tokens}` : 'budget: unknown';
     activeLogger.info(requestId, `Thinking type: ${thinkingType}, ${budget} extracted from Claude-Format`);
   } else {
-    activeLogger.info(requestId, 'Thinking type: not specified');
+    activeLogger.info(requestId, `Thinking type: not specified by req body format=message`);
   }
 
   // Get target model ID
@@ -114,7 +142,32 @@ export async function handleMessagesRequest(
   // Log request info
   activeLogger.info(requestId, `Upstream target url (stream =${isStreaming}) : ${targetUrl}`);
   activeLogger.debug(requestId, `Has auth headers: ${!!authHeaders['Authorization'] || !!authHeaders['x-api-key']}`);
-  
+  activeLogger.debug(requestId, `Is for SDK Model: ${isSdkUrl(targetUrl)}`);
+
+  // Check if this is an SDK URL
+  if (isSdkUrl(targetUrl)) {
+      // Extract API key from auth headers
+      let apiKey: string | undefined;
+      if (authHeaders['Authorization']) {
+          apiKey = authHeaders['Authorization'].replace('Bearer ', '');
+      } else if (authHeaders['x-api-key']) {
+          apiKey = authHeaders['x-api-key'];
+      } else if (authHeaders['x-goog-api-key']) {
+          apiKey = authHeaders['x-goog-api-key'];
+      }
+
+      // Use SDK handler for OpenAI requests
+      return handleSdkOpenAIRequest(
+          request,
+          targetUrl,
+          requestId,
+          apiKey,
+          targetModelId,
+          activeLogger,
+          env
+      );
+  }
+
   const response = await fetch(targetUrl, {
     method: 'POST',
     headers: {

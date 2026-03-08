@@ -3,6 +3,7 @@ import { convertClaudeToOpenAIRequest } from '../converters/claude-to-openai.js'
 import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
 import { convertOpenAIToGeminiGenerateContent, convertOpenAIToGeminiInteractions } from '../converters/openai-to-gemini.js';
 import { createLogger } from '../utils/logger.js';
+import { isSdkUrl, handleSdkOpenAIRequest } from '../utils/sdk-handler.js';
 import type { Env, Logger } from '../types/shared.js';
 
 /**
@@ -181,6 +182,30 @@ export async function handleOpenAIRequest(
     };
 
     try {
+        // Check if this is an SDK URL
+        if (isSdkUrl(targetUrl)) {
+            // Extract API key from auth headers
+            let apiKey: string | undefined;
+            if (authHeaders['Authorization']) {
+                apiKey = authHeaders['Authorization'].replace('Bearer ', '');
+            } else if (authHeaders['x-api-key']) {
+                apiKey = authHeaders['x-api-key'];
+            } else if (authHeaders['x-goog-api-key']) {
+                apiKey = authHeaders['x-goog-api-key'];
+            }
+
+            // Use SDK handler for OpenAI requests
+            return handleSdkOpenAIRequest(
+                request,
+                targetUrl,
+                requestId,
+                apiKey,
+                modelId,
+                activeLogger,
+                env
+            );
+        }
+
         const response = await fetch(targetUrl, {
             method: 'POST',
             headers,

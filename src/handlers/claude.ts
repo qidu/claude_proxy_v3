@@ -6,6 +6,7 @@
 import { Env, Logger } from '../types/shared.js';
 import { createLogger } from '../utils/logger.js';
 import { handleTargetApiError } from '../utils/errors.js';
+import { isSdkUrl, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
 
 /**
  * Handle native Claude API request (pass-through)
@@ -33,6 +34,30 @@ export async function handleClaudeRequest(
     activeLogger.debug(requestId, `Claude native upstream: ${targetUrl}`);
     activeLogger.debug(requestId, `Model: ${modelId || requestBody.model}`);
     activeLogger.debug(requestId, `Streaming: ${isStreaming}`);
+
+    // Check if this is an SDK URL
+    if (isSdkUrl(targetUrl)) {
+        // Extract API key from auth headers
+        let apiKey: string | undefined;
+        if (authHeaders['Authorization']) {
+            apiKey = authHeaders['Authorization'].replace('Bearer ', '');
+        } else if (authHeaders['x-api-key']) {
+            apiKey = authHeaders['x-api-key'];
+        } else if (authHeaders['x-goog-api-key']) {
+            apiKey = authHeaders['x-goog-api-key'];
+        }
+
+        // Use SDK handler for Anthropic requests
+        return handleSdkAnthropicRequest(
+            request,
+            targetUrl,
+            requestId,
+            apiKey,
+            modelId,
+            activeLogger,
+            env
+        );
+    }
 
     // Pass through to native Claude API
     const response = await fetch(targetUrl, {
