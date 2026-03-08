@@ -106,6 +106,8 @@ npm run dev
 
 or
 ```bash
+npm run build-chatjimmy
+
 npm run build
 PROXY_CONFIG_PATH=./proxy_config.toml npx tsx dist/server.js
 ```
