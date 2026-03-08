@@ -29,10 +29,10 @@ export async function handleMessagesRequest(
   conversionOptions?: ThinkingConversionOptions
 ): Promise<Response> {
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
+
   // Clone request before parsing body to preserve body for SDK handler
-  const clonedRequest = request.clone();
   // Parse request body from cloned request
-  const requestBody = await clonedRequest.json() as Record<string, unknown>;
+  const requestBody = isSdkUrl(targetUrl) ? await request.clone().json() as Record<string, unknown> : await request.json() as Record<string, unknown>;
   
   // Detect Gemini CLI and force non-streaming to avoid JSON parsing issues
   const userAgent = request.headers.get('user-agent') || '';
