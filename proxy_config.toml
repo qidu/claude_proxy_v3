@@ -7,16 +7,15 @@ budget_to_effort_high = 0        # >= 2000 or 0 = always "high" (or use a thresh
 
 [models.claude]
 upstream_mode = "anthropic-messages"
-base_url = "https://api.example-ai.com"
-api_key = "sk-cJESnlELbBS****"
+base_url = "https://api.wenwen-ai.com"
+api_key = "sk-cJESnlELbBSsytvgIgCevJWqBYrDjg1CoHotH6EGtVU12KKk"
 "claude-4.5-sonnet" = ["claude-opus-4-20250514", "", ""]
 #"claude-4.6-sonnet" = ["claude-opus-4-1-20250805", "", ""]
 
 [models.gemini]
 upstream_mode = "gemini-generatecontent"
-base_url = "https://api.example.com"
-api_key = "sk-qeFSCTmVW61oSbOT****"
-base_url = "https://generativelanguage.googleapis.com"
+base_url = "https://api.yoosheen.com"
+api_key = "sk-qeFSCTmVW61oSbOTFdrxiFoPdyEf48OmU4PSMvZkBhDAlRwf"
 #"gemini-3.1-pro-preview" = ["", "", ""]
 "gemini-3.0-flash-preview" = ["gemini-3-flash-preview", "", ""]
 # "gemini-2.5-flash" = ["", "", ""]

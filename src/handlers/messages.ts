@@ -92,6 +92,7 @@ export async function handleMessagesRequest(
   // Log thinking type configuration
   const thinking = claudeRequest.thinking;
   if (thinking) {
+    activeLogger.debug(requestId, `Thinking: ${JSON.stringify(thinking)}`);
     const thinkingType = thinking.type === true || thinking.type === 'enabled' || thinking.type === 'adaptive' ? 'enabled' : 'disabled';
     const budget = 'budget_tokens' in thinking && thinking.budget_tokens ? `budget_tokens: ${thinking.budget_tokens}` : 'budget: unknown';
     activeLogger.info(requestId, `Thinking type: ${thinkingType}, ${budget} extracted from Claude-Format`);
