@@ -3,6 +3,16 @@
   "version": "3.1.0",
   "description": "Model API Proxy v3.1 - Claude and Gemini API Proxy for all models",
   "main": "src/index.ts",
+  "imports": [
+    {
+      "pattern": "chatjimmy-sdk/*",
+      "target": "./submodules/chatjimmy/src/*"
+    },
+    {
+      "pattern": "chatjimmy-sdk",
+      "target": "./submodules/chatjimmy/src/index.ts"
+    }
+  ],
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
@@ -13,6 +23,7 @@
     "server": "tsx src/server.ts"
   },
   "dependencies": {
+    "@anthropic-ai/claude-code": "^2.1.71",
     "@cloudflare/workers-types": "^4.20241106.0",
     "js-tiktoken": "^1.0.21",
     "tiktoken": "^1.0.15",

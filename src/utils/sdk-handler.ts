@@ -28,11 +28,11 @@ export function parseSdkUrl(targetUrl: string): {
     throw new Error(`Invalid SDK URL: ${targetUrl}`);
   }
 
-  // Remove sdk:// prefix
-  const urlWithoutPrefix = targetUrl.substring(5);
+  // Remove sdk:// prefix (6 characters including //)
+  const urlWithoutPrefix = targetUrl.substring(6);
 
   // Parse like a normal URL
-  const match = urlWithoutPrefix.match(/^([^/]+)(\/.*)?$/);
+  const match = urlWithoutPrefix.match(/^([^\/]+)(\/.*)?$/);
   if (!match) {
     throw new Error(`Invalid SDK URL format: ${targetUrl}`);
   }
@@ -53,23 +53,16 @@ export function parseSdkUrl(targetUrl: string): {
 }
 
 /**
- * Dynamically import chatjimmy SDK
+ * Dynamically import chatjimmy SDK from submodule
  */
 async function importChatJimmySdk() {
   try {
-    // Try to import from dist first (built version)
+    // Import from the built dist folder in the submodule
     const chatjimmy = await import('../../submodules/chatjimmy/dist/index.js');
     return chatjimmy;
   } catch (error) {
-    console.warn('Failed to import chatjimmy SDK from dist, trying src:', error);
-    try {
-      // Fall back to source
-      const chatjimmy = await import('../../submodules/chatjimmy/src/index.js');
-      return chatjimmy;
-    } catch (srcError) {
-      console.warn('Failed to import chatjimmy SDK from src:', srcError);
-      throw new Error('ChatJimmy SDK not available. Please build the chatjimmy submodule.');
-    }
+    console.warn('Failed to import chatjimmy SDK:', error);
+    throw new Error('ChatJimmy SDK not available. Please ensure chatjimmy submodule is properly configured and built.');
   }
 }
 
