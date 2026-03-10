@@ -70,16 +70,30 @@ async function importChatJimmySdk() {
  * Convert our OpenAI request to chatjimmy SDK OpenAI request
  */
 function convertToChatJimmyOpenAIRequest(ourRequest: OpenAIRequest): any {
-  // Convert messages content from OpenAIContent to string
-  const messages = ourRequest.messages.map(msg => ({
-    role: msg.role,
-    content: typeof msg.content === 'string' ? msg.content :
-             Array.isArray(msg.content) ? msg.content.map(part => {
-               if (part.type === 'text') return part.text;
-               if (part.type === 'image_url') return `[Image: ${part.image_url.url}]`;
-               return '';
-             }).join(' ') : String(msg.content)
-  }));
+  // Convert messages content from OpenAIContent to string, preserve tool_calls
+  const messages = ourRequest.messages.map(msg => {
+    const converted: any = { ...msg };
+    
+    // Ensure content is a string
+    if (typeof msg.content === 'string') {
+      converted.content = msg.content;
+    } else if (Array.isArray(msg.content)) {
+      converted.content = msg.content.map(part => {
+        if (part.type === 'text') return part.text;
+        if (part.type === 'image_url') return `[Image: ${part.image_url.url}]`;
+        return '';
+      }).join(' ');
+    } else {
+      converted.content = String(msg.content);
+    }
+    
+    // Ensure message has either content or tool_calls
+    if (!converted.content && !converted.tool_calls) {
+      converted.content = ' '; // Fallback to space if empty
+    }
+    
+    return converted;
+  });
 
   // Create base object without properties we'll set explicitly
   const { model, messages: _, stream, max_tokens, temperature, top_p, ...rest } = ourRequest;
@@ -101,14 +115,53 @@ function convertToChatJimmyOpenAIRequest(ourRequest: OpenAIRequest): any {
  */
 function convertClaudeToOpenAIForChatJimmy(claudeRequest: ClaudeMessagesRequest): any {
   // Convert Claude messages to OpenAI format
-  const messages = claudeRequest.messages.map(msg => ({
-    role: msg.role,
-    content: Array.isArray(msg.content) ? msg.content.map(block => {
-      if (block.type === 'text') return block.text;
-      if (block.type === 'image') return `[Image: ${block.source?.data}]`;
-      return '';
-    }).join(' ') : String(msg.content)
-  }));
+  const messages = claudeRequest.messages.map(msg => {
+    const converted: any = { role: msg.role };
+    const toolCalls: any[] = [];
+    const textParts: string[] = [];
+
+    // Process content array - extract tool_use and convert to tool_calls
+    if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block.type === 'text') {
+          textParts.push(block.text);
+        } else if (block.type === 'tool_use') {
+          // Convert Claude tool_use to OpenAI tool_calls
+          toolCalls.push({
+            id: block.id,
+            type: 'function',
+            function: {
+              name: block.name,
+              arguments: JSON.stringify(block.input)
+            }
+          });
+        } else if (block.type === 'image') {
+          textParts.push(`[Image: ${block.source?.data}]`);
+        }
+        // tool_result blocks are handled differently - they contain assistant's response
+      }
+    } else {
+      textParts.push(String(msg.content));
+    }
+
+    // Set content to remaining text (if any)
+    const content = textParts.join(' ');
+    if (content.trim()) {
+      converted.content = content;
+    }
+
+    // Add tool_calls if any were extracted
+    if (toolCalls.length > 0) {
+      converted.tool_calls = toolCalls;
+    }
+
+    // Ensure message has either content or tool_calls
+    if (!converted.content && !converted.tool_calls) {
+      converted.content = ' '; // Fallback to space if empty
+    }
+
+    return converted;
+  });
 
   // Create base object without properties we'll set explicitly
   const { model, messages: _, stream, max_tokens, temperature, ...rest } = claudeRequest;
@@ -134,19 +187,20 @@ export async function handleSdkOpenAIRequest(
   apiKey?: string,
   modelAlias?: string,
   logger?: Logger,
-  env?: Env
+  env?: Env,
+  requestBody?: Record<string, unknown>
 ): Promise<Response> {
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
   activeLogger.debug(requestId, `Using SDK client for OpenAI request model ${modelAlias} url=${request.url}, method=${request.method}`);
 
-  // Parse request body
-  const requestBody = await request.json() as Record<string, unknown>;
+  // Use provided request body or parse from request
+  const openaiRequest = (requestBody ?? (await request.json() as Record<string, unknown>)) as unknown as OpenAIRequest;
   // Validate that request body has required fields
-  if (!requestBody.model || !requestBody.messages) {
+  if (!openaiRequest.model || !openaiRequest.messages) {
     throw new Error('Invalid OpenAI request: missing model or messages');
   }
-  const openaiRequest = requestBody as unknown as OpenAIRequest;
   const isStreaming = openaiRequest.stream === true;
+  activeLogger.debug(requestId, `targetUrl: ${targetUrl}, streaming: ${isStreaming}`);
 
   // Import SDK
   const sdk = await importChatJimmySdk();
@@ -155,7 +209,7 @@ export async function handleSdkOpenAIRequest(
   const config: any = {
     baseURL: 'https://chatjimmy.ai/api', // ChatJimmy API endpoint
     apiKey: apiKey || '',
-    timeout: 10000,
+    timeout: 3000,
     maxRetries: 3,
     headers: {}
   };
@@ -164,11 +218,12 @@ export async function handleSdkOpenAIRequest(
   // Create client
   const client = new sdk.OpenAICompatibleClient(config);
 
-  activeLogger.debug(requestId, `Using SDK client for OpenAI request: ${targetUrl}, streaming: ${isStreaming}`);
-
   try {
     // Convert request to chatjimmy SDK format
     const chatJimmyRequest = convertToChatJimmyOpenAIRequest(openaiRequest);
+    
+    // Debug log the converted request
+    activeLogger.debug(requestId, `Converted request: ${JSON.stringify(chatJimmyRequest, null, 2)}`);
 
     if (isStreaming) {
       // Handle streaming request
@@ -205,8 +260,14 @@ export async function handleSdkOpenAIRequest(
     }
   } catch (error) {
     activeLogger.error(requestId, `SDK client error: ${(error as Error).message}`);
+    activeLogger.error(requestId, `Error stack: ${(error as Error).stack}`);
+    activeLogger.error(requestId, `Error name: ${(error as Error).name}`);
 
-    // Return error response
+    // Log specific tool call errors
+    if ((error as Error).message.includes('tool_calls') || (error as Error).message.includes('content')) {
+      activeLogger.error(requestId, `Tool call validation failed - request may have empty content and no tool_calls`);
+    }
+    
     return new Response(JSON.stringify({
       error: {
         message: (error as Error).message,
@@ -232,18 +293,21 @@ export async function handleSdkAnthropicRequest(
   apiKey?: string,
   modelAlias?: string,
   logger?: Logger,
-  env?: Env
+  env?: Env,
+  requestBody?: Record<string, unknown>
 ): Promise<Response> {
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
+  activeLogger.debug(requestId, `Using SDK client for Claude request model ${modelAlias} url=${request.url}, method=${request.method}`);
 
-  // Parse request body
-  const requestBody = await request.json() as Record<string, unknown>;
+  // Use provided request body or parse from request
+  const claudeRequest = (requestBody ?? (await request.json() as Record<string, unknown>)) as unknown as ClaudeMessagesRequest;
   // Validate that request body has required fields
-  if (!requestBody.model || !requestBody.messages || !requestBody.max_tokens) {
-    throw new Error('Invalid Claude request: missing model, messages, or max_tokens');
+  if (!claudeRequest.model || !claudeRequest.messages || !claudeRequest.max_tokens) {
+    activeLogger.debug(requestId, `request model ${claudeRequest.model} ${claudeRequest.messages} ${claudeRequest.max_tokens}`);
+    throw new Error(`Invalid Claude request: missing model, messages, or max_tokens`);
   }
-  const claudeRequest = requestBody as unknown as ClaudeMessagesRequest;
   const isStreaming = claudeRequest.stream === true;
+  activeLogger.debug(requestId, `targetUrl: ${targetUrl}, streaming: ${isStreaming}`);
 
   // Import SDK
   const sdk = await importChatJimmySdk();
@@ -259,8 +323,6 @@ export async function handleSdkAnthropicRequest(
 
   // Create client - use OpenAI client for Anthropic requests (as fallback)
   const client = new sdk.OpenAICompatibleClient(config);
-
-  activeLogger.debug(requestId, `Using SDK client for Anthropic request: ${targetUrl}, streaming: ${isStreaming}`);
 
   try {
     // Convert Claude request to OpenAI format for chatjimmy SDK
@@ -301,8 +363,13 @@ export async function handleSdkAnthropicRequest(
     }
   } catch (error) {
     activeLogger.error(requestId, `SDK client error: ${(error as Error).message}`);
+    activeLogger.error(requestId, `Error stack: ${(error as Error).stack}`);
+    activeLogger.error(requestId, `Error name: ${(error as Error).name}`);
 
-    // Return error response
+    // Log specific tool call errors
+    if ((error as Error).message.includes('tool_calls') || (error as Error).message.includes('content')) {
+      activeLogger.error(requestId, `Tool call validation failed - request may have empty content and no tool_calls`);
+    }
     return new Response(JSON.stringify({
       error: {
         message: (error as Error).message,

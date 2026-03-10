@@ -22,8 +22,12 @@ export async function handleClaudeRequest(
 ): Promise<Response> {
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
+    // Clone request before parsing body to preserve body for SDK handler
+    // Parse request body from cloned request
+    const requestBody = isSdkUrl(targetUrl) ? await request.clone().json() as Record<string, unknown> : await request.json() as Record<string, unknown>;
     // Parse request body
-    const requestBody = await request.json() as Record<string, unknown>;
+    //const requestBody = await request.json() as Record<string, unknown>;
+    
     const isStreaming = requestBody.stream === true;
 
     // Use modelId (which may be an alias) if provided
@@ -55,7 +59,8 @@ export async function handleClaudeRequest(
             apiKey,
             modelId,
             activeLogger,
-            env
+            env,
+            requestBody
         );
     }
 

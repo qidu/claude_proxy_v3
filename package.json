@@ -11,7 +11,7 @@
     {
       "pattern": "chatjimmy-sdk",
       "target": "./submodules/chatjimmy/src/index.ts"
-    }
+     }
   ],
   "scripts": {
     "dev": "wrangler dev",

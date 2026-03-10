@@ -621,7 +621,7 @@ export default {
               const val = parseInt(String(high));
               if (!isNaN(val)) conversionOptions.budget_to_effort_high = val;
             }
-            response = await handleMessagesRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, conversionOptions);
+            response = await handleMessagesRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, conversionOptions, upstreamMode);
           }
           break;
 
