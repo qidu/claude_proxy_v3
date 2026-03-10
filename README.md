@@ -107,7 +107,7 @@ npm run dev
 or
 ```bash
 git submodule update --init --recursive
-#git submodule update --remote --merge
+git submodule update --remote --merge
 npm run build-chatjimmy
 
 npm run build
