@@ -1,3 +1,3 @@
 [submodule "submodules/chatjimmy"]
 	path = submodules/chatjimmy
-	url = https://github.com/qidu/chatjimmy.git
+	url = git@github.com:qidu/chatjimmy.git

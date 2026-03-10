@@ -106,6 +106,10 @@ npm run dev
 
 or
 ```bash
+git submodule update --init --recursive
+#git submodule update --remote --merge
+npm run build-chatjimmy
+
 npm run build
 PROXY_CONFIG_PATH=./proxy_config.toml npx tsx dist/server.js
 ```
@@ -878,7 +882,54 @@ MIT
 3. Make your changes
 4. Submit a pull request
 
-## 🛠️ Technical Implementation (2026-03-04 Updates)
+## 🛠️ Technical Implementation
+
+### Latest Changes (2026-03-09)
+
+**ChatJimmy SDK Path Mapping & Import Fixes**:
+- **package.json**: Added chatjimmy-sdk imports configuration
+- **tsconfig.json/tsconfig.server.json**: Added TypeScript path mappings for `chatjimmy-sdk` and `chatjimmy-sdk/*`
+- **src/utils/sdk-handler.ts**:
+  - Fixed SDK URL parsing (corrected prefix length from 5 to 6 characters)
+  - Simplified chatjimmy SDK import to use only built dist version
+  - Improved error messages for SDK import failures
+
+tsconfig.json / tsconfig.server.json
+```json
+    "esModuleInterop": true,
+    "baseUrl": "./",
+    "paths": {
+      "chatjimmy-sdk": ["submodules/chatjimmy/src/index.ts"],
+      "chatjimmy-sdk/*": ["submodules/chatjimmy/src/*"]
+    }
+```
+
+package.json
+```json
+  "imports": [
+    {
+      "pattern": "chatjimmy-sdk/*",
+      "target": "./submodules/chatjimmy/src/*"
+    }
+  ]
+```
+or
+```json
+    {
+      "pattern": "chatjimmy-sdk",
+      "target": "./submodules/chatjimmy/src/index.ts"
+    }
+```
+
+### ChatJimmy SDK Integration (2026-03-04)
+
+**Direct source reference with path mapping**: ChatJimmy SDK is integrated via TypeScript path mapping instead of requiring separate build steps.
+
+**SDK Handler**: `src/utils/sdk-handler.ts` provides SDK-based request handling:
+- **SDK URL detection**: `sdk://` URLs use chatjimmy SDK clients instead of HTTP fetch
+- **OpenAI-compatible mode**: `handleSdkOpenAIRequest()` uses `OpenAICompatibleClient`
+- **Anthropic-compatible mode**: `handleSdkAnthropicRequest()` uses `OpenAICompatibleClient` as fallback
+- **Streaming support**: Both handlers support SSE streaming
 
 ### Thinking to reasoning_effort Conversion
 

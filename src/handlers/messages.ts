@@ -26,13 +26,15 @@ export async function handleMessagesRequest(
   modelId?: string,
   env?: Env,
   logger?: Logger,
-  conversionOptions?: ThinkingConversionOptions
+  conversionOptions?: ThinkingConversionOptions,
+  upstreamMode?: string
 ): Promise<Response> {
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
+
   // Clone request before parsing body to preserve body for SDK handler
-  const clonedRequest = request.clone();
   // Parse request body from cloned request
-  const requestBody = await clonedRequest.json() as Record<string, unknown>;
+  const requestBody = isSdkUrl(targetUrl) ? await request.clone().json() as Record<string, unknown> : await request.json() as Record<string, unknown>;
+  // const requestBody = await request.json() as Record<string, unknown>;
   
   // Detect Gemini CLI and force non-streaming to avoid JSON parsing issues
   const userAgent = request.headers.get('user-agent') || '';
@@ -82,7 +84,8 @@ export async function handleMessagesRequest(
             apiKey,
             model,
             activeLogger,
-            env
+            env,
+            requestBody
         );
     }
 
@@ -131,18 +134,13 @@ export async function handleMessagesRequest(
   // Get target model ID
   const targetModelId = modelId || claudeRequest.model;
 
-  // Convert to OpenAI format
-  const openaiRequest: OpenAIRequest = convertClaudeToOpenAIRequest(claudeRequest, targetModelId, conversionOptions);
-  const upstreamRequest = JSON.stringify(openaiRequest);
-  activeLogger.debug(requestId, `Converted request (claude->openai): ${upstreamRequest.substring(0, 250)} ... ${upstreamRequest.substring(upstreamRequest.length - 250)}`);
-
   // Check if streaming is requested
   const isStreaming = claudeRequest.stream === true;
 
   // Log request info
   activeLogger.info(requestId, `Upstream target url (stream =${isStreaming}) : ${targetUrl}`);
   activeLogger.debug(requestId, `Has auth headers: ${!!authHeaders['Authorization'] || !!authHeaders['x-api-key']}`);
-  activeLogger.debug(requestId, `Is for SDK Model: ${isSdkUrl(targetUrl)}`);
+  activeLogger.debug(requestId, `Is for SDK Model: ${isSdkUrl(targetUrl)} with upstreamMode: ${upstreamMode}`);
 
   // Check if this is an SDK URL
   if (isSdkUrl(targetUrl)) {
@@ -156,7 +154,19 @@ export async function handleMessagesRequest(
           apiKey = authHeaders['x-goog-api-key'];
       }
 
-      // Use SDK handler for OpenAI requests
+      // Use appropriate SDK handler based on upstream mode
+      if (upstreamMode === 'anthropic-messages') {
+          return handleSdkAnthropicRequest(
+              request,
+              targetUrl,
+              requestId,
+              apiKey,
+              targetModelId,
+              activeLogger,
+              env,
+              requestBody
+          );
+      }
       return handleSdkOpenAIRequest(
           request,
           targetUrl,
@@ -164,9 +174,15 @@ export async function handleMessagesRequest(
           apiKey,
           targetModelId,
           activeLogger,
-          env
+          env,
+          requestBody
       );
   }
+
+  // Convert to OpenAI format
+  const openaiRequest: OpenAIRequest = convertClaudeToOpenAIRequest(claudeRequest, targetModelId, conversionOptions);
+  const upstreamRequest = JSON.stringify(openaiRequest);
+  activeLogger.debug(requestId, `Converted request (claude->openai): ${upstreamRequest.substring(0, 250)} ... ${upstreamRequest.substring(upstreamRequest.length - 250)}`);
 
   const response = await fetch(targetUrl, {
     method: 'POST',
