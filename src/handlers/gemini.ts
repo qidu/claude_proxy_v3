@@ -17,6 +17,7 @@ import { convertClaudeToOpenAIRequest } from '../converters/claude-to-openai.js'
 import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
 import { createStreamTransformer } from '../converters/streaming.js';
 import { handleTargetApiError } from '../utils/errors.js';
+import { addForwardedHeaders } from '../utils/routing.js';
 
 /**
  * Gemini API configuration
@@ -198,6 +199,7 @@ async function handleGeminiInteractionsRequest(
     };
 
     activeLogger.debug(requestId, `Using auth headers: ${Object.keys(geminiHeaders).join(', ')}`);
+    addForwardedHeaders(geminiHeaders, request);
     const response = await fetch(targetUrl, {
         method: 'POST',
         headers: geminiHeaders,
@@ -311,6 +313,7 @@ async function handleGeminiToOpenAIMode(
     }
 
     activeLogger.debug(requestId, `Gemini→OpenAI mode: ${targetUrl}`);
+    addForwardedHeaders(authHeaders, request);
 
     const response = await fetch(targetUrl, {
         method: 'POST',
@@ -487,6 +490,7 @@ async function handleGeminiToGeminiMode(
     };
 
     activeLogger.debug(requestId, `Using auth headers: ${Object.keys(geminiHeaders).join(', ')}`);
+    addForwardedHeaders(geminiHeaders, request);
 
     try {
         const response = await fetch(fullTargetUrl, {
@@ -585,6 +589,7 @@ async function handleGeminiGenerateContentRequest(
     };
 
     activeLogger.debug(requestId, `Using auth headers: ${Object.keys(geminiHeaders).join(', ')}`);
+    addForwardedHeaders(geminiHeaders, request);
 
     try {
         const response = await fetch(fullTargetUrl, {

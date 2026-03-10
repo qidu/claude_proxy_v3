@@ -446,6 +446,12 @@ For Gemini API endpoints, authentication headers are automatically mapped:
   - Configuration file: `api_key` in model or category config
   - Environment variable: `GEMINI_API_KEY` (for Gemini CLI compatibility)
 
+#### Client IP Forwarding
+The proxy forwards the client's real IP to upstream APIs via the `x-forwarded-for` header. Supports:
+- **Cloudflare Workers**: Uses `cf-connecting-ip` header
+- **Standard Proxies**: Uses `x-forwarded-for` header (takes first IP if multiple)
+- **Nginx**: Uses `x-real-ip` header
+
 ## 🏗️ Architecture
 
 ### Project Structure

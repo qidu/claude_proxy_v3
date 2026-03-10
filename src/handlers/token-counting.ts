@@ -23,6 +23,7 @@ import {
   TokenCountingOptions,
   getTiktokenTokenizer,
 } from '../utils/token-counting.js';
+import { addForwardedHeaders } from '../utils/routing.js';
 
 /**
  * Handle token counting API request
@@ -65,7 +66,7 @@ export async function handleTokenCountingRequest(
   }
 
   // Fall back to API-based token counting
-  return handleApiBasedTokenCounting(claudeRequest, targetUrl, authHeaders, requestId, activeLogger);
+  return handleApiBasedTokenCounting(claudeRequest, targetUrl, authHeaders, requestId, request, activeLogger);
 }
 
 /**
@@ -146,6 +147,7 @@ async function handleApiBasedTokenCounting(
   targetUrl: string,
   authHeaders: Record<string, string>,
   requestId: string,
+  request: Request,
   logger: Logger
 ): Promise<Response> {
   // Convert Claude request to OpenAI format
@@ -171,7 +173,7 @@ async function handleApiBasedTokenCounting(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...authHeaders,
+      ...addForwardedHeaders(authHeaders, request),
     },
     body: JSON.stringify(openaiRequest),
   });

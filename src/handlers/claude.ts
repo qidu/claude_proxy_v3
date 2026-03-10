@@ -7,6 +7,7 @@ import { Env, Logger } from '../types/shared.js';
 import { createLogger } from '../utils/logger.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { isSdkUrl, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
+import { addForwardedHeaders } from '../utils/routing.js';
 
 /**
  * Handle native Claude API request (pass-through)
@@ -69,7 +70,7 @@ export async function handleClaudeRequest(
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            ...authHeaders,
+            ...addForwardedHeaders(authHeaders, request),
         },
         body: JSON.stringify(requestBody),
     });

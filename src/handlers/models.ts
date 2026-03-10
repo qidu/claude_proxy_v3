@@ -10,6 +10,7 @@ import { OpenAIModelsResponse } from '../types/openai.js';
 import { convertOpenAIModelsToClaude } from '../converters/openai-to-claude.js';
 import { validateModelsRequestParams } from '../utils/validation.js';
 import { handleTargetApiError } from '../utils/errors.js';
+import { addForwardedHeaders } from '../utils/routing.js';
 
 /**
  * Handle models API request
@@ -45,7 +46,7 @@ export async function handleModelsRequest(
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
-      ...authHeaders,
+      ...addForwardedHeaders(authHeaders, request),
     },
   });
 

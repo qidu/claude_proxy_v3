@@ -14,6 +14,7 @@ import { createStreamTransformer } from '../converters/streaming.js';
 import { validateClaudeMessagesRequest, validateAuthHeaders } from '../utils/validation.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { isSdkUrl, handleSdkOpenAIRequest, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
+import { addForwardedHeaders } from '../utils/routing.js';
 
 /**
  * Handle messages API request
@@ -93,7 +94,7 @@ export async function handleMessagesRequest(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...authHeaders,
+        ...addForwardedHeaders(authHeaders, request),
       },
       body: JSON.stringify(requestBody),
     });
@@ -188,7 +189,7 @@ export async function handleMessagesRequest(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...authHeaders,
+      ...addForwardedHeaders(authHeaders, request),
     },
     body: JSON.stringify(openaiRequest),
   });

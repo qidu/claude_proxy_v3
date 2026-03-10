@@ -423,4 +423,35 @@ function formatApiKeyForUpstream(apiKey: string, upstreamMode: string): Record<s
   return headers;
 }
 
+/**
+ * Get client IP from request headers
+ * Supports Cloudflare Workers, proxies, and direct connections
+ */
+export function getClientIp(request: Request): string | undefined {
+  // Cloudflare Workers
+  const cfConnectingIp = request.headers.get('cf-connecting-ip');
+  if (cfConnectingIp) return cfConnectingIp;
+
+  // Standard proxy headers
+  const xForwardedFor = request.headers.get('x-forwarded-for');
+  if (xForwardedFor) return xForwardedFor.split(',')[0].trim();
+
+  // Nginx proxy
+  const xRealIp = request.headers.get('x-real-ip');
+  if (xRealIp) return xRealIp;
+
+  return undefined;
+}
+
+/**
+ * Add x-forwarded-for header to auth headers for upstream requests
+ */
+export function addForwardedHeaders(authHeaders: Record<string, string>, request: Request): Record<string, string> {
+  const clientIp = getClientIp(request);
+  if (clientIp) {
+    authHeaders['x-forwarded-for'] = clientIp;
+  }
+  return authHeaders;
+}
+
 

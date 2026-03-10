@@ -5,6 +5,7 @@ import { convertOpenAIToGeminiGenerateContent, convertOpenAIToGeminiInteractions
 import { createLogger } from '../utils/logger.js';
 import { isSdkUrl, handleSdkOpenAIRequest } from '../utils/sdk-handler.js';
 import type { Env, Logger } from '../types/shared.js';
+import { addForwardedHeaders } from '../utils/routing.js';
 
 /**
  * Check if request is in Gemini Interactions format
@@ -208,7 +209,7 @@ export async function handleOpenAIRequest(
 
         const response = await fetch(targetUrl, {
             method: 'POST',
-            headers,
+            headers: addForwardedHeaders(headers, request),
             body: JSON.stringify(openaiRequest),
         });
 
