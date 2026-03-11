@@ -1,6 +1,7 @@
 # OpenAI API Reference
 
-**Source:** https://platform.openai.com/docs/api-reference
+**Source:** 
+- https://platform.openai.com/docs/api-reference
 
 ## Quick Reference
 
@@ -15,6 +16,9 @@
 | **Files** | `/v1/files` |
 | **Fine-tuning** | `/v1/fine_tuning/jobs` |
 | **Moderations** | `/v1/moderations` |
+
+**Response API**
+- https://developers.openai.com/api/reference/resources/responses/index.md
 
 ## Authentication
 
