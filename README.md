@@ -7,6 +7,7 @@ A complete Claude and Gemini API Proxy Endpoints that supports multiple AI model
 - **Unified API Format**:
   - `GET /v1/models` - List available models
   - `POST /v1/messages` - Process claude messages (supports 49+ models)
+  - `POST /v1/responses` - OpenAI Responses API (passthrough or convert to chat completions)
   - `POST /v1/interactions` -  Process gemini interactions messages
   - `POST /v1beta/models/{model}:generateContent` - Process gemini content messages
   - `POST /v1beta/models/{model}:streamGenerateContent` - Process gemini content messages with SSE
@@ -177,6 +178,7 @@ pm2 start dist/server.js -i 4
 ## API Specifications
 this proxy implements claude and gemini API formats for multiple models:
 - **Claude Messages API**: See `docs/claude_api_docs/messages-api.md`
+- **OpenAI Responses API**: See `docs/openai-response.md` (passthrough or convert to chat completions)
 - **Gemini Interactions API**: See `docs/interactions.md`
 - **Gemini GenerateContent API**: See `docs/vertex-ai-gemini-api.md`
 - **OpenAI Chat Completions**: Standard `/v1/chat/completions` format not for endpoints, just for upstream to Compatible API
@@ -295,6 +297,64 @@ POST /v1/messages
   }
 }
 ```
+
+### Responses API
+
+**Endpoint**: `POST /v1/responses`
+
+OpenAI Responses API support with format conversion to/from Chat Completions.
+
+**Request Example**:
+```json
+{
+  "model": "gpt-4o",
+  "input": "What is the capital of France?",
+  "background": false
+}
+```
+
+**Response Example**:
+```json
+{
+  "id": "resp_chatcmpl-abc123",
+  "object": "response",
+  "created": 1773286630,
+  "status": "completed",
+  "model": "gpt-4o",
+  "output_items": [
+    {
+      "id": "msg_123",
+      "type": "message",
+      "status": "completed",
+      "content": [{"type": "output_text", "text": "The capital of France is Paris."}]
+    }
+  ],
+  "usage": {
+    "input_tokens": 14,
+    "output_tokens": 8,
+    "total_tokens": 22
+  }
+}
+```
+
+**How It Works**:
+- When `upstream_mode = "openai-completions"` (default): Converts Responses API request → Chat Completions → sends to upstream → converts response back to Responses API format
+- When `upstream_mode = "openai-responses"`: Passes through directly to OpenAI Responses API upstream
+
+**Key Differences from Chat Completions**:
+- Uses `input` instead of `messages`
+- Response contains `output_items` array instead of `choices`
+- Uses `status: "completed"` instead of `finish_reason`
+- Does NOT support streaming (use `background: true` for async processing)
+
+**Configuration**:
+```toml
+[models.default]
+upstream_mode = "openai-completions"  # Default: converts to chat completions
+# upstream_mode = "openai-responses"   # Alternative: pass through to Responses API
+```
+
+**Test Results**: 5/6 models pass (83.3%) - see `tests/test_responses_both_sse_and_none.sh`
 
 ### Token Counting API
 
@@ -461,6 +521,7 @@ src/
 ├── index.ts                 # Main router and middleware
 ├── handlers/
 │   ├── messages.ts         # Messages API handler
+│   ├── responses.ts        # Responses API handler
 │   ├── models.ts           # Models API handler
 │   ├── token-counting.ts   # Token counting handler
 │   └── gemini.ts           # Gemini API handler (dual-mode)
@@ -470,7 +531,8 @@ src/
 │   ├── streaming.ts        # Streaming response conversion
 │   ├── claude-to-gemini.ts # Claude to Gemini conversion
 │   ├── gemini-to-claude.ts # Gemini to Claude conversion
-│   └── gemini-streaming.ts # Gemini streaming transformer
+│   ├── gemini-streaming.ts # Gemini streaming transformer
+│   └── responses-to-completions.ts # Responses API to Chat Completions
 ├── utils/
 │   ├── routing.ts          # Dynamic routing logic
 │   ├── validation.ts       # Request validation

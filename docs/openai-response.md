@@ -19,7 +19,7 @@ as input for the model's response.
 - `background: optional boolean`
 
   Whether to run the model response in the background.
-  [Learn more](/docs/guides/background).
+  [Learn more](https://developers.openai.com/api/docs/guides/background).
 
 - `context_management: optional array of object { type, compact_threshold }`
 
