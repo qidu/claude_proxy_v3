@@ -44,7 +44,7 @@ export interface OpenAIToolCall {
 
 // --- Message Types ---
 
-export type OpenAIRole = "system" | "user" | "assistant" | "tool";
+export type OpenAIRole = "system" | "user" | "assistant" | "tool" | "developer";
 
 export interface OpenAIMessage {
     role: OpenAIRole;

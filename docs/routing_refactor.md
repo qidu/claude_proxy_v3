@@ -43,7 +43,18 @@ case 'generateContent':
 case 'streamGenerateContent':
   // /v1beta/models/{model}:streamGenerateContent routes based on upstream_mode
   // same as 'generateContent' but with SSE support
-```
+  break;
+
+case 'responses':
+  // /responses routes based on upstream_mode
+  if (upstreamMode === 'openai-responses') {
+    // using keys from endpoint as `Authorization: Bearer` for upstream
+    response = await handleResponsesRequest(...); // pass through to OpenAI Responses API
+  } else { // upstreamMode === 'openai-completions'
+    // using keys from endpoint as `Authorization: Bearer` for upstream
+    response = await handleResponsesRequest(...); // convert to OpenAI Chat Completions format
+  }
+  break;
 
 ## Upstream URI Mappings
 
@@ -53,6 +64,7 @@ Each `upstream_mode` maps to a specific upstream API endpoint:
 - **`anthropic-messages`** → `/v1/messages` both streaming and non-streaming
 - **`gemini-generatecontent`** → `/v1beta/models/{model}:generateContent` (non-streaming) or `/v1beta/models/{model}:streamGenerateContent` (streaming)
 - **`gemini-interactions`** → `/v1/interactions` both streaming and non-streaming
+- **`openai-responses`** → `/responses` both streaming and non-streaming (passthrough only)
 
 The proxy automatically constructs the full upstream URL by combining `base_url` + URI path based on the configured `upstream_mode`.
 
@@ -61,7 +73,8 @@ The proxy automatically constructs the full upstream URL by combining `base_url`
 ```
     ┌────────────────────────────────────────────────────────────────────────────┐
     │                       Users Requests                                       │
-    │  /v1/messages | /v1/interactions | /v1beta/models/{model}:contentGenerate  │
+    │  /v1/messages     | /v1/responses   |                                      │
+    │  /v1/interactions | /v1beta/models/{model}:contentGenerate                 │
     └────────────────────────────┬───────────────────────────────────────────────┘
                                  │
                                  ▼
@@ -73,27 +86,27 @@ The proxy automatically constructs the full upstream URL by combining `base_url`
                                  ▼
                         switch(handlerType)
                                  │
-        ┌────────────────────────┼───────────────────────────┬────────────────┐
-        │                        │                           │                │
-        ▼                        ▼                           ▼                ▼
-   'messages'              'interactions'             'generateContent'  'openai-completions'
-        │                        │                           │                │
- check upstream_mode      check upstream_mode          check upstream_mode    ▼
-        │                        │                           │             ❌ BLOCKED
-   ┌────┴────┐              ┌────┴───────┐            ┌──────┴─────────┐
-   ▼         ▼              ▼            ▼            ▼                ▼
-'anthropic' 'openai-     'gemini-      'openai-     'gemini-          'openai-
-'-messages' completions' interactions' completions' generatecontent'  completions'
-   │         │              │            │            │                │
-   ▼         ▼              ▼            ▼            ▼                ▼
-handleClaude handleMessages handleGemini handleOpenAI handleGemini   handleOpenAI
-Request()    Request()      Request()    Request()    Request()        Request()
-   │         │              │            │              │              │
-   │         │              │            │              │              │
-   ▼         ▼              ▼            ▼              ▼              ▼
-AWS/Vertex  OpenAI        Gemini API  OpenAI        Gemini API       OpenAI
-Claude API  Compatible    /v1/         Compatible    /v1beta/models/  Compatible
-/v1/        /v1/chat/     interactions /v1/chat/     {model}:         /v1/chat/
+        ┌────────────────────────┼───────────────────────────┬────────────────────┐
+        │                        │                           │                    │
+        ▼                        ▼                           ▼                    ▼
+   'messages'              'interactions'             'generateContent'        'responses'
+        │                        │                           │                    │
+ check upstream_mode      check upstream_mode          check upstream_mode   check upstream_mode
+        │                        │                           │                    │
+   ┌────┴────┐              ┌────┴───────┐            ┌──────┴─────────┐       ┌────┴────────┐
+   ▼         ▼              ▼            ▼            ▼                ▼       ▼             ▼
+'anthropic' 'openai-     'gemini-      'openai-     'gemini-          'openai-''openai-    'openai-
+'-messages' completions' interactions' completions' generatecontent'  completions'responses' completions'
+   │         │              │            │            │                │        │            │
+   ▼         ▼              ▼            ▼            ▼                ▼        ▼            ▼
+handleClaude handleMessages handleGemini handleOpenAI handleGemini   handleOpenAI handleResponses handleResponses
+Request()    Request()      Request()    Request()    Request()        Request()  Request()     Request()
+   │         │              │            │              │              │          │            │
+   │         │              │            │              │              │          │            │
+   ▼         ▼              ▼            ▼              ▼              ▼          ▼            ▼
+AWS/Vertex  OpenAI        Gemini API  OpenAI        Gemini API       OpenAI     OpenAI       OpenAI
+Claude API  Compatible    /v1/         Compatible    /v1beta/models/  Compatible /responses    /v1/chat/
+/v1/        /v1/chat/     interactions /v1/chat/     {model}:         /v1/chat/              completions
 messages    completions                completions   generate         completions
                                                      Content
 
@@ -261,11 +274,18 @@ See `docs/multiple_upstream_analysis.md` for implementation plan.
 
 
 ### API Specifications
-- **`gemini-interactions`** : Support Gemini '/v1/interactions' input and output,  Spec refered to docs/interactions.md
-- **`gemini-generatecontent`** : Support Gemini '/v1beta/models/{model}:generateContent' input and output, Spec refered to docs/vertex-ai-gemini-api.md without `/v1/projects/{project}/locations/{location}/publishers` in URI
-- **stream `gemini-generatecontent`** : Support Gemini SSE stream '/v1beta/models/{model}:streamGenerateContent' input and output, Spec refered to docs/vertex-ai-gemini-api.md without `/v1/projects/{project}/locations/{location}/publishers` in URI
-- **`anthropic-messages`** : Support Claude '/v1/messages' Spec refered to files in docs/claude_api_docs/*.md , espetially the 'messages-api.md' and  'token-counting-api.md' and "versioning.md"
-- **`openai-completions`** → `/v1/chat/completions` Blocked from Endpoint
+- **`gemini-interactions`** : Support Gemini '/v1/interactions' input and output,  Spec refered to `docs/interactions.md`
+- **`gemini-generatecontent`** : Support Gemini '/v1beta/models/{model}:generateContent' input and output, Spec refered to `docs/vertex-ai-gemini-api.md` without `/v1/projects/{project}/locations/{location}/publishers` in URI
+- **stream `gemini-generatecontent`** : Support Gemini SSE stream '/v1beta/models/{model}:streamGenerateContent' input and output, Spec refered to `docs/vertex-ai-gemini-api.md` without `/v1/projects/{project}/locations/{location}/publishers` in URI
+- **`anthropic-messages`** : Support Claude '/v1/messages' Spec refered to files in docs/claude_api_docs/*.md , espetially following docs:
+  - `docs/claude_api_docs/messages-api.md` - High-level guide for getting started
+  - `docs/claude_api_docs/messages-create.md` - Complete reference for the main endpoint
+  - `docs/claude_api_docs/messages-count-tokens.md` - Specialized reference for token counting
+  - `docs/claude_api_docs/versioning.md` - API version and other pamameters
+
+- **`openai-responses`** → `/v1/responses` Support OpenAI Responses API (`docs/openai-response.md`)
+- **`openai-completions`** → `/v1/chat/completions` Blocked from Endpoint (`docs/openai-api-reference.md`)
+
 
 ### Authentications
 #### API Keys in reqeusts Headers got from Endpoints
@@ -298,11 +318,13 @@ See `docs/multiple_upstream_analysis.md` for implementation plan.
 | Endpoint | Mode | Handler | Target Upstream | Endpoint Input | Endpoint Ouput |
 |----------|------|---------|-----------------|----------------|----------------|
 | `/v1/messages` | anthropic-messages | claude.ts | Claude API | Claude Format | Claude Format |
-| `/v1/messages` | openai-completions | messages.ts | OpenAI upstream | Claude Format | Claude Format | 
+| `/v1/messages` | openai-completions | messages.ts | OpenAI upstream | Claude Format | Claude Format |
 | `/v1/interactions` | gemini-interactions | gemini.ts | Gemini API | Gemini interactions Format | Gemini interactions Format |
 | `/v1/interactions` | openai-completions | openai.ts | OpenAI upstream | Gemini interactions Format | Gemini interactions Format |
 | `/v1beta/models/{model}:` | gemini-generatecontent | gemini.ts | Gemini API | Gemini content Format | Gemini content Format |
 | `/v1beta/models/{model}:` | openai-completions | openai.ts | OpenAI upstream | Gemini content Format | Gemini content Format |
+| `/responses` | openai-responses | responses.ts | OpenAI Responses API | Responses API Format | Responses API Format |
+| `/responses` | openai-completions | responses.ts | OpenAI Chat Completions | Responses API Format | Chat Completions Format |
 
 ### Type Safety
 

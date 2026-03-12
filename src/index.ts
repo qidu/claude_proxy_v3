@@ -12,6 +12,7 @@ import { createLogger } from './utils/logger.js';
 import { handleModelsRequest } from './handlers/models.js';
 import { handleTokenCountingRequest } from './handlers/token-counting.js';
 import { handleMessagesRequest } from './handlers/messages.js';
+import { handleResponsesRequest } from './handlers/responses.js';
 import { handleGeminiRequest, handleGeminiRequestForMessages } from './handlers/gemini.js';
 import { handleOpenAIRequest } from './handlers/openai.js';
 import { handleClaudeRequest } from './handlers/claude.js';
@@ -121,10 +122,10 @@ function isDynamicRoute(path: string): boolean {
  * Fixed route: /v1/messages -> /v1/chat/completions
  * Uses [models.default] and [upstream] from proxy_config.toml
  */
-function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): { 
-  targetUrl: string; 
-  targetEndpoint: string; 
-  handlerType: 'messages' | 'interactions' | 'generateContent' | 'models' | 'token-counting';
+function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
+  targetUrl: string;
+  targetEndpoint: string;
+  handlerType: 'messages' | 'interactions' | 'generateContent' | 'models' | 'token-counting' | 'responses';
   upstreamMode?: string;
   modelId?: string;
   forceStreaming?: boolean;
@@ -240,6 +241,27 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     };
   }
 
+  // 5. /v1/responses → multiple upstream modes
+  if (path === '/v1/responses' || path.startsWith('/v1/responses?')) {
+    if (defaultMode === 'openai-responses') {
+      // Pass through to OpenAI Responses API
+      return {
+        targetUrl: `${defaultBaseUrl}/responses`,
+        targetEndpoint: 'v1/responses',
+        handlerType: 'responses',
+        upstreamMode: 'openai-responses',
+      };
+    } else {
+      // Convert to OpenAI Chat Completions
+      return {
+        targetUrl: `${defaultBaseUrl}/v1/chat/completions`,
+        targetEndpoint: 'v1/responses',
+        handlerType: 'responses',
+        upstreamMode: 'openai-completions',
+      };
+    }
+  }
+
   // Models endpoint
   if (path === '/v1/models' || path.startsWith('/v1/models?')) {
     return {
@@ -332,7 +354,7 @@ export default {
       }
 
       let targetUrl: string = '';
-      let handlerType: 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' = 'messages';
+      let handlerType: 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' = 'messages';
       let modelId: string | undefined;
       let upstreamMode: string | undefined;
       let forceStreaming: boolean = false;
@@ -644,6 +666,17 @@ export default {
           } else {
             // OpenAI-compatible mode
             response = await handleOpenAIRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, forceStreaming);
+          }
+          break;
+
+        case 'responses':
+          // /v1/responses routes based on upstream mode
+          if (upstreamMode === 'openai-responses') {
+            // Pass through to OpenAI Responses API
+            response = await handleResponsesRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, upstreamMode);
+          } else {
+            // Convert to OpenAI Chat Completions
+            response = await handleResponsesRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, upstreamMode);
           }
           break;
 
