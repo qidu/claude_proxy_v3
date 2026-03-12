@@ -23,6 +23,30 @@ function convertFinishReasonToStopReason(finishReason: string | null): string | 
 }
 
 /**
+ * Extract token counts from various response formats
+ * Handles standard OpenAI format and non-standard formats like QNAIGC
+ */
+function extractTokenCounts(usage: Record<string, any> | undefined): {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+} {
+    if (!usage) {
+        return { input_tokens: 0, output_tokens: 0 };
+    }
+
+    // Standard OpenAI format: prompt_tokens, completion_tokens
+    // QNAIGC non-standard format: input, output
+    return {
+        input_tokens: usage.prompt_tokens ?? usage.input ?? 0,
+        output_tokens: usage.completion_tokens ?? usage.output ?? 0,
+        cache_creation_input_tokens: usage.prompt_cache_miss_tokens,
+        cache_read_input_tokens: usage.prompt_cache_hit_tokens,
+    };
+}
+
+/**
  * Convert OpenAI model response to Claude format
  */
 export function convertOpenAIToClaudeResponse(
@@ -40,12 +64,7 @@ export function convertOpenAIToClaudeResponse(
             model: model,
             content: [],
             stop_reason: null,
-            usage: {
-                input_tokens: openaiResponse.usage?.prompt_tokens || 0,
-                output_tokens: openaiResponse.usage?.completion_tokens || 0,
-                cache_creation_input_tokens: openaiResponse.usage?.prompt_cache_miss_tokens,
-                cache_read_input_tokens: openaiResponse.usage?.prompt_cache_hit_tokens,
-            },
+            usage: extractTokenCounts(openaiResponse.usage),
         };
     }
 
@@ -89,7 +108,14 @@ export function convertOpenAIToClaudeResponse(
         });
     }
 
-    const stopReason = convertFinishReasonToStopReason(choice.finish_reason);
+    // Determine stop_reason, handling empty finish_reason from providers like QNAIGC
+    let stopReason = convertFinishReasonToStopReason(choice.finish_reason);
+
+    // If stop_reason is null/empty or "end_turn" but we have tool calls, use "tool_use"
+    // This handles providers that return empty or incorrect finish_reason
+    if ((!stopReason || stopReason === "end_turn") && message?.tool_calls && message.tool_calls.length > 0) {
+        stopReason = "tool_use";
+    }
 
     const response: ClaudeMessagesResponse = {
         id: openaiResponse.id || requestId,
@@ -98,12 +124,7 @@ export function convertOpenAIToClaudeResponse(
         model: model,
         content: contentBlocks,
         stop_reason: stopReason,
-        usage: {
-            input_tokens: openaiResponse.usage?.prompt_tokens || 0,
-            output_tokens: openaiResponse.usage?.completion_tokens || 0,
-            cache_creation_input_tokens: openaiResponse.usage?.prompt_cache_miss_tokens,
-            cache_read_input_tokens: openaiResponse.usage?.prompt_cache_hit_tokens,
-        },
+        usage: extractTokenCounts(openaiResponse.usage),
     };
 
     return response;

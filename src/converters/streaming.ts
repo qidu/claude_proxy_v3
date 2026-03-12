@@ -5,6 +5,7 @@
 export function createStreamTransformer(model: string, requestId: string) {
     let initialized = false;
     let buffer = "";
+    let hasToolCalls = false;
     const messageId = requestId || `msg_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
     const toolCalls: {
         [index: number]: {
@@ -79,9 +80,11 @@ export function createStreamTransformer(model: string, requestId: string) {
                 try {
                     const lastChunk = JSON.parse(lines[lines.length - 2].substring(6));
                     const finishReason = lastChunk.choices?.[0]?.finish_reason;
-                    if (finishReason === 'tool_calls') finalStopReason = 'tool_use';
-                    if (finishReason === 'length') finalStopReason = 'max_tokens';
-                    if (finishReason === 'content_filter') finalStopReason = 'content_filter';
+                    if (finishReason === 'tool_calls' || finishReason === 'tool_use') finalStopReason = 'tool_use';
+                    else if (finishReason === 'length') finalStopReason = 'max_tokens';
+                    else if (finishReason === 'content_filter') finalStopReason = 'content_filter';
+                    // Handle empty or unknown finish_reason - infer from tool calls
+                    else if (!finishReason && hasToolCalls) finalStopReason = 'tool_use';
                 } catch (e) { }
 
                 // Send message_delta with proper usage
@@ -120,6 +123,7 @@ export function createStreamTransformer(model: string, requestId: string) {
 
                 // Handle tool call deltas
                 if (delta.tool_calls) {
+                    hasToolCalls = true;
                     for (const tc_delta of delta.tool_calls) {
                         const index = tc_delta.index;
                         if (!toolCalls[index]) {
