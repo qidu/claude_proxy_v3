@@ -552,7 +552,7 @@ export default {
             });
           }
         } catch (error) {
-          logger.error(requestId, `Failed to parse request body for model routing: ${(error as Error).message}`);
+          logger.error(requestId, `Failed to parse request body for model routing ${path}: ${(error as Error).message}`);
           return createErrorResponse(new Error('Invalid request body'), requestId, 400);
         }
       } else if (isDynamicRoute(path)) {

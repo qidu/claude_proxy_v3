@@ -22,6 +22,8 @@ COPY tsconfig.json ./
 COPY tsconfig.server.json ./
 COPY wrangler.toml ./
 COPY src/ ./src/
+RUN git rev-parse --short HEAD > /tmp/proxy_version
+
 RUN npm run build
 
 # Production image - much smaller
@@ -32,9 +34,14 @@ WORKDIR /app
 # Copy only what's needed from builder
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+COPY --from=git /tmp/proxy_version /tmp/proxy_version
 COPY wrangler.toml ./
 
-ENV LOCAL_TOKEN_COUNTING=true
+ENV VERSION=$(cat /tmp/proxy_version)
+ENV LOCAL_TOKEN_COUNTING=true      # Enable local counting
+ENV LOCAL_TIKTOKEN=true            # Use tiktoken (accurate)
+ENV TIKTOKEN_MODEL=o200k_base      # Encoding model (default: cl100k_base)
+
 EXPOSE 8788
 
 CMD ["node", "dist/server.js"]

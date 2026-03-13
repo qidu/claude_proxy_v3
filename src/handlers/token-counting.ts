@@ -87,7 +87,7 @@ async function handleLocalTokenCounting(
 
   if (localConfig.useTiktoken) {
     // Initialize tiktoken tokenizer
-    logger.info(requestId, `Initializing tiktoken with model: ${localConfig.modelName}`);
+    logger.debug(requestId, `Initializing tiktoken with model: ${localConfig.modelName}`);
     try {
       const tokenizer = await getTiktokenTokenizer(localConfig.modelName, localConfig.bpeUrl);
       options = {
