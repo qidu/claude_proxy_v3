@@ -9,12 +9,24 @@ import { Logger, createLogger } from '../utils/logger.js';
 import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.js';
 import { OpenAIRequest, OpenAIResponse } from '../types/openai.js';
 import { convertClaudeToOpenAIRequest, ThinkingConversionOptions } from '../converters/claude-to-openai.js';
-import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
+import { convertOpenAIToClaudeResponse, TokenCountingConfig } from '../converters/openai-to-claude.js';
 import { createStreamTransformer } from '../converters/streaming.js';
-import { validateClaudeMessagesRequest, validateAuthHeaders } from '../utils/validation.js';
+import { validateClaudeMessagesRequest } from '../utils/validation.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { isSdkUrl, handleSdkOpenAIRequest, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
 import { addForwardedHeaders } from '../utils/routing.js';
+import { getLocalTokenCountingConfig } from '../utils/token-counting.js';
+
+/**
+ * Get token counting configuration from environment
+ */
+function getTokenCountingConfig(env?: Env): TokenCountingConfig {
+  const config = getLocalTokenCountingConfig(env as unknown as Record<string, string>);
+  return {
+    enabled: config.enabled,
+    modelName: config.modelName,
+  };
+}
 
 /**
  * Handle messages API request
@@ -108,11 +120,14 @@ export async function handleMessagesRequest(
       handleTargetApiError(response, 'Messages API', { url: targetUrl, body: bodyPreview });
     }
 
+    // Get local token counting config
+    const tokenCountingConfig = getTokenCountingConfig(env);
+
     // For OpenAI format pass-through, convert response to Claude format
     if (isStreaming) {
-      return handleStreamingResponse(response, model, requestId, activeLogger);
+      return handleStreamingResponse(response, model, requestId, activeLogger, requestBody, tokenCountingConfig);
     }
-    return handleNonStreamingResponse(response, model, requestId, activeLogger);
+    return handleNonStreamingResponse(response, model, requestId, activeLogger, requestBody, tokenCountingConfig);
   }
 
   // Claude format - convert to OpenAI
@@ -203,13 +218,16 @@ export async function handleMessagesRequest(
     handleTargetApiError(response, 'Messages API', { url: targetUrl, body: bodyPreview });
   }
 
+  // Get local token counting config
+  const tokenCountingConfig = getTokenCountingConfig(env);
+
   // Handle streaming response
   if (isStreaming) {
-    return handleStreamingResponse(response, targetModelId, requestId, activeLogger);
+    return handleStreamingResponse(response, targetModelId, requestId, activeLogger, requestBody, tokenCountingConfig);
   }
 
   // Handle non-streaming response
-  return handleNonStreamingResponse(response, targetModelId, requestId, activeLogger);
+  return handleNonStreamingResponse(response, targetModelId, requestId, activeLogger, requestBody, tokenCountingConfig);
 }
 
 /**
@@ -219,7 +237,9 @@ async function handleNonStreamingResponse(
   response: Response,
   model: string,
   requestId: string,
-  logger: Logger
+  logger: Logger,
+  requestBody?: Record<string, unknown>,
+  tokenCountingConfig?: TokenCountingConfig
 ): Promise<Response> {
   try {
     // Parse target API response
@@ -228,10 +248,12 @@ async function handleNonStreamingResponse(
     const openaiResponse: OpenAIResponse = JSON.parse(responseText);
 
     // Convert to Claude format
-    const claudeResponse: ClaudeMessagesResponse = convertOpenAIToClaudeResponse(
+    const claudeResponse: ClaudeMessagesResponse = await convertOpenAIToClaudeResponse(
       openaiResponse,
       model,
-      requestId
+      requestId,
+      requestBody,
+      tokenCountingConfig
     );
 
     // Return response with Claude headers
@@ -255,7 +277,9 @@ async function handleStreamingResponse(
   response: Response,
   model: string,
   requestId: string,
-  logger: Logger
+  logger: Logger,
+  requestBody?: Record<string, unknown>,
+  tokenCountingConfig?: TokenCountingConfig
 ): Promise<Response> {
   // Check if response body exists and is readable
   if (!response.body) {
@@ -267,7 +291,7 @@ async function handleStreamingResponse(
   try {
 
     // Create streaming transformer
-    const transformer = createStreamTransformer(model, requestId);
+    const transformer = createStreamTransformer(model, requestId, requestBody, tokenCountingConfig);
 
     // Create a tee to read the raw response while also transforming it
     const [stream1, stream2] = response.body.tee();
