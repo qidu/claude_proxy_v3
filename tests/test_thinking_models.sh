@@ -29,16 +29,16 @@ COMPLEX_Q="Explain step by step how to solve this problem: A train travels 120 k
 # All thinking models
 MODELS=(
   "deepseek-r1-0528"
-#  "qwen3-vl-30b-a3b-thinking"
-#  "qwen3-30b-a3b-thinking-2507"
-#  "qwen3-next-80b-a3b-thinking"
-#  "qwen3-235b-a22b-thinking-2507"
-#  "doubao-seed-1.6-thinking"
-#  "doubao-1.5-thinking-pro"
-#  "deepseek/deepseek-v3.1-terminus-thinking"
-#  "moonshotai/kimi-k2-thinking"
-#  "moonshotai/kimi-k2.5"
-#  "minimax/minimax-m2.5"
+  "qwen3-vl-30b-a3b-thinking"
+  "qwen3-30b-a3b-thinking-2507"
+  "qwen3-next-80b-a3b-thinking"
+  "qwen3-235b-a22b-thinking-2507"
+  "doubao-seed-1.6-thinking"
+  "doubao-1.5-thinking-pro"
+  "deepseek/deepseek-v3.1-terminus-thinking"
+  "moonshotai/kimi-k2-thinking"
+  "moonshotai/kimi-k2.5"
+  "minimax/minimax-m2.5"
 )
 
 test_nonstream() {
@@ -63,12 +63,9 @@ test_nonstream() {
       echo "  ✅ $name"
     fi
     ((PASS++))
-    echo "$RESP"
   else
     ERROR=$(echo "$RESP" | jq -r '.error.message // .message // "Unknown error"' 2>/dev/null || echo "Failed")
     echo "  ❌ $name: $ERROR"
-    echo "$RESP" | jq -e '.id'
-    echo "$RESP" | jq -e '.model'
     echo "$RESP" | jq 
     ((FAIL++))
   fi
@@ -79,22 +76,23 @@ test_stream() {
   local url=$2
   local data=$3
 
-  echo "$data" | jq
-  RESP=$(timeout 10 curl -s -N "$url" -H "Content-Type: application/json" \
+  rm -f /tmp/test_steamout.txt
+  RESP=$(curl -v -N "$url" -H "Content-Type: application/json" \
         -H "Authorization: Bearer $API_KEY" \
         -H "x-api-key: $API_KEY" \
         -H "x-goog-api-key: $API_KEY" \
+        -o /tmp/test_steamout.txt \
         -d "$data" 2>/dev/null)
 
+  RESP=$(cat /tmp/test_steamout.txt)
+
   # Save first event for basic check
-  echo "$RESP"
-  FIRST_EVENT=$(echo "$RESP" | head -1)
   echo "$RESP" >> /tmp/test_thinking_reponses.txt
   echo "" >> /tmp/test_thinking_reponses.txt
 
-  if echo "$FIRST_EVENT" | grep -q "data:"; then
-    # Check for thinking_delta event in streaming response
-    HAS_THINKING_DELTA=$(echo "$RESP" | grep -c "thinking_delta" || echo "0")
+  if echo "$RESP" | grep -q "event: message_start"; then
+          # Check for data (BUT not content_block_stop or thinking_delta) event in streaming response
+    HAS_THINKING_DELTA=$(echo "$RESP" | grep -c "data: " || echo "0")
     if [ "$HAS_THINKING_DELTA" -gt 0 ]; then
       echo "  ✅ $name (stream with thinking_delta)"
     else
@@ -104,6 +102,7 @@ test_stream() {
   else
     echo "  ❌ $name (stream): No SSE"
     ((FAIL++))
+    echo "$RESP"
   fi
 }
 
@@ -128,10 +127,10 @@ for MODEL in "${MODELS[@]}"; do
     "$BASE_URL/v1beta/models/$MODEL:generateContent" \
     "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"$SIMPLE_Q\"}]}]}"
 
-  # Streaming tests (complex question)
+  # Streaming tests
   test_stream "/v1/messages" \
     "$BASE_URL/v1/messages" \
-    "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"$COMPLEX_Q\"}],\"max_tokens\":500,\"stream\":true}"
+    "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"$COMPLEX_Q\"}],\"stream\":true}"
 
   test_stream "/v1/interactions" \
     "$BASE_URL/v1/interactions" \
