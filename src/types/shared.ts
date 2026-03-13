@@ -116,6 +116,13 @@ export interface Env {
      */
     PROXY_CONFIG_PATH?: string;
     PROXY_CONFIG_URL?: string;
+
+    /**
+     * Cache TTL in seconds for the /v1/models endpoint.
+     * Default: 300 (5 minutes)
+     * Set to 0 to disable caching.
+     */
+    MODELS_CACHE_TTL?: string;
 }
 
 

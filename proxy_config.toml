@@ -8,7 +8,7 @@ budget_to_effort_high = 0        # >= 2000 or 0 = always "high" (or use a thresh
 [models.claude]
 upstream_mode = "anthropic-messages"
 base_url = "https://api.qnaigc.com"
-api_key = "sk-17ac71ed56aee29a57519861d09ab147407fbe0ed010d3f48f9156ea8a9eb3c9"
+api_key = "sk-17ac71ed56aee29*"
 "stepfun/step-flash" = ["stepfun/step-3.5-flash", "", ""]
 "meituan/longcat-flash" = ["meituan/longcat-flash-lite", "", ""]
 #base_url = "https://api.example-ai.com"
@@ -28,5 +28,4 @@ api_key = "sk-***"
 [models.default]
 "llama" = ["llama3.1-8B", "sdk://localhost", ""]
 #"deepseek/deepseek-v3.2-251201" = ["", "", ""]
-upstream_mode = "anthropic-messages"
 #upstream_mode = "openai-completions"

@@ -1,7 +1,7 @@
 /**
  * Models API handler for Claude Proxy v3
  *
- * Handles GET /v1/models endpoint
+ * Handles GET /v1/models endpoint with caching support
  */
 
 import { Logger } from '../utils/logger.js';
@@ -12,6 +12,129 @@ import { validateModelsRequestParams } from '../utils/validation.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { addForwardedHeaders } from '../utils/routing.js';
 
+// In-memory cache for model list
+interface CacheEntry {
+  data: ClaudeModelsResponse;
+  timestamp: number;
+}
+
+const modelCache: Map<string, CacheEntry> = new Map();
+
+// Default cache TTL in milliseconds (300 seconds)
+const DEFAULT_CACHE_TTL_MS = 300 * 1000;
+
+/**
+ * Get cache TTL from environment or use default
+ */
+function getCacheTTL(env?: Record<string, unknown>): number {
+  const envValue = env?.MODELS_CACHE_TTL as string | undefined;
+  if (envValue !== undefined) {
+    const parsed = parseInt(envValue, 10);
+    if (!isNaN(parsed) && parsed > 0) {
+      return parsed * 1000; // Convert seconds to milliseconds
+    }
+  }
+  return DEFAULT_CACHE_TTL_MS;
+}
+
+/**
+ * Check if cache is valid
+ */
+function isCacheValid(entry: CacheEntry, ttl: number): boolean {
+  return Date.now() - entry.timestamp < ttl;
+}
+
+/**
+ * Get cached model list
+ */
+export function getCachedModels(ttl: number): ClaudeModelsResponse | null {
+  const entry = modelCache.get('models');
+  if (entry && isCacheValid(entry, ttl)) {
+    return entry.data;
+  }
+  return null;
+}
+
+/**
+ * Set cached model list
+ */
+export function setCachedModels(data: ClaudeModelsResponse): void {
+  modelCache.set('models', {
+    data,
+    timestamp: Date.now(),
+  });
+}
+
+/**
+ * Clear model cache (useful for testing)
+ */
+export function clearModelCache(): void {
+  modelCache.clear();
+}
+
+/**
+ * Get model count from cache
+ * Returns null if cache is invalid or empty
+ */
+export function getCachedModelCount(env?: Record<string, unknown>): number | null {
+  const cacheTTL = getCacheTTL(env);
+  const cachedModels = getCachedModels(cacheTTL);
+  if (cachedModels && cachedModels.data) {
+    return cachedModels.data.length;
+  }
+  return null;
+}
+
+/**
+ * Get model count by fetching from upstream if needed
+ * Returns { count: number, cached: boolean }
+ */
+export async function getModelCount(
+  targetUrl: string,
+  authHeaders: Record<string, string>,
+  requestId: string,
+  logger: Logger,
+  env?: Record<string, unknown>
+): Promise<{ count: number; cached: boolean }> {
+  const cacheTTL = getCacheTTL(env);
+
+  // Check cache first
+  const cachedCount = getCachedModelCount(env);
+  if (cachedCount !== null) {
+    return { count: cachedCount, cached: true };
+  }
+
+  // Cache miss - fetch from upstream
+  logger.debug(requestId, `Fetching model list from upstream for count: ${targetUrl}`);
+
+  try {
+    const response = await fetch(targetUrl, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders,
+      },
+    });
+
+    if (!response.ok) {
+      logger.error(requestId, `Failed to fetch models: ${response.status}`);
+      return { count: 0, cached: false };
+    }
+
+    const responseText = await response.text();
+    const openaiResponse: OpenAIModelsResponse = JSON.parse(responseText);
+    const claudeResponse: ClaudeModelsResponse = convertOpenAIModelsToClaude(openaiResponse);
+
+    // Cache the response
+    setCachedModels(claudeResponse);
+
+    return { count: claudeResponse.data.length, cached: false };
+  } catch (error) {
+    logger.error(requestId, `Error fetching model count: ${(error as Error).message}`);
+    return { count: 0, cached: false };
+  }
+}
+
 /**
  * Handle models API request
  */
@@ -20,7 +143,8 @@ export async function handleModelsRequest(
   targetUrl: string,
   authHeaders: Record<string, string>,
   requestId: string,
-  logger: Logger
+  logger: Logger,
+  env?: Record<string, unknown>
 ): Promise<Response> {
   // Parse query parameters
   const url = new URL(request.url);
@@ -30,6 +154,27 @@ export async function handleModelsRequest(
 
   // Validate parameters
   validateModelsRequestParams({ after_id: afterId, before_id: beforeId, limit });
+
+  // Get cache TTL from environment or use default
+  const cacheTTL = getCacheTTL(env);
+
+  // Check if we have valid cached data (only for first page requests without pagination)
+  if (!afterId && !beforeId && !limit) {
+    const cachedModels = getCachedModels(cacheTTL);
+    if (cachedModels) {
+      logger.debug(requestId, `Using cached model list (TTL: ${cacheTTL}ms)`);
+      return new Response(JSON.stringify(cachedModels), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-request-id': requestId,
+          'x-cache': 'HIT',
+        },
+      });
+    }
+  }
+
+  logger.debug(requestId, `Cache miss or invalid, fetching from upstream: ${targetUrl}`);
 
   // Build target API URL with query parameters
   const targetApiUrl = new URL(targetUrl);
@@ -63,12 +208,18 @@ export async function handleModelsRequest(
   // Convert to Claude format
   const claudeResponse: ClaudeModelsResponse = convertOpenAIModelsToClaude(openaiResponse);
 
+  // Cache the response (only for non-paginated requests)
+  if (!afterId && !beforeId && !limit) {
+    setCachedModels(claudeResponse);
+  }
+
   // Return response with Claude headers
   return new Response(JSON.stringify(claudeResponse), {
     status: 200,
     headers: {
       'Content-Type': 'application/json',
       'x-request-id': requestId,
+      'x-cache': 'MISS',
     },
   });
 }

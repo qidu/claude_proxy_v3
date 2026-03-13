@@ -9,7 +9,7 @@ import { Env } from './types/shared.js';
 import { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, transformAuthHeadersForUpstream, isHostAllowed, formatApiKeyForUpstream } from './utils/routing.js';
 import { createErrorResponse } from './utils/errors.js';
 import { createLogger } from './utils/logger.js';
-import { handleModelsRequest } from './handlers/models.js';
+import { handleModelsRequest, getModelCount } from './handlers/models.js';
 import { handleTokenCountingRequest } from './handlers/token-counting.js';
 import { handleMessagesRequest } from './handlers/messages.js';
 import { handleResponsesRequest } from './handlers/responses.js';
@@ -311,19 +311,19 @@ export default {
       if (path === '/health' || path === '/') {
         const defaultCategory = proxyConfig.models?.default;
         const defaultCategoryConfig = defaultCategory && !Array.isArray(defaultCategory) ? defaultCategory : undefined;
-        const healthBaseUrl = defaultCategoryConfig?.base_url || 
-                             proxyConfig.upstream?.default_base_url || 
+        const healthBaseUrl = defaultCategoryConfig?.base_url ||
+                             proxyConfig.upstream?.default_base_url ||
                              'https://api.qnaigc.com';
         const healthUrl = `${healthBaseUrl}/v1/models`;
         const healthAuth = extractAuthHeaders(request);
-        
+
         try {
-          const healthResponse = await handleModelsRequest(request, healthUrl, healthAuth, requestId, logger);
-          if (healthResponse.ok) {
-            const data = await healthResponse.json() as { data?: unknown[] };
-            return new Response(JSON.stringify({ 
-              status: 'ok', 
-              models: data.data?.length || 0,
+          const { count, cached } = await getModelCount(healthUrl, healthAuth, requestId, logger, env as unknown as Record<string, unknown>);
+          if (count > 0) {
+            return new Response(JSON.stringify({
+              status: 'ok',
+              models: count,
+              cached,
               version: env.VERSION || 'unknown'
             }), {
               status: 200,
@@ -333,7 +333,7 @@ export default {
         } catch {
           // Fall through to error
         }
-        return new Response(JSON.stringify({ 
+        return new Response(JSON.stringify({
           error: 'No models Found.',
           version: env.VERSION || 'unknown'
         }), {
@@ -608,7 +608,7 @@ export default {
       let response: Response;
       switch (handlerType) {
         case 'models':
-          response = await handleModelsRequest(request, targetUrl, modelAuthHeaders, requestId, logger);
+          response = await handleModelsRequest(request, targetUrl, modelAuthHeaders, requestId, logger, env as unknown as Record<string, unknown>);
           break;
 
         case 'token-counting':

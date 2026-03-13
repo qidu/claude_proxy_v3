@@ -7,7 +7,9 @@ compatibility_flags = ["nodejs_compat"]
 VERSION = "dev"  # Set to commit id, tag, or branch name
 LOCAL_TOKEN_COUNTING=true      # Enable local counting
 LOCAL_TIKTOKEN=true            # Use tiktoken (accurate)
-TIKTOKEN_MODEL=o200k_base      # Encoding model (default: cl100k_base)
+TIKTOKEN_MODEL="o200k_base"    # Encoding model (default: cl100k_base)
+
+MODELS_CACHE_TTL=300           # cache models list from upstream
 
 ALLOWED_HOSTS="127.0.0.1,localhost,api.qnaigc.com,api.example1.com,api.example2-ai.com,api.yoosheen.com,api.wenwen-ai.com"
 DEV_MODE=true
