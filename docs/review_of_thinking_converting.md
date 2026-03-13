@@ -4,6 +4,8 @@
 grep -rn "thinking_" src/ | claude -p "any thinking converting from upstream 'openai-completions' ot '/v1/messages' endpoint "
 ```
 
+TODO: models emit do not `thinking_start` streaming events. The API wrapper doesn't convert downstream provider thinking output into Anthropic's `thinking_type` content block format.
+
 Based on grep analysis of the codebase, here's a summary of the conversion from OpenAI `/v1/chat/completions` upstream to Claude `/v1/messages` endpoint:
 
 ## Key Conversion Points
