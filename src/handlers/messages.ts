@@ -58,7 +58,19 @@ export async function handleMessagesRequest(
   // Claude format: { model, messages, max_tokens, thinking, system, ... }
   const isOpenAIFormat = !requestBody.system && !requestBody.thinking && !requestBody.stop_sequences;
 
-  if (isOpenAIFormat) {
+  // Additional check: if request has tools, check if they're in Claude format
+  // Claude tools format: { name: string, description?: string, input_schema: any }
+  // OpenAI tools format: { type: "function", function: { name: string, description?: string, parameters: any } }
+  let hasClaudeFormatTools = false;
+  if (requestBody.tools && Array.isArray(requestBody.tools)) {
+    // Check if first tool has Claude format (has 'name' and 'input_schema' fields)
+    const firstTool = requestBody.tools[0];
+    if (firstTool && firstTool.name && firstTool.input_schema && !firstTool.type) {
+      hasClaudeFormatTools = true;
+    }
+  }
+
+  if (isOpenAIFormat && !hasClaudeFormatTools) {
     // Request is already in OpenAI format, pass through directly
     const model = (requestBody.model as string) || modelId || 'unknown';
     const isStreaming = requestBody.stream === true;

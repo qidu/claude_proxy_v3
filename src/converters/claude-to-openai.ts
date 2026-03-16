@@ -388,6 +388,9 @@ export function convertClaudeToOpenAIRequest(
     const convertedToolChoice = convertClaudeToolChoiceToOpenAI(claudeRequest.tool_choice);
     if (convertedToolChoice !== undefined) {
         openaiRequest.tool_choice = convertedToolChoice;
+    } else if (convertedTools) {
+        // If tools are present but tool_choice is not specified, default to "auto"
+        openaiRequest.tool_choice = 'auto';
     }
 
     // Handle thinking
