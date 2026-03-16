@@ -3,7 +3,7 @@
  */
 
 import { ClaudeMessagesResponse, ClaudeContentBlock, ClaudeTokenCountingResponse, ClaudeModelsResponse, ClaudeModel } from '../types/claude.js';
-import { OpenAIResponse, OpenAITokenCountingResponse, OpenAIModelsResponse, OpenAIModel, OpenAITextPart } from '../types/openai.js';
+import { OpenAIResponse, OpenAITokenCountingResponse, OpenAIModelsResponse, OpenAIModel, OpenAITextPart, OpenAIThinkingPart } from '../types/openai.js';
 import { countClaudeRequestTokens, getTiktokenTokenizer, TokenCountingOptions } from '../utils/token-counting.js';
 
 export interface TokenCountingConfig {
@@ -130,51 +130,97 @@ export async function convertOpenAIToClaudeResponse(
     // Handle text content
     if (content) {
         let textContent: string;
+        let thinkingContent = '';
+        let thinkingSignature: string | undefined = undefined;
+
         if (typeof content === 'string') {
             textContent = content;
-        } else if (Array.isArray(content)) {
-            // Extract text from content parts
-            textContent = content
-                .filter(part => part.type === 'text')
-                .map(part => (part as OpenAITextPart).text)
-                .join('');
-        } else {
-            textContent = String(content);
-        }
 
-        // Extract <thinking>...</thinking> markers from text content
-        const thinkingRegex = /<thinking>([\s\S]*?)<\/thinking>/g;
-        let thinkingContent = '';
-        let match;
-        let hasThinkingContent = false;
+            // Extract <thinking>...</thinking> markers from text content
+            const thinkingRegex = /<thinking>([\s\S]*?)<\/thinking>/g;
+            let match;
+            let hasThinkingContent = false;
 
-        while ((match = thinkingRegex.exec(textContent)) !== null) {
-            thinkingContent += match[1];
-            hasThinkingContent = true;
-        }
+            while ((match = thinkingRegex.exec(textContent)) !== null) {
+                thinkingContent += match[1];
+                hasThinkingContent = true;
+            }
 
-        // If thinking content found, strip markers from text
-        if (hasThinkingContent) {
-            const cleanedText = textContent.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
-            if (cleanedText) {
+            // If thinking content found, strip markers from text
+            if (hasThinkingContent) {
+                const cleanedText = textContent.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
+                if (cleanedText) {
+                    contentBlocks.push({
+                        type: 'text',
+                        text: cleanedText
+                    });
+                }
+            } else {
+                // No thinking markers found, add as regular text
                 contentBlocks.push({
                     type: 'text',
-                    text: cleanedText
+                    text: textContent
                 });
             }
-            // Add thinking block
-            if (thinkingContent) {
+        } else if (Array.isArray(content)) {
+            // Extract text and thinking from content parts
+            const textParts: string[] = [];
+
+            for (const part of content) {
+                if (part.type === 'text') {
+                    textParts.push((part as OpenAITextPart).text);
+                } else if (part.type === 'thinking') {
+                    const thinkingPart = part as OpenAIThinkingPart;
+                    thinkingContent += thinkingPart.thinking;
+                    // Extract signature from thinking part if available
+                    if (thinkingPart.signature) {
+                        thinkingSignature = thinkingPart.signature;
+                    }
+                }
+                // Handle other part types as needed
+            }
+
+            textContent = textParts.join('');
+            if (textContent) {
                 contentBlocks.push({
-                    type: 'thinking',
-                    thinking: thinkingContent
+                    type: 'text',
+                    text: textContent
                 });
             }
         } else {
-            // No thinking markers found, add as regular text
+            textContent = String(content);
             contentBlocks.push({
                 type: 'text',
                 text: textContent
             });
+        }
+
+        // Add thinking block if we have thinking content
+        if (thinkingContent) {
+            const thinkingBlock: any = {
+                type: 'thinking',
+                thinking: thinkingContent
+            };
+
+            // Add signature if available
+            if (thinkingSignature) {
+                thinkingBlock.signature = thinkingSignature;
+            }
+
+            // Also check for reasoning_item_id or other signature fields in the response
+            if (!thinkingSignature) {
+                // Check for reasoning_item_id or other signature fields
+                const reasoningItemId = (openaiResponse as any).reasoning_item_id;
+                const responseSignature = (openaiResponse as any).signature;
+
+                if (reasoningItemId) {
+                    thinkingBlock.signature = reasoningItemId;
+                } else if (responseSignature) {
+                    thinkingBlock.signature = responseSignature;
+                }
+            }
+
+            contentBlocks.push(thinkingBlock);
         }
     }
 

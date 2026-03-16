@@ -193,9 +193,10 @@ export interface ClaudeStreamEvent {
         index: number;
     };
     delta?: {
-        type: "text_delta" | "input_json_delta" | "thinking_delta";
+        type: "text_delta" | "input_json_delta" | "thinking_delta" | "signature_delta";
         text?: string;
         partial_json?: string;
+        signature?: string;
         index: number;
     };
     usage?: {

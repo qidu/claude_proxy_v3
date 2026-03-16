@@ -7,7 +7,7 @@
  *
  * Configuration:
  * - LOCAL_TOKEN_COUNTING: Set to "true" to enable local token counting
- * - TIKTOKEN_MODEL: Model name for tiktoken encoding (default: cl100k_base)
+ * - TIKTOKEN_MODEL: Model name for tiktoken encoding (default: o200k_base)
  *   Supported models: cl100k_base, p50k_base, p50k_edit, r50k_base, gpt2, o200k_base
  * - TIKTOKEN_BPE_URL: URL to fetch tiktoken BPE data from (default: OpenAI's CDN)
  *   Note: bpeUrl parameter is currently not used with js-tiktoken
@@ -365,7 +365,7 @@ export function getLocalTokenCountingConfig(env?: Record<string, string>): {
 
   // Tiktoken options
   const useTiktoken = envVars.LOCAL_TIKTOKEN !== 'false' && envVars.LOCAL_TIKTOKEN !== '0';
-  const modelName = envVars.TIKTOKEN_MODEL || 'cl100k_base';
+  const modelName = envVars.TIKTOKEN_MODEL || 'o200k_base';
   const bpeUrl = envVars.TIKTOKEN_BPE_URL;
 
   return {

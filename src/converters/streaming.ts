@@ -17,7 +17,7 @@ export function createStreamTransformer(
     let hasToolCalls = false;
     let hasThinking = false;
     let thinkingStarted = false;
-    const messageId = requestId || `msg_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const messageMutex = requestId || `msg_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
     const toolCalls: {
         [index: number]: {
             id: string,
@@ -30,6 +30,11 @@ export function createStreamTransformer(
     let contentBlockIndex = 0;
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
+
+    // Thinking content accumulation state
+    let accumulatedThinkingContent = "";
+    let accumulatedSignature = "";
+    let thinkingBlockIndex = -1;
 
     // Token counting state
     let inputTokens = 0;
@@ -77,8 +82,88 @@ export function createStreamTransformer(
         }
     };
 
+    // Count thinking tokens separately
+    const countThinkingTokens = (thinkingText: string) => {
+        if (!tokenizerReady || !thinkingText) return;
+        try {
+            outputTokens += countTokensWithTiktoken(thinkingText, { tokenizer, useLocalCounting: true });
+        } catch (e) {
+            // Ignore counting errors
+        }
+    };
+
     const sendEvent = (controller: TransformStreamDefaultController, event: string, data: object) => {
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+    };
+
+    // Process thinking extraction from text content
+    const processThinkingExtraction = (textContent: string, controller: TransformStreamDefaultController) => {
+        // Add to buffer for processing
+        accumulatedThinkingContent += textContent;
+
+        // Try to extract complete thinking blocks
+        const thinkingRegex = /<thinking>([\s\S]*?)<\/thinking>/g;
+        let match;
+        let lastIndex = 0;
+        let hasCompleteThinkingBlock = false;
+
+        while ((match = thinkingRegex.exec(accumulatedThinkingContent)) !== null) {
+            // Send any text before this thinking block
+            if (match.index > lastIndex) {
+                const textBefore = accumulatedThinkingContent.substring(lastIndex, match.index);
+                if (textBefore.trim()) {
+                    countOutputTokens(textBefore);
+                    sendEvent(controller, 'content_block_delta', {
+                        type: 'content_block_delta',
+                        index: 0,
+                        delta: { type: 'text_delta', text: textBefore }
+                    });
+                }
+            }
+
+            // Extract thinking content
+            const thinkingContent = match[1];
+
+            // Start thinking block if not already started
+            if (!thinkingStarted) {
+                thinkingStarted = true;
+                thinkingBlockIndex = contentBlockIndex + 1;
+                contentBlockIndex = thinkingBlockIndex;
+                sendEvent(controller, 'content_block_start', {
+                    type: 'content_block_start',
+                    index: thinkingBlockIndex,
+                    content_block: { type: 'thinking', thinking: '' }
+                });
+            }
+
+            // Send thinking delta
+            countThinkingTokens(thinkingContent);
+            sendEvent(controller, 'content_block_delta', {
+                type: 'content_block_delta',
+                index: thinkingBlockIndex,
+                delta: { type: 'thinking_delta', thinking: thinkingContent }
+            });
+
+            lastIndex = thinkingRegex.lastIndex;
+            hasCompleteThinkingBlock = true;
+            hasThinking = true;
+        }
+
+        // If we found complete thinking blocks, remove processed content
+        if (hasCompleteThinkingBlock) {
+            accumulatedThinkingContent = accumulatedThinkingContent.substring(lastIndex);
+        }
+
+        // If we have remaining text after thinking blocks, send it
+        if (accumulatedThinkingContent && !accumulatedThinkingContent.includes('<thinking>')) {
+            countOutputTokens(accumulatedThinkingContent);
+            sendEvent(controller, 'content_block_delta', {
+                type: 'content_block_delta',
+                index: 0,
+                delta: { type: 'text_delta', text: accumulatedThinkingContent }
+            });
+            accumulatedThinkingContent = '';
+        }
     };
 
     return {
@@ -93,7 +178,7 @@ export function createStreamTransformer(
                 sendEvent(controller, 'message_start', {
                     type: 'message_start',
                     message: {
-                        id: messageId,
+                        id: messageMutex,
                         type: 'message',
                         role: 'assistant',
                         model,
@@ -125,6 +210,27 @@ export function createStreamTransformer(
                         type: 'content_block_stop',
                         index: 0
                     });
+
+                    // Send signature_delta before content_block_stop for thinking block if we have signature
+                    if (thinkingStarted && thinkingBlockIndex !== -1 && accumulatedSignature) {
+                        sendEvent(controller, 'content_block_delta', {
+                            type: 'content_block_delta',
+                            index: thinkingBlockIndex,
+                            delta: {
+                                type: 'signature_delta',
+                                signature: accumulatedSignature,
+                                index: thinkingBlockIndex
+                            }
+                        });
+                    }
+
+                    // Send content_block_stop for thinking block if active
+                    if (thinkingStarted && thinkingBlockIndex !== -1) {
+                        sendEvent(controller, 'content_block_stop', {
+                            type: 'content_block_stop',
+                            index: thinkingBlockIndex
+                        });
+                    }
 
                     Object.values(toolCalls).forEach(tc => {
                         if (tc.started) {
@@ -172,62 +278,12 @@ export function createStreamTransformer(
 
                     // Handle text content delta
                     if (delta.content) {
-                        let textContent = delta.content;
-                        let thinkingContent = '';
+                        const textContent = delta.content;
 
-                        // Extract <thinking>...</thinking> markers from text content
-                        const thinkingRegex = /<thinking>([\s\S]*?)<\/thinking>/g;
-                        let match;
-                        let lastIndex = 0;
-                        let extractedThinking = false;
-
-                        while ((match = thinkingRegex.exec(textContent)) !== null) {
-                            // Send text before this thinking block (if any)
-                            if (match.index > lastIndex) {
-                                const textBefore = textContent.substring(lastIndex, match.index);
-                                countOutputTokens(textBefore);
-                                sendEvent(controller, 'content_block_delta', {
-                                    type: 'content_block_delta',
-                                    index: 0,
-                                    delta: { type: 'text_delta', text: textBefore }
-                                });
-                            }
-
-                            // Extract thinking content
-                            thinkingContent += match[1];
-                            lastIndex = thinkingRegex.lastIndex;
-                            extractedThinking = true;
-                        }
-
-                        // If we found thinking content, create thinking block and send remaining text
-                        if (extractedThinking && thinkingContent) {
-                            hasThinking = true;
-                            if (!thinkingStarted) {
-                                thinkingStarted = true;
-                                contentBlockIndex++;
-                                sendEvent(controller, 'content_block_start', {
-                                    type: 'content_block_start',
-                                    index: contentBlockIndex,
-                                    content_block: { type: 'thinking', thinking: '' }
-                                });
-                            }
-                            contentBlockIndex++;
-                            sendEvent(controller, 'content_block_delta', {
-                                type: 'content_block_delta',
-                                index: contentBlockIndex - 1,
-                                delta: { type: 'thinking_delta', thinking: thinkingContent }
-                            });
-
-                            // Send remaining text after last thinking block
-                            if (lastIndex < textContent.length) {
-                                const remainingText = textContent.substring(lastIndex);
-                                countOutputTokens(remainingText);
-                                sendEvent(controller, 'content_block_delta', {
-                                    type: 'content_block_delta',
-                                    index: 0,
-                                    delta: { type: 'text_delta', text: remainingText }
-                                });
-                            }
+                        // Check if this chunk contains thinking markers
+                        if (textContent.includes('<thinking>') || textContent.includes('</thinking>') || accumulatedThinkingContent) {
+                            // Process thinking extraction with state management
+                            processThinkingExtraction(textContent, controller);
                         } else {
                             // No thinking markers found, send as regular text
                             countOutputTokens(textContent);
@@ -244,22 +300,46 @@ export function createStreamTransformer(
                         // Handle reasoning_content (common in thinking-enabled models)
                         const reasoningContent = delta.reasoning_content || delta.reasoning;
                         if (reasoningContent && typeof reasoningContent === 'string') {
+                            // Add reasoning content to accumulated thinking content
+                            accumulatedThinkingContent += reasoningContent;
                             hasThinking = true;
+
+                            // Start thinking block if not already started
                             if (!thinkingStarted) {
                                 thinkingStarted = true;
-                                contentBlockIndex++;
+                                thinkingBlockIndex = contentBlockIndex + 1;
+                                contentBlockIndex = thinkingBlockIndex;
                                 sendEvent(controller, 'content_block_start', {
                                     type: 'content_block_start',
-                                    index: contentBlockIndex,
+                                    index: thinkingBlockIndex,
                                     content_block: { type: 'thinking', thinking: '' }
                                 });
                             }
-                            contentBlockIndex++;
+
+                            // Send thinking delta
+                            countThinkingTokens(reasoningContent);
                             sendEvent(controller, 'content_block_delta', {
                                 type: 'content_block_delta',
-                                index: contentBlockIndex - 1,
+                                index: thinkingBlockIndex,
                                 delta: { type: 'thinking_delta', thinking: reasoningContent }
                             });
+                        }
+
+                        // Handle signature delta for thinking verification
+                        const signatureContent = delta.signature;
+                        if (signatureContent && typeof signatureContent === 'string') {
+                            // Accumulate signature for thinking block
+                            accumulatedSignature += signatureContent;
+                        }
+
+                        // Also check for signature in the chunk metadata (similar to non-streaming)
+                        const reasoningItemId = openaiChunk.reasoning_item_id;
+                        const responseSignature = openaiChunk.signature;
+
+                        if (reasoningItemId && !accumulatedSignature) {
+                            accumulatedSignature = reasoningItemId;
+                        } else if (responseSignature && !accumulatedSignature) {
+                            accumulatedSignature = responseSignature;
                         }
                     }
 
@@ -322,6 +402,43 @@ export function createStreamTransformer(
         flush(controller: TransformStreamDefaultController) {
             // Send final events if stream ends unexpectedly
             if (initialized) {
+                // Send content_block_stop for all active blocks
+                sendEvent(controller, 'content_block_stop', {
+                    type: 'content_block_stop',
+                    index: 0
+                });
+
+                // Send signature_delta before content_block_stop for thinking block if we have signature
+                if (thinkingStarted && thinkingBlockIndex !== -1 && accumulatedSignature) {
+                    sendEvent(controller, 'content_block_delta', {
+                        type: 'content_block_delta',
+                        index: thinkingBlockIndex,
+                        delta: {
+                            type: 'signature_delta',
+                            signature: accumulatedSignature,
+                            index: thinkingBlockIndex
+                        }
+                    });
+                }
+
+                // Send content_block_stop for thinking block if active
+                if (thinkingStarted && thinkingBlockIndex !== -1) {
+                    sendEvent(controller, 'content_block_stop', {
+                        type: 'content_block_stop',
+                        index: thinkingBlockIndex
+                    });
+                }
+
+                // Send content_block_stop for tool calls
+                Object.values(toolCalls).forEach(tc => {
+                    if (tc.started) {
+                        sendEvent(controller, 'content_block_stop', {
+                            type: 'content_block_stop',
+                            index: tc.claudeIndex
+                        });
+                    }
+                });
+
                 sendEvent(controller, 'message_delta', {
                     type: 'message_delta',
                     delta: { stop_reason: "end_turn", stop_sequence: null },

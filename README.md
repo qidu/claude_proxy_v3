@@ -24,12 +24,13 @@ A complete Claude and Gemini API Proxy Endpoints that supports multiple AI model
   - Doubao (Seed-1.6-Thinking)
   - Gemini (2.5-Flash with native API support)
 
-- **Extended Thinking Support**: Reasoning models with step-by-step explanations
-  - DeepSeek R1 series (deepseek-r1, deepseek-r1-0528)
-  - Doubao Thinking (doubao-seed-1.6-thinking)
-  - Qwen Thinking variants (qwen3-*-thinking)
-  - Natural reasoning without special parameters
-  - Supports boolean values (`true`/`false`) in addition to string values (`"enabled"`/`"disabled"`) for thinking config
+- **Extended Thinking Support**: Full Claude-style thinking with signature verification
+  - **Model Support**: DeepSeek R1 series, Doubao Thinking, Qwen Thinking variants, Gemini reasoning models
+  - **Thinking Modes**: Supports both `enabled` (manual) and `adaptive` (Claude 4.6+) thinking types
+  - **Boolean Support**: Accepts boolean values (`true`/`false`) in addition to string values (`"enabled"`/`"disabled"`)
+  - **Signature Verification**: Full signature_delta streaming events for thinking block verification
+  - **Streaming Support**: Proper thinking_delta and signature_delta events in SSE streams
+  - **Token Counting**: Accurate token counting for thinking content with budget validation
 
 - **Flexible Configuration**:
   - File-based config: `proxy_config.toml`
@@ -297,6 +298,92 @@ POST /v1/messages
   }
 }
 ```
+
+### Thinking Feature
+
+The proxy provides full Claude-style extended thinking support, converting between OpenAI-compatible thinking formats and Claude's thinking format with signature verification.
+
+#### **Thinking Configuration Formats**
+
+**Claude Format (Output)**:
+```json
+{
+  "thinking": {
+    "type": "enabled",  // or "adaptive", "disabled", true, false
+    "budget_tokens": 10000
+  }
+}
+```
+
+**OpenAI-Compatible Format (Input)**:
+```json
+{
+  "thinking": {
+    "enabled": true,  // or false
+    "budget_tokens": 10000
+  }
+}
+```
+
+#### **Supported Thinking Modes**
+
+1. **Manual Thinking (`type: "enabled"`)**:
+   - Fixed budget tokens specified in request
+   - Used for older models (Sonnet 4.5, Opus 4.5, etc.)
+   - Example: `{"type": "enabled", "budget_tokens": 10000}`
+
+2. **Adaptive Thinking (`type: "adaptive"`)**:
+   - Claude dynamically determines when and how much to think
+   - Recommended for Claude Opus 4.6 and Sonnet 4.6
+   - Example: `{"type": "adaptive"}`
+
+3. **Boolean Format**:
+   - `true` = `"enabled"`, `false` = `"disabled"`
+   - Example: `{"type": true, "budget_tokens": 10000}`
+
+#### **Signature Verification**
+
+The proxy handles thinking signature verification for secure thinking block validation:
+
+- **Non-streaming**: Signature included in thinking block metadata
+- **Streaming**: `signature_delta` events sent before `content_block_stop`
+- **Signature Sources**:
+  - `delta.signature` from OpenAI streaming
+  - `reasoning_item_id` from response metadata
+  - `signature` from response metadata
+
+#### **Streaming Events**
+
+For SSE streaming responses, the proxy sends proper thinking events:
+
+1. **Thinking Block Start**:
+   ```json
+   {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}}
+   ```
+
+2. **Thinking Content Deltas**:
+   ```json
+   {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Step 1: Analyze the problem..."}}
+   ```
+
+3. **Signature Delta** (if available):
+   ```json
+   {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "EqQBCgIYAhIM1gbcDa9GJwZA2b3hGgxBdjrkzLoky3dl1pkiMOYds..."}}
+   ```
+
+4. **Thinking Block Stop**:
+   ```json
+   {"type": "content_block_stop", "index": 0}
+   ```
+
+#### **Supported Thinking Models**
+
+- **DeepSeek**: R1 series, V3.2-exp-thinking, V3.1-terminus-thinking
+- **Qwen**: Thinking variants (vl-30b, 30b-2507, next-80b, 235b-2507)
+- **Doubao**: seed-1.6-thinking, 1.5-thinking-pro
+- **Moonshot/Kimi**: kimi-k2-thinking
+- **Gemini**: 3.1-pro-preview (includes reasoning_content)
+- **Claude**: All 4.x models with thinking support
 
 ### Responses API
 
@@ -952,7 +1039,13 @@ MIT
 
 ## 🛠️ Technical Implementation
 
-### Latest Changes (2026-03-09)
+### Latest Changes (Current)
+
+**Thinking Signature Support & Streaming Improvements**:
+- **Signature Delta Events**: Added full `signature_delta` support for thinking block verification in streaming
+- **OpenAI-to-Claude Conversion**: Enhanced conversion of OpenAI's `reasoning_item_id` and `signature` to Claude's thinking format
+- **Streaming Thinking Extraction**: Improved thinking content extraction from `<thinking>` markers and `reasoning_content` fields
+- **Thinking Block Lifecycle**: Proper `content_block_start/delta/stop` events for thinking blocks in streaming
 
 **ChatJimmy SDK Path Mapping & Import Fixes**:
 - **package.json**: Added chatjimmy-sdk imports configuration
@@ -1046,6 +1139,19 @@ budget_to_effort_high = 0         # >= threshold or 0 = always "high"
 - **Normalization Utility**: Added `normalizeThinkingConfig()` function to standardize thinking config across the codebase
 - **Token Counting**: Updated token counting logic to handle boolean thinking types
 - **Validation**: Enhanced validation to accept boolean values while maintaining backward compatibility
+
+### Thinking Signature Support (Latest)
+- **Signature Delta Events**: Added `"signature_delta"` to `ClaudeStreamEvent.delta.type` for streaming signature verification
+- **Streaming Signature Emission**: Implemented `signature_delta` event emission before `content_block_stop` for thinking blocks
+- **Signature Accumulation**: Accumulates signatures from multiple sources: `delta.signature`, `reasoning_item_id`, and `signature` fields
+- **OpenAI-to-Claude Conversion**: Converts OpenAI's `reasoning_item_id` and `signature` to Claude's `signature_delta` format
+- **Anthropic Pass-Through**: Passes through `signature_delta` events from Anthropic upstream unchanged
+- **Non-Streaming Compatibility**: Includes signature in thinking block metadata for non-streaming responses
+
+**Files Modified**:
+- `src/types/claude.ts` - Added `"signature_delta"` to stream event types
+- `src/converters/streaming.ts` - Added signature accumulation and emission logic
+- `src/converters/openai-to-claude.ts` - Enhanced signature extraction from response metadata
 
 ### Gemini v1 Endpoint Support
 - **Path Pattern Matching**: Updated regex patterns to support both `/v1beta/models/` and `/v1/models/` endpoints
