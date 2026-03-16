@@ -410,14 +410,29 @@ export default {
               logger.debug(requestId, `No auth headers found for ${modelRoute.upstreamMode}`);
             }
 
-            // For openai-completions upstream, always use client headers (transformed from x-goog-api-key or x-api-key)
-            // Config API keys should NOT override client headers for openai-completions upstream
-            // because client might send Gemini/Claude API keys that don't work with OpenAI upstream,
-            // but that's the client's responsibility
+            // For openai-completions upstream:
+            // - If model has an alias AND config has api_key, use config api_key first
+            // - Otherwise, use client headers (transformed from x-goog-api-key or x-api-key)
             if (modelRoute.upstreamMode === 'openai-completions') {
-                // Always use transformed client headers for openai-completions upstream
-                // Do NOT use config API key even if present
-                logger.debug(requestId, `Using client API key for openai-completions upstream: ${modelName}`);
+                if (modelRoute.modelAlias && modelRoute.apiKey) {
+                    // Model has alias and config has api_key - use config api_key first
+                    const configHeaders = formatApiKeyForUpstream(modelRoute.apiKey, modelRoute.upstreamMode);
+                    modelAuthHeaders = { ...modelAuthHeaders, ...configHeaders };
+                    logger.debug(requestId, `Using API key from config for model with alias: ${modelName}`);
+
+                    // Debug log: show auth header keys and partial values after config override
+                    const authKeysAfterConfig = Object.keys(modelAuthHeaders);
+                    if (authKeysAfterConfig.length > 0) {
+                      authKeysAfterConfig.forEach(key => {
+                        const value = modelAuthHeaders[key];
+                        const partialValue = value.length > 8 ? `${value.substring(0, 4)}...${value.substring(value.length - 4)}` : '***';
+                        logger.debug(requestId, `Auth header after config override for ${modelRoute.upstreamMode}: ${key}=${partialValue}`);
+                      });
+                    }
+                } else {
+                    // Use transformed client headers for openai-completions upstream
+                    logger.debug(requestId, `Using client API key for openai-completions upstream: ${modelName}`);
+                }
             } else if (modelRoute.apiKey) {
                 // For native upstream modes (anthropic-messages, gemini-generatecontent, gemini-interactions),
                 // config API key overrides request headers

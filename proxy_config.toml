@@ -17,6 +17,15 @@ api_key = "sk-17ac71ed56aee29*"
 #"claude-4.5-sonnet" = ["claude-opus-4-20250514", "", ""]
 #"claude-4.6-sonnet" = ["claude-opus-4-1-20250805", "", ""]
 
+[models.free]
+base_url = "https://api.qnaigc.com"
+upstream_mode = "openai-completions"
+api_key = "sk-17ac71ed56aee29a57***"
+"stepfun/step-flash-free" = ["stepfun/step-3.5-flash", "", ""]
+"trinity-free" = ["arcee-ai/trinity-large-preview" , "", ""]
+"hunter-free" = ["hunter-alpha" , "", ""]
+"healer-free" = ["healer-alpha" , "", ""]
+
 [models.gemini]
 upstream_mode = "gemini-generatecontent"
 base_url = "https://api.example.com"
