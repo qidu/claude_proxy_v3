@@ -244,12 +244,39 @@ export function createStreamTransformer(
                     // Determine final stop reason
                     let finalStopReason = "end_turn";
                     try {
-                        const lastChunk = JSON.parse(lines[lines.length - 2].substring(6));
-                        const finishReason = lastChunk.choices?.[0]?.finish_reason;
-                        if (finishReason === 'tool_calls' || finishReason === 'tool_use') finalStopReason = 'tool_use';
-                        else if (finishReason === 'length') finalStopReason = 'max_tokens';
-                        else if (finishReason === 'content_filter') finalStopReason = 'content_filter';
-                        else if ((!finishReason || finishReason === 'stop') && hasToolCalls) finalStopReason = 'tool_use';
+                        // Find the last data chunk before [DONE]
+                        // We need to look backward from the current line (which is [DONE])
+                        // The lines array includes all lines from buffer.split("\n"), including empty lines
+                        // We need to find the last non-empty data line before [DONE]
+                        let lastDataChunk = null;
+
+                        // Iterate backward through lines to find the last data chunk
+                        for (let i = lines.length - 2; i >= 0; i--) {
+                            const line = lines[i];
+                            if (line.startsWith("data: ")) {
+                                const lineData = line.substring(6);
+                                if (lineData.trim() !== "[DONE]") {
+                                    try {
+                                        lastDataChunk = JSON.parse(lineData);
+                                        break;
+                                    } catch (e) {
+                                        // Skip invalid JSON lines
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (lastDataChunk) {
+                            const finishReason = lastDataChunk.choices?.[0]?.finish_reason;
+                            if (finishReason === 'tool_calls' || finishReason === 'tool_use') finalStopReason = 'tool_use';
+                            else if (finishReason === 'length') finalStopReason = 'max_tokens';
+                            else if (finishReason === 'content_filter') finalStopReason = 'content_filter';
+                            else if ((!finishReason || finishReason === 'stop') && hasToolCalls) finalStopReason = 'tool_use';
+                        } else if (hasToolCalls) {
+                            // If we can't find the last chunk but we have tool calls, default to tool_use
+                            finalStopReason = 'tool_use';
+                        }
                     } catch (e) { }
 
                     // Send message_delta with final output token count
@@ -441,7 +468,7 @@ export function createStreamTransformer(
 
                 sendEvent(controller, 'message_delta', {
                     type: 'message_delta',
-                    delta: { stop_reason: "end_turn", stop_sequence: null },
+                    delta: { stop_reason: hasToolCalls ? "tool_use" : "end_turn", stop_sequence: null },
                     usage: { output_tokens: outputTokens }
                 });
 
