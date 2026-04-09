@@ -11,7 +11,7 @@
     {
       "pattern": "chatjimmy-sdk",
       "target": "./submodules/chatjimmy/src/index.ts"
-     }
+    }
   ],
   "scripts": {
     "dev": "wrangler dev",
@@ -23,7 +23,7 @@
     "server": "tsx src/server.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "^2.1.71",
+    "@anthropic-ai/claude-code": "^2.1.27",
     "@cloudflare/workers-types": "^4.20241106.0",
     "js-tiktoken": "^1.0.21",
     "tiktoken": "^1.0.15",

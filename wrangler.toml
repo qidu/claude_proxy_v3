@@ -10,6 +10,7 @@ LOCAL_TIKTOKEN=true            # Use tiktoken (accurate)
 TIKTOKEN_MODEL="o200k_base"    # Encoding model
 
 MODELS_CACHE_TTL=300           # cache models list from upstream
+UPSTREAM_BODY_TIMEOUT_MS=600000    # upstream body fetch timeout in ms
 
 ALLOWED_HOSTS="127.0.0.1,localhost,api.qnaigc.com,api.example1.com,api.example2-ai.com,api.yoosheen.com,api.wenwen-ai.com"
 DEV_MODE=true

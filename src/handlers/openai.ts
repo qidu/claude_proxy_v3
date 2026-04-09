@@ -6,6 +6,7 @@ import { createLogger } from '../utils/logger.js';
 import { isSdkUrl, handleSdkOpenAIRequest } from '../utils/sdk-handler.js';
 import type { Env, Logger } from '../types/shared.js';
 import { addForwardedHeaders } from '../utils/routing.js';
+import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 
 /**
  * Check if request is in Gemini Interactions format
@@ -211,6 +212,7 @@ export async function handleOpenAIRequest(
             method: 'POST',
             headers: addForwardedHeaders(headers, request),
             body: JSON.stringify(openaiRequest),
+            signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
         });
 
         // Handle target API errors

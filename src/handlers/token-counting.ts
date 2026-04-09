@@ -24,6 +24,7 @@ import {
   getTiktokenTokenizer,
 } from '../utils/token-counting.js';
 import { addForwardedHeaders } from '../utils/routing.js';
+import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 
 /**
  * Handle token counting API request
@@ -66,7 +67,7 @@ export async function handleTokenCountingRequest(
   }
 
   // Fall back to API-based token counting
-  return handleApiBasedTokenCounting(claudeRequest, targetUrl, authHeaders, requestId, request, activeLogger);
+  return handleApiBasedTokenCounting(claudeRequest, targetUrl, authHeaders, requestId, request, activeLogger, env);
 }
 
 /**
@@ -148,7 +149,8 @@ async function handleApiBasedTokenCounting(
   authHeaders: Record<string, string>,
   requestId: string,
   request: Request,
-  logger: Logger
+  logger: Logger,
+  env?: Env
 ): Promise<Response> {
   // Convert Claude request to OpenAI format
   const openaiRequest: OpenAITokenCountingRequest = convertClaudeTokenCountingToOpenAI(
@@ -176,6 +178,7 @@ async function handleApiBasedTokenCounting(
       ...addForwardedHeaders(authHeaders, request),
     },
     body: JSON.stringify(openaiRequest),
+    signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
   // Handle target API errors

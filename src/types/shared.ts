@@ -123,6 +123,12 @@ export interface Env {
      * Set to 0 to disable caching.
      */
     MODELS_CACHE_TTL?: string;
+
+    /**
+     * Timeout in milliseconds for upstream body fetches.
+     * Default: 30000 (30 seconds)
+     */
+    UPSTREAM_BODY_TIMEOUT_MS?: string;
 }
 
 

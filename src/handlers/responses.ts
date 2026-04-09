@@ -10,6 +10,7 @@ import { Logger, createLogger } from '../utils/logger.js';
 import { OpenAIRequest, OpenAIResponse } from '../types/openai.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { addForwardedHeaders } from '../utils/routing.js';
+import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { convertResponsesToChatCompletions } from '../converters/responses-to-completions.js';
 import { convertCompletionsToResponses } from '../converters/completions-to-responses.js';
 
@@ -37,11 +38,11 @@ export async function handleResponsesRequest(
   // Handle based on upstream mode
   if (upstreamMode === 'openai-completions') {
     // Convert Responses API format to Chat Completions format
-    return handleAsCompletions(request, targetUrl, authHeaders, requestId, model, activeLogger, requestBody, isStreaming);
+    return handleAsCompletions(request, targetUrl, authHeaders, requestId, model, activeLogger, requestBody, isStreaming, env);
   }
 
   // Default: Pass through to OpenAI Responses API upstream
-  return handleAsPassthrough(request, targetUrl, authHeaders, requestId, activeLogger, requestBody, isStreaming);
+  return handleAsPassthrough(request, targetUrl, authHeaders, requestId, activeLogger, requestBody, isStreaming, env);
 }
 
 /**
@@ -55,7 +56,8 @@ async function handleAsCompletions(
   model: string,
   logger: Logger,
   requestBody: Record<string, unknown>,
-  isStreaming: boolean
+  isStreaming: boolean,
+  env?: Env
 ): Promise<Response> {
   // Convert Responses API request to Chat Completions format
   const completionsRequest = convertResponsesToChatCompletions(requestBody, model);
@@ -69,6 +71,7 @@ async function handleAsCompletions(
       ...addForwardedHeaders(authHeaders, request),
     },
     body: JSON.stringify(completionsRequest),
+    signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
   if (!response.ok) {
@@ -116,7 +119,8 @@ async function handleAsPassthrough(
   requestId: string,
   logger: Logger,
   requestBody: Record<string, unknown>,
-  isStreaming: boolean
+  isStreaming: boolean,
+  env?: Env
 ): Promise<Response> {
   const response = await fetch(targetUrl, {
     method: 'POST',
@@ -125,6 +129,7 @@ async function handleAsPassthrough(
       ...addForwardedHeaders(authHeaders, request),
     },
     body: JSON.stringify(requestBody),
+    signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
   if (!response.ok) {

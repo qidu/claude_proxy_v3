@@ -16,6 +16,7 @@ import { handleTargetApiError } from '../utils/errors.js';
 import { isSdkUrl, handleSdkOpenAIRequest, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
 import { addForwardedHeaders } from '../utils/routing.js';
 import { getLocalTokenCountingConfig } from '../utils/token-counting.js';
+import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 
 /**
  * Get token counting configuration from environment
@@ -121,6 +122,7 @@ export async function handleMessagesRequest(
         ...addForwardedHeaders(authHeaders, request),
       },
       body: JSON.stringify(requestBody),
+      signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 
     // Handle target API errors
@@ -219,6 +221,7 @@ export async function handleMessagesRequest(
       ...addForwardedHeaders(authHeaders, request),
     },
     body: JSON.stringify(openaiRequest),
+    signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
   // Handle target API errors

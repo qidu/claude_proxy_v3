@@ -7,24 +7,26 @@ budget_to_effort_high = 0        # >= 2000 or 0 = always "high" (or use a thresh
 
 [models.claude]
 upstream_mode = "anthropic-messages"
-base_url = "https://api.qnaigc.com"
+#base_url = "https://api.qnaigc.com"
+base_url = "http://localhost:4000"
 api_key = "sk-17ac71ed56aee29*"
-"stepfun/step-flash" = ["stepfun/step-3.5-flash", "", ""]
-"meituan/longcat-flash" = ["meituan/longcat-flash-lite", "", ""]
+#"meituan/longcat-flash" = ["meituan/longcat-flash-lite", "", ""]
 #base_url = "https://api.example-ai.com"
 #"claude-4.5-sonnet" = ["claude-opus-4-20250514", "", ""]
 #api_key = "sk-***"
 #"claude-4.5-sonnet" = ["claude-opus-4-20250514", "", ""]
 #"claude-4.6-sonnet" = ["claude-opus-4-1-20250805", "", ""]
+"claude-opus-4-6" = ["claude-opus-4-6", "", ""]
+"claude-sonnet-4-6" = ["claude-sonnet-4-6", "", ""]
+"claude-sonnet-4-5" = ["claude-sonnet-4-5", "", ""]
+"claude-haiku-4-5" = ["claude-haiku-4-5", "", ""]
 
 [models.free]
 base_url = "https://api.qnaigc.com"
 upstream_mode = "openai-completions"
-api_key = "sk-17ac71ed56aee29a57***"
+api_key = "sk-17ac71ed56aee29***"
 "stepfun/step-flash-free" = ["stepfun/step-3.5-flash", "", ""]
 "trinity-free" = ["arcee-ai/trinity-large-preview" , "", ""]
-"hunter-free" = ["hunter-alpha" , "", ""]
-"healer-free" = ["healer-alpha" , "", ""]
 
 [models.gemini]
 upstream_mode = "gemini-generatecontent"

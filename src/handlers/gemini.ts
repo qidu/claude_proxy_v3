@@ -18,6 +18,7 @@ import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js
 import { createStreamTransformer } from '../converters/streaming.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { addForwardedHeaders } from '../utils/routing.js';
+import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 
 /**
  * Gemini API configuration
@@ -204,6 +205,7 @@ async function handleGeminiInteractionsRequest(
         method: 'POST',
         headers: geminiHeaders,
         body: JSON.stringify(geminiRequest),
+        signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
     
     activeLogger.debug(requestId, `Response status: ${response.status}`);

@@ -11,6 +11,7 @@ import { convertOpenAIModelsToClaude } from '../converters/openai-to-claude.js';
 import { validateModelsRequestParams } from '../utils/validation.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { addForwardedHeaders } from '../utils/routing.js';
+import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 
 // In-memory cache for model list
 interface CacheEntry {
@@ -114,6 +115,7 @@ export async function getModelCount(
         'Content-Type': 'application/json',
         ...authHeaders,
       },
+      signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 
     if (!response.ok) {
@@ -193,6 +195,7 @@ export async function handleModelsRequest(
       'Content-Type': 'application/json',
       ...addForwardedHeaders(authHeaders, request),
     },
+    signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
   // Handle target API errors

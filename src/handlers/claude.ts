@@ -8,6 +8,7 @@ import { createLogger } from '../utils/logger.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { isSdkUrl, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
 import { addForwardedHeaders } from '../utils/routing.js';
+import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 
 /**
  * Handle native Claude API request (pass-through)
@@ -73,6 +74,7 @@ export async function handleClaudeRequest(
             ...addForwardedHeaders(authHeaders, request),
         },
         body: JSON.stringify(requestBody),
+        signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 
     if (!response.ok) {
