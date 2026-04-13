@@ -367,6 +367,7 @@ export default {
       // For endpoints that need model-specific routing, extract model from request body
       if (path === '/v1/messages' || path.startsWith('/v1/messages?') ||
           path === '/v1/interactions' || path.startsWith('/v1/interactions?') ||
+          path === '/v1/responses' || path.startsWith('/v1/responses?') ||
           ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent')))) {
         try {
           const bodyText = await request.text();
@@ -513,7 +514,7 @@ export default {
               const isStreamEndpoint = path.includes(':streamGenerateContent');
               const modelMatch = path.match(/\/(v1beta|v1)\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
               const pathModelId = modelMatch ? modelMatch[2] : upstreamModelName;
-              
+
               if (isNativeMode) {
                 // Check if this is a Gemini model (only Gemini supports generateContent API natively)
                 if (modelRoute.upstreamMode === 'gemini-generatecontent' || modelRoute.upstreamMode === 'gemini-interactions') {
@@ -538,10 +539,19 @@ export default {
                 upstreamMode = 'openai-completions';
                 forceStreaming = isStreamEndpoint;
               }
+            } else if (path === '/v1/responses' || path.startsWith('/v1/responses?')) {
+              handlerType = 'responses';
+              if (modelRoute.upstreamMode === 'openai-responses') {
+                targetUrl = `${modelRoute.targetUrl}/v1/responses`;
+                upstreamMode = 'openai-responses';
+              } else {
+                targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
+                upstreamMode = 'openai-completions';
+              }
             }
-            
+
             modelId = upstreamModelName;
-            
+
             logger.debug(requestId, `Model-specific routing: ${modelName} -> ${targetUrl} (${modelRoute.upstreamMode}) [${handlerType}]`);
             
             // Recreate request with body
@@ -685,14 +695,7 @@ export default {
           break;
 
         case 'responses':
-          // /v1/responses routes based on upstream mode
-          if (upstreamMode === 'openai-responses') {
-            // Pass through to OpenAI Responses API
-            response = await handleResponsesRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, upstreamMode);
-          } else {
-            // Convert to OpenAI Chat Completions
-            response = await handleResponsesRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, upstreamMode);
-          }
+          response = await handleResponsesRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, upstreamMode);
           break;
 
         default:

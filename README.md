@@ -434,6 +434,18 @@ OpenAI Responses API support with format conversion to/from Chat Completions.
 - Uses `status: "completed"` instead of `finish_reason`
 - Does NOT support streaming (use `background: true` for async processing)
 
+**Known Limitations** (`openai-completions` conversion mode):
+
+1. **Image inputs dropped**: `input_image` content parts are converted to a `[Image input]` string placeholder rather than forwarded as multipart `image_url` content to the upstream Chat Completions API (`responses-to-completions.ts`).
+
+2. **Reasoning content discarded**: When the upstream returns a `thinking` content block, a `reasoning` output item is emitted in the response but without any content — the reasoning text is silently lost (`completions-to-responses.ts`).
+
+3. **`developer` role may cause upstream errors**: The `developer` role is passed through as-is; most OpenAI-compatible upstreams do not support it and will return a validation error (`responses-to-completions.ts`).
+
+4. **Stateful features ignored**: `conversation`, `previous_response_id`, `background`, `context_management`, and `store` parameters are silently dropped. The proxy is stateless by design.
+
+5. **Streaming tool call name latency**: In SSE mode, the `response.output_item.added` event for a function call may emit an empty `name` field if the tool name arrives in a later chunk from the upstream (`handlers/responses.ts`).
+
 **Configuration**:
 ```toml
 [models.default]

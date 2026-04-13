@@ -16,6 +16,14 @@ export function convertResponsesToChatCompletions(
   // Extract model from responses request (may have different naming)
   const responseModel = (responsesRequest.model as string) || model;
 
+  // Map top-level instructions to a system message (prepended before input)
+  if (responsesRequest.instructions) {
+    messages.push({
+      role: 'system',
+      content: responsesRequest.instructions as string,
+    });
+  }
+
   // Convert input items to messages
   const input = responsesRequest.input;
   if (input) {
@@ -51,7 +59,9 @@ export function convertResponsesToChatCompletions(
   if (responsesRequest.temperature !== undefined) {
     completionsRequest.temperature = responsesRequest.temperature as number;
   }
-  if (responsesRequest.max_tokens !== undefined) {
+  if (responsesRequest.max_output_tokens !== undefined) {
+    completionsRequest.max_tokens = responsesRequest.max_output_tokens as number;
+  } else if (responsesRequest.max_tokens !== undefined) {
     completionsRequest.max_tokens = responsesRequest.max_tokens as number;
   }
   if (responsesRequest.top_p !== undefined) {
@@ -102,21 +112,10 @@ function convertInputItemToMessages(item: Record<string, unknown>): OpenAIMessag
   const role = item.role as string;
   const type = item.type as string;
 
-  // Handle message type inputs
   if (type === 'message') {
     const content = item.content;
-    if (content) {
-      messages.push({
-        role: convertRole(role),
-        content: convertContentToString(content),
-      });
-    }
-  }
-
-  // Handle output messages being passed as input (for continuing conversations)
-  if (type === 'message' && role === 'assistant') {
-    const content = item.content;
-    if (content && Array.isArray(content)) {
+    if (role === 'assistant' && Array.isArray(content)) {
+      // Output messages passed as input (continuing conversations) — extract output_text
       const textContent = content.find(
         (c: Record<string, unknown>) => c.type === 'output_text'
       );
@@ -126,7 +125,33 @@ function convertInputItemToMessages(item: Record<string, unknown>): OpenAIMessag
           content: (textContent as Record<string, unknown>).text as string,
         });
       }
+    } else if (content) {
+      messages.push({
+        role: convertRole(role),
+        content: convertContentToString(content),
+      });
     }
+  } else if (type === 'function_call') {
+    // Assistant-side tool call — map to an assistant message with tool_calls
+    messages.push({
+      role: 'assistant',
+      content: null as unknown as string,
+      tool_calls: [{
+        id: item.call_id as string || item.id as string,
+        type: 'function',
+        function: {
+          name: item.name as string,
+          arguments: item.arguments as string,
+        },
+      }],
+    });
+  } else if (type === 'function_call_output') {
+    // Tool result — map to a tool message
+    messages.push({
+      role: 'tool',
+      content: item.output as string ?? '',
+      tool_call_id: item.call_id as string,
+    });
   }
 
   return messages;

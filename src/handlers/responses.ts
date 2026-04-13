@@ -81,18 +81,8 @@ async function handleAsCompletions(
   }
 
   if (isStreaming) {
-    // For streaming, we need to pass through but the response format is different
-    // Chat Completions streaming uses a different format than Responses API
-    // Currently pass through as-is (responses API doesn't support streaming in same format)
-    return new Response(response.body, {
-      status: 200,
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'x-request-id': requestId,
-      },
-    });
+    // Transform Chat Completions SSE stream into Responses API SSE events
+    return streamCompletionsAsResponses(response, model, requestId);
   }
 
   // Convert Chat Completions response back to Responses API format
@@ -104,6 +94,296 @@ async function handleAsCompletions(
     status: 200,
     headers: {
       'Content-Type': 'application/json',
+      'x-request-id': requestId,
+    },
+  });
+}
+
+/**
+ * Transform a Chat Completions SSE stream into a Responses API SSE stream.
+ *
+ * Chat Completions events look like:
+ *   data: {"id":"...","choices":[{"delta":{"content":"hi"},"index":0}],"model":"..."}
+ *
+ * Responses API events emitted here:
+ *   response.created           – once at start
+ *   response.output_item.added – once (message item)
+ *   response.content_part.added – once (output_text part)
+ *   response.output_text.delta  – one per token chunk
+ *   response.output_text.done   – once at end of text
+ *   response.output_item.done   – once (message item)
+ *   response.completed          – once at end with usage
+ */
+function streamCompletionsAsResponses(
+  upstreamResponse: Response,
+  model: string,
+  requestId: string
+): Response {
+  const responseId = `resp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const itemId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+  const created_at = Math.floor(Date.now() / 1000);
+
+  let sequenceNumber = 0;
+  const nextSeq = () => sequenceNumber++;
+
+  function sseEvent(event: string, data: unknown): string {
+    return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  }
+
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
+  // Accumulated state for tool calls streamed as indexed fragments.
+  // Map from tool-call index -> { id, name, arguments }
+  type ToolCallAccum = { id: string; name: string; arguments: string };
+
+  async function pump() {
+    try {
+      // Emit response.created
+      await writer.write(encoder.encode(sseEvent('response.created', {
+        type: 'response.created',
+        sequence_number: nextSeq(),
+        response: { id: responseId, object: 'response', created_at, status: 'in_progress', model, output: [] },
+      })));
+
+      let accumulatedText = '';
+      let textPartOpened = false;
+      let usageData: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
+      let upstreamModel = model;
+      let buffer = '';
+      // tool_calls are streamed by index; accumulate across chunks
+      const toolCalls: Map<number, ToolCallAccum> = new Map();
+      // Track which tool call output_index slots have been opened
+      const toolCallOutputIndex: Map<number, number> = new Map();
+      let nextOutputIndex = 1; // 0 reserved for the text message item if present
+
+      const reader = upstreamResponse.body?.getReader();
+      if (!reader) {
+        await writer.close();
+        return;
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (raw === '[DONE]') continue;
+
+          let chunk: Record<string, unknown>;
+          try {
+            chunk = JSON.parse(raw);
+          } catch {
+            continue;
+          }
+
+          if (chunk.model) upstreamModel = chunk.model as string;
+          if (chunk.usage) usageData = chunk.usage as typeof usageData;
+
+          const choices = chunk.choices as Array<{
+            delta?: {
+              content?: string;
+              tool_calls?: Array<{
+                index: number;
+                id?: string;
+                type?: string;
+                function?: { name?: string; arguments?: string };
+              }>;
+            };
+            finish_reason?: string;
+          }> | undefined;
+          if (!choices?.length) continue;
+
+          const delta = choices[0].delta;
+          if (!delta) continue;
+
+          // --- text content ---
+          if (delta.content) {
+            if (!textPartOpened) {
+              // Open the message output item and text part on first text delta
+              await writer.write(encoder.encode(sseEvent('response.output_item.added', {
+                type: 'response.output_item.added',
+                sequence_number: nextSeq(),
+                output_index: 0,
+                item: { id: itemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] },
+              })));
+              await writer.write(encoder.encode(sseEvent('response.content_part.added', {
+                type: 'response.content_part.added',
+                sequence_number: nextSeq(),
+                item_id: itemId,
+                output_index: 0,
+                content_index: 0,
+                part: { type: 'output_text', text: '' },
+              })));
+              textPartOpened = true;
+            }
+            accumulatedText += delta.content;
+            await writer.write(encoder.encode(sseEvent('response.output_text.delta', {
+              type: 'response.output_text.delta',
+              sequence_number: nextSeq(),
+              item_id: itemId,
+              output_index: 0,
+              content_index: 0,
+              delta: delta.content,
+            })));
+          }
+
+          // --- tool call chunks ---
+          if (delta.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index;
+              if (!toolCalls.has(idx)) {
+                // First chunk for this tool call index
+                const tcId = tc.id ?? `call_${Date.now()}_${idx}`;
+                toolCalls.set(idx, { id: tcId, name: tc.function?.name ?? '', arguments: tc.function?.arguments ?? '' });
+                const outputIndex = nextOutputIndex++;
+                toolCallOutputIndex.set(idx, outputIndex);
+                // Emit output_item.added for this function_call
+                await writer.write(encoder.encode(sseEvent('response.output_item.added', {
+                  type: 'response.output_item.added',
+                  sequence_number: nextSeq(),
+                  output_index: outputIndex,
+                  item: {
+                    id: tcId,
+                    type: 'function_call',
+                    status: 'in_progress',
+                    name: tc.function?.name ?? '',
+                    arguments: '',
+                    call_id: tcId,
+                  },
+                })));
+              } else {
+                const accum = toolCalls.get(idx)!;
+                if (tc.function?.name) accum.name += tc.function.name;
+                if (tc.function?.arguments) {
+                  accum.arguments += tc.function.arguments;
+                  const outputIndex = toolCallOutputIndex.get(idx)!;
+                  // Emit arguments delta
+                  await writer.write(encoder.encode(sseEvent('response.function_call_arguments.delta', {
+                    type: 'response.function_call_arguments.delta',
+                    sequence_number: nextSeq(),
+                    item_id: accum.id,
+                    output_index: outputIndex,
+                    delta: tc.function.arguments,
+                  })));
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // --- close text part if it was opened ---
+      if (textPartOpened) {
+        await writer.write(encoder.encode(sseEvent('response.output_text.done', {
+          type: 'response.output_text.done',
+          sequence_number: nextSeq(),
+          item_id: itemId,
+          output_index: 0,
+          content_index: 0,
+          text: accumulatedText,
+        })));
+        await writer.write(encoder.encode(sseEvent('response.output_item.done', {
+          type: 'response.output_item.done',
+          sequence_number: nextSeq(),
+          output_index: 0,
+          item: {
+            id: itemId,
+            type: 'message',
+            status: 'completed',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: accumulatedText }],
+          },
+        })));
+      }
+
+      // --- close each tool call item ---
+      const completedToolCalls: Array<{ id: string; type: string; status: string; name: string; arguments: string; call_id: string }> = [];
+      for (const [idx, accum] of toolCalls) {
+        const outputIndex = toolCallOutputIndex.get(idx)!;
+        await writer.write(encoder.encode(sseEvent('response.function_call_arguments.done', {
+          type: 'response.function_call_arguments.done',
+          sequence_number: nextSeq(),
+          item_id: accum.id,
+          output_index: outputIndex,
+          arguments: accum.arguments,
+        })));
+        await writer.write(encoder.encode(sseEvent('response.output_item.done', {
+          type: 'response.output_item.done',
+          sequence_number: nextSeq(),
+          output_index: outputIndex,
+          item: {
+            id: accum.id,
+            type: 'function_call',
+            status: 'completed',
+            name: accum.name,
+            arguments: accum.arguments,
+            call_id: accum.id,
+          },
+        })));
+        completedToolCalls.push({ id: accum.id, type: 'function_call', status: 'completed', name: accum.name, arguments: accum.arguments, call_id: accum.id });
+      }
+
+      // Build output array for response.completed
+      const outputItems: unknown[] = [];
+      if (textPartOpened) {
+        outputItems.push({
+          id: itemId,
+          type: 'message',
+          status: 'completed',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: accumulatedText }],
+        });
+      }
+      outputItems.push(...completedToolCalls);
+
+      // Build usage for response.completed
+      const usage = usageData ? {
+        input_tokens: usageData.prompt_tokens ?? 0,
+        output_tokens: usageData.completion_tokens ?? 0,
+        total_tokens: usageData.total_tokens ?? 0,
+        input_tokens_details: { cached_tokens: 0 },
+      } : undefined;
+
+      // Emit response.completed
+      await writer.write(encoder.encode(sseEvent('response.completed', {
+        type: 'response.completed',
+        sequence_number: nextSeq(),
+        response: {
+          id: responseId,
+          object: 'response',
+          created_at,
+          status: 'completed',
+          model: upstreamModel,
+          output: outputItems,
+          usage,
+        },
+      })));
+
+      await writer.write(encoder.encode('data: [DONE]\n\n'));
+    } catch {
+      // Stream ended or errored; close writer to flush what we have
+    } finally {
+      await writer.close();
+    }
+  }
+
+  pump();
+
+  return new Response(readable, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
       'x-request-id': requestId,
     },
   });

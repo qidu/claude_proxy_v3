@@ -10,14 +10,15 @@ import { OpenAIResponse } from '../types/openai.js';
 export interface OpenAIResponsesResponse {
   id: string;
   object: 'response';
-  created: number;
+  created_at: number;
   status: 'completed' | 'in_progress' | 'failed';
   model: string;
   output_text?: string;
-  output_items: Array<{
+  output: Array<{
     id: string;
     type: 'message' | 'function_call' | 'function_call_output' | 'web_search_call' | 'code_interpreter_call' | 'computer_call' | 'computer_call_output' | 'file_search_call' | 'reasoning' | 'refusal';
     status?: 'completed' | 'in_progress' | 'failed';
+    role?: 'assistant' | 'user' | 'system';
     content?: Array<{
       type: 'output_text' | 'input_text' | 'input_image' | 'input_file' | 'refusal';
       text?: string;
@@ -52,20 +53,21 @@ export function convertCompletionsToResponses(
   model: string
 ): OpenAIResponsesResponse {
   const responseId = `resp_${completionsResponse.id || generateResponseId()}`;
-  const created = completionsResponse.created || Math.floor(Date.now() / 1000);
+  const created_at = completionsResponse.created || Math.floor(Date.now() / 1000);
 
   // Extract the assistant message content
   const choice = completionsResponse.choices[0];
   const message = choice?.message;
 
   // Build output items from the chat completion message
-  const outputItems: OpenAIResponsesResponse['output_items'] = [];
+  const outputItems: OpenAIResponsesResponse['output'] = [];
 
   if (message) {
-    const outputItem: OpenAIResponsesResponse['output_items'][0] = {
+    const outputItem: OpenAIResponsesResponse['output'][0] = {
       id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
       type: 'message',
       status: 'completed',
+      role: 'assistant',
       content: [],
     };
 
@@ -77,38 +79,29 @@ export function convertCompletionsToResponses(
           text: message.content,
         }];
       } else if (Array.isArray(message.content)) {
-        outputItem.content = message.content.map(part => {
+        const contentParts: NonNullable<typeof outputItem.content> = [];
+        for (const part of message.content) {
           if (part.type === 'text') {
-            return {
-              type: 'output_text' as const,
+            contentParts.push({
+              type: 'output_text',
               text: part.text,
-            };
+            });
           } else if (part.type === 'image_url') {
-            return {
-              type: 'input_image' as const,
+            // Forward image as input_image with the URL
+            contentParts.push({
+              type: 'input_image',
               image_url: part.image_url?.url,
-            };
+            });
           } else if (part.type === 'thinking') {
-            // Convert thinking to reasoning item
+            // Convert thinking to a reasoning output item (prepended before the message)
             outputItems.push({
               id: `reasoning_${Date.now()}`,
               type: 'reasoning',
               status: 'completed',
-              content: [{
-                type: 'output_text' as const,
-                text: part.thinking,
-              }],
             });
-            return {
-              type: 'output_text' as const,
-              text: '[Reasoning hidden]',
-            };
           }
-          return {
-            type: 'output_text' as const,
-            text: '',
-          };
-        }).filter(c => c.text);
+        }
+        outputItem.content = contentParts.length > 0 ? contentParts : [];
       }
     }
 
@@ -139,13 +132,27 @@ export function convertCompletionsToResponses(
     },
   } : undefined;
 
+  // Collect all output_text content across message output items for the convenience field
+  const outputTextParts: string[] = [];
+  for (const item of outputItems) {
+    if (item.type === 'message' && item.content) {
+      for (const part of item.content) {
+        if (part.type === 'output_text' && part.text) {
+          outputTextParts.push(part.text);
+        }
+      }
+    }
+  }
+  const output_text = outputTextParts.length > 0 ? outputTextParts.join('') : undefined;
+
   return {
     id: responseId,
     object: 'response',
-    created,
+    created_at,
     status: 'completed',
     model: completionsResponse.model || model,
-    output_items: outputItems,
+    output_text,
+    output: outputItems,
     usage,
   };
 }
