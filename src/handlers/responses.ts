@@ -84,7 +84,7 @@ async function handleAsCompletions(
 
   if (isStreaming) {
     // Transform Chat Completions SSE stream into Responses API SSE events
-    return streamCompletionsAsResponses(response, model, requestId);
+    return streamCompletionsAsResponses(response, model, requestId, logger);
   }
 
   // Convert Chat Completions response back to Responses API format
@@ -120,7 +120,8 @@ async function handleAsCompletions(
 function streamCompletionsAsResponses(
   upstreamResponse: Response,
   model: string,
-  requestId: string
+  requestId: string,
+  logger?: Logger
 ): Response {
   const responseId = `resp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   const itemId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
@@ -157,6 +158,7 @@ function streamCompletionsAsResponses(
       let usageData: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
       let upstreamModel = model;
       let buffer = '';
+      let rawUpstreamBody = ''; // accumulate for debug logging
       // tool_calls are streamed by index; accumulate across chunks
       const toolCalls: Map<number, ToolCallAccum> = new Map();
       // Track which tool call output_index slots have been opened
@@ -173,7 +175,9 @@ function streamCompletionsAsResponses(
         const { done, value } = await reader.read();
         if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
+        const chunk = decoder.decode(value, { stream: true });
+        rawUpstreamBody += chunk;
+        buffer += chunk;
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
 
@@ -300,6 +304,8 @@ function streamCompletionsAsResponses(
           }
         }
       }
+
+      logger?.debug(requestId, `[stream] upstream raw body (${rawUpstreamBody.length} bytes):\n${rawUpstreamBody}`);
 
       // --- close text part if it was opened ---
       if (textPartOpened) {

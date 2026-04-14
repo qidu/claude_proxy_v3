@@ -328,7 +328,7 @@ export default {
     const proxyConfig = await loadProxyConfig(env);
 
     if (proxyConfig.upstream) {
-      logger.debug(requestId, `Upstream config: budget_to_effort_low=${proxyConfig.upstream.budget_to_effort_low}, budget_to_effort_medium=${proxyConfig.upstream.budget_to_effort_medium}, budget_to_effort_high=${proxyConfig.upstream.budget_to_effort_high}`);
+      logger.debug(requestId, `Upstream config: budget_to_effort_low=${proxyConfig.upstream.budget_to_effort_low}, \n\tbudget_to_effort_medium=${proxyConfig.upstream.budget_to_effort_medium}, \n\tbudget_to_effort_high=${proxyConfig.upstream.budget_to_effort_high}`);
     }
 
     try {
