@@ -444,7 +444,22 @@ OpenAI Responses API support with format conversion to/from Chat Completions.
 
 3. **`developer` role may cause upstream errors**: The `developer` role is passed through as-is; most OpenAI-compatible upstreams do not support it and will return a validation error (`responses-to-completions.ts`).
 
-4. **Stateful features ignored**: `conversation`, `previous_response_id`, `background`, `context_management`, and `store` parameters are silently dropped. The proxy is stateless by design.
+4. **`previous_response_id` and stateful features not supported**: The proxy is stateless — it does not store responses between requests. Sending `previous_response_id` does **not** raise an error; the field is silently dropped and the upstream receives a context-free request with no prior conversation history. The response will appear to answer your new `input` only, with no memory of the previous turn.
+
+   **Workaround**: pass the full conversation history explicitly in the `input` array on every request:
+   ```json
+   {
+     "model": "gpt-4o",
+     "input": [
+       {"type": "message", "role": "user",      "content": "What is the capital of France?"},
+       {"type": "message", "role": "assistant",  "content": [{"type": "output_text", "text": "Paris."}]},
+       {"type": "message", "role": "user",       "content": "And Germany?"}
+     ]
+   }
+   ```
+   Tool call turns use `function_call` / `function_call_output` items in the same array (see [OpenAI Responses API docs](https://platform.openai.com/docs/api-reference/responses)).
+
+   Other stateful fields that are also silently dropped: `conversation`, `background`, `context_management`, `store`.
 
 5. **Streaming tool call name latency**: In SSE mode, the `response.output_item.added` event for a function call may emit an empty `name` field if the tool name arrives in a later chunk from the upstream (`handlers/responses.ts`).
 

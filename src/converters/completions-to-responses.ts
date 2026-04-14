@@ -138,7 +138,13 @@ export function convertCompletionsToResponses(
       }
     }
 
-    outputItems.push(outputItem);
+    // Only include the message item when it has actual content.
+    // Tool-call-only responses (finish_reason: "tool_calls") leave content null,
+    // so the message item would be empty — omit it to stay spec-compliant.
+    const hasContent = outputItem.content && outputItem.content.length > 0;
+    if (hasContent) {
+      outputItems.push(outputItem);
+    }
   }
 
   // Build usage info

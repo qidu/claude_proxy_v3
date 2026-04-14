@@ -13,8 +13,9 @@ export function convertResponsesToChatCompletions(
 ): OpenAIRequest {
   const messages: OpenAIMessage[] = [];
 
-  // Extract model from responses request (may have different naming)
-  const responseModel = (responsesRequest.model as string) || model;
+  // model parameter is the alias (already resolved by the caller); prefer it over the raw
+  // body field so that model remapping (e.g. codex-mini-latest → gpt-4o-mini) takes effect.
+  const responseModel = model || (responsesRequest.model as string);
 
   // Map top-level instructions to a system message (prepended before input)
   if (responsesRequest.instructions) {
@@ -74,17 +75,45 @@ export function convertResponsesToChatCompletions(
     completionsRequest.response_format = responsesRequest.response_format as { type: 'text' | 'json_object' };
   }
   if (responsesRequest.tools !== undefined) {
-    // Responses API supports non-function tool types (web_search_preview, file_search,
-    // computer_use_preview, etc.) that have no .function property. Filter to only
-    // function-type tools before passing to chat completions.
-    const functionTools = (responsesRequest.tools as Array<Record<string, unknown>>)
-      .filter(t => t.type === 'function' && t.function != null);
-    if (functionTools.length > 0) {
-      completionsRequest.tools = functionTools as OpenAIRequest['tools'];
+    // Responses API function tools use a flat format:
+    //   { type: "function", name: "fn", description?: "...", parameters: {...} }
+    // Chat Completions uses a nested format:
+    //   { type: "function", function: { name: "fn", description?: "...", parameters: {...} } }
+    // Non-function Responses API tools (web_search_preview, file_search, etc.) are dropped.
+    const converted = (responsesRequest.tools as Array<Record<string, unknown>>)
+      .filter(t => t.type === 'function')
+      .map(t => {
+        if (t.function != null) {
+          // Already in Chat Completions nested format — pass through as-is
+          return t as unknown as { type: 'function'; function: { name: string; description?: string; parameters: any } };
+        }
+        // Responses API flat format → Chat Completions nested format
+        return {
+          type: 'function' as const,
+          function: {
+            name: t.name as string,
+            ...(t.description != null ? { description: t.description as string } : {}),
+            parameters: t.parameters,
+          },
+        };
+      });
+    if (converted.length > 0) {
+      completionsRequest.tools = converted;
     }
   }
   if (responsesRequest.tool_choice !== undefined) {
-    completionsRequest.tool_choice = responsesRequest.tool_choice as OpenAIRequest['tool_choice'];
+    const tc = responsesRequest.tool_choice as Record<string, unknown> | string;
+    if (typeof tc === 'object' && tc !== null && tc.type === 'function') {
+      // Responses API: { type: "function", name: "fn" }
+      // Chat Completions: { type: "function", function: { name: "fn" } }
+      completionsRequest.tool_choice = {
+        type: 'function',
+        function: { name: tc.name as string },
+      };
+    } else {
+      // "auto" | "none" | "required" — pass through as-is
+      completionsRequest.tool_choice = tc as OpenAIRequest['tool_choice'];
+    }
   }
   if (responsesRequest.frequency_penalty !== undefined) {
     completionsRequest.frequency_penalty = responsesRequest.frequency_penalty as number;

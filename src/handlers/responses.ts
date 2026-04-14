@@ -31,7 +31,9 @@ export async function handleResponsesRequest(
 
   const requestBody = await request.json() as Record<string, unknown>;
   const isStreaming = requestBody.stream === true;
-  const model = (requestBody.model as string) || modelId || 'unknown';
+  // Alias (modelId) takes precedence over the body's model field, matching the pattern
+  // used by the messages handler: `const targetModelId = modelId || claudeRequest.model`
+  const model = modelId || (requestBody.model as string) || 'unknown';
 
   activeLogger.info(requestId, `Responses API request (stream=${isStreaming}, mode=${upstreamMode}, model=${model}): ${targetUrl}`);
 
@@ -87,6 +89,7 @@ async function handleAsCompletions(
 
   // Convert Chat Completions response back to Responses API format
   const responseText = await response.text();
+  logger.debug(requestId, `Upstream completions response: ${responseText.substring(0, 1000)}`);
   const completionsResponse = JSON.parse(responseText) as OpenAIResponse;
   const responsesResponse = convertCompletionsToResponses(completionsResponse, model);
 
@@ -150,6 +153,7 @@ function streamCompletionsAsResponses(
 
       let accumulatedText = '';
       let textPartOpened = false;
+      let textOutputIndex = -1; // set when text item is opened
       let usageData: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
       let upstreamModel = model;
       let buffer = '';
@@ -157,7 +161,7 @@ function streamCompletionsAsResponses(
       const toolCalls: Map<number, ToolCallAccum> = new Map();
       // Track which tool call output_index slots have been opened
       const toolCallOutputIndex: Map<number, number> = new Map();
-      let nextOutputIndex = 1; // 0 reserved for the text message item if present
+      let nextOutputIndex = 0; // claimed by the text message item if/when text appears, else tool calls start at 0
 
       const reader = upstreamResponse.body?.getReader();
       if (!reader) {
@@ -211,18 +215,20 @@ function streamCompletionsAsResponses(
           // --- text content ---
           if (delta.content) {
             if (!textPartOpened) {
+              // Text message item claims the next available index (always 0 if no tool calls came first)
+              textOutputIndex = nextOutputIndex++;
               // Open the message output item and text part on first text delta
               await writer.write(encoder.encode(sseEvent('response.output_item.added', {
                 type: 'response.output_item.added',
                 sequence_number: nextSeq(),
-                output_index: 0,
+                output_index: textOutputIndex,
                 item: { id: itemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] },
               })));
               await writer.write(encoder.encode(sseEvent('response.content_part.added', {
                 type: 'response.content_part.added',
                 sequence_number: nextSeq(),
                 item_id: itemId,
-                output_index: 0,
+                output_index: textOutputIndex,
                 content_index: 0,
                 part: { type: 'output_text', text: '' },
               })));
@@ -233,7 +239,7 @@ function streamCompletionsAsResponses(
               type: 'response.output_text.delta',
               sequence_number: nextSeq(),
               item_id: itemId,
-              output_index: 0,
+              output_index: textOutputIndex,
               content_index: 0,
               delta: delta.content,
             })));
@@ -246,7 +252,8 @@ function streamCompletionsAsResponses(
               if (!toolCalls.has(idx)) {
                 // First chunk for this tool call index
                 const tcId = tc.id ?? `call_${Date.now()}_${idx}`;
-                toolCalls.set(idx, { id: tcId, name: tc.function?.name ?? '', arguments: tc.function?.arguments ?? '' });
+                const initialArgs = tc.function?.arguments ?? '';
+                toolCalls.set(idx, { id: tcId, name: tc.function?.name ?? '', arguments: initialArgs });
                 const outputIndex = nextOutputIndex++;
                 toolCallOutputIndex.set(idx, outputIndex);
                 // Emit output_item.added for this function_call
@@ -263,6 +270,16 @@ function streamCompletionsAsResponses(
                     call_id: tcId,
                   },
                 })));
+                // If the first chunk already carries argument data, emit it as a delta now
+                if (initialArgs) {
+                  await writer.write(encoder.encode(sseEvent('response.function_call_arguments.delta', {
+                    type: 'response.function_call_arguments.delta',
+                    sequence_number: nextSeq(),
+                    item_id: tcId,
+                    output_index: outputIndex,
+                    delta: initialArgs,
+                  })));
+                }
               } else {
                 const accum = toolCalls.get(idx)!;
                 if (tc.function?.name) accum.name += tc.function.name;
@@ -290,14 +307,14 @@ function streamCompletionsAsResponses(
           type: 'response.output_text.done',
           sequence_number: nextSeq(),
           item_id: itemId,
-          output_index: 0,
+          output_index: textOutputIndex,
           content_index: 0,
           text: accumulatedText,
         })));
         await writer.write(encoder.encode(sseEvent('response.output_item.done', {
           type: 'response.output_item.done',
           sequence_number: nextSeq(),
-          output_index: 0,
+          output_index: textOutputIndex,
           item: {
             id: itemId,
             type: 'message',
@@ -425,7 +442,7 @@ export async function handleResponsesInputTokensRequest(
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
   const requestBody = await request.json() as Record<string, unknown>;
-  const model = (requestBody.model as string) || modelId || 'unknown';
+  const model = modelId || (requestBody.model as string) || 'unknown';
 
   activeLogger.info(requestId, `Responses input_tokens request (mode=${upstreamMode}, model=${model}): ${targetUrl}`);
 
@@ -508,7 +525,7 @@ export async function handleResponsesCompactRequest(
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
   const requestBody = await request.json() as Record<string, unknown>;
-  const model = (requestBody.model as string) || modelId || 'unknown';
+  const model = modelId || (requestBody.model as string) || 'unknown';
 
   activeLogger.info(requestId, `Responses compact request (mode=${upstreamMode}, model=${model}): ${targetUrl}`);
 
