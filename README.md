@@ -444,12 +444,13 @@ OpenAI Responses API support with format conversion to/from Chat Completions.
 
 3. **`developer` role may cause upstream errors**: The `developer` role is passed through as-is; most OpenAI-compatible upstreams do not support it and will return a validation error (`responses-to-completions.ts`).
 
-4. **`previous_response_id` and stateful features not supported**: The proxy is stateless — it does not store responses between requests. Sending `previous_response_id` does **not** raise an error; the field is silently dropped and the upstream receives a context-free request with no prior conversation history. The response will appear to answer your new `input` only, with no memory of the previous turn.
+4. **Stateful conversation not supported (`previous_response_id`, `conversation`, `store`)**: The proxy is stateless by design — it does not store or cache responses between requests, and it will not implement a conversation store. `previous_response_id` is silently dropped; the upstream receives only the current `input` with no prior history. The result is a context-free response that ignores all previous turns. This applies to both `openai-completions` and `openai-responses` modes (in the latter, the field is forwarded to the upstream, but non-OpenAI upstreams such as LiteLLM also have no conversation store and will silently ignore it).
 
-   **Workaround**: pass the full conversation history explicitly in the `input` array on every request:
+   **Required client-side fix**: set `store: false` and pass the full conversation history in `input` on every request. This is the correct stateless usage pattern per the Responses API spec:
    ```json
    {
      "model": "gpt-4o",
+     "store": false,
      "input": [
        {"type": "message", "role": "user",      "content": "What is the capital of France?"},
        {"type": "message", "role": "assistant",  "content": [{"type": "output_text", "text": "Paris."}]},
@@ -457,9 +458,9 @@ OpenAI Responses API support with format conversion to/from Chat Completions.
      ]
    }
    ```
-   Tool call turns use `function_call` / `function_call_output` items in the same array (see [OpenAI Responses API docs](https://platform.openai.com/docs/api-reference/responses)).
+   Tool call turns use `function_call` / `function_call_output` items in the same array. See the [OpenAI Responses API docs](https://platform.openai.com/docs/api-reference/responses) for the full item schema.
 
-   Other stateful fields that are also silently dropped: `conversation`, `background`, `context_management`, `store`.
+   Other silently dropped fields: `background`, `context_management`.
 
 5. **Streaming tool call name latency**: In SSE mode, the `response.output_item.added` event for a function call may emit an empty `name` field if the tool name arrives in a later chunk from the upstream (`handlers/responses.ts`).
 
