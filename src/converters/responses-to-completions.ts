@@ -74,7 +74,14 @@ export function convertResponsesToChatCompletions(
     completionsRequest.response_format = responsesRequest.response_format as { type: 'text' | 'json_object' };
   }
   if (responsesRequest.tools !== undefined) {
-    completionsRequest.tools = responsesRequest.tools as OpenAIRequest['tools'];
+    // Responses API supports non-function tool types (web_search_preview, file_search,
+    // computer_use_preview, etc.) that have no .function property. Filter to only
+    // function-type tools before passing to chat completions.
+    const functionTools = (responsesRequest.tools as Array<Record<string, unknown>>)
+      .filter(t => t.type === 'function' && t.function != null);
+    if (functionTools.length > 0) {
+      completionsRequest.tools = functionTools as OpenAIRequest['tools'];
+    }
   }
   if (responsesRequest.tool_choice !== undefined) {
     completionsRequest.tool_choice = responsesRequest.tool_choice as OpenAIRequest['tool_choice'];

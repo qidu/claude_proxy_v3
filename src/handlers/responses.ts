@@ -12,7 +12,7 @@ import { handleTargetApiError } from '../utils/errors.js';
 import { addForwardedHeaders } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { convertResponsesToChatCompletions } from '../converters/responses-to-completions.js';
-import { convertCompletionsToResponses } from '../converters/completions-to-responses.js';
+import { convertCompletionsToResponses, convertCompletionsToCompactedResponse } from '../converters/completions-to-responses.js';
 
 /**
  * Handle responses API request
@@ -205,6 +205,9 @@ function streamCompletionsAsResponses(
           const delta = choices[0].delta;
           if (!delta) continue;
 
+          // Thinking tokens in delta.thinking / delta.reasoning_content are silently skipped;
+          // the fallback output item below ensures output is never empty if no text or tool calls follow.
+
           // --- text content ---
           if (delta.content) {
             if (!textPartOpened) {
@@ -345,6 +348,20 @@ function streamCompletionsAsResponses(
       }
       outputItems.push(...completedToolCalls);
 
+      // output: [] is invalid per spec. If the stream had only thinking/reasoning content
+      // (no text, no tool calls), emit a fallback empty-text message item so the client
+      // receives a non-empty output array. This handles models that emit thinking tokens
+      // in delta.thinking / delta.reasoning_content without a separate text delta.
+      if (outputItems.length === 0) {
+        outputItems.push({
+          id: itemId,
+          type: 'message',
+          status: 'completed',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '' }],
+        });
+      }
+
       // Build usage for response.completed
       const usage = usageData ? {
         input_tokens: usageData.prompt_tokens ?? 0,
@@ -384,6 +401,171 @@ function streamCompletionsAsResponses(
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
+      'x-request-id': requestId,
+    },
+  });
+}
+
+/**
+ * Handle POST /v1/responses/input_tokens request
+ *
+ * Returns input token count for the given request.
+ * Spec: POST /responses/input_tokens → { object: "response.input_tokens", input_tokens: number }
+ */
+export async function handleResponsesInputTokensRequest(
+  request: Request,
+  targetUrl: string,
+  authHeaders: Record<string, string>,
+  requestId: string,
+  modelId?: string,
+  env?: Env,
+  logger?: Logger,
+  upstreamMode?: string
+): Promise<Response> {
+  const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
+
+  const requestBody = await request.json() as Record<string, unknown>;
+  const model = (requestBody.model as string) || modelId || 'unknown';
+
+  activeLogger.info(requestId, `Responses input_tokens request (mode=${upstreamMode}, model=${model}): ${targetUrl}`);
+
+  if (upstreamMode === 'openai-completions') {
+    // Convert to completions format, call with max_tokens=1, extract prompt_tokens from usage
+    const completionsRequest = convertResponsesToChatCompletions(requestBody, model);
+    const countRequest = { ...completionsRequest, max_tokens: 1, stream: false };
+
+    activeLogger.debug(requestId, `input_tokens -> completions count: ${JSON.stringify(countRequest).substring(0, 500)}`);
+
+    const response = await fetch(targetUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...addForwardedHeaders(authHeaders, request),
+      },
+      body: JSON.stringify(countRequest),
+      signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
+    });
+
+    if (!response.ok) {
+      activeLogger.error(requestId, `Responses input_tokens error: ${response.status}, URL: ${targetUrl}`);
+      handleTargetApiError(response, 'Responses input_tokens (via Completions)', { url: targetUrl });
+    }
+
+    const responseText = await response.text();
+    const completionsResponse = JSON.parse(responseText) as OpenAIResponse;
+    const inputTokens = completionsResponse.usage?.prompt_tokens ?? 0;
+
+    return new Response(JSON.stringify({ object: 'response.input_tokens', input_tokens: inputTokens }), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'x-request-id': requestId,
+      },
+    });
+  }
+
+  // Passthrough to OpenAI Responses API upstream /responses/input_tokens
+  const response = await fetch(targetUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...addForwardedHeaders(authHeaders, request),
+    },
+    body: JSON.stringify(requestBody),
+    signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
+  });
+
+  if (!response.ok) {
+    activeLogger.error(requestId, `Responses input_tokens passthrough error: ${response.status}, URL: ${targetUrl}`);
+    handleTargetApiError(response, 'Responses input_tokens', { url: targetUrl });
+  }
+
+  return new Response(response.body, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-request-id': requestId,
+    },
+  });
+}
+
+/**
+ * Handle POST /v1/responses/compact request
+ *
+ * Compact a conversation. Returns a CompactedResponse with object: "response.compaction".
+ * Spec: POST /responses/compact
+ */
+export async function handleResponsesCompactRequest(
+  request: Request,
+  targetUrl: string,
+  authHeaders: Record<string, string>,
+  requestId: string,
+  modelId?: string,
+  env?: Env,
+  logger?: Logger,
+  upstreamMode?: string
+): Promise<Response> {
+  const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
+
+  const requestBody = await request.json() as Record<string, unknown>;
+  const model = (requestBody.model as string) || modelId || 'unknown';
+
+  activeLogger.info(requestId, `Responses compact request (mode=${upstreamMode}, model=${model}): ${targetUrl}`);
+
+  if (upstreamMode === 'openai-completions') {
+    // Convert to chat completions, call upstream, wrap as CompactedResponse
+    const completionsRequest = convertResponsesToChatCompletions(requestBody, model);
+
+    activeLogger.debug(requestId, `Compact -> completions: ${JSON.stringify(completionsRequest).substring(0, 500)}`);
+
+    const response = await fetch(targetUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...addForwardedHeaders(authHeaders, request),
+      },
+      body: JSON.stringify(completionsRequest),
+      signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
+    });
+
+    if (!response.ok) {
+      activeLogger.error(requestId, `Responses compact error: ${response.status}, URL: ${targetUrl}`);
+      handleTargetApiError(response, 'Responses compact (via Completions)', { url: targetUrl });
+    }
+
+    const responseText = await response.text();
+    const completionsResponse = JSON.parse(responseText) as OpenAIResponse;
+    const compactedResponse = convertCompletionsToCompactedResponse(completionsResponse, model);
+
+    return new Response(JSON.stringify(compactedResponse), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'x-request-id': requestId,
+      },
+    });
+  }
+
+  // Passthrough to OpenAI Responses API upstream /responses/compact
+  const response = await fetch(targetUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...addForwardedHeaders(authHeaders, request),
+    },
+    body: JSON.stringify(requestBody),
+    signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
+  });
+
+  if (!response.ok) {
+    activeLogger.error(requestId, `Responses compact passthrough error: ${response.status}, URL: ${targetUrl}`);
+    handleTargetApiError(response, 'Responses compact', { url: targetUrl });
+  }
+
+  return new Response(response.body, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
       'x-request-id': requestId,
     },
   });

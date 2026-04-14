@@ -12,7 +12,7 @@ import { createLogger } from './utils/logger.js';
 import { handleModelsRequest, getModelCount } from './handlers/models.js';
 import { handleTokenCountingRequest } from './handlers/token-counting.js';
 import { handleMessagesRequest } from './handlers/messages.js';
-import { handleResponsesRequest } from './handlers/responses.js';
+import { handleResponsesRequest, handleResponsesCompactRequest, handleResponsesInputTokensRequest } from './handlers/responses.js';
 import { handleGeminiRequest, handleGeminiRequestForMessages } from './handlers/gemini.js';
 import { handleOpenAIRequest } from './handlers/openai.js';
 import { handleClaudeRequest } from './handlers/claude.js';
@@ -125,7 +125,7 @@ function isDynamicRoute(path: string): boolean {
 function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
   targetUrl: string;
   targetEndpoint: string;
-  handlerType: 'messages' | 'interactions' | 'generateContent' | 'models' | 'token-counting' | 'responses';
+  handlerType: 'messages' | 'interactions' | 'generateContent' | 'models' | 'token-counting' | 'responses' | 'responses-compact' | 'responses-input-tokens';
   upstreamMode?: string;
   modelId?: string;
   forceStreaming?: boolean;
@@ -241,7 +241,45 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     };
   }
 
-  // 5. /v1/responses → multiple upstream modes
+  // 5. /v1/responses/input_tokens → count input tokens
+  if (path === '/v1/responses/input_tokens' || path.startsWith('/v1/responses/input_tokens?')) {
+    if (defaultMode === 'openai-responses') {
+      return {
+        targetUrl: `${defaultBaseUrl}/responses/input_tokens`,
+        targetEndpoint: 'v1/responses/input_tokens',
+        handlerType: 'responses-input-tokens',
+        upstreamMode: 'openai-responses',
+      };
+    } else {
+      return {
+        targetUrl: `${defaultBaseUrl}/v1/chat/completions`,
+        targetEndpoint: 'v1/responses/input_tokens',
+        handlerType: 'responses-input-tokens',
+        upstreamMode: 'openai-completions',
+      };
+    }
+  }
+
+  // 6. /v1/responses/compact → compact a conversation
+  if (path === '/v1/responses/compact' || path.startsWith('/v1/responses/compact?')) {
+    if (defaultMode === 'openai-responses') {
+      return {
+        targetUrl: `${defaultBaseUrl}/responses/compact`,
+        targetEndpoint: 'v1/responses/compact',
+        handlerType: 'responses-compact',
+        upstreamMode: 'openai-responses',
+      };
+    } else {
+      return {
+        targetUrl: `${defaultBaseUrl}/v1/chat/completions`,
+        targetEndpoint: 'v1/responses/compact',
+        handlerType: 'responses-compact',
+        upstreamMode: 'openai-completions',
+      };
+    }
+  }
+
+  // 6. /v1/responses → multiple upstream modes
   if (path === '/v1/responses' || path.startsWith('/v1/responses?')) {
     if (defaultMode === 'openai-responses') {
       // Pass through to OpenAI Responses API
@@ -354,7 +392,7 @@ export default {
       }
 
       let targetUrl: string = '';
-      let handlerType: 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' = 'messages';
+      let handlerType: 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' | 'responses-compact' | 'responses-input-tokens' = 'messages';
       let modelId: string | undefined;
       let upstreamMode: string | undefined;
       let forceStreaming: boolean = false;
@@ -368,6 +406,8 @@ export default {
       if (path === '/v1/messages' || path.startsWith('/v1/messages?') ||
           path === '/v1/interactions' || path.startsWith('/v1/interactions?') ||
           path === '/v1/responses' || path.startsWith('/v1/responses?') ||
+          path === '/v1/responses/compact' || path.startsWith('/v1/responses/compact?') ||
+          path === '/v1/responses/input_tokens' || path.startsWith('/v1/responses/input_tokens?') ||
           ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent')))) {
         try {
           const bodyText = await request.text();
@@ -548,6 +588,24 @@ export default {
                 targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
                 upstreamMode = 'openai-completions';
               }
+            } else if (path === '/v1/responses/input_tokens' || path.startsWith('/v1/responses/input_tokens?')) {
+              handlerType = 'responses-input-tokens';
+              if (modelRoute.upstreamMode === 'openai-responses') {
+                targetUrl = `${modelRoute.targetUrl}/v1/responses/input_tokens`;
+                upstreamMode = 'openai-responses';
+              } else {
+                targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
+                upstreamMode = 'openai-completions';
+              }
+            } else if (path === '/v1/responses/compact' || path.startsWith('/v1/responses/compact?')) {
+              handlerType = 'responses-compact';
+              if (modelRoute.upstreamMode === 'openai-responses') {
+                targetUrl = `${modelRoute.targetUrl}/v1/responses/compact`;
+                upstreamMode = 'openai-responses';
+              } else {
+                targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
+                upstreamMode = 'openai-completions';
+              }
             }
 
             modelId = upstreamModelName;
@@ -696,6 +754,14 @@ export default {
 
         case 'responses':
           response = await handleResponsesRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, upstreamMode);
+          break;
+
+        case 'responses-input-tokens':
+          response = await handleResponsesInputTokensRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, upstreamMode);
+          break;
+
+        case 'responses-compact':
+          response = await handleResponsesCompactRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, upstreamMode);
           break;
 
         default:

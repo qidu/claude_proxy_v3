@@ -8,6 +8,8 @@ A complete Claude and Gemini API Proxy Endpoints that supports multiple AI model
   - `GET /v1/models` - List available models
   - `POST /v1/messages` - Process claude messages (supports 49+ models)
   - `POST /v1/responses` - OpenAI Responses API (passthrough or convert to chat completions)
+  - `POST /v1/responses/input_tokens` - Count input tokens for a Responses API request
+  - `POST /v1/responses/compact` - Compact a conversation (returns `response.compaction` object)
   - `POST /v1/interactions` -  Process gemini interactions messages
   - `POST /v1beta/models/{model}:generateContent` - Process gemini content messages
   - `POST /v1beta/models/{model}:streamGenerateContent` - Process gemini content messages with SSE

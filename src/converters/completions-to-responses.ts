@@ -56,11 +56,30 @@ export function convertCompletionsToResponses(
   const created_at = completionsResponse.created || Math.floor(Date.now() / 1000);
 
   // Extract the assistant message content
-  const choice = completionsResponse.choices[0];
+  const choice = completionsResponse.choices?.[0];
   const message = choice?.message;
 
   // Build output items from the chat completion message
   const outputItems: OpenAIResponsesResponse['output'] = [];
+
+  // Guard: if choices is empty/missing, return a fallback message item so output is never [].
+  // output: [] is always invalid per the Responses API spec.
+  if (!completionsResponse.choices?.length) {
+    return {
+      id: responseId,
+      object: 'response',
+      created_at,
+      status: 'completed',
+      model: completionsResponse.model || model,
+      output: [{
+        id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        type: 'message',
+        status: 'completed',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '' }],
+      }],
+    };
+  }
 
   if (message) {
     const outputItem: OpenAIResponsesResponse['output'][0] = {
@@ -162,4 +181,32 @@ export function convertCompletionsToResponses(
  */
 function generateResponseId(): string {
   return `resp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+/**
+ * CompactedResponse format (object: "response.compaction")
+ */
+export interface CompactedResponse {
+  id: string;
+  object: 'response.compaction';
+  created_at: number;
+  output: OpenAIResponsesResponse['output'];
+  usage?: OpenAIResponsesResponse['usage'];
+}
+
+/**
+ * Convert Chat Completions response to CompactedResponse format
+ */
+export function convertCompletionsToCompactedResponse(
+  completionsResponse: OpenAIResponse,
+  model: string
+): CompactedResponse {
+  const base = convertCompletionsToResponses(completionsResponse, model);
+  return {
+    id: base.id,
+    object: 'response.compaction',
+    created_at: base.created_at,
+    output: base.output,
+    usage: base.usage,
+  };
 }
