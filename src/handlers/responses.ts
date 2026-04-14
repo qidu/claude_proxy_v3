@@ -13,6 +13,7 @@ import { addForwardedHeaders } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { convertResponsesToChatCompletions } from '../converters/responses-to-completions.js';
 import { convertCompletionsToResponses, convertCompletionsToCompactedResponse } from '../converters/completions-to-responses.js';
+import { getConversation, saveConversation, normalizeInputToItems } from '../utils/conversation-store.js';
 
 /**
  * Handle responses API request
@@ -61,10 +62,33 @@ async function handleAsCompletions(
   isStreaming: boolean,
   env?: Env
 ): Promise<Response> {
-  // Convert Responses API request to Chat Completions format
-  const completionsRequest = convertResponsesToChatCompletions(requestBody, model);
+  const conversationEnabled = env?.CONVERSATION === 'true' || env?.CONVERSATION === '1';
+  const previousResponseId = requestBody.previous_response_id as string | undefined;
 
-  logger.debug(requestId, `Converted to completions format: ${JSON.stringify(completionsRequest).substring(0, 500)}`);
+  // Normalize current input to an item array so we can prepend prior history
+  let mergedInput: unknown[] = normalizeInputToItems(requestBody.input);
+
+  // If conversation caching is on and client references a prior response,
+  // prepend [prior_input_items, prior_output_items] before the new input.
+  if (conversationEnabled && previousResponseId) {
+    const prior = getConversation(previousResponseId);
+    if (prior) {
+      mergedInput = [...prior.inputItems, ...prior.outputItems, ...mergedInput];
+      logger.debug(requestId, `[conversation] loaded prior=${previousResponseId} (${prior.inputItems.length + prior.outputItems.length} items prepended)`);
+    } else {
+      logger.debug(requestId, `[conversation] previous_response_id=${previousResponseId} not found in store (expired or unknown)`);
+    }
+  }
+
+  // Build effective request body: use merged input, drop previous_response_id
+  // (Chat Completions upstream does not understand it)
+  const effectiveBody: Record<string, unknown> = { ...requestBody, input: mergedInput };
+  delete effectiveBody.previous_response_id;
+
+  // Convert Responses API request to Chat Completions format
+  const completionsRequest = convertResponsesToChatCompletions(effectiveBody, model);
+
+  logger.debug(requestId, `Converted to completions format: ${JSON.stringify(completionsRequest)}`);
 
   const response = await fetch(targetUrl, {
     method: 'POST',
@@ -83,8 +107,14 @@ async function handleAsCompletions(
   }
 
   if (isStreaming) {
-    // Transform Chat Completions SSE stream into Responses API SSE events
-    return streamCompletionsAsResponses(response, model, requestId, logger);
+    // onComplete saves the conversation entry after the stream finishes
+    const onComplete = conversationEnabled
+      ? (responseId: string, outputItems: unknown[]) => {
+          saveConversation(responseId, mergedInput, outputItems);
+          logger.debug(requestId, `[conversation] saved responseId=${responseId} (${mergedInput.length} input + ${outputItems.length} output items)`);
+        }
+      : undefined;
+    return streamCompletionsAsResponses(response, model, requestId, logger, onComplete);
   }
 
   // Convert Chat Completions response back to Responses API format
@@ -92,6 +122,12 @@ async function handleAsCompletions(
   logger.debug(requestId, `Upstream completions response: ${responseText.substring(0, 1000)}`);
   const completionsResponse = JSON.parse(responseText) as OpenAIResponse;
   const responsesResponse = convertCompletionsToResponses(completionsResponse, model);
+
+  // Save conversation entry for next turn
+  if (conversationEnabled) {
+    saveConversation(responsesResponse.id, mergedInput, responsesResponse.output);
+    logger.debug(requestId, `[conversation] saved responseId=${responsesResponse.id} (${mergedInput.length} input + ${responsesResponse.output.length} output items)`);
+  }
 
   return new Response(JSON.stringify(responsesResponse), {
     status: 200,
@@ -121,7 +157,8 @@ function streamCompletionsAsResponses(
   upstreamResponse: Response,
   model: string,
   requestId: string,
-  logger?: Logger
+  logger?: Logger,
+  onComplete?: (responseId: string, outputItems: unknown[]) => void
 ): Response {
   const responseId = `resp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   const itemId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
@@ -392,6 +429,9 @@ function streamCompletionsAsResponses(
         total_tokens: usageData.total_tokens ?? 0,
         input_tokens_details: { cached_tokens: 0 },
       } : undefined;
+
+      // Save conversation entry before emitting the completed event
+      onComplete?.(responseId, outputItems);
 
       // Emit response.completed
       await writer.write(encoder.encode(sseEvent('response.completed', {

@@ -129,6 +129,15 @@ export interface Env {
      * Default: 30000 (30 seconds)
      */
     UPSTREAM_BODY_TIMEOUT_MS?: string;
+
+    /**
+     * Enable stateful conversation caching for /v1/responses with openai-completions upstream.
+     * When "true", the proxy stores each response's output items in memory and
+     * automatically prepends prior conversation history for requests that carry
+     * `previous_response_id`. TTL: 3600 seconds. In-memory only (no cross-process sharing).
+     * Set to "true" or "1" to enable.
+     */
+    CONVERSATION?: string;
 }
 
 

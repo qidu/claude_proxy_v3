@@ -446,6 +446,8 @@ OpenAI Responses API support with format conversion to/from Chat Completions.
 
 4. **Stateful conversation not supported (`previous_response_id`, `conversation`, `store`)**: The proxy is stateless by design — it does not store or cache responses between requests, and it will not implement a conversation store. `previous_response_id` is silently dropped; the upstream receives only the current `input` with no prior history. The result is a context-free response that ignores all previous turns. This applies to both `openai-completions` and `openai-responses` modes (in the latter, the field is forwarded to the upstream, but non-OpenAI upstreams such as LiteLLM also have no conversation store and will silently ignore it).
 
+Notice: set `CONVERSATION=true` in environment to enable stateful conversation experimental feature, it just cache conversion inner a proxy process instance.
+
    **Required client-side fix**: set `store: false` and pass the full conversation history in `input` on every request. This is the correct stateless usage pattern per the Responses API spec:
    ```json
    {
