@@ -1,6 +1,6 @@
 # Model Proxy v3
 
-A complete Claude and Gemini API Proxy Endpoints that supports multiple AI models and providers with Claude and Gemini API format.
+A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports multiple AI models and providers with Claude and Gemini API format.
 
 ## ✨ Features
 
@@ -1151,7 +1151,7 @@ budget_to_effort_high = 0         # >= threshold or 0 = always "high"
 // OpenAI output (with high=0)
 "reasoning_effort": "high"
 ```
-
+ 
 **Behavior**:
 - If no thresholds configured → thinking field stripped entirely
 - If thresholds configured → converted to `reasoning_effort`
