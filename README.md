@@ -1209,5 +1209,6 @@ budget_to_effort_high = 0         # >= threshold or 0 = always "high"
 ## 🔗 Links
 
 - [Claude API Documentation](https://docs.anthropic.com/claude/reference/)
-- [OpenAI API Documentation](https://platform.openai.com/docs/api-reference)
+- [OpenAI API Completions](https://platform.openai.com/docs/api-reference)
+- [OpenAI API Responses](https://developers.openai.com/api/reference/resources/responses/index.md)
 - [Google Gemini API Documentation](https://ai.google.dev/gemini-api/docs)
