@@ -17,9 +17,11 @@ DEV_MODE=true
 ALLOWED_ORIGINS="*"
 IMAGE_BLOCK_DATA_MAX_SIZE = "10485760"  # 10MB
 
-# Proxy config file path or URL
-PROXY_CONFIG_PATH = "./proxy_config.toml"
-# PROXY_CONFIG_URL = "http://eureka-server/config/proxy_config.toml"
+# Proxy config file path or Consul server address
+#PROXY_CONFIG_PATH = "./proxy_config.toml"
+# When set, PROXY_CONFIG_URL points to a Consul server, e.g. http://localhost:8500
+# The loader reads the KV prefix: model-proxy-v3/
+PROXY_CONFIG_URL = "http://localhost:8500"
 
 LOG_LEVEL = "info"
 

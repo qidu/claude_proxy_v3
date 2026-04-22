@@ -5,6 +5,8 @@
  */
 
 import { Env } from '../types/shared.js';
+import { mkdirSync, writeFileSync } from 'fs';
+import { dirname, join } from 'path';
 
 // Check if we're running in Node.js environment
 const isNodeEnvironment = (typeof process !== 'undefined' && process.versions?.node) ||
@@ -138,7 +140,7 @@ export function getModelRouteConfig(
  */
 function parseApiKey(apiKey: string | undefined): string | undefined {
   if (!apiKey) return undefined;
-  
+
   // Parse API key if it contains header format (e.g., "x-api-key: sk-...")
   if (apiKey.includes(':')) {
     const parts = apiKey.split(':');
@@ -147,11 +149,201 @@ function parseApiKey(apiKey: string | undefined): string | undefined {
       return parts.slice(1).join(':').trim();
     }
   }
-  
+
   return apiKey;
 }
 
+type ConsulKvEntry = {
+  Key: string;
+  Value?: string | null;
+};
+
+const CONSUL_CONFIG_PREFIX = 'model-proxy-v3';
+
+function decodeBase64(value: string): string {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(value, 'base64').toString('utf-8');
+  }
+
+  const binary = atob(value);
+  return new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)));
+}
+
+function parseConsulArrayValue(value: string): string[] {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) {
+    return [value];
+  }
+
+  const inner = trimmed.slice(1, -1);
+  const elements: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < inner.length; i++) {
+    const char = inner[i];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      elements.push(current.trim().replace(/^"|"$/g, ''));
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+
+  if (current.trim()) {
+    elements.push(current.trim().replace(/^"|"$/g, ''));
+  }
+
+  return elements;
+}
+
+function parseConsulScalarValue(value: string): string | number {
+  if (value === '') {
+    return '';
+  }
+
+  const numeric = Number(value);
+  if (!Number.isNaN(numeric) && value.trim() !== '') {
+    return numeric;
+  }
+
+  return value;
+}
+
+function buildConsulKvUrl(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}/v1/kv/${CONSUL_CONFIG_PREFIX}?recurse=true`;
+}
+
+function applyConsulKvEntry(config: ProxyConfig, entry: ConsulKvEntry): void {
+  if (!entry.Value) {
+    return;
+  }
+
+  const relativeKey = entry.Key.startsWith(`${CONSUL_CONFIG_PREFIX}/`)
+    ? entry.Key.slice(CONSUL_CONFIG_PREFIX.length + 1)
+    : entry.Key;
+  const parts = relativeKey.split('/').filter(Boolean);
+  if (parts.length === 0) {
+    return;
+  }
+
+  const rawValue = decodeBase64(entry.Value).trim();
+  const section = parts[0];
+
+  if (section === 'upstream' && parts.length >= 2) {
+    config.upstream ??= {};
+    const key = parts.slice(1).join('/');
+    (config.upstream as any)[key] = parseConsulScalarValue(rawValue);
+    return;
+  }
+
+  if (section === 'defaults' && parts.length >= 2) {
+    config.defaults ??= {};
+    const key = parts.slice(1).join('/');
+    (config.defaults as any)[key] = rawValue;
+    return;
+  }
+
+  if (section === 'models' && parts.length >= 3) {
+    config.models ??= {};
+    const categoryName = parts[1];
+    const key = parts.slice(2).join('/');
+    const category = (config.models[categoryName] ??= {});
+
+    if (Array.isArray(category)) {
+      return;
+    }
+
+    if (rawValue.startsWith('[') && rawValue.endsWith(']')) {
+      category[key] = parseConsulArrayValue(rawValue);
+      return;
+    }
+
+    category[key] = rawValue;
+  }
+}
+
+function parseConsulConfig(entries: ConsulKvEntry[]): ProxyConfig {
+  const config: ProxyConfig = {};
+  for (const entry of entries) {
+    applyConsulKvEntry(config, entry);
+  }
+  return config;
+}
+
+function quoteTomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function serializeTomlValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => serializeTomlValue(item)).join(', ')}]`;
+  }
+
+  if (typeof value === 'string') {
+    return quoteTomlString(value);
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  return quoteTomlString(String(value));
+}
+
+function serializeTomlSection(section: Record<string, unknown>): string[] {
+  return Object.entries(section).map(([key, value]) => `${key} = ${serializeTomlValue(value)}`);
+}
+
+function serializeProxyConfigToml(config: ProxyConfig): string {
+  const lines: string[] = [];
+
+  if (config.upstream) {
+    lines.push('[upstream]');
+    lines.push(...serializeTomlSection(config.upstream as Record<string, unknown>));
+    lines.push('');
+  }
+
+  if (config.models) {
+    for (const [categoryName, categoryConfig] of Object.entries(config.models)) {
+      if (Array.isArray(categoryConfig)) {
+        continue;
+      }
+
+      lines.push(`[models.${categoryName}]`);
+      lines.push(...serializeTomlSection(categoryConfig as Record<string, unknown>));
+      lines.push('');
+    }
+  }
+
+  if (config.defaults) {
+    lines.push('[defaults]');
+    lines.push(...serializeTomlSection(config.defaults as Record<string, unknown>));
+    lines.push('');
+  }
+
+  return lines.join('\n').replace(/\n$/, '');
+}
+
+export function dumpProxyConfigToml(config: ProxyConfig, directory = './config-dumps'): string | null {
+  if (!isNodeEnvironment) {
+    return null;
+  }
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filePath = join(directory, `proxy_config_${timestamp}.toml`);
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, serializeProxyConfigToml(config), 'utf-8');
+  return filePath;
+}
+
 let cachedConfig: ProxyConfig | null = null;
+
+export function clearProxyConfigCache(): void {
+  cachedConfig = null;
+}
 
 /**
  * Load proxy config from file or URL
@@ -167,17 +359,22 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
   console.log(`[INFO] Config path: ${configPath}, Config URL: ${configUrl}`);
 
   try {
-    let configContent: string;
+    let config: ProxyConfig;
 
     if (configUrl) {
-      // Load from URL (e.g., Eureka)
-      const response = await fetch(configUrl);
+      const response = await fetch(buildConsulKvUrl(configUrl));
       if (!response.ok) {
-        throw new Error(`Failed to fetch config from ${configUrl}: ${response.status}`);
+        throw new Error(`Failed to fetch config from Consul at ${configUrl}: ${response.status}`);
       }
-      configContent = await response.text();
+
+      const kvEntries = (await response.json()) as ConsulKvEntry[];
+      if (!Array.isArray(kvEntries)) {
+        throw new Error(`Invalid Consul KV response from ${configUrl}`);
+      }
+      config = parseConsulConfig(kvEntries);
     } else if (configPath) {
       // Load from file - handle both Node.js and Cloudflare Workers environments
+      let configContent: string;
       if (isNodeEnvironment) {
         // Node.js environment - use fs module
         const fs = await import('fs');
@@ -191,13 +388,13 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
         }
         configContent = await response.text();
       }
+      config = parseSimpleToml(configContent);
     } else {
       // No config specified, return empty config
       return {};
     }
 
-    // Parse TOML (simple parser for basic structure)
-    cachedConfig = parseSimpleToml(configContent);
+    cachedConfig = config;
     return cachedConfig;
   } catch (error) {
     console.warn(`Failed to load proxy config: ${(error as Error).message}`);

@@ -16,7 +16,7 @@ import { handleResponsesRequest, handleResponsesCompactRequest, handleResponsesI
 import { handleGeminiRequest, handleGeminiRequestForMessages } from './handlers/gemini.js';
 import { handleOpenAIRequest } from './handlers/openai.js';
 import { handleClaudeRequest } from './handlers/claude.js';
-import { loadProxyConfig, getModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
+import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
 import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
 
 /**
@@ -319,11 +319,38 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const requestId = generateRequestId();
     const logger = createLogger(env as Record<string, unknown>);
+    const url = new URL(request.url);
+    const path = url.pathname;
 
     // Load proxy config on first request
     const configPath = env.PROXY_CONFIG_PATH;
     const configUrl = env.PROXY_CONFIG_URL;
     logger.debug(requestId, `Config path: ${configPath}, Config URL: ${configUrl}`);
+
+    if (path === '/reload') {
+      try {
+        if (!env.PROXY_CONFIG_URL) {
+          throw new Error('proxy config url is not set.');
+        }
+
+        clearProxyConfigCache();
+        const proxyConfig = await loadProxyConfig(env);
+        dumpProxyConfigToml(proxyConfig);
+
+        return new Response(JSON.stringify({ status: 'ok' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({
+          status: 'failed',
+          error: (error as Error).message,
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+    }
 
     const proxyConfig = await loadProxyConfig(env);
 
@@ -337,8 +364,6 @@ export default {
         return handleOptionsRequest(request, env);
       }
 
-      const url = new URL(request.url);
-      const path = url.pathname;
 
       // Skip favicon requests
       if (path === '/favicon.ico') {

@@ -102,6 +102,52 @@ upstream_mode = "openai-completions"
 
 **Note**: Each model supports one upstream. Multiple upstreams per model (load balancing) is a future feature.
 
+#### Consul-backed config
+
+`PROXY_CONFIG_URL` can point to a Consul server address, and the proxy will read the KV prefix `model-proxy-v3/`.
+
+**Notice**: `wrangler.toml` vars are loaded by Wrangler/Cloudflare at runtime. The Node server (`npm run server` / `dist/server.js`) uses process environment variables instead.
+
+Example:
+
+```toml
+# wrangler.toml
+PROXY_CONFIG_URL = "http://localhost:8500"
+```
+
+Put config into Consul KV using the `model-proxy-v3/` prefix:
+
+```bash
+consul kv put model-proxy-v3/upstream/default_base_url "https://api.qnaigc.com"
+consul kv put model-proxy-v3/upstream/budget_to_effort_low "8000"
+consul kv put model-proxy-v3/upstream/budget_to_effort_medium "20000"
+consul kv put model-proxy-v3/upstream/budget_to_effort_high "0"
+
+consul kv put model-proxy-v3/models/claude/upstream_mode "anthropic-messages"
+consul kv put model-proxy-v3/models/claude/base_url "http://localhost:4000"
+consul kv put model-proxy-v3/models/claude/api_key "sk-..."
+consul kv put model-proxy-v3/models/claude/claude-opus-4-6 '["claude-opus-4-6", "", ""]'
+
+consul kv put model-proxy-v3/models/free/upstream_mode "openai-completions"
+consul kv put model-proxy-v3/models/free/base_url "http://localhost:4000"
+consul kv put model-proxy-v3/models/free/api_key "sk-hello"
+consul kv put model-proxy-v3/models/free/gpt-5.4-mini '["gpt-5.4-mini", "", ""]'
+```
+
+List the keys under a prefix with:
+
+```bash
+consul kv get -recurse -keys model-proxy-v3/models/free/
+```
+
+After updating Consul KV, trigger a reload:
+
+```bash
+curl http://localhost:8788/reload
+```
+
+On success, the proxy also dumps the reloaded config to `./config-dumps/` as a timestamped TOML file.
+
 ### 3. Develop Locally
 
 ```bash
