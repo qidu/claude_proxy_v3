@@ -327,6 +327,33 @@ function serializeProxyConfigToml(config: ProxyConfig): string {
   return lines.join('\n').replace(/\n$/, '');
 }
 
+export function getConfiguredModelIds(config: ProxyConfig): string[] {
+  const ids = new Set<string>();
+  const reservedKeys = new Set(['upstream_mode', 'base_url', 'api_key']);
+
+  if (!config.models) {
+    return [];
+  }
+
+  for (const [categoryName, categoryConfig] of Object.entries(config.models)) {
+    if (categoryName === 'list' || Array.isArray(categoryConfig)) {
+      continue;
+    }
+
+    for (const [key, value] of Object.entries(categoryConfig)) {
+      if (reservedKeys.has(key) || key.endsWith('_list')) {
+        continue;
+      }
+
+      if (value !== undefined) {
+        ids.add(key);
+      }
+    }
+  }
+
+  return [...ids];
+}
+
 export function dumpProxyConfigToml(config: ProxyConfig, directory = './config-dumps'): string | null {
   if (!isNodeEnvironment) {
     return null;

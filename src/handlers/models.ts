@@ -7,7 +7,7 @@
 import { Logger } from '../utils/logger.js';
 import { ClaudeModelsResponse } from '../types/claude.js';
 import { OpenAIModelsResponse } from '../types/openai.js';
-import { convertOpenAIModelsToClaude } from '../converters/openai-to-claude.js';
+import { convertOpenAIModelsToClaude, mergeClaudeModelsResponse } from '../converters/openai-to-claude.js';
 import { validateModelsRequestParams } from '../utils/validation.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { addForwardedHeaders } from '../utils/routing.js';
@@ -97,8 +97,6 @@ export async function getModelCount(
   logger: Logger,
   env?: Record<string, unknown>
 ): Promise<{ count: number; cached: boolean }> {
-  const cacheTTL = getCacheTTL(env);
-
   // Check cache first
   const cachedCount = getCachedModelCount(env);
   if (cachedCount !== null) {
@@ -146,7 +144,8 @@ export async function handleModelsRequest(
   authHeaders: Record<string, string>,
   requestId: string,
   logger: Logger,
-  env?: Record<string, unknown>
+  env?: Record<string, unknown>,
+  extraModelIds: string[] = []
 ): Promise<Response> {
   // Parse query parameters
   const url = new URL(request.url);
@@ -157,7 +156,6 @@ export async function handleModelsRequest(
   // Validate parameters
   validateModelsRequestParams({ after_id: afterId, before_id: beforeId, limit });
 
-  // Get cache TTL from environment or use default
   const cacheTTL = getCacheTTL(env);
 
   // Check if we have valid cached data (only for first page requests without pagination)
@@ -165,7 +163,8 @@ export async function handleModelsRequest(
     const cachedModels = getCachedModels(cacheTTL);
     if (cachedModels) {
       logger.debug(requestId, `Using cached model list (TTL: ${cacheTTL}ms)`);
-      return new Response(JSON.stringify(cachedModels), {
+      const mergedCachedModels = mergeClaudeModelsResponse(cachedModels, extraModelIds);
+      return new Response(JSON.stringify(mergedCachedModels), {
         status: 200,
         headers: {
           'Content-Type': 'application/json',
@@ -208,8 +207,8 @@ export async function handleModelsRequest(
 
   const openaiResponse: OpenAIModelsResponse = JSON.parse(responseText);
 
-  // Convert to Claude format
-  const claudeResponse: ClaudeModelsResponse = convertOpenAIModelsToClaude(openaiResponse);
+  // Convert to Claude format and merge config-defined model IDs
+  const claudeResponse: ClaudeModelsResponse = convertOpenAIModelsToClaude(openaiResponse, extraModelIds);
 
   // Cache the response (only for non-paginated requests)
   if (!afterId && !beforeId && !limit) {

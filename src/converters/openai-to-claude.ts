@@ -281,20 +281,53 @@ function unixToRFC3339(timestamp: number): string {
 /**
  * Convert OpenAI models response to Claude format
  */
+function addExtraModels(models: ClaudeModel[], extraModelIds: string[]): ClaudeModel[] {
+    const modelsMap = new Map(models.map((model) => [model.id, model] as const));
+    const now = new Date().toISOString();
+
+    for (const modelId of extraModelIds) {
+        if (!modelsMap.has(modelId)) {
+            modelsMap.set(modelId, {
+                id: modelId,
+                type: "model",
+                created_at: now,
+                display_name: modelId,
+            });
+        }
+    }
+
+    return [...modelsMap.values()];
+}
+
+export function mergeClaudeModelsResponse(
+    claudeResponse: ClaudeModelsResponse,
+    extraModelIds: string[] = []
+): ClaudeModelsResponse {
+    const models = addExtraModels(claudeResponse.data, extraModelIds);
+
+    return {
+        data: models,
+        first_id: models.length > 0 ? models[0].id : null,
+        has_more: false,
+        last_id: models.length > 0 ? models[models.length - 1].id : null,
+    };
+}
+
 export function convertOpenAIModelsToClaude(
-    openaiResponse: OpenAIModelsResponse
+    openaiResponse: OpenAIModelsResponse,
+    extraModelIds: string[] = []
 ): ClaudeModelsResponse {
     const models: ClaudeModel[] = openaiResponse.data.map(model => ({
         id: model.id,
         type: "model",
         created_at: unixToRFC3339(model.created),
-        display_name: model.id, // OpenAI doesn't have display_name, use model id
+        display_name: model.id,
     }));
 
-    return {
+    return mergeClaudeModelsResponse({
         data: models,
         first_id: models.length > 0 ? models[0].id : null,
-        has_more: false, // OpenAI doesn't support pagination in models list
+        has_more: false,
         last_id: models.length > 0 ? models[models.length - 1].id : null,
-    };
+    }, extraModelIds);
 }

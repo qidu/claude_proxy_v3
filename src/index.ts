@@ -16,7 +16,7 @@ import { handleResponsesRequest, handleResponsesCompactRequest, handleResponsesI
 import { handleGeminiRequest, handleGeminiRequestForMessages } from './handlers/gemini.js';
 import { handleOpenAIRequest } from './handlers/openai.js';
 import { handleClaudeRequest } from './handlers/claude.js';
-import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
+import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
 import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
 
 /**
@@ -353,6 +353,7 @@ export default {
     }
 
     const proxyConfig = await loadProxyConfig(env);
+    const configuredModelIds = getConfiguredModelIds(proxyConfig);
 
     if (proxyConfig.upstream) {
       logger.debug(requestId, `Upstream config: budget_to_effort_low=${proxyConfig.upstream.budget_to_effort_low}, \n\tbudget_to_effort_medium=${proxyConfig.upstream.budget_to_effort_medium}, \n\tbudget_to_effort_high=${proxyConfig.upstream.budget_to_effort_high}`);
@@ -716,7 +717,7 @@ export default {
       let response: Response;
       switch (handlerType) {
         case 'models':
-          response = await handleModelsRequest(request, targetUrl, modelAuthHeaders, requestId, logger, env as unknown as Record<string, unknown>);
+          response = await handleModelsRequest(request, targetUrl, modelAuthHeaders, requestId, logger, env as unknown as Record<string, unknown>, configuredModelIds);
           break;
 
         case 'token-counting':
