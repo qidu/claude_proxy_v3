@@ -109,8 +109,15 @@ upstream_mode = "openai-completions"
 [composite]
 "gpt-all" = {"gpt-5.4-mini": {"share": 50}, "gpt-5-mini": {"share": 20}, "nvidia/nemotron-3-super-120b-a12b-free": {}}
 "gpt-5" = {"gpt-5.4-mini": {"fallback": 1}, "gpt-5-mini": {"primary": true}, "nvidia/nemotron-3-super-120b-a12b-free": {"fallback": 2}}
-"llama" = {"llama3": {}, "nemotron-3-120b-a12b-free": {}}
+"llama" = {"llama3": {}, "g5-mini": {}}
 ```
+
+Composite behavior:
+- `primary: true`: always try this target first, then fail over to others.
+- `fallback: N`: lower number means higher retry priority when primary is absent.
+- `share`: weighted random selection for first attempt when no `primary`/`fallback` is configured.
+- no `share`/`primary`/`fallback`: equal random first-attempt distribution across targets.
+- if one upstream fails, proxy retries the next configured candidate automatically.
 
 #### Consul-backed config
 

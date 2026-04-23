@@ -16,7 +16,7 @@ import { handleResponsesRequest, handleResponsesCompactRequest, handleResponsesI
 import { handleGeminiRequest, handleGeminiRequestForMessages } from './handlers/gemini.js';
 import { handleOpenAIRequest } from './handlers/openai.js';
 import { handleClaudeRequest } from './handlers/claude.js';
-import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
+import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, ModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
 import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
 
 /**
@@ -423,7 +423,19 @@ export default {
       let upstreamMode: string | undefined;
       let forceStreaming: boolean = false;
       let isGeminiBypass = false;
-      
+
+      type RouteAttemptHandlerType = 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' | 'responses-compact' | 'responses-input-tokens';
+      type RouteAttempt = {
+        request: Request;
+        targetUrl: string;
+        handlerType: RouteAttemptHandlerType;
+        modelId?: string;
+        upstreamMode?: string;
+        forceStreaming: boolean;
+        authHeaders: Record<string, string>;
+      };
+      let compositeAttempts: RouteAttempt[] | undefined;
+
       // Extract authentication headers early
       const authHeaders = extractAuthHeaders(request);
       let modelAuthHeaders = authHeaders;
@@ -449,210 +461,159 @@ export default {
           }
           
           if (modelName && proxyConfig.models) {
-            // Get model-specific routing config
-            const modelRoute = getModelRouteConfig(modelName, proxyConfig);
-            
+            const compositeCandidates = getCompositeRouteCandidates(modelName, proxyConfig);
+            const routeCandidates: Array<{ modelName: string; route: ModelRouteConfig }> = compositeCandidates.length > 0
+              ? compositeCandidates
+              : [{ modelName, route: getModelRouteConfig(modelName, proxyConfig) }];
+
             // Get client connection info from headers (added by Node.js server adapter)
             const clientAddress = request.headers.get('x-client-address') || 'unknown';
             const clientPort = request.headers.get('x-client-port') || 'unknown';
-            
-            logger.info(requestId, `Model: ${modelName}, Mode: ${modelRoute.upstreamMode}, TargetURL: ${modelRoute.targetUrl}, Endpoint: ${url.pathname}, Client: ${clientAddress}:${clientPort}`);
-            
-            // Use the resolved upstream model id, not the composite alias
-            const upstreamModelName = modelRoute.modelAlias || modelName;
-            const forwardedBodyText = JSON.stringify({
-              ...body,
-              model: upstreamModelName,
-            });
-            request = new Request(request.url, {
-              method: request.method,
-              headers: request.headers,
-              body: forwardedBodyText,
-            });
 
-            // Transform auth headers based on upstream mode and endpoint
-            // Extract API key from request headers and format correctly for the target upstream
-            modelAuthHeaders = transformAuthHeadersForUpstream(request, modelRoute.upstreamMode, path, requestId, env as Record<string, unknown>);
+            compositeAttempts = routeCandidates.map(({ modelName: candidateName, route }) => {
+              logger.info(requestId, `Model: ${modelName}, Candidate: ${candidateName}, Mode: ${route.upstreamMode}, TargetURL: ${route.targetUrl}, Endpoint: ${url.pathname}, Client: ${clientAddress}:${clientPort}`);
 
-            // Debug log: show auth header keys and partial values
-            const authKeys = Object.keys(modelAuthHeaders);
-            if (authKeys.length > 0) {
-              authKeys.forEach(key => {
-                const value = modelAuthHeaders[key];
-                const partialValue = value.length > 8 ? `${value.substring(0, 4)}...${value.substring(value.length - 4)}` : '***';
-                logger.debug(requestId, `Auth header for ${modelRoute.upstreamMode}: ${key}=${partialValue}`);
+              const upstreamModelName = route.modelAlias || candidateName;
+              const forwardedBodyText = JSON.stringify({
+                ...body,
+                model: upstreamModelName,
               });
-            } else {
-              logger.debug(requestId, `No auth headers found for ${modelRoute.upstreamMode}`);
-            }
 
-            // For openai-completions upstream:
-            // - If model has an alias AND config has api_key, use config api_key first
-            // - Otherwise, use client headers (transformed from x-goog-api-key or x-api-key)
-            if (modelRoute.upstreamMode === 'openai-completions') {
-                if (modelRoute.modelAlias && modelRoute.apiKey) {
-                    // Model has alias and config has api_key - use config api_key first
-                    const configHeaders = formatApiKeyForUpstream(modelRoute.apiKey, modelRoute.upstreamMode);
-                    modelAuthHeaders = { ...modelAuthHeaders, ...configHeaders };
-                    logger.debug(requestId, `Using API key from config for model with alias: ${modelName}`);
+              const candidateRequest = new Request(request.url, {
+                method: request.method,
+                headers: request.headers,
+                body: forwardedBodyText,
+              });
 
-                    // Debug log: show auth header keys and partial values after config override
-                    const authKeysAfterConfig = Object.keys(modelAuthHeaders);
-                    if (authKeysAfterConfig.length > 0) {
-                      authKeysAfterConfig.forEach(key => {
-                        const value = modelAuthHeaders[key];
-                        const partialValue = value.length > 8 ? `${value.substring(0, 4)}...${value.substring(value.length - 4)}` : '***';
-                        logger.debug(requestId, `Auth header after config override for ${modelRoute.upstreamMode}: ${key}=${partialValue}`);
-                      });
-                    }
-                } else {
-                    // Use transformed client headers for openai-completions upstream
-                    logger.debug(requestId, `Using client API key for openai-completions upstream: ${modelName}`);
-                }
-            } else if (modelRoute.apiKey) {
-                // For native upstream modes (anthropic-messages, gemini-generatecontent, gemini-interactions),
-                // config API key overrides request headers
-                const configHeaders = formatApiKeyForUpstream(modelRoute.apiKey, modelRoute.upstreamMode);
-                // Merge config headers (overriding any from request)
-                modelAuthHeaders = { ...modelAuthHeaders, ...configHeaders };
-                logger.debug(requestId, `Using API key from config for model: ${modelName}`);
+              let candidateAuthHeaders = transformAuthHeadersForUpstream(candidateRequest, route.upstreamMode, path, requestId, env as Record<string, unknown>);
 
-                // Debug log: show auth header keys and partial values after config override
-                const authKeysAfterConfig = Object.keys(modelAuthHeaders);
-                if (authKeysAfterConfig.length > 0) {
-                  authKeysAfterConfig.forEach(key => {
-                    const value = modelAuthHeaders[key];
-                    const partialValue = value.length > 8 ? `${value.substring(0, 4)}...${value.substring(value.length - 4)}` : '***';
-                    logger.debug(requestId, `Auth header after config override for ${modelRoute.upstreamMode}: ${key}=${partialValue}`);
-                  });
+              if (route.upstreamMode === 'openai-completions') {
+                if (route.modelAlias && route.apiKey) {
+                  const configHeaders = formatApiKeyForUpstream(route.apiKey, route.upstreamMode);
+                  candidateAuthHeaders = { ...candidateAuthHeaders, ...configHeaders };
                 }
-            }
-            
-            // Determine handler type and build target URL based on endpoint and upstream_mode
-            const isNativeMode = modelRoute.upstreamMode === 'anthropic-messages' || 
-                                modelRoute.upstreamMode === 'gemini-generatecontent' || 
-                                modelRoute.upstreamMode === 'gemini-interactions';
-            
-            if (path === '/v1/messages' || path.startsWith('/v1/messages?')) {
-              handlerType = 'messages';
-              if (isNativeMode) {
-                // Check if streaming is requested
-                const requestBody = JSON.parse(forwardedBodyText) as Record<string, unknown>;
-                const isStreaming = requestBody.stream === true;
-                
-                if (modelRoute.upstreamMode === 'gemini-generatecontent' || modelRoute.upstreamMode === 'gemini-interactions') {
-                  // For Gemini native, route to generateContent endpoints
-                  if (isStreaming) {
-                    targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:streamGenerateContent?alt=sse`;
-                  } else {
-                    targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
-                  }
-                } else {
-                  // For Claude native (anthropic-messages), route to /v1/messages
-                  targetUrl = `${modelRoute.targetUrl}/v1/messages`;
-                }
-                upstreamMode = modelRoute.upstreamMode;
-              } else {
-                targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
-                upstreamMode = 'openai-completions';
+              } else if (route.apiKey) {
+                const configHeaders = formatApiKeyForUpstream(route.apiKey, route.upstreamMode);
+                candidateAuthHeaders = { ...candidateAuthHeaders, ...configHeaders };
               }
-              logger.info(requestId, `Final targetUrl for /v1/messages: ${targetUrl}`);
-            } else if (path === '/v1/interactions' || path.startsWith('/v1/interactions?')) {
-              handlerType = 'interactions';
-              if (isNativeMode) {
-                // Check if this is a Gemini model (only Gemini supports interactions API natively)
-                if (modelRoute.upstreamMode === 'gemini-generatecontent' || modelRoute.upstreamMode === 'gemini-interactions') {
-                  // Native Gemini API - check if streaming is requested
+
+              const isNativeMode = route.upstreamMode === 'anthropic-messages' ||
+                                  route.upstreamMode === 'gemini-generatecontent' ||
+                                  route.upstreamMode === 'gemini-interactions';
+
+              let candidateTargetUrl = '';
+              let candidateHandlerType: RouteAttempt['handlerType'] = 'messages';
+              let candidateUpstreamMode: string | undefined;
+              let candidateForceStreaming = false;
+
+              if (path === '/v1/messages' || path.startsWith('/v1/messages?')) {
+                candidateHandlerType = 'messages';
+                if (isNativeMode) {
                   const requestBody = JSON.parse(forwardedBodyText) as Record<string, unknown>;
                   const isStreaming = requestBody.stream === true;
-                  
-                  // Route to appropriate endpoint based on streaming
-                  if (isStreaming) {
-                    targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:streamGenerateContent?alt=sse`;
+
+                  if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
+                    candidateTargetUrl = isStreaming
+                      ? `${route.targetUrl}/v1beta/models/${upstreamModelName}:streamGenerateContent?alt=sse`
+                      : `${route.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
                   } else {
-                    targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
+                    candidateTargetUrl = `${route.targetUrl}/v1/messages`;
                   }
-                  upstreamMode = modelRoute.upstreamMode;
+                  candidateUpstreamMode = route.upstreamMode;
                 } else {
-                  // Claude models don't support interactions API in native mode
-                  // Fall back to OpenAI-compatible mode
-                  targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
-                  upstreamMode = 'openai-completions';
+                  candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                  candidateUpstreamMode = 'openai-completions';
                 }
-              } else {
-                // OpenAI-compatible mode
-                targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
-                upstreamMode = 'openai-completions';
-              }
-            } else if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
-              handlerType = 'generateContent';
-              const isStreamEndpoint = path.includes(':streamGenerateContent');
-              const modelMatch = path.match(/\/(v1beta|v1)\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
-              const pathModelId = modelMatch ? modelMatch[2] : upstreamModelName;
-
-              if (isNativeMode) {
-                // Check if this is a Gemini model (only Gemini supports generateContent API natively)
-                if (modelRoute.upstreamMode === 'gemini-generatecontent' || modelRoute.upstreamMode === 'gemini-interactions') {
-                  const endpoint = isStreamEndpoint ? 'streamGenerateContent' : 'generateContent';
-                  // Preserve query string if present, or add ?alt=sse for streamGenerateContent
-                  let queryString = path.includes('?') ? path.substring(path.indexOf('?')) : '';
-                  if (isStreamEndpoint && !queryString.includes('alt=sse')) {
-                    queryString = queryString ? `${queryString}&alt=sse` : '?alt=sse';
+              } else if (path === '/v1/interactions' || path.startsWith('/v1/interactions?')) {
+                candidateHandlerType = 'interactions';
+                if (isNativeMode) {
+                  if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
+                    const requestBody = JSON.parse(forwardedBodyText) as Record<string, unknown>;
+                    const isStreaming = requestBody.stream === true;
+                    candidateTargetUrl = isStreaming
+                      ? `${route.targetUrl}/v1beta/models/${upstreamModelName}:streamGenerateContent?alt=sse`
+                      : `${route.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
+                    candidateUpstreamMode = route.upstreamMode;
+                  } else {
+                    candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                    candidateUpstreamMode = 'openai-completions';
                   }
-                  // Use upstreamModelName (alias) instead of pathModelId (client name)
-                  targetUrl = `${modelRoute.targetUrl}/v1beta/models/${upstreamModelName}:${endpoint}${queryString}`;
-                  upstreamMode = modelRoute.upstreamMode;
                 } else {
-                  // Claude models don't support generateContent API in native mode
-                  // Fall back to OpenAI-compatible mode
-                  targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
-                  upstreamMode = 'openai-completions';
-                  forceStreaming = isStreamEndpoint;
+                  candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                  candidateUpstreamMode = 'openai-completions';
                 }
-              } else {
-                targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
-                upstreamMode = 'openai-completions';
-                forceStreaming = isStreamEndpoint;
+              } else if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
+                candidateHandlerType = 'generateContent';
+                const isStreamEndpoint = path.includes(':streamGenerateContent');
+                if (isNativeMode) {
+                  if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
+                    const endpoint = isStreamEndpoint ? 'streamGenerateContent' : 'generateContent';
+                    let queryString = path.includes('?') ? path.substring(path.indexOf('?')) : '';
+                    if (isStreamEndpoint && !queryString.includes('alt=sse')) {
+                      queryString = queryString ? `${queryString}&alt=sse` : '?alt=sse';
+                    }
+                    candidateTargetUrl = `${route.targetUrl}/v1beta/models/${upstreamModelName}:${endpoint}${queryString}`;
+                    candidateUpstreamMode = route.upstreamMode;
+                  } else {
+                    candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                    candidateUpstreamMode = 'openai-completions';
+                    candidateForceStreaming = isStreamEndpoint;
+                  }
+                } else {
+                  candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                  candidateUpstreamMode = 'openai-completions';
+                  candidateForceStreaming = isStreamEndpoint;
+                }
+              } else if (path === '/v1/responses' || path.startsWith('/v1/responses?')) {
+                candidateHandlerType = 'responses';
+                if (route.upstreamMode === 'openai-responses') {
+                  candidateTargetUrl = `${route.targetUrl}/v1/responses`;
+                  candidateUpstreamMode = 'openai-responses';
+                } else {
+                  candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                  candidateUpstreamMode = 'openai-completions';
+                }
+              } else if (path === '/v1/responses/input_tokens' || path.startsWith('/v1/responses/input_tokens?')) {
+                candidateHandlerType = 'responses-input-tokens';
+                if (route.upstreamMode === 'openai-responses') {
+                  candidateTargetUrl = `${route.targetUrl}/v1/responses/input_tokens`;
+                  candidateUpstreamMode = 'openai-responses';
+                } else {
+                  candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                  candidateUpstreamMode = 'openai-completions';
+                }
+              } else if (path === '/v1/responses/compact' || path.startsWith('/v1/responses/compact?')) {
+                candidateHandlerType = 'responses-compact';
+                if (route.upstreamMode === 'openai-responses') {
+                  candidateTargetUrl = `${route.targetUrl}/v1/responses/compact`;
+                  candidateUpstreamMode = 'openai-responses';
+                } else {
+                  candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                  candidateUpstreamMode = 'openai-completions';
+                }
               }
-            } else if (path === '/v1/responses' || path.startsWith('/v1/responses?')) {
-              handlerType = 'responses';
-              if (modelRoute.upstreamMode === 'openai-responses') {
-                targetUrl = `${modelRoute.targetUrl}/v1/responses`;
-                upstreamMode = 'openai-responses';
-              } else {
-                targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
-                upstreamMode = 'openai-completions';
-              }
-            } else if (path === '/v1/responses/input_tokens' || path.startsWith('/v1/responses/input_tokens?')) {
-              handlerType = 'responses-input-tokens';
-              if (modelRoute.upstreamMode === 'openai-responses') {
-                targetUrl = `${modelRoute.targetUrl}/v1/responses/input_tokens`;
-                upstreamMode = 'openai-responses';
-              } else {
-                targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
-                upstreamMode = 'openai-completions';
-              }
-            } else if (path === '/v1/responses/compact' || path.startsWith('/v1/responses/compact?')) {
-              handlerType = 'responses-compact';
-              if (modelRoute.upstreamMode === 'openai-responses') {
-                targetUrl = `${modelRoute.targetUrl}/v1/responses/compact`;
-                upstreamMode = 'openai-responses';
-              } else {
-                targetUrl = `${modelRoute.targetUrl}/v1/chat/completions`;
-                upstreamMode = 'openai-completions';
-              }
-            }
 
-            modelId = upstreamModelName;
-
-            logger.debug(requestId, `Model-specific routing: ${modelName} -> ${targetUrl} (${modelRoute.upstreamMode}) [${handlerType}]`);
-
-            // Recreate request with resolved upstream model id in body
-            request = new Request(request.url, {
-              method: request.method,
-              headers: request.headers,
-              body: forwardedBodyText,
+              return {
+                request: candidateRequest,
+                targetUrl: candidateTargetUrl,
+                handlerType: candidateHandlerType,
+                modelId: upstreamModelName,
+                upstreamMode: candidateUpstreamMode,
+                forceStreaming: candidateForceStreaming,
+                authHeaders: candidateAuthHeaders,
+              };
             });
+
+            const firstAttempt = compositeAttempts[0];
+            targetUrl = firstAttempt.targetUrl;
+            handlerType = firstAttempt.handlerType;
+            modelId = firstAttempt.modelId;
+            upstreamMode = firstAttempt.upstreamMode;
+            forceStreaming = firstAttempt.forceStreaming;
+            modelAuthHeaders = firstAttempt.authHeaders;
+            request = firstAttempt.request;
+
+            logger.debug(requestId, `Model-specific routing: ${modelName} -> ${targetUrl} (${upstreamMode}) [${handlerType}]`);
           } else {
             // No model-specific config, use default routing
             const fixedRoute = parseFixedRoute(path, proxyConfig, env);
@@ -722,86 +683,114 @@ export default {
         }
       }
 
-      // Route to appropriate handler
-      let response: Response;
-      switch (handlerType) {
-        case 'models':
-          response = await handleModelsRequest(request, targetUrl, modelAuthHeaders, requestId, logger, env as unknown as Record<string, unknown>, configuredModelIds);
-          break;
+      const runAttempt = async (attempt: RouteAttempt): Promise<Response> => {
+        const attemptRequest = attempt.request;
+        const attemptTargetUrl = attempt.targetUrl;
+        const attemptHandlerType = attempt.handlerType;
+        const attemptModelId = attempt.modelId;
+        const attemptUpstreamMode = attempt.upstreamMode;
+        const attemptForceStreaming = attempt.forceStreaming;
+        const attemptAuthHeaders = attempt.authHeaders;
 
-        case 'token-counting':
-          response = await handleTokenCountingRequest(request, targetUrl, modelAuthHeaders, requestId, env, logger);
-          break;
+        // Route to appropriate handler
+        let response: Response;
+        switch (attemptHandlerType) {
+          case 'models':
+            response = await handleModelsRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, logger, env as unknown as Record<string, unknown>, configuredModelIds);
+            break;
 
-        case 'messages':
-          // /v1/messages routes based on upstream mode
-          if (upstreamMode === 'anthropic-messages') {
-            // Native Claude API
-            response = await handleClaudeRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
-          } else if (upstreamMode === 'gemini-generatecontent' || upstreamMode === 'gemini-interactions') {
-            // Native Gemini API (routed to generateContent endpoint)
-            response = await handleGeminiRequestForMessages(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
-          } else {
-            // OpenAI-compatible mode
-            // Build thinking conversion options from config
-            const conversionOptions: ThinkingConversionOptions = {};
-            const upstream = proxyConfig.upstream;
-            const low = upstream?.budget_to_effort_low;
-            if (low !== undefined && low !== '') {
-              const val = parseInt(String(low));
-              if (!isNaN(val)) conversionOptions.budget_to_effort_low = val;
+          case 'token-counting':
+            response = await handleTokenCountingRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, env, logger);
+            break;
+
+          case 'messages':
+            if (attemptUpstreamMode === 'anthropic-messages') {
+              response = await handleClaudeRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger);
+            } else if (attemptUpstreamMode === 'gemini-generatecontent' || attemptUpstreamMode === 'gemini-interactions') {
+              response = await handleGeminiRequestForMessages(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger);
+            } else {
+              const conversionOptions: ThinkingConversionOptions = {};
+              const upstream = proxyConfig.upstream;
+              const low = upstream?.budget_to_effort_low;
+              if (low !== undefined && low !== '') {
+                const val = parseInt(String(low));
+                if (!isNaN(val)) conversionOptions.budget_to_effort_low = val;
+              }
+              const medium = upstream?.budget_to_effort_medium;
+              if (medium !== undefined && medium !== '') {
+                const val = parseInt(String(medium));
+                if (!isNaN(val)) conversionOptions.budget_to_effort_medium = val;
+              }
+              const high = upstream?.budget_to_effort_high;
+              if (high !== undefined && high !== '') {
+                const val = parseInt(String(high));
+                if (!isNaN(val)) conversionOptions.budget_to_effort_high = val;
+              }
+              response = await handleMessagesRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, conversionOptions, attemptUpstreamMode);
             }
-            const medium = upstream?.budget_to_effort_medium;
-            if (medium !== undefined && medium !== '') {
-              const val = parseInt(String(medium));
-              if (!isNaN(val)) conversionOptions.budget_to_effort_medium = val;
+            break;
+
+          case 'interactions':
+            if (attemptUpstreamMode === 'gemini-generatecontent' || attemptUpstreamMode === 'gemini-interactions') {
+              response = await handleGeminiRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger);
+            } else {
+              response = await handleOpenAIRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptForceStreaming);
             }
-            const high = upstream?.budget_to_effort_high;
-            if (high !== undefined && high !== '') {
-              const val = parseInt(String(high));
-              if (!isNaN(val)) conversionOptions.budget_to_effort_high = val;
+            break;
+
+          case 'generateContent':
+            if (attemptUpstreamMode === 'gemini-generatecontent' || attemptUpstreamMode === 'gemini-interactions') {
+              response = await handleGeminiRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger);
+            } else {
+              response = await handleOpenAIRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptForceStreaming);
             }
-            response = await handleMessagesRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, conversionOptions, upstreamMode);
+            break;
+
+          case 'responses':
+            response = await handleResponsesRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptUpstreamMode);
+            break;
+
+          case 'responses-input-tokens':
+            response = await handleResponsesInputTokensRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptUpstreamMode);
+            break;
+
+          case 'responses-compact':
+            response = await handleResponsesCompactRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptUpstreamMode);
+            break;
+
+          default:
+            throw new Error(`Unsupported handler type: ${attemptHandlerType}`);
+        }
+
+        return response;
+      };
+
+      if (compositeAttempts && compositeAttempts.length > 0) {
+        let lastError: unknown;
+        for (let i = 0; i < compositeAttempts.length; i++) {
+          const attempt = compositeAttempts[i];
+          try {
+            const response = await runAttempt(attempt);
+            return applyCorsHeaders(response, attempt.request, env);
+          } catch (error) {
+            lastError = error;
+            if (i < compositeAttempts.length - 1) {
+              logger.warn(requestId, `Composite attempt ${i + 1}/${compositeAttempts.length} failed for model=${attempt.modelId}: ${(error as Error).message}; retrying next candidate`);
+            }
           }
-          break;
-
-        case 'interactions':
-          // /v1/interactions routes based on upstream mode
-          if (upstreamMode === 'gemini-generatecontent' || upstreamMode === 'gemini-interactions') {
-            // Native Gemini API
-            response = await handleGeminiRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
-          } else {
-            // OpenAI-compatible mode
-            response = await handleOpenAIRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, forceStreaming);
-          }
-          break;
-
-        case 'generateContent':
-          // /v1beta/models/{model}:generateContent or :streamGenerateContent routes based on upstream mode
-          if (upstreamMode === 'gemini-generatecontent' || upstreamMode === 'gemini-interactions') {
-            // Native Gemini API
-            response = await handleGeminiRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger);
-          } else {
-            // OpenAI-compatible mode
-            response = await handleOpenAIRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, forceStreaming);
-          }
-          break;
-
-        case 'responses':
-          response = await handleResponsesRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, upstreamMode);
-          break;
-
-        case 'responses-input-tokens':
-          response = await handleResponsesInputTokensRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, upstreamMode);
-          break;
-
-        case 'responses-compact':
-          response = await handleResponsesCompactRequest(request, targetUrl, modelAuthHeaders, requestId, modelId, env, logger, upstreamMode);
-          break;
-
-        default:
-          throw new Error(`Unsupported handler type: ${handlerType}`);
+        }
+        throw (lastError as Error);
       }
+
+      const response = await runAttempt({
+        request,
+        targetUrl,
+        handlerType,
+        modelId,
+        upstreamMode,
+        forceStreaming,
+        authHeaders: modelAuthHeaders,
+      });
 
       // Apply CORS headers
       return applyCorsHeaders(response, request, env);

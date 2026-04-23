@@ -58,6 +58,13 @@ export interface CompositeRouteSelection {
   skippedTargets: string[];
 }
 
+interface CompositeResolvedTarget {
+  targetModelName: string;
+  targetConfig: CompositeTargetConfig;
+  route: ModelRouteConfig;
+  index: number;
+}
+
 function resolveModelRouteFromEntry(
   modelEntry: string | string[],
   categoryConfig: ModelCategoryConfig,
@@ -107,10 +114,10 @@ function resolveModelRouteFromConfig(
   return resolveModelRouteFromEntry(entry, modelConfig.categoryConfig, proxyConfig);
 }
 
-function resolveCompositeModelRoute(
+function getOrderedCompositeTargets(
   modelName: string,
   proxyConfig: ProxyConfig
-): CompositeRouteSelection | undefined {
+): { orderedTargets: CompositeResolvedTarget[]; skippedTargets: string[] } | undefined {
   const compositeConfig = proxyConfig.composite?.[modelName];
   if (!compositeConfig) {
     return undefined;
@@ -132,20 +139,15 @@ function resolveCompositeModelRoute(
         index,
       };
     })
-    .filter((candidate): candidate is {
-      targetModelName: string;
-      targetConfig: CompositeTargetConfig;
-      route: ModelRouteConfig;
-      index: number;
-    } => candidate !== undefined);
+    .filter((candidate): candidate is CompositeResolvedTarget => candidate !== undefined);
 
   if (resolvedTargets.length === 0) {
-    return undefined;
+    return { orderedTargets: [], skippedTargets };
   }
 
   const primaryCandidate = resolvedTargets.find(candidate => candidate.targetConfig.primary);
-  const orderedCandidates = primaryCandidate
-    ? [primaryCandidate]
+  const orderedTargets = primaryCandidate
+    ? [primaryCandidate, ...resolvedTargets.filter(candidate => candidate !== primaryCandidate)]
     : resolvedTargets
         .slice()
         .sort((left, right) => {
@@ -163,11 +165,26 @@ function resolveCompositeModelRoute(
           return left.index - right.index;
         });
 
-  const selectedCandidate = primaryCandidate
-    ? primaryCandidate
-    : orderedCandidates.some(candidate => candidate.targetConfig.fallback !== undefined)
-      ? orderedCandidates[0]
-      : selectWeightedCompositeCandidate(orderedCandidates);
+  return { orderedTargets, skippedTargets };
+}
+
+function resolveCompositeModelRoute(
+  modelName: string,
+  proxyConfig: ProxyConfig
+): CompositeRouteSelection | undefined {
+  const orderedComposite = getOrderedCompositeTargets(modelName, proxyConfig);
+  if (!orderedComposite) {
+    return undefined;
+  }
+
+  const { orderedTargets, skippedTargets } = orderedComposite;
+  if (orderedTargets.length === 0) {
+    return undefined;
+  }
+
+  const selectedCandidate = orderedTargets.some(candidate => candidate.targetConfig.fallback !== undefined || candidate.targetConfig.primary)
+    ? orderedTargets[0]
+    : selectWeightedCompositeCandidate(orderedTargets);
 
   if (!selectedCandidate) {
     return undefined;
@@ -208,31 +225,8 @@ function selectWeightedCompositeCandidate<T extends { targetConfig: CompositeTar
 /**
  * Get model-specific routing config with category inheritance
  */
-export function getModelRouteConfig(
-  modelName: string,
-  proxyConfig: ProxyConfig
-): ModelRouteConfig {
-  if (!proxyConfig.models) {
-    const defaultMode = proxyConfig.upstream?.upstream_mode || 'openai-completions';
-    return {
-      targetUrl: proxyConfig.upstream?.default_base_url || 'https://api.qnaigc.com',
-      apiKey: proxyConfig.upstream?.default_api_key,
-      upstreamMode: defaultMode,
-    };
-  }
-
-  const compositeRoute = resolveCompositeModelRoute(modelName, proxyConfig);
-  if (compositeRoute) {
-    return compositeRoute.route;
-  }
-
-  const directRoute = resolveModelRouteFromConfig(modelName, proxyConfig);
-  if (directRoute) {
-    return directRoute;
-  }
-
-  // Model not found in any category, use [models.default] or [upstream] defaults
-  const defaultCategory = proxyConfig.models.default;
+function getDefaultModelRoute(proxyConfig: ProxyConfig): ModelRouteConfig {
+  const defaultCategory = proxyConfig.models?.default;
   const defaultCategoryConfig = defaultCategory && !Array.isArray(defaultCategory) ? defaultCategory : undefined;
   const defaultMode = defaultCategoryConfig?.upstream_mode ||
                      proxyConfig.upstream?.upstream_mode ||
@@ -248,6 +242,60 @@ export function getModelRouteConfig(
     apiKey: parseApiKey(defaultApiKey),
     upstreamMode: defaultMode,
   };
+}
+
+export function getCompositeRouteCandidates(
+  modelName: string,
+  proxyConfig: ProxyConfig
+): Array<{ modelName: string; route: ModelRouteConfig }> {
+  if (!proxyConfig.models) {
+    return [];
+  }
+
+  const orderedComposite = getOrderedCompositeTargets(modelName, proxyConfig);
+  if (!orderedComposite) {
+    return [];
+  }
+
+  const { orderedTargets } = orderedComposite;
+  const hasPriorityOrder = orderedTargets.some(candidate => candidate.targetConfig.primary || candidate.targetConfig.fallback !== undefined);
+
+  let attemptOrder = orderedTargets;
+  if (!hasPriorityOrder) {
+    const firstCandidate = selectWeightedCompositeCandidate(orderedTargets);
+    if (firstCandidate) {
+      attemptOrder = [firstCandidate, ...orderedTargets.filter(candidate => candidate !== firstCandidate)];
+    }
+  }
+
+  return attemptOrder.map(candidate => ({
+    modelName: candidate.targetModelName,
+    route: {
+      ...candidate.route,
+      modelAlias: candidate.route.modelAlias || candidate.targetModelName,
+    },
+  }));
+}
+
+export function getModelRouteConfig(
+  modelName: string,
+  proxyConfig: ProxyConfig
+): ModelRouteConfig {
+  if (!proxyConfig.models) {
+    return getDefaultModelRoute(proxyConfig);
+  }
+
+  const compositeRoute = resolveCompositeModelRoute(modelName, proxyConfig);
+  if (compositeRoute) {
+    return compositeRoute.route;
+  }
+
+  const directRoute = resolveModelRouteFromConfig(modelName, proxyConfig);
+  if (directRoute) {
+    return directRoute;
+  }
+
+  return getDefaultModelRoute(proxyConfig);
 }
 
 /**

@@ -54,5 +54,5 @@ api_key = "sk-***"
 [composite]
 "gpt-all" = {"gpt-5.4-mini": {"share": 50}, "gpt-5-mini": {"share": 20}, "nvidia/nemotron-3-super-120b-a12b-free": {}}
 "gpt-5" = {"gpt-5.4-mini": {"fallback": 1}, "gpt-5-mini": {"primary": true}, "nvidia/nemotron-3-super-120b-a12b-free": {"fallback": 2}}
-"llama" = {"llama3":{}, "g5-mini": {}}
+"llama" = {"llama3.1":{}, "g5-mini": {}}
 #"llama" = {"llama3":{}, "nemotron-3-120b-a12b-free": {}}
