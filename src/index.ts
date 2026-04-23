@@ -450,7 +450,7 @@ export default {
           
           if (modelName && proxyConfig.models) {
             // Get model-specific routing config
-            const modelRoute = getModelRouteConfig(modelName, proxyConfig, env);
+            const modelRoute = getModelRouteConfig(modelName, proxyConfig);
             
             // Get client connection info from headers (added by Node.js server adapter)
             const clientAddress = request.headers.get('x-client-address') || 'unknown';
@@ -458,9 +458,18 @@ export default {
             
             logger.info(requestId, `Model: ${modelName}, Mode: ${modelRoute.upstreamMode}, TargetURL: ${modelRoute.targetUrl}, Endpoint: ${url.pathname}, Client: ${clientAddress}:${clientPort}`);
             
-            // Use model alias if configured, otherwise use original model name
+            // Use the resolved upstream model id, not the composite alias
             const upstreamModelName = modelRoute.modelAlias || modelName;
-            
+            const forwardedBodyText = JSON.stringify({
+              ...body,
+              model: upstreamModelName,
+            });
+            request = new Request(request.url, {
+              method: request.method,
+              headers: request.headers,
+              body: forwardedBodyText,
+            });
+
             // Transform auth headers based on upstream mode and endpoint
             // Extract API key from request headers and format correctly for the target upstream
             modelAuthHeaders = transformAuthHeadersForUpstream(request, modelRoute.upstreamMode, path, requestId, env as Record<string, unknown>);
@@ -528,7 +537,7 @@ export default {
               handlerType = 'messages';
               if (isNativeMode) {
                 // Check if streaming is requested
-                const requestBody = JSON.parse(bodyText) as Record<string, unknown>;
+                const requestBody = JSON.parse(forwardedBodyText) as Record<string, unknown>;
                 const isStreaming = requestBody.stream === true;
                 
                 if (modelRoute.upstreamMode === 'gemini-generatecontent' || modelRoute.upstreamMode === 'gemini-interactions') {
@@ -554,7 +563,7 @@ export default {
                 // Check if this is a Gemini model (only Gemini supports interactions API natively)
                 if (modelRoute.upstreamMode === 'gemini-generatecontent' || modelRoute.upstreamMode === 'gemini-interactions') {
                   // Native Gemini API - check if streaming is requested
-                  const requestBody = JSON.parse(bodyText) as Record<string, unknown>;
+                  const requestBody = JSON.parse(forwardedBodyText) as Record<string, unknown>;
                   const isStreaming = requestBody.stream === true;
                   
                   // Route to appropriate endpoint based on streaming
@@ -637,12 +646,12 @@ export default {
             modelId = upstreamModelName;
 
             logger.debug(requestId, `Model-specific routing: ${modelName} -> ${targetUrl} (${modelRoute.upstreamMode}) [${handlerType}]`);
-            
-            // Recreate request with body
+
+            // Recreate request with resolved upstream model id in body
             request = new Request(request.url, {
               method: request.method,
               headers: request.headers,
-              body: bodyText,
+              body: forwardedBodyText,
             });
           } else {
             // No model-specific config, use default routing

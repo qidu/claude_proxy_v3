@@ -38,6 +38,7 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
   - File-based config: `proxy_config.toml`
   - URL-based config: Eureka service discovery support
   - Model-specific routing with per-model upstreams
+  - Composite model routing with weighted, primary/fallback, or default ordering
   - Per-model API keys
   - Native and OpenAI-compatible modes
 
@@ -100,7 +101,16 @@ upstream_mode = "openai-completions"
 - **Model names**: Preserve original names (no normalization) - `"deepseek/deepseek-v3.2"`, `"gemini-2.5-flash"`
 - **Inheritance chain**: Model array → Category defaults → [upstream] defaults
 
-**Note**: Each model supports one upstream. Multiple upstreams per model (load balancing) is a future feature.
+**Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, but each individual model still maps to a single upstream.
+
+#### Composite aliases
+
+```toml
+[composite]
+"gpt-all" = {"gpt-5.4-mini": {"share": 50}, "gpt-5-mini": {"share": 20}, "nvidia/nemotron-3-super-120b-a12b-free": {}}
+"gpt-5" = {"gpt-5.4-mini": {"fallback": 1}, "gpt-5-mini": {"primary": true}, "nvidia/nemotron-3-super-120b-a12b-free": {"fallback": 2}}
+"llama" = {"llama3": {}, "nemotron-3-120b-a12b-free": {}}
+```
 
 #### Consul-backed config
 
@@ -640,7 +650,14 @@ upstream_mode = "openai-completions"
 - **Model names**: Preserve original names (no normalization) - `"deepseek/deepseek-v3.2"`, `"gemini-2.5-flash"`
 - **Inheritance chain**: Model array → Category defaults → [upstream] defaults
 
-**Note**: Each model supports one upstream. Multiple upstreams per model (load balancing) is a future feature.
+**Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, but each individual model still maps to a single upstream.
+
+#### Composite aliases
+
+```toml
+[composite]
+##### refer to previous 'Composite aliases' examples
+```
 
 ### Configuration Loading
 

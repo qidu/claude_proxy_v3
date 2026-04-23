@@ -22,6 +22,7 @@ export interface ProxyConfig {
     budget_to_effort_high?: number | string;
   };
   models?: Record<string, ModelCategoryConfig | ModelArrayConfig>;
+  composite?: Record<string, CompositeModelConfig>;
   defaults?: {
     upstream_mode?: string;
   };
@@ -36,6 +37,14 @@ export interface ModelCategoryConfig {
 
 export type ModelArrayConfig = [string, string, string]; // [model_alias, base_url, api_key]
 
+export interface CompositeTargetConfig {
+  share?: number;
+  primary?: boolean;
+  fallback?: number;
+}
+
+export type CompositeModelConfig = Record<string, CompositeTargetConfig>;
+
 export interface ModelRouteConfig {
   targetUrl: string;
   apiKey?: string;
@@ -43,16 +52,157 @@ export interface ModelRouteConfig {
   modelAlias?: string;
 }
 
-/**
- * Map upstream_mode to handler type
- */
-function getUpstreamModeType(upstreamMode: string): 'native' | 'openai-completions' {
-  if (upstreamMode === 'anthropic-messages' || 
-      upstreamMode === 'gemini-generatecontent' || 
-      upstreamMode === 'gemini-interactions') {
-    return 'native';
+export interface CompositeRouteSelection {
+  selectedModelName: string;
+  route: ModelRouteConfig;
+  skippedTargets: string[];
+}
+
+function resolveModelRouteFromEntry(
+  modelEntry: string | string[],
+  categoryConfig: ModelCategoryConfig,
+  proxyConfig: ProxyConfig
+): ModelRouteConfig {
+  const categoryUpstreamMode = categoryConfig.upstream_mode ||
+                               proxyConfig.upstream?.upstream_mode ||
+                               'openai-completions';
+  const categoryBaseUrl = categoryConfig.base_url ||
+                          proxyConfig.upstream?.default_base_url ||
+                          'https://api.qnaigc.com';
+  const categoryApiKey = categoryConfig.api_key ||
+                        proxyConfig.upstream?.default_api_key;
+
+  if (Array.isArray(modelEntry)) {
+    const [modelAlias, modelBaseUrl, modelApiKey] = modelEntry;
+    return {
+      targetUrl: modelBaseUrl || categoryBaseUrl,
+      apiKey: parseApiKey(modelApiKey || categoryApiKey),
+      upstreamMode: categoryUpstreamMode,
+      modelAlias: modelAlias || undefined,
+    };
   }
-  return 'openai-completions';
+
+  return {
+    targetUrl: categoryBaseUrl,
+    apiKey: parseApiKey(categoryApiKey),
+    upstreamMode: categoryUpstreamMode,
+    modelAlias: modelEntry || undefined,
+  };
+}
+
+function resolveModelRouteFromConfig(
+  modelName: string,
+  proxyConfig: ProxyConfig
+): ModelRouteConfig | undefined {
+  const modelConfig = getModelConfig(proxyConfig, modelName);
+  if (!modelConfig) {
+    return undefined;
+  }
+
+  const entry = modelConfig.entry;
+  if (entry === undefined) {
+    return undefined;
+  }
+
+  return resolveModelRouteFromEntry(entry, modelConfig.categoryConfig, proxyConfig);
+}
+
+function resolveCompositeModelRoute(
+  modelName: string,
+  proxyConfig: ProxyConfig
+): CompositeRouteSelection | undefined {
+  const compositeConfig = proxyConfig.composite?.[modelName];
+  if (!compositeConfig) {
+    return undefined;
+  }
+
+  const skippedTargets: string[] = [];
+  const resolvedTargets = Object.entries(compositeConfig)
+    .map(([targetModelName, targetConfig], index) => {
+      const route = resolveModelRouteFromConfig(targetModelName, proxyConfig);
+      if (!route) {
+        skippedTargets.push(targetModelName);
+        return undefined;
+      }
+
+      return {
+        targetModelName,
+        targetConfig: targetConfig || {},
+        route,
+        index,
+      };
+    })
+    .filter((candidate): candidate is {
+      targetModelName: string;
+      targetConfig: CompositeTargetConfig;
+      route: ModelRouteConfig;
+      index: number;
+    } => candidate !== undefined);
+
+  if (resolvedTargets.length === 0) {
+    return undefined;
+  }
+
+  const primaryCandidate = resolvedTargets.find(candidate => candidate.targetConfig.primary);
+  const orderedCandidates = primaryCandidate
+    ? [primaryCandidate]
+    : resolvedTargets
+        .slice()
+        .sort((left, right) => {
+          const leftFallback = left.targetConfig.fallback;
+          const rightFallback = right.targetConfig.fallback;
+
+          if (leftFallback !== undefined || rightFallback !== undefined) {
+            const normalizedLeft = leftFallback ?? Number.POSITIVE_INFINITY;
+            const normalizedRight = rightFallback ?? Number.POSITIVE_INFINITY;
+            if (normalizedLeft !== normalizedRight) {
+              return normalizedLeft - normalizedRight;
+            }
+          }
+
+          return left.index - right.index;
+        });
+
+  const selectedCandidate = primaryCandidate
+    ? primaryCandidate
+    : orderedCandidates.some(candidate => candidate.targetConfig.fallback !== undefined)
+      ? orderedCandidates[0]
+      : selectWeightedCompositeCandidate(orderedCandidates);
+
+  if (!selectedCandidate) {
+    return undefined;
+  }
+
+  return {
+    selectedModelName: selectedCandidate.targetModelName,
+    route: {
+      ...selectedCandidate.route,
+      modelAlias: selectedCandidate.route.modelAlias || selectedCandidate.targetModelName,
+    },
+    skippedTargets,
+  };
+}
+
+function selectWeightedCompositeCandidate<T extends { targetConfig: CompositeTargetConfig }>(candidates: T[]): T | undefined {
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  const weights = candidates.map(candidate => candidate.targetConfig.share ?? 1);
+  const totalWeight = weights.reduce((sum, weight) => sum + Math.max(0, weight), 0);
+  if (totalWeight <= 0) {
+    return candidates[0];
+  }
+
+  let remaining = Math.random() * totalWeight;
+  for (let i = 0; i < candidates.length; i++) {
+    remaining -= Math.max(0, weights[i]);
+    if (remaining <= 0) {
+      return candidates[i];
+    }
+  }
+
+  return candidates[candidates.length - 1];
 }
 
 /**
@@ -60,11 +210,9 @@ function getUpstreamModeType(upstreamMode: string): 'native' | 'openai-completio
  */
 export function getModelRouteConfig(
   modelName: string,
-  proxyConfig: ProxyConfig,
-  env: Env
+  proxyConfig: ProxyConfig
 ): ModelRouteConfig {
   if (!proxyConfig.models) {
-    // No models config, use defaults from [upstream]
     const defaultMode = proxyConfig.upstream?.upstream_mode || 'openai-completions';
     return {
       targetUrl: proxyConfig.upstream?.default_base_url || 'https://api.qnaigc.com',
@@ -73,61 +221,28 @@ export function getModelRouteConfig(
     };
   }
 
-  // Search for model in all categories
-  for (const [categoryName, categoryConfig] of Object.entries(proxyConfig.models)) {
-    if (Array.isArray(categoryConfig)) {
-      // Skip array entries (these are model definitions, not categories)
-      continue;
-    }
+  const compositeRoute = resolveCompositeModelRoute(modelName, proxyConfig);
+  if (compositeRoute) {
+    return compositeRoute.route;
+  }
 
-    // Check if this category contains the model
-    const modelEntry = categoryConfig[modelName];
-    
-    if (modelEntry !== undefined) {
-      // Found the model in this category
-      const categoryUpstreamMode = categoryConfig.upstream_mode || 
-                                   proxyConfig.upstream?.upstream_mode || 
-                                   'openai-completions';
-      const categoryBaseUrl = categoryConfig.base_url || 
-                             proxyConfig.upstream?.default_base_url || 
-                             'https://api.qnaigc.com';
-      const categoryApiKey = categoryConfig.api_key || 
-                            proxyConfig.upstream?.default_api_key;
-
-      if (Array.isArray(modelEntry)) {
-        // Array format: [model_alias, base_url, api_key]
-        const [modelAlias, modelBaseUrl, modelApiKey] = modelEntry;
-        
-        return {
-          targetUrl: modelBaseUrl || categoryBaseUrl,
-          apiKey: parseApiKey(modelApiKey || categoryApiKey),
-          upstreamMode: categoryUpstreamMode,
-          modelAlias: modelAlias || undefined,
-        };
-      } else if (typeof modelEntry === 'string') {
-        // Simple string value (legacy format or shorthand)
-        return {
-          targetUrl: categoryBaseUrl,
-          apiKey: parseApiKey(categoryApiKey),
-          upstreamMode: categoryUpstreamMode,
-          modelAlias: modelEntry || undefined,
-        };
-      }
-    }
+  const directRoute = resolveModelRouteFromConfig(modelName, proxyConfig);
+  if (directRoute) {
+    return directRoute;
   }
 
   // Model not found in any category, use [models.default] or [upstream] defaults
   const defaultCategory = proxyConfig.models.default;
   const defaultCategoryConfig = defaultCategory && !Array.isArray(defaultCategory) ? defaultCategory : undefined;
-  const defaultMode = defaultCategoryConfig?.upstream_mode || 
-                     proxyConfig.upstream?.upstream_mode || 
+  const defaultMode = defaultCategoryConfig?.upstream_mode ||
+                     proxyConfig.upstream?.upstream_mode ||
                      'openai-completions';
-  const defaultBaseUrl = defaultCategoryConfig?.base_url || 
-                        proxyConfig.upstream?.default_base_url || 
+  const defaultBaseUrl = defaultCategoryConfig?.base_url ||
+                        proxyConfig.upstream?.default_base_url ||
                         'https://api.qnaigc.com';
-  const defaultApiKey = defaultCategoryConfig?.api_key || 
+  const defaultApiKey = defaultCategoryConfig?.api_key ||
                        proxyConfig.upstream?.default_api_key;
-  
+
   return {
     targetUrl: defaultBaseUrl,
     apiKey: parseApiKey(defaultApiKey),
@@ -273,6 +388,95 @@ function parseConsulConfig(entries: ConsulKvEntry[]): ProxyConfig {
   return config;
 }
 
+function parseCompositeTargetConfig(value: string): CompositeTargetConfig {
+  const config: CompositeTargetConfig = {};
+  const cleaned = value.replace(/[{}]/g, '');
+  const fields = cleaned.split(',');
+
+  for (const field of fields) {
+    const trimmed = field.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    const match = trimmed.match(/^"?([^"=]+)"?\s*:\s*(.+)$/);
+    if (!match) {
+      continue;
+    }
+
+    const key = match[1].trim().replace(/^"|"$/g, '');
+    const rawValue = match[2].trim().replace(/,$/, '');
+
+    if (key === 'share' || key === 'fallback') {
+      const numeric = Number(rawValue);
+      if (!Number.isNaN(numeric)) {
+        config[key] = numeric;
+      }
+      continue;
+    }
+
+    if (key === 'primary') {
+      config.primary = rawValue === 'true';
+    }
+  }
+
+  return config;
+}
+
+function parseCompositeModelConfig(rawValue: string): CompositeModelConfig {
+  const config: CompositeModelConfig = {};
+  const trimmed = rawValue.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+    return config;
+  }
+
+  const inner = trimmed.slice(1, -1);
+  const entries: string[] = [];
+  let current = '';
+  let depth = 0;
+  let inQuotes = false;
+
+  for (let i = 0; i < inner.length; i++) {
+    const char = inner[i];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      current += char;
+      continue;
+    }
+
+    if (!inQuotes) {
+      if (char === '{') {
+        depth += 1;
+      } else if (char === '}') {
+        depth -= 1;
+      } else if (char === ',' && depth === 0) {
+        if (current.trim()) {
+          entries.push(current.trim());
+        }
+        current = '';
+        continue;
+      }
+    }
+
+    current += char;
+  }
+
+  if (current.trim()) {
+    entries.push(current.trim());
+  }
+
+  for (const entry of entries) {
+    const match = entry.match(/^"([^"]+)"\s*:\s*(\{.*\})$/);
+    if (!match) {
+      continue;
+    }
+
+    config[match[1]] = parseCompositeTargetConfig(match[2]);
+  }
+
+  return config;
+}
+
 function quoteTomlString(value: string): string {
   return JSON.stringify(value);
 }
@@ -297,6 +501,28 @@ function serializeTomlSection(section: Record<string, unknown>): string[] {
   return Object.entries(section).map(([key, value]) => `${key} = ${serializeTomlValue(value)}`);
 }
 
+function serializeCompositeTargetConfig(config: CompositeTargetConfig): string {
+  const fields: string[] = [];
+  if (config.share !== undefined) {
+    fields.push(`"share": ${config.share}`);
+  }
+  if (config.primary !== undefined) {
+    fields.push(`"primary": ${config.primary}`);
+  }
+  if (config.fallback !== undefined) {
+    fields.push(`"fallback": ${config.fallback}`);
+  }
+  return `{${fields.join(', ')}}`;
+}
+
+function serializeCompositeModelConfig(config: CompositeModelConfig): string {
+  const entries = Object.entries(config).map(([modelName, targetConfig]) => {
+    const serializedTarget = serializeCompositeTargetConfig(targetConfig || {});
+    return `${JSON.stringify(modelName)}: ${serializedTarget}`;
+  });
+  return `{${entries.join(', ')}}`;
+}
+
 function serializeProxyConfigToml(config: ProxyConfig): string {
   const lines: string[] = [];
 
@@ -313,9 +539,19 @@ function serializeProxyConfigToml(config: ProxyConfig): string {
       }
 
       lines.push(`[models.${categoryName}]`);
-      lines.push(...serializeTomlSection(categoryConfig as Record<string, unknown>));
+      const { composite, ...categoryRest } = categoryConfig as Record<string, unknown>;
+      lines.push(...serializeTomlSection(categoryRest));
+      if (composite && typeof composite === 'object' && !Array.isArray(composite)) {
+        lines.push(`composite = ${serializeCompositeModelConfig(composite as CompositeModelConfig)}`);
+      }
       lines.push('');
     }
+  }
+
+  if (config.composite) {
+    lines.push('[composite]');
+    lines.push(...Object.entries(config.composite).map(([modelName, targetConfig]) => `${JSON.stringify(modelName)} = ${serializeCompositeModelConfig(targetConfig)}`));
+    lines.push('');
   }
 
   if (config.defaults) {
@@ -461,6 +697,10 @@ function parseSimpleToml(content: string): ProxyConfig {
         if (currentCategory) {
           config.models[currentCategory] = {};
         }
+      } else if (parts[0] === 'composite') {
+        currentSection = 'composite';
+        currentCategory = null;
+        config.composite = {};
       } else if (parts[0] === 'defaults') {
         currentSection = 'defaults';
         currentCategory = null;
@@ -483,9 +723,20 @@ function parseSimpleToml(content: string): ProxyConfig {
         if (cleanKey === 'upstream_mode' || cleanKey === 'base_url' || cleanKey === 'api_key') {
           category[cleanKey] = value;
         }
+      } else if (currentSection === 'composite' && config.composite) {
+        config.composite[cleanKey] = parseCompositeModelConfig(value);
       } else if (currentSection === 'defaults' && config.defaults) {
         (config.defaults as any)[cleanKey] = value;
       }
+      continue;
+    }
+
+    // Handle composite inline object values: "alias" = {"m1": {...}, "m2": {...}}
+    const compositeObjectMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*(\{.+\})$/);
+    if (compositeObjectMatch && currentSection === 'composite' && config.composite) {
+      const [, key, value] = compositeObjectMatch;
+      const cleanKey = key.trim().replace(/^"|"$/g, '');
+      config.composite[cleanKey] = parseCompositeModelConfig(value.trim());
       continue;
     }
 
