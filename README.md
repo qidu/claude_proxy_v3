@@ -140,6 +140,16 @@ List the keys under a prefix with:
 consul kv get -recurse -keys model-proxy-v3/models/free/
 ```
 
+List all values of all keys:
+```
+for KEY in $(consul kv get -recurse -keys model-proxy-v3); do consul kv get $KEY; done
+```
+
+Watch if a key changed:
+```
+consul watch -type=key -key=model-proxy-v3/models/free/api_key
+```
+
 After updating Consul KV, trigger a reload:
 
 ```bash

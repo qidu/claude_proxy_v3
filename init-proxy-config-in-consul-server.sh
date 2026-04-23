@@ -1,3 +1,8 @@
+# Readme
+## Refer to docs/consul-server.md
+## Refer to consul section in README.md
+## Refer to config at ./proxy_config.toml
+
 # upstream
 consul kv put model-proxy-v3/upstream/default_base_url "https://api.qnaigc.com"
 consul kv put model-proxy-v3/upstream/budget_to_effort_low "8000"
