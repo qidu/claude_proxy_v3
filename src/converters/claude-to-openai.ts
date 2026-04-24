@@ -106,6 +106,21 @@ function convertClaudeToolChoiceToOpenAI(toolChoice: ClaudeMessagesRequest['tool
 }
 
 /**
+ * Normalize effort value, mapping non-standard values like "xhigh" to valid ones
+ */
+function normalizeEffort(effort: string | undefined): "low" | "medium" | "high" | "max" | undefined {
+    if (!effort) return undefined;
+    switch (effort) {
+        case "low": return "low";
+        case "medium": return "medium";
+        case "high": return "high";
+        case "max": return "max";
+        case "xhigh": return "max";
+        default: return undefined;
+    }
+}
+
+/**
  * Convert Claude thinking config to OpenAI format
  * Can optionally convert to reasoning_effort based on budget thresholds
  */
@@ -113,6 +128,8 @@ export interface ThinkingConversionOptions {
     budget_to_effort_low?: number;
     budget_to_effort_medium?: number;
     budget_to_effort_high?: number;
+    explicit_reasoning_effort?: "low" | "medium" | "high" | "max";
+    task_budget_total?: number;
 }
 
 export function convertClaudeThinkingToOpenAI(
@@ -131,6 +148,13 @@ export function convertClaudeThinkingToOpenAI(
         const convertedThinking: OpenAIRequest['thinking'] = { enabled: true };
         if (thinking.budget_tokens !== undefined) {
             convertedThinking.budget_tokens = thinking.budget_tokens;
+        } else if (options?.task_budget_total !== undefined) {
+            convertedThinking.budget_tokens = options.task_budget_total;
+        }
+
+        // Use explicit reasoning_effort from request body if provided
+        if (options?.explicit_reasoning_effort) {
+            return { thinking: convertedThinking, reasoning_effort: options.explicit_reasoning_effort };
         }
 
         const hasThresholds = options &&
@@ -138,11 +162,11 @@ export function convertClaudeThinkingToOpenAI(
              options.budget_to_effort_medium !== undefined ||
              options.budget_to_effort_high !== undefined);
 
-        if (!hasThresholds || thinking.budget_tokens === undefined) {
+        if (!hasThresholds || convertedThinking.budget_tokens === undefined) {
             return { thinking: convertedThinking };
         }
 
-        const budget = thinking.budget_tokens;
+        const budget = convertedThinking.budget_tokens;
         let effort: "low" | "medium" | "high" | "max" = "low";
         const highThreshold = options?.budget_to_effort_high;
         const mediumThreshold = options?.budget_to_effort_medium;
@@ -396,7 +420,12 @@ export function convertClaudeToOpenAIRequest(
     }
 
     // Handle thinking
-    const convertedThinking = convertClaudeThinkingToOpenAI(claudeRequest.thinking, conversionOptions);
+    const convertedThinking = convertClaudeThinkingToOpenAI(claudeRequest.thinking, {
+        ...conversionOptions,
+        explicit_reasoning_effort: conversionOptions?.explicit_reasoning_effort ??
+            normalizeEffort(claudeRequest.reasoning_effort) ?? normalizeEffort(claudeRequest.output_config?.effort),
+        task_budget_total: claudeRequest.output_config?.task_budget?.total,
+    });
     if (convertedThinking.thinking) {
         openaiRequest.thinking = convertedThinking.thinking;
     }

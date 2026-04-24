@@ -6,7 +6,7 @@ default_base_url = "https://api.qnaigc.com"
 budget_to_effort_low = 8000  
 # < 20000 tokens → "medium"
 budget_to_effort_medium = 20000
-# >= 2000 or 0 = always "high" (or use a threshold)
+# >= 20000 or 0 = always "high" (or use a threshold)
 budget_to_effort_high = 0
 
 [models.claude]

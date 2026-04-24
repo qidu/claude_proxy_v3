@@ -124,6 +124,10 @@ export interface ClaudeMessagesRequest {
     reasoning_effort?: "low" | "medium" | "high" | "max";
     output_config?: {
         effort?: "low" | "medium" | "high" | "max";
+        task_budget?: {
+            type: "tokens";
+            total: number;
+        };
     };
     service_tier?: "auto" | "standard_only";
     metadata?: {
