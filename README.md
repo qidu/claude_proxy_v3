@@ -462,6 +462,8 @@ For SSE streaming responses, the proxy sends proper thinking events:
 - **Gemini**: 3.1-pro-preview (includes reasoning_content)
 - **Claude**: All 4.x models with thinking support
 
+> **Note**: Some upstreams (e.g., DeepSeek's Anthropic-compatible API) internally default models to thinking mode regardless of the request's `thinking` parameter. This can cause `400` errors (`"The content[].thinking in the thinking mode must be passed back to the API"`) on first streaming requests where no prior thinking blocks exist. The proxy handles this by stripping `thinking` config when no prior assistant thinking blocks are present in the conversation. If you encounter this error with other Anthropic-compatible upstreams, ensure the conversation includes prior assistant `thinking` content blocks or disable thinking client-side.
+
 ### Responses API
 
 **Endpoint**: `POST /v1/responses`
@@ -605,6 +607,10 @@ PROXY_CONFIG_PATH = "./proxy_config.toml"
 LOCAL_TOKEN_COUNTING = "false"
 ALLOWED_HOSTS = "127.0.0.1,localhost,api.qnaigc.com"
 LOG_LEVEL = "debug"
+
+# Default max_tokens for requests that don't include it (anthropic-messages mode)
+# Some upstreams (e.g. DeepSeek) require max_tokens in every request
+# DEFAULT_MAX_TOKENS = "8192"
 ```
 
 ### Model Configuration
@@ -721,10 +727,12 @@ The proxy forwards the client's real IP to upstream APIs via the `x-forwarded-fo
 src/
 ├── index.ts                 # Main router and middleware
 ├── handlers/
-│   ├── messages.ts         # Messages API handler
+│   ├── claude.ts           # Claude native API handler (anthropic-messages passthrough)
+│   ├── messages.ts         # Messages API handler (openai-completions conversion)
 │   ├── responses.ts        # Responses API handler
 │   ├── models.ts           # Models API handler
 │   ├── token-counting.ts   # Token counting handler
+│   ├── openai.ts           # OpenAI completions handler
 │   └── gemini.ts           # Gemini API handler (dual-mode)
 ├── converters/
 │   ├── claude-to-openai.ts # Request conversion
@@ -738,7 +746,13 @@ src/
 │   ├── routing.ts          # Dynamic routing logic
 │   ├── validation.ts       # Request validation
 │   ├── errors.ts           # Error handling
-│   └── thinking.ts         # Thinking utilities
+│   ├── thinking.ts         # Thinking utilities
+│   ├── config-loader.ts    # Proxy config TOML loader
+│   ├── fetch-timeout.ts    # Upstream request timeout
+│   ├── logger.ts           # Logging utilities
+│   ├── sdk-handler.ts      # SDK-based request handling
+│   ├── token-counting.ts   # Token counting utilities
+│   └── beta-features.ts    # Beta feature validation
 └── types/
     ├── claude.ts           # Claude API types
     ├── openai.ts           # OpenAI API types
@@ -1154,6 +1168,14 @@ MIT
 ## 🛠️ Technical Implementation
 
 ### Latest Changes (Current)
+
+**Upstream Error Diagnostics**: The proxy now reads and logs upstream error response bodies in `handleClaudeRequest` before throwing, making it possible to diagnose API-level errors (e.g., DeepSeek returning 400 about thinking mode).
+
+**DeepSeek Thinking Mode Compatibility**: Some upstreams (e.g., DeepSeek's Anthropic-compatible API) internally default models to thinking mode and require prior `content[].thinking` blocks in the conversation even on the first request. The proxy now:
+- Defaults `thinking` to `disabled` when the client doesn't set it
+- Strips `thinking: { type: "enabled" }` when there are no prior assistant thinking blocks in the conversation history (avoids 400 errors on first requests)
+
+**Full Request Body Logging**: Added debug-level logging of the full request body sent to upstreams in `handleClaudeRequest` for easier troubleshooting.
 
 **Thinking Signature Support & Streaming Improvements**:
 - **Signature Delta Events**: Added full `signature_delta` support for thinking block verification in streaming
