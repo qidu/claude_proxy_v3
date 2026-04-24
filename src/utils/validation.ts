@@ -312,19 +312,15 @@ export function validateThinkingConfig(
   // Check if thinking is enabled (either string 'enabled' or boolean true)
   const isEnabled = thinking.type === 'enabled' || thinking.type === true;
 
-  if (isEnabled) {
-    if (thinking.budget_tokens !== undefined) {
-      if (typeof thinking.budget_tokens !== 'number') {
-        throw new ValidationError(`${context}.budget_tokens must be a number`);
-      }
-      if (thinking.budget_tokens < 1024) {
-        throw new ValidationError(`${context}.budget_tokens must be at least 1,024`);
-      }
-      if (thinking.budget_tokens > 100000) {
-        throw new ValidationError(`${context}.budget_tokens cannot exceed 100,000`);
-      }
-    } else {
-      throw new ValidationError(`${context}.budget_tokens is required when thinking is enabled`);
+  if (isEnabled && thinking.budget_tokens !== undefined) {
+    if (typeof thinking.budget_tokens !== 'number') {
+      throw new ValidationError(`${context}.budget_tokens must be a number`);
+    }
+    if (thinking.budget_tokens < 1024) {
+      throw new ValidationError(`${context}.budget_tokens must be at least 1,024`);
+    }
+    if (thinking.budget_tokens > 100000) {
+      throw new ValidationError(`${context}.budget_tokens cannot exceed 100,000`);
     }
   }
 }

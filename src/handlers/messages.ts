@@ -29,6 +29,15 @@ function getTokenCountingConfig(env?: Env): TokenCountingConfig {
   };
 }
 
+function normalizeOpenAICompletionsBody(requestBody: Record<string, unknown>): Record<string, unknown> {
+  const normalizedBody: Record<string, unknown> = { ...requestBody };
+  const outputConfig = normalizedBody.output_config as Record<string, unknown> | undefined;
+  if (outputConfig && normalizedBody.reasoning_effort === undefined && outputConfig.effort !== undefined) {
+    normalizedBody.reasoning_effort = outputConfig.effort;
+  }
+  return normalizedBody;
+}
+
 /**
  * Handle messages API request
  */
@@ -73,11 +82,12 @@ export async function handleMessagesRequest(
 
   if (isOpenAIFormat && !hasClaudeFormatTools) {
     // Request is already in OpenAI format, pass through directly
-    const model = (requestBody.model as string) || modelId || 'unknown';
-    const isStreaming = requestBody.stream === true;
+    const openaiRequestBody = normalizeOpenAICompletionsBody(requestBody);
+    const model = (openaiRequestBody.model as string) || modelId || 'unknown';
+    const isStreaming = openaiRequestBody.stream === true;
 
     // Log thinking configuration if present (OpenAI format)
-    const openaiThinking = requestBody.thinking as { enabled?: boolean; budget_tokens?: number } | undefined;
+    const openaiThinking = openaiRequestBody.thinking as { enabled?: boolean; budget_tokens?: number } | undefined;
     if (openaiThinking) {
       const thinkingType = openaiThinking.enabled ? 'enabled' : 'disabled';
       const budget = openaiThinking.budget_tokens ? ` budget_tokens: ${openaiThinking.budget_tokens}` : 'budget: unknown';
@@ -111,7 +121,7 @@ export async function handleMessagesRequest(
             model,
             activeLogger,
             env,
-            requestBody
+            openaiRequestBody
         );
     }
 
@@ -121,7 +131,7 @@ export async function handleMessagesRequest(
         'Content-Type': 'application/json',
         ...addForwardedHeaders(authHeaders, request),
       },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify(openaiRequestBody),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 
@@ -139,9 +149,9 @@ export async function handleMessagesRequest(
 
     // For OpenAI format pass-through, convert response to Claude format
     if (isStreaming) {
-      return handleStreamingResponse(response, model, requestId, activeLogger, requestBody, tokenCountingConfig);
+      return handleStreamingResponse(response, model, requestId, activeLogger, openaiRequestBody, tokenCountingConfig);
     }
-    return handleNonStreamingResponse(response, model, requestId, activeLogger, requestBody, tokenCountingConfig);
+    return handleNonStreamingResponse(response, model, requestId, activeLogger, openaiRequestBody, tokenCountingConfig);
   }
 
   // Claude format - convert to OpenAI

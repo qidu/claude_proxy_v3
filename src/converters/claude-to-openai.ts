@@ -118,27 +118,32 @@ export interface ThinkingConversionOptions {
 export function convertClaudeThinkingToOpenAI(
     thinking: ThinkingConfigParam | undefined,
     options?: ThinkingConversionOptions
-): { thinking?: OpenAIRequest['thinking']; reasoning_effort?: "low" | "medium" | "high" } {
+): { thinking?: OpenAIRequest['thinking']; reasoning_effort?: "low" | "medium" | "high" | "max" } {
     if (!thinking) {
         return {};
     }
 
-    // Handle boolean values (true = enabled, false = disabled)
+    if (thinking.type === false || thinking.type === 'disabled') {
+        return { thinking: { enabled: false } };
+    }
+
     if (thinking.type === true || thinking.type === 'enabled' || thinking.type === 'adaptive') {
-        // Check if any budget thresholds are configured
+        const convertedThinking: OpenAIRequest['thinking'] = { enabled: true };
+        if (thinking.budget_tokens !== undefined) {
+            convertedThinking.budget_tokens = thinking.budget_tokens;
+        }
+
         const hasThresholds = options &&
             (options.budget_to_effort_low !== undefined ||
              options.budget_to_effort_medium !== undefined ||
              options.budget_to_effort_high !== undefined);
 
-        // If no thresholds configured, strip thinking entirely (don't send to upstream)
-        if (!hasThresholds) {
-            return {};
+        if (!hasThresholds || thinking.budget_tokens === undefined) {
+            return { thinking: convertedThinking };
         }
 
-        // Convert to reasoning_effort based on thresholds
-        const budget = thinking.budget_tokens || 0;
-        let effort: "low" | "medium" | "high" = "low";
+        const budget = thinking.budget_tokens;
+        let effort: "low" | "medium" | "high" | "max" = "low";
         const highThreshold = options?.budget_to_effort_high;
         const mediumThreshold = options?.budget_to_effort_medium;
 
@@ -148,10 +153,7 @@ export function convertClaudeThinkingToOpenAI(
             effort = "medium";
         }
 
-        return { reasoning_effort: effort };
-    } else if (thinking.type === false || thinking.type === 'disabled') {
-        // For disabled, strip thinking entirely (don't send to upstream)
-        return {};
+        return { thinking: convertedThinking, reasoning_effort: effort };
     }
 
     return {};

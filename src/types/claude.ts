@@ -13,7 +13,7 @@ export interface ClaudeTool {
 
 export type ThinkingConfigParam = {
     type: "enabled" | "adaptive" | true;
-    budget_tokens: number;
+    budget_tokens?: number;
 } | {
     type: "disabled" | false;
 };
@@ -121,6 +121,10 @@ export interface ClaudeMessagesRequest {
     tools?: ClaudeTool[];
     tool_choice?: { type: "auto" | "any" | "tool"; name?: string } | { type: "none" };
     thinking?: ThinkingConfigParam;
+    reasoning_effort?: "low" | "medium" | "high" | "max";
+    output_config?: {
+        effort?: "low" | "medium" | "high" | "max";
+    };
     service_tier?: "auto" | "standard_only";
     metadata?: {
         user_id?: string;

@@ -189,7 +189,7 @@ export function estimateThinkingTokens(
 
   if (normalizedThinking.type === 'enabled') {
     // Use budget tokens as estimate, but cap at default if budget is very high
-    return Math.min(normalizedThinking.budget_tokens, defaultEstimate);
+    return Math.min(normalizedThinking.budget_tokens ?? defaultEstimate, defaultEstimate);
   }
 
   return 0;
@@ -249,7 +249,10 @@ export function validateThinkingForTokenCounting(
   }
 
   if (normalizedThinking.type === 'enabled') {
-    const budgetTokens = normalizedThinking.budget_tokens;
+    const budgetTokens = normalizedThinking.budget_tokens ?? 0;
+    if (budgetTokens === 0) {
+      return;
+    }
 
     // For token counting, budget tokens should be reasonable
     if (budgetTokens < 1) {

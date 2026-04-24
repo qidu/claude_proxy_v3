@@ -28,8 +28,10 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
 
 - **Extended Thinking Support**: Full Claude-style thinking with signature verification
   - **Model Support**: DeepSeek R1 series, Doubao Thinking, Qwen Thinking variants, Gemini reasoning models
-  - **Thinking Modes**: Supports both `enabled` (manual) and `adaptive` (Claude 4.6+) thinking types
+  - **Thinking Modes**: Supports `enabled` (manual) and `adaptive` (Claude 4.6+) thinking types
   - **Boolean Support**: Accepts boolean values (`true`/`false`) in addition to string values (`"enabled"`/`"disabled"`)
+  - **Flexible Request Fields**: `/v1/messages` accepts `thinking: { type: "enabled" }` with or without `budget_tokens`, plus `reasoning_effort: "low" | "medium" | "high" | "max"` and `output_config.effort`
+  - **OpenAI Upstream Passthrough**: For `openai-completions` upstreams, the proxy forwards `thinking` and `reasoning_effort` instead of dropping them
   - **Signature Verification**: Full signature_delta streaming events for thinking block verification
   - **Streaming Support**: Proper thinking_delta and signature_delta events in SSE streams
   - **Token Counting**: Accurate token counting for thinking content with budget validation
