@@ -1226,7 +1226,8 @@ or
 - **SDK URL detection**: `sdk://` URLs use chatjimmy SDK clients instead of HTTP fetch
 - **OpenAI-compatible mode**: `handleSdkOpenAIRequest()` uses `OpenAICompatibleClient`
 - **Anthropic-compatible mode**: `handleSdkAnthropicRequest()` uses `OpenAICompatibleClient` as fallback
-- **Streaming support**: Both handlers support SSE streaming
+- **Streaming support**: SDK Anthropic stream is converted from OpenAI chunks to Claude SSE event format (`message_start`, `content_block_*`, `message_delta`, `message_stop`)
+- **Streaming fallback**: If SDK stream is unavailable, falls back to non-stream response
 
 ### Thinking to reasoning_effort Conversion
 

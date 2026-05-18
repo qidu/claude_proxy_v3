@@ -2,12 +2,9 @@
 default_base_url = "https://api.qnaigc.com"
 #default_base_url = "http://localhost:4000"
 # Use client API keys (x-goog-api-key, x-api-key) as 'Authorization: Baerer' token for openai-completions
-# < 8000 tokens → "low"
-budget_to_effort_low = 8000  
-# < 20000 tokens → "medium"
-budget_to_effort_medium = 20000
-# >= 20000 or 0 = always "high" (or use a threshold)
-budget_to_effort_high = 0
+budget_to_effort_low = 8000      # < 8000 tokens → "low"
+budget_to_effort_medium = 20000  # < 20000 tokens → "medium"
+budget_to_effort_high = 0        # >= 2000 or 0 = always "high" (or use a threshold)
 
 [models.claude]
 upstream_mode = "anthropic-messages"
@@ -24,19 +21,20 @@ api_key = "sk-17ac71ed56aee29*"
 "claude-sonnet-4-6" = ["claude-sonnet-4-6", "", ""]
 "claude-sonnet-4-5" = ["claude-sonnet-4-5", "", ""]
 "claude-haiku-4-5" = ["claude-haiku-4-5", "", ""]
-"g5.4-mini" = ["gpt-5.4-mini", "", ""]
-"g5-mini" = ["gpt-5-mini", "", ""]
 
 [models.free]
 #base_url = "https://api.qnaigc.com"
-base_url = "http://localhost:4000"
+base_url = "http://localhost:3000"
 upstream_mode = "openai-completions"
 api_key = "WELCOME_TO_USE_THIS_PUBLIC_FREE_KEY_ON_YOUR_CLAW"
+"gpt-5.4-mini" = ["gpt-5.4-mini", "", ""]
+"gpt-5.3-codex" = ["gpt-5.3-codex", "", ""]
 "gemini-3-flash" = ["gemini-3-flash", "", ""]
 "gpt-oss-120b-medium" = ["gpt-oss-120b-medium", "", ""]
 "gemini-3.1-pro-low" = ["gemini-3.1-pro-low", "", ""]
 "gemini-3.1-pro-high" = ["gemini-3.1-pro-high", "", ""]
 "nemotron-3-120b-a12b-free" = ["nvidia/nemotron-3-super-120b-a12b-free", "", ""]
+"llama3" = ["llama3.1-8B", "sdk://localhost", ""]
 
 [models.gemini]
 upstream_mode = "gemini-generatecontent"
@@ -47,12 +45,12 @@ api_key = "sk-***"
 # "gemini-2.5-flash" = ["", "", ""]
 
 [models.default]
-"llama3" = ["llama3.1-8B", "sdk://localhost", ""]
+#"llama3" = ["llama3.1-8B", "sdk://localhost", ""]
 #"deepseek/deepseek-v3.2-251201" = ["", "", ""]
+#upstream_mode = "anthropic-messages"
 #upstream_mode = "openai-completions"
 
 [composite]
 "gpt-all" = {"gpt-5.4-mini": {"share": 50}, "gpt-5-mini": {"share": 20}, "nvidia/nemotron-3-super-120b-a12b-free": {}}
 "gpt-5" = {"gpt-5.4-mini": {"fallback": 1}, "gpt-5-mini": {"primary": true}, "nvidia/nemotron-3-super-120b-a12b-free": {"fallback": 2}}
-"llama" = {"llama3.1":{}, "g5-mini": {}}
-#"llama" = {"llama3":{}, "nemotron-3-120b-a12b-free": {}}
+"llama" = {"llama3":{}, "nemotron-3-120b-a12b-free": {}}

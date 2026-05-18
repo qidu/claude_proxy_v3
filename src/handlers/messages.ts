@@ -121,7 +121,8 @@ export async function handleMessagesRequest(
             model,
             activeLogger,
             env,
-            openaiRequestBody
+            openaiRequestBody,
+            'claude'
         );
     }
 
@@ -215,7 +216,8 @@ export async function handleMessagesRequest(
           targetModelId,
           activeLogger,
           env,
-          requestBody
+          requestBody,
+          'claude'
       );
   }
 

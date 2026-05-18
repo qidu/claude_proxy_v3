@@ -4,7 +4,7 @@ compatibility_date = "2025-01-21"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-VERSION = "dev"  # Set to commit id, tag, or branch name
+VERSION = "v1.7.0@feature/composite"  # Set to commit id, tag, or branch name
 LOCAL_TOKEN_COUNTING=true      # Enable local counting
 LOCAL_TIKTOKEN=true            # Use tiktoken (accurate)
 TIKTOKEN_MODEL="o200k_base"    # Encoding model

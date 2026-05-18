@@ -8,6 +8,8 @@ import { OpenAIRequest, OpenAIResponse } from '../types/openai.js';
 import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.js';
 import { Env, Logger } from '../types/shared.js';
 import { createLogger } from './logger.js';
+import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
+import { createStreamTransformer } from '../converters/streaming.js';
 
 /**
  * Check if target URL is an SDK URL (sdk://)
@@ -188,7 +190,8 @@ export async function handleSdkOpenAIRequest(
   modelAlias?: string,
   logger?: Logger,
   env?: Env,
-  requestBody?: Record<string, unknown>
+  requestBody?: Record<string, unknown>,
+  outputFormat: 'openai' | 'claude' = 'openai'
 ): Promise<Response> {
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
   activeLogger.debug(requestId, `Using SDK client for OpenAI request model ${modelAlias} url=${request.url}, method=${request.method}`);
@@ -226,38 +229,91 @@ export async function handleSdkOpenAIRequest(
     activeLogger.debug(requestId, `Converted request: ${JSON.stringify(chatJimmyRequest, null, 2)}`);
 
     if (isStreaming) {
-      // Handle streaming request
-      const stream = client.createChatCompletionStream(chatJimmyRequest);
+      try {
+        // Handle streaming request
+        const stream = client.createChatCompletionStream(chatJimmyRequest);
+        const encoder = new TextEncoder();
 
-      // Convert stream to SSE response
-      const encoder = new TextEncoder();
-      const readable = new ReadableStream({
-        async start(controller) {
-          for await (const chunk of stream) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-          }
-          controller.close();
+        if (outputFormat === 'claude') {
+          const transformer = createStreamTransformer(
+            modelAlias || openaiRequest.model,
+            requestId,
+            requestBody as Record<string, unknown>
+          );
+
+          const openAiSseReadable = new ReadableStream<Uint8Array>({
+            async start(controller) {
+              try {
+                for await (const chunk of stream) {
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+                }
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+                controller.close();
+              } catch (error) {
+                controller.error(error);
+              }
+            }
+          });
+
+          const claudeSseReadable = openAiSseReadable.pipeThrough(new TransformStream(transformer));
+          return new Response(claudeSseReadable, {
+            status: 200,
+            headers: {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+            },
+          });
         }
-      });
 
-      return new Response(readable, {
-        status: 200,
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-        },
-      });
-    } else {
-      // Handle non-streaming request
-      const response = await client.createChatCompletion(chatJimmyRequest);
+        const readable = new ReadableStream({
+          async start(controller) {
+            for await (const chunk of stream) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+            }
+            controller.close();
+          }
+        });
 
-      return new Response(JSON.stringify(response), {
+        return new Response(readable, {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+          },
+        });
+      } catch (streamError) {
+        activeLogger.warn(requestId, `SDK streaming not available, fallback to non-stream response: ${(streamError as Error).message}`);
+      }
+    }
+
+    // Handle non-streaming request (default or fallback)
+    const response = await client.createChatCompletion({
+      ...chatJimmyRequest,
+      stream: false,
+    }) as OpenAIResponse;
+
+    if (outputFormat === 'claude') {
+      const claudeResponse: ClaudeMessagesResponse = await convertOpenAIToClaudeResponse(
+        response,
+        modelAlias || openaiRequest.model,
+        requestId,
+        requestBody as Record<string, any>
+      );
+
+      return new Response(JSON.stringify(claudeResponse), {
         status: 200,
         headers: {
           'Content-Type': 'application/json',
         },
       });
     }
+
+    return new Response(JSON.stringify(response), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
   } catch (error) {
     activeLogger.error(requestId, `SDK client error: ${(error as Error).message}`);
     activeLogger.error(requestId, `Error stack: ${(error as Error).stack}`);
@@ -329,38 +385,62 @@ export async function handleSdkAnthropicRequest(
     const chatJimmyRequest = convertClaudeToOpenAIForChatJimmy(claudeRequest);
 
     if (isStreaming) {
-      // Handle streaming request
-      const stream = client.createChatCompletionStream(chatJimmyRequest);
+      try {
+        // Handle streaming request and convert OpenAI SSE to Claude SSE
+        const stream = client.createChatCompletionStream(chatJimmyRequest);
+        const encoder = new TextEncoder();
+        const transformer = createStreamTransformer(
+          modelAlias || claudeRequest.model,
+          requestId,
+          requestBody as Record<string, unknown>
+        );
 
-      // Convert stream to SSE response
-      const encoder = new TextEncoder();
-      const readable = new ReadableStream({
-        async start(controller) {
-          for await (const chunk of stream) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+        const openAiSseReadable = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            try {
+              for await (const chunk of stream) {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+              }
+              controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+              controller.close();
+            } catch (error) {
+              controller.error(error);
+            }
           }
-          controller.close();
-        }
-      });
+        });
 
-      return new Response(readable, {
-        status: 200,
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-        },
-      });
-    } else {
-      // Handle non-streaming request
-      const response = await client.createChatCompletion(chatJimmyRequest);
+        const claudeSseReadable = openAiSseReadable.pipeThrough(new TransformStream(transformer));
 
-      return new Response(JSON.stringify(response), {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
+        return new Response(claudeSseReadable, {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+          },
+        });
+      } catch (streamError) {
+        activeLogger.warn(requestId, `SDK streaming not available, fallback to non-stream response: ${(streamError as Error).message}`);
+      }
     }
+
+    // Handle non-streaming request (default or fallback)
+    const response = await client.createChatCompletion({
+      ...chatJimmyRequest,
+      stream: false,
+    }) as OpenAIResponse;
+    const claudeResponse: ClaudeMessagesResponse = await convertOpenAIToClaudeResponse(
+      response,
+      modelAlias || claudeRequest.model,
+      requestId,
+      requestBody as Record<string, any>
+    );
+
+    return new Response(JSON.stringify(claudeResponse), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
   } catch (error) {
     activeLogger.error(requestId, `SDK client error: ${(error as Error).message}`);
     activeLogger.error(requestId, `Error stack: ${(error as Error).stack}`);
