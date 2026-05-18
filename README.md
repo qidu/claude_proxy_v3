@@ -31,7 +31,7 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
   - **Thinking Modes**: Supports `enabled` (manual) and `adaptive` (Claude 4.6+) thinking types
   - **Boolean Support**: Accepts boolean values (`true`/`false`) in addition to string values (`"enabled"`/`"disabled"`)
   - **Flexible Request Fields**: `/v1/messages` accepts `thinking: { type: "enabled" }` with or without `budget_tokens`, plus `reasoning_effort: "low" | "medium" | "high" | "max"` and `output_config.effort` (including non-standard `xhigh` normalization), and `output_config.task_budget.total` can supply the thinking budget when `budget_tokens` is omitted (request-supplied effort takes priority over budget-based thresholds)
-  - **OpenAI Upstream Passthrough**: For `openai-completions` upstreams, the proxy forwards `thinking` and `reasoning_effort` instead of dropping them
+  - **OpenAI Upstream Passthrough**: For `openai-completions` upstreams, the proxy derives `reasoning_effort` from `thinking.budget_tokens` and strips the `thinking` field (OpenAI chat completions schema does not support it)
   - **Signature Verification**: Full signature_delta streaming events for thinking block verification
   - **Streaming Support**: Proper thinking_delta and signature_delta events in SSE streams
   - **Token Counting**: Accurate token counting for thinking content with budget validation
@@ -376,93 +376,152 @@ POST /v1/messages
 }
 ```
 
-### Thinking Feature
+---
 
-The proxy provides full Claude-style extended thinking support, converting between OpenAI-compatible thinking formats and Claude's thinking format with signature verification.
+## 🧠 Thinking and Reasoning
 
-#### **Thinking Configuration Formats**
+The proxy provides full Claude-style extended thinking support, bridging thinking/reasoning across Claude, OpenAI, and Gemini upstream modes. All upstream thinking formats are normalized to Claude's `thinking_delta` / `signature_delta` streaming events.
 
-**Claude Format (Output)**:
+### Supported Thinking Modes
+
+| Mode | Config | Supported Models | Behavior |
+|:-----|:-------|:-----------------|:---------|
+| **Manual** | `thinking: { type: "enabled", budget_tokens: N }` | All models with thinking support | Fixed token budget for reasoning |
+| **Adaptive** | `thinking: { type: "adaptive" }` | Claude Opus 4.6, Sonnet 4.6 | Claude decides when/how much to think |
+| **Disabled** | Omit `thinking` or set `type: "disabled"` / `false` | All models | Standard response, no thinking |
+| **Boolean** | `thinking: { type: true, budget_tokens: N }` | All models | Shorthand for `"enabled"` |
+
+### Effort Parameter
+
+Claude-style `output_config.effort` and `reasoning_effort` are accepted on `/v1/messages`:
+
+- `"low"` — minimize thinking (fastest)
+- `"medium"` — moderate thinking depth
+- `"high"` — always think deeply (default for adaptive)
+- `"max"` — no constraints on thinking depth (Opus 4.6 only)
+- `"xhigh"` — normalized to `"max"` (non-standard input support)
+
+When both `reasoning_effort` and budget thresholds are present, effort takes priority.
+
+### Provider-Specific Handling
+
+**Claude Native (`anthropic-messages`)** — Passthrough:
+- `thinking: { type: "enabled" | "adaptive", budget_tokens }` forwarded as-is
+- `output_config.effort`, `reasoning_effort` forwarded as-is
+- `thinking_delta` / `signature_delta` events passthrough in streaming
+
+**OpenAI-Compatible (`openai-completions`)** — Thinking to reasoning mapping:
+- `thinking` field is **stripped** (not in OpenAI chat completions schema)
+- `budget_tokens` → `reasoning_effort` via budget thresholds or defaults
+- Default mapping: ≥4096 → `"high"`, ≥2048 → `"medium"`, else `"low"`
+- Explicit thresholds via `[upstream].budget_to_effort_*` override defaults
+- Upstream response: `<thinking>` markers, `reasoning_content`, or `delta.thinking` parts are extracted and converted to Claude `thinking_delta` events
+- `reasoning_item_id` / `delta.signature` → `signature_delta` events
+
+**Gemini (`gemini-generatecontent` / `gemini-interactions`)**:
+- Claude `thinking` → Gemini `thinking_level: "medium"` + `max_output_tokens` budget
+- Gemini response `thought` blocks → Claude `thinking` content blocks with signature
+
+**SDK Handler (`sdk://`)**:
+- Same `thinking` → `reasoning_effort` mapping as `openai-completions`
+- Handles both Claude-format and OpenAI-format `thinking` objects
+
+### Thinking Configuration Request Formats
+
+The proxy accepts both Claude and OpenAI format on the `/v1/messages` endpoint:
+
+**Claude Format**:
 ```json
 {
-  "thinking": {
-    "type": "enabled",  // or "adaptive", "disabled", true, false
-    "budget_tokens": 10000
-  }
+  "thinking": { "type": "enabled", "budget_tokens": 10000 }
 }
 ```
 
-**OpenAI-Compatible Format (Input)**:
+**OpenAI Format** (passthrough before conversion):
 ```json
 {
-  "thinking": {
-    "enabled": true,  // or false
-    "budget_tokens": 10000
-  }
+  "thinking": { "enabled": true, "budget_tokens": 10000 }
 }
 ```
 
-#### **Supported Thinking Modes**
+**Adaptive Format**:
+```json
+{
+  "thinking": { "type": "adaptive" },
+  "output_config": { "effort": "medium" }
+}
+```
 
-1. **Manual Thinking (`type: "enabled"`)**:
-   - Fixed budget tokens specified in request
-   - Used for older models (Sonnet 4.5, Opus 4.5, etc.)
-   - Example: `{"type": "enabled", "budget_tokens": 10000}`
+### Streaming Events
 
-2. **Adaptive Thinking (`type: "adaptive"`)**:
-   - Claude dynamically determines when and how much to think
-   - Recommended for Claude Opus 4.6 and Sonnet 4.6
-   - Example: `{"type": "adaptive"}`
+For SSE streaming, the proxy normalizes all upstream formats to Claude's streaming events:
 
-3. **Boolean Format**:
-   - `true` = `"enabled"`, `false` = `"disabled"`
-   - Example: `{"type": true, "budget_tokens": 10000}`
+| Event | Description | Source |
+|:------|:------------|:-------|
+| `content_block_start` / `type: "thinking"` | Thinking block begins | All upstreams |
+| `thinking_delta` | Incremental thinking tokens | `<thinking>` markers, `reasoning_content`, `delta.thinking` parts |
+| `signature_delta` | Thinking signature for verification | `delta.signature`, `reasoning_item_id`, `signature` metadata |
+| `content_block_stop` | Thinking block ends | All upstreams |
 
-#### **Signature Verification**
+### Signature Verification
 
-The proxy handles thinking signature verification for secure thinking block validation:
+Thinking signatures are accumulated across multiple sources and emitted as `signature_delta` before `content_block_stop`:
 
-- **Non-streaming**: Signature included in thinking block metadata
-- **Streaming**: `signature_delta` events sent before `content_block_stop`
-- **Signature Sources**:
-  - `delta.signature` from OpenAI streaming
-  - `reasoning_item_id` from response metadata
-  - `signature` from response metadata
+- **Non-streaming**: Signature embedded in thinking block metadata
+- **Streaming**: `signature_delta` event before `content_block_stop`
+- **Sources**: `delta.signature`, `reasoning_item_id`, `response.signature`
 
-#### **Streaming Events**
+### Known Limitations
 
-For SSE streaming responses, the proxy sends proper thinking events:
+1. Some upstreams (e.g., DeepSeek's Anthropic-compatible API) internally default models to thinking mode regardless of the request's `thinking` parameter. The proxy handles this by stripping `thinking` config when no prior assistant thinking blocks exist in the conversation.
 
-1. **Thinking Block Start**:
-   ```json
-   {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}}
-   ```
+2. For `openai-completions` upstreams, Gemini `thought` content is dropped during conversion.
 
-2. **Thinking Content Deltas**:
-   ```json
-   {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Step 1: Analyze the problem..."}}
-   ```
+3. `thinking: { type: "disabled" }` is stripped entirely for all upstreams.
 
-3. **Signature Delta** (if available):
-   ```json
-   {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "EqQBCgIYAhIM1gbcDa9GJwZA2b3hGgxBdjrkzLoky3dl1pkiMOYds..."}}
-   ```
+4. When `openai-completions` upstream returns thinking in the response, the conversion is lossless for streaming (real-time `thinking_delta`), but depends on `<thinking>` markers or `reasoning_content` for non-streaming responses.
 
-4. **Thinking Block Stop**:
-   ```json
-   {"type": "content_block_stop", "index": 0}
-   ```
+### `reasoning: true` Compatibility Notes (qnaigc / deepseek)
 
-#### **Supported Thinking Models**
+Test observations for model config using `"reasoning": true`:
 
-- **DeepSeek**: R1 series, V3.2-exp-thinking, V3.1-terminus-thinking
+- ✅ Proxy → qnaigc: **ok**
+- ✅ Proxy → deepseek/anthropic-compatible endpoint: **ok**
+- ❌ Direct deepseek/openai-compatible: **failed**
+
+### Supported Models
+
+- **DeepSeek**: R1, R1-0528, V3.2-exp-thinking, V3.1-terminus-thinking
 - **Qwen**: Thinking variants (vl-30b, 30b-2507, next-80b, 235b-2507)
 - **Doubao**: seed-1.6-thinking, 1.5-thinking-pro
 - **Moonshot/Kimi**: kimi-k2-thinking
-- **Gemini**: 3.1-pro-preview (includes reasoning_content)
-- **Claude**: All 4.x models with thinking support
+- **Gemini**: 2.5-pro-preview, 3.1-pro-preview (includes reasoning_content)
+- **Claude**: All 4.x models (Opus, Sonnet, Haiku)
 
-> **Note**: Some upstreams (e.g., DeepSeek's Anthropic-compatible API) internally default models to thinking mode regardless of the request's `thinking` parameter. This can cause `400` errors (`"The content[].thinking in the thinking mode must be passed back to the API"`) on first streaming requests where no prior thinking blocks exist. The proxy handles this by stripping `thinking` config when no prior assistant thinking blocks are present in the conversation. If you encounter this error with other Anthropic-compatible upstreams, ensure the conversation includes prior assistant `thinking` content blocks or disable thinking client-side.
+### thinking to reasoning_effort Conversion (for openai-completions)
+
+When forwarding requests to `openai-completions` upstreams, the proxy converts Claude-style `thinking` to OpenAI `reasoning_effort` in all code paths (direct passthrough, claude→openai converter, and SDK handler) because the OpenAI `/v1/chat/completions` schema does not support a `thinking` field.
+
+**Default mapping** (no explicit thresholds):
+```
+budget_tokens >= 4096 → "high"
+budget_tokens >= 2048 → "medium"
+< 2048               → "low"
+```
+
+**Optional explicit thresholds** (`proxy_config.toml`):
+```toml
+[upstream]
+budget_to_effort_low = 8000       # < 8000 tokens → "low"
+budget_to_effort_medium = 20000   # < 20000 tokens → "medium"
+budget_to_effort_high = 0         # >= threshold or 0 = always "high"
+```
+
+**Behavior**:
+- `thinking: { enabled: true, budget_tokens: N }` or Claude `thinking: { type: "enabled", budget_tokens: N }` → `reasoning_effort` derived from budget, `thinking` stripped
+- `thinking: { enabled: false }` or `thinking: { type: "disabled" }` → stripped entirely, no `reasoning_effort`
+- No `thinking` in request → nothing changed
+- If `reasoning_effort` is already set by the request → budget mapping skipped, `thinking` stripped, existing effort preserved
 
 ### Responses API
 
@@ -1229,47 +1288,6 @@ or
 - **Streaming support**: SDK Anthropic stream is converted from OpenAI chunks to Claude SSE event format (`message_start`, `content_block_*`, `message_delta`, `message_stop`)
 - **Streaming fallback**: If SDK stream is unavailable, falls back to non-stream response
 
-### Thinking to reasoning_effort Conversion
-
-**New feature**: Convert Claude `thinking` config to OpenAI `reasoning_effort` format based on budget thresholds.
-
-**Configuration** (`proxy_config.toml`):
-```toml
-[upstream]
-budget_to_effort_low = 8000       # < 8000 tokens → "low"
-budget_to_effort_medium = 20000   # < 20000 tokens → "medium"
-budget_to_effort_high = 0         # >= threshold or 0 = always "high"
-```
-
-**Conversion Logic**:
-- Budget < `budget_to_effort_low` → `"low"`
-- Budget < `budget_to_effort_medium` → `"medium"`
-- Budget >= `budget_to_effort_high` (or `high=0`) → `"high"`
-
-**Example**:
-```json
-// Claude input
-"thinking": { "type": "enabled", "budget_tokens": 25000 }
-
-// ↓ converted to ↓
-
-// OpenAI output (with high=0)
-"reasoning_effort": "high"
-```
- 
-**Behavior**:
-- If no thresholds configured → thinking field stripped entirely
-- If thresholds configured → converted to `reasoning_effort`
-- `thinking: { type: "disabled" }` → stripped
-
-**Files Modified**:
-- `src/utils/config-loader.ts` - Added budget_to_effort config parsing
-- `src/types/openai.ts` - Added `reasoning_effort` field
-- `src/converters/claude-to-openai.ts` - Added `ThinkingConversionOptions` interface and conversion logic
-- `src/handlers/messages.ts` - Pass conversion options to converter
-- `src/index.ts` - Build options from config, pass to handler
-
----
 
 ### Enhanced Thinking Configuration (2026-03-03)
 - **Type Definitions**: Updated `ThinkingConfigParam` type to accept `boolean` values (`true`/`false`) in addition to string values (`"enabled"`/`"disabled"`)

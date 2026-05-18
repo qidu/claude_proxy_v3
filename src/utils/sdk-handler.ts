@@ -202,6 +202,21 @@ export async function handleSdkOpenAIRequest(
   if (!openaiRequest.model || !openaiRequest.messages) {
     throw new Error('Invalid OpenAI request: missing model or messages');
   }
+
+  // openai-completions doesn't support thinking field; derive reasoning_effort from budget_tokens
+  if (openaiRequest.thinking !== undefined) {
+    const thinking = openaiRequest.thinking as { enabled?: boolean; budget_tokens?: number; type?: boolean | string };
+    if (thinking?.budget_tokens && !openaiRequest.reasoning_effort) {
+      // Handle both OpenAI format (enabled) and Claude format (type)
+      const isEnabled = 'enabled' in thinking ? thinking.enabled : thinking.type === true || thinking.type === 'enabled';
+      if (isEnabled) {
+        const budget = thinking.budget_tokens;
+        openaiRequest.reasoning_effort = budget >= 4096 ? 'high' : budget >= 2048 ? 'medium' : 'low';
+      }
+    }
+    delete openaiRequest.thinking;
+  }
+
   const isStreaming = openaiRequest.stream === true;
   activeLogger.debug(requestId, `targetUrl: ${targetUrl}, streaming: ${isStreaming}`);
 

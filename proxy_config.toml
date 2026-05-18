@@ -28,7 +28,7 @@ base_url = "http://localhost:3000"
 upstream_mode = "openai-completions"
 api_key = "WELCOME_TO_USE_THIS_PUBLIC_FREE_KEY_ON_YOUR_CLAW"
 "gpt-5.4-mini" = ["gpt-5.4-mini", "", ""]
-"gpt-5.3-codex" = ["gpt-5.3-codex", "", ""]
+#"gpt-5.3-codex" = ["gpt-5.3-codex", "", ""]
 "gemini-3-flash" = ["gemini-3-flash", "", ""]
 "gpt-oss-120b-medium" = ["gpt-oss-120b-medium", "", ""]
 "gemini-3.1-pro-low" = ["gemini-3.1-pro-low", "", ""]
@@ -47,8 +47,12 @@ api_key = "sk-***"
 [models.default]
 #"llama3" = ["llama3.1-8B", "sdk://localhost", ""]
 #"deepseek/deepseek-v3.2-251201" = ["", "", ""]
-#upstream_mode = "anthropic-messages"
+upstream_mode = "anthropic-messages"
 #upstream_mode = "openai-completions"
+upstream_mode = "anthropic-messages"
+"deepseek-v4-flash" = ["deepseek-v4-flash", "https://api.deepseek.com/anthropic", "sk-7ce53b***"]
+#"deepseek/deepseek-v4-flash" = ["deepseek/deepseek-v4-flash", "https://api.qnaigc.com", "sk-37a57c***"]
+#"gpt-5.3-codex" = ["deepseek/deepseek-v4-flash", "https://api.qnaigc.com", "sk-37a57c***"]
 
 [composite]
 "gpt-all" = {"gpt-5.4-mini": {"share": 50}, "gpt-5-mini": {"share": 20}, "nvidia/nemotron-3-super-120b-a12b-free": {}}

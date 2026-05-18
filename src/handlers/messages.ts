@@ -83,18 +83,29 @@ export async function handleMessagesRequest(
   if (isOpenAIFormat && !hasClaudeFormatTools) {
     // Request is already in OpenAI format, pass through directly
     const openaiRequestBody = normalizeOpenAICompletionsBody(requestBody);
-    const model = (openaiRequestBody.model as string) || modelId || 'unknown';
     const isStreaming = openaiRequestBody.stream === true;
 
-    // Log thinking configuration if present (OpenAI format)
-    const openaiThinking = openaiRequestBody.thinking as { enabled?: boolean; budget_tokens?: number } | undefined;
-    if (openaiThinking) {
-      const thinkingType = openaiThinking.enabled ? 'enabled' : 'disabled';
-      const budget = openaiThinking.budget_tokens ? ` budget_tokens: ${openaiThinking.budget_tokens}` : 'budget: unknown';
+    // Log thinking configuration before stripping (for openai-completions)
+    const originalThinking = openaiRequestBody.thinking as { enabled?: boolean; budget_tokens?: number } | undefined;
+    if (originalThinking) {
+      const thinkingType = originalThinking.enabled ? 'enabled' : 'disabled';
+      const budget = originalThinking.budget_tokens ? ` budget_tokens: ${originalThinking.budget_tokens}` : 'budget: unknown';
       activeLogger.info(requestId, `Thinking type: ${thinkingType} , ${budget} extracted from OpenAI-Format`);
     } else {
       activeLogger.info(requestId, `Thinking type: not specified by req body format=${isOpenAIFormat}`);
     }
+
+    // openai-completions doesn't support thinking field; derive reasoning_effort from budget_tokens
+    if (upstreamMode === 'openai-completions' && openaiRequestBody.thinking !== undefined) {
+      const thinking = openaiRequestBody.thinking as { enabled?: boolean; budget_tokens?: number } | undefined;
+      if (thinking?.enabled && thinking?.budget_tokens && !openaiRequestBody.reasoning_effort) {
+        const budget = thinking.budget_tokens;
+        openaiRequestBody.reasoning_effort = budget >= 4096 ? 'high' : budget >= 2048 ? 'medium' : 'low';
+      }
+      delete openaiRequestBody.thinking;
+    }
+
+    const model = (openaiRequestBody.model as string) || modelId || 'unknown';
 
     // Log request info
     activeLogger.info(requestId, `Upstream target url (stream=${isStreaming}): ${targetUrl}`);
@@ -141,7 +152,15 @@ export async function handleMessagesRequest(
       const bodyPreview = typeof requestBody === 'string'
         ? requestBody
         : JSON.stringify(requestBody);
-      activeLogger.error(requestId, `Messages API error from upstream (openai-passthrough): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}`);
+      if (response.status === 400) {
+        const upstreamResponseBody = await response.text();
+        const upstreamBodyPreview = upstreamResponseBody.length > 500
+          ? `${upstreamResponseBody.substring(0, 500)}...`
+          : upstreamResponseBody;
+        activeLogger.error(requestId, `Messages API error from upstream (openai-passthrough): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}, upstream response body: ${upstreamBodyPreview}`);
+      } else {
+        activeLogger.error(requestId, `Messages API error from upstream (openai-passthrough): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}`);
+      }
       handleTargetApiError(response, 'Messages API', { url: targetUrl, body: bodyPreview });
     }
 
@@ -223,6 +242,16 @@ export async function handleMessagesRequest(
 
   // Convert to OpenAI format
   const openaiRequest: OpenAIRequest = convertClaudeToOpenAIRequest(claudeRequest, targetModelId, conversionOptions);
+
+  // Strip thinking field for openai-completions (derive reasoning_effort from budget_tokens)
+  if (upstreamMode === 'openai-completions' && openaiRequest.thinking !== undefined) {
+    if (openaiRequest.thinking.enabled && openaiRequest.thinking.budget_tokens !== undefined && !openaiRequest.reasoning_effort) {
+      const budget = openaiRequest.thinking.budget_tokens;
+      openaiRequest.reasoning_effort = budget >= 4096 ? 'high' : budget >= 2048 ? 'medium' : 'low';
+    }
+    delete openaiRequest.thinking;
+  }
+
   const upstreamRequest = JSON.stringify(openaiRequest);
   activeLogger.debug(requestId, `Converted request (claude->openai): ${upstreamRequest.substring(0, 250)} ... ${upstreamRequest.substring(upstreamRequest.length - 250)}`);
 
@@ -241,7 +270,15 @@ export async function handleMessagesRequest(
     const bodyPreview = typeof openaiRequest === 'string'
       ? openaiRequest
       : JSON.stringify(openaiRequest);
-    activeLogger.error(requestId, `Messages API error from upstream (claude->openai): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}`);
+    if (response.status === 400) {
+      const upstreamResponseBody = await response.text();
+      const upstreamBodyPreview = upstreamResponseBody.length > 500
+        ? `${upstreamResponseBody.substring(0, 500)}...`
+        : upstreamResponseBody;
+      activeLogger.error(requestId, `Messages API error from upstream (claude->openai): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}, upstream response body: ${upstreamBodyPreview}`);
+    } else {
+      activeLogger.error(requestId, `Messages API error from upstream (claude->openai): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}`);
+    }
     handleTargetApiError(response, 'Messages API', { url: targetUrl, body: bodyPreview });
   }
 
