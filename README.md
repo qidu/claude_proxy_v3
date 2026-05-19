@@ -44,7 +44,7 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
   - Per-model API keys
   - Native and OpenAI-compatible modes
 
-- **Dynamic Routing**: Route requests to any OpenAI-compatible API
+- **Model-based Routing**: Route requests based on model name via `proxy_config.toml` categories
 - **TypeScript First**: Full type safety with comprehensive type definitions
 - **Cloudflare Workers Ready**: Optimized for edge deployment
 
@@ -802,7 +802,7 @@ src/
 │   ├── gemini-streaming.ts # Gemini streaming transformer
 │   └── responses-to-completions.ts # Responses API to Chat Completions
 ├── utils/
-│   ├── routing.ts          # Dynamic routing logic
+│   ├── routing.ts          # Auth header handling and URL building
 │   ├── validation.ts       # Request validation
 │   ├── errors.ts           # Error handling
 │   ├── thinking.ts         # Thinking utilities

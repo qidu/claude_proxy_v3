@@ -6,7 +6,7 @@
  */
 
 import { Env } from './types/shared.js';
-import { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, transformAuthHeadersForUpstream, isHostAllowed, formatApiKeyForUpstream } from './utils/routing.js';
+import { extractAuthHeaders, transformAuthHeadersForUpstream, formatApiKeyForUpstream } from './utils/routing.js';
 import { createErrorResponse } from './utils/errors.js';
 import { createLogger } from './utils/logger.js';
 import { handleModelsRequest, getModelCount } from './handlers/models.js';
@@ -635,20 +635,8 @@ export default {
           return createErrorResponse(new Error('Invalid request body'), requestId, 400);
         }
       } else if (isDynamicRoute(path)) {
-        // Dynamic routing: /https/api.qnaigc.com/v1/messages
-        const parsedRoute = parseDynamicRoute(path);
-        const { targetConfig, claudeEndpoint } = parsedRoute;
-        modelId = parsedRoute.modelId;
-
-        // SSRF protection: validate host against whitelist
-        const host = targetConfig.targetUrl.replace(/^https?:\/\//, '');
-        if (!isHostAllowed(host, env.ALLOWED_HOSTS)) {
-          logger.warn(requestId, `Host not allowed: ${host}. Allowed hosts: ${env.ALLOWED_HOSTS || '127.0.0.1, localhost'}`);
-          return createErrorResponse(new Error('Host not allowed'), requestId, 403);
-        }
-
-        handlerType = getHandlerType(claudeEndpoint) as typeof handlerType;
-        targetUrl = buildTargetUrl(targetConfig, claudeEndpoint, modelId);
+        logger.error(requestId, `No dynamic routing: ${path}`);
+        return createErrorResponse(new Error('No Routing.'), requestId, 400);
       } else {
         // Fixed routing: /v1/messages -> /v1/chat/completions
         const fixedRoute = parseFixedRoute(path, proxyConfig, env);
