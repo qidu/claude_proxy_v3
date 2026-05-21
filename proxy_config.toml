@@ -47,12 +47,15 @@ api_key = "sk-***"
 [models.default]
 #"llama3" = ["llama3.1-8B", "sdk://localhost", ""]
 #"deepseek/deepseek-v3.2-251201" = ["", "", ""]
-upstream_mode = "anthropic-messages"
 #upstream_mode = "openai-completions"
 upstream_mode = "anthropic-messages"
-"deepseek-v4-flash" = ["deepseek-v4-flash", "https://api.deepseek.com/anthropic", "sk-7ce53b***"]
-#"deepseek/deepseek-v4-flash" = ["deepseek/deepseek-v4-flash", "https://api.qnaigc.com", "sk-37a57c***"]
+#"deepseek-v4-flash" = ["deepseek-v4-flash", "https://api.deepseek.com/anthropic", "sk-7ce53b***"]
+"deepseek-v4-flash" = ["deepseek/deepseek-v4-flash", "https://api.qnaigc.com", "sk-2e8977***"]
 #"gpt-5.3-codex" = ["deepseek/deepseek-v4-flash", "https://api.qnaigc.com", "sk-37a57c***"]
+
+[models.embedding]
+base_url = "https://openrouter.ai/api"
+#api_key = "sk-or-v1-6cdb535***"
 
 [composite]
 "gpt-all" = {"gpt-5.4-mini": {"share": 50}, "gpt-5-mini": {"share": 20}, "nvidia/nemotron-3-super-120b-a12b-free": {}}

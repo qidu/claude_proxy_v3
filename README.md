@@ -16,6 +16,7 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
   - `POST /v1/models/{model}:generateContent` - Alternative Gemini v1 endpoint (added 2026-03-03)
   - `POST /v1/models/{model}:streamGenerateContent` - Alternative Gemini v1 endpoint with SSE (added 2026-03-03)
   - `POST /v1/messages/count_tokens` - Count tokens in messages
+  - `POST /v1/embeddings` - Generate embeddings (proxied to upstream OpenAI-compatible API)
 
 - **Multiple Model Providers**: Support for 6+ providers:
   - DeepSeek (v3.1, v3.2, R1, etc.)
@@ -649,6 +650,64 @@ POST /v1/messages/count_tokens
 }
 ```
 
+### Embeddings API
+
+**Endpoint**: `POST /v1/embeddings`
+
+Generate vector embeddings for text input. Proxied to the upstream OpenAI-compatible API (`{defaultBaseUrl}/v1/embeddings`). The `provider` field is stripped from the upstream response.
+
+**Example Request**:
+```bash
+curl http://localhost:8788/v1/embeddings \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen/qwen3-embedding-4b",
+    "input": "Your text string goes here",
+    "encoding_format": "float"
+  }'
+```
+
+The `input` field also supports batch processing with arrays:
+```json
+{
+  "model": "qwen/qwen3-embedding-4b",
+  "input": ["text1", "text2", "text3"]
+}
+```
+
+**Response**:
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "embedding": [0.000136, 0.001807, ...],
+      "index": 0
+    }
+  ],
+  "model": "Qwen/Qwen3-Embedding-4B",
+  "usage": {
+    "prompt_tokens": 6,
+    "total_tokens": 6
+  }
+}
+```
+
+**Configuration**:
+```toml
+[models.embedding]
+upstream_mode = "anthropic-messages"
+#base_url = "https://api.qnaigc.com"
+#base_url = "https://openrouter.ai/api"
+#api_key = "sk-..."
+```
+
+The embedding endpoint checks `[models.embedding]` in the proxy config first. If `base_url` and `api_key` are configured there, they take priority over defaults. Falls back to `[models.default]` / `[upstream]` when not set in `[models.embedding]`.
+
+See `docs/test_embeding.md` for more details.
+
 ## 🔧 Configuration
 
 ### Environment Variables
@@ -792,7 +851,8 @@ src/
 │   ├── models.ts           # Models API handler
 │   ├── token-counting.ts   # Token counting handler
 │   ├── openai.ts           # OpenAI completions handler
-│   └── gemini.ts           # Gemini API handler (dual-mode)
+│   ├── gemini.ts           # Gemini API handler (dual-mode)
+│   └── embeddings.ts       # Embeddings API handler
 ├── converters/
 │   ├── claude-to-openai.ts # Request conversion
 │   ├── openai-to-claude.ts # Response conversion

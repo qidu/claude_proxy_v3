@@ -16,6 +16,7 @@ import { handleResponsesRequest, handleResponsesCompactRequest, handleResponsesI
 import { handleGeminiRequest, handleGeminiRequestForMessages } from './handlers/gemini.js';
 import { handleOpenAIRequest } from './handlers/openai.js';
 import { handleClaudeRequest } from './handlers/claude.js';
+import { handleEmbeddingsRequest } from './handlers/embeddings.js';
 import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, ModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
 import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
 
@@ -125,7 +126,7 @@ function isDynamicRoute(path: string): boolean {
 function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
   targetUrl: string;
   targetEndpoint: string;
-  handlerType: 'messages' | 'interactions' | 'generateContent' | 'models' | 'token-counting' | 'responses' | 'responses-compact' | 'responses-input-tokens';
+  handlerType: 'messages' | 'interactions' | 'generateContent' | 'models' | 'token-counting' | 'responses' | 'responses-compact' | 'responses-input-tokens' | 'embeddings';
   upstreamMode?: string;
   modelId?: string;
   forceStreaming?: boolean;
@@ -309,6 +310,19 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     };
   }
 
+  // Embeddings endpoint — uses [models.embedding] config with priority over defaults
+  if (path === '/v1/embeddings' || path.startsWith('/v1/embeddings?')) {
+    const embeddingCategory = proxyConfig.models?.embedding;
+    const embeddingConfig = embeddingCategory && !Array.isArray(embeddingCategory) ? embeddingCategory : undefined;
+    const embeddingBaseUrl = embeddingConfig?.base_url || defaultBaseUrl;
+    return {
+      targetUrl: `${embeddingBaseUrl}/v1/embeddings`,
+      targetEndpoint: 'v1/embeddings',
+      handlerType: 'embeddings',
+      upstreamMode: 'openai-completions',
+    };
+  }
+
   throw new Error(`Unsupported fixed route: ${path}`);
 }
 
@@ -418,13 +432,13 @@ export default {
       }
 
       let targetUrl: string = '';
-      let handlerType: 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' | 'responses-compact' | 'responses-input-tokens' = 'messages';
+      let handlerType: 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' | 'responses-compact' | 'responses-input-tokens' | 'embeddings' = 'messages';
       let modelId: string | undefined;
       let upstreamMode: string | undefined;
       let forceStreaming: boolean = false;
       let isGeminiBypass = false;
 
-      type RouteAttemptHandlerType = 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' | 'responses-compact' | 'responses-input-tokens';
+      type RouteAttemptHandlerType = 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' | 'responses-compact' | 'responses-input-tokens' | 'embeddings';
       type RouteAttempt = {
         request: Request;
         targetUrl: string;
@@ -669,6 +683,20 @@ export default {
             logger.debug(requestId, `Using client API key for openai-completions upstream in fixed routing`);
           }
         }
+
+        // Embeddings endpoint: apply [models.embedding] api_key if configured
+        if (path === '/v1/embeddings' || path.startsWith('/v1/embeddings?')) {
+          const embeddingCategory = proxyConfig.models?.embedding;
+          const embeddingConfig = embeddingCategory && !Array.isArray(embeddingCategory) ? embeddingCategory : undefined;
+          const embeddingApiKey = embeddingConfig?.api_key;
+          if (embeddingApiKey) {
+            modelAuthHeaders = {
+              ...modelAuthHeaders,
+              ...formatApiKeyForUpstream(embeddingApiKey, upstreamMode || 'openai-completions'),
+            };
+            logger.debug(requestId, `Applied [models.embedding] api_key for embeddings request`);
+          }
+        }
       }
 
       const runAttempt = async (attempt: RouteAttempt): Promise<Response> => {
@@ -744,6 +772,10 @@ export default {
 
           case 'responses-compact':
             response = await handleResponsesCompactRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptUpstreamMode);
+            break;
+
+          case 'embeddings':
+            response = await handleEmbeddingsRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, logger, env);
             break;
 
           default:
