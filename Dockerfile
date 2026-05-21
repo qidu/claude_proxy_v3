@@ -22,8 +22,10 @@ COPY tsconfig.json ./
 COPY tsconfig.server.json ./
 COPY wrangler.toml ./
 COPY src/ ./src/
-RUN git rev-parse --short HEAD > /tmp/proxy_version
+
+RUN git describe --tags --abbrev=0 > /tmp/proxy_version
 RUN git branch | grep "*" >> /tmp/proxy_version
+RUN git rev-parse --short HEAD >> /tmp/proxy_version
 
 RUN npm run build
 
@@ -38,7 +40,7 @@ COPY --from=builder /app/dist ./dist
 COPY --from=git /tmp/proxy_version /tmp/proxy_version
 COPY wrangler.toml ./
 
-ENV VERSION=$(cat /tmp/proxy_version)
+ENV VERSION=$(cat /tmp/proxy_version | tr -d '\n')
 ENV LOCAL_TOKEN_COUNTING=true      # Enable local counting
 ENV LOCAL_TIKTOKEN=true            # Use tiktoken (accurate)
 ENV TIKTOKEN_MODEL="o200k_base"    # Encoding model (default: cl100k_base)
