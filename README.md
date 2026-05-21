@@ -712,6 +712,19 @@ See `docs/test_embeding.md` for more details.
 
 ### Environment Variables
 
+Vars defined in `wrangler.toml` `[vars]` are automatically injected by Cloudflare Workers at runtime. When running via the Node.js server (`npm run server` / `dist/server.js`), you must set them via `process.env` — `wrangler.toml` is **not** read by `server.ts`.
+
+For local Node.js runs, either pass inline:
+```bash
+VERSION=my-version LOG_LEVEL=debug node dist/server.js
+```
+or export them:
+```bash
+export VERSION="my-version"
+export LOG_LEVEL="debug"
+node dist/server.js
+```
+
 ```toml
 # wrangler.toml
 [vars]

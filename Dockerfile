@@ -23,6 +23,7 @@ COPY tsconfig.server.json ./
 COPY wrangler.toml ./
 COPY src/ ./src/
 RUN git rev-parse --short HEAD > /tmp/proxy_version
+RUN git branch | grep "*" >> /tmp/proxy_version
 
 RUN npm run build
 
