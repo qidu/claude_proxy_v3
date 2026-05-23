@@ -17,6 +17,12 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
   - `POST /v1/models/{model}:streamGenerateContent` - Alternative Gemini v1 endpoint with SSE (added 2026-03-03)
   - `POST /v1/messages/count_tokens` - Count tokens in messages
   - `POST /v1/embeddings` - Generate embeddings (proxied to upstream OpenAI-compatible API)
+  - `GET /dashboard` - Web dashboard for config and runtime statistics
+  - `GET /dashboard/api/config` - Read sanitized editable config (`models.*`, `composite`; hides `api_key`)
+  - `PUT /dashboard/api/config` - Save dashboard config edits (file mode only; read-only when `PROXY_CONFIG_URL` is set)
+  - `GET /dashboard/api/stats/models` - Model request + token stats
+  - `GET /dashboard/api/stats/agents` - User-agent prefix + tool stats
+  - `GET /dashboard/api/stats/requests` - Request/response stats by endpoint, upstream, and status code
 
 - **Multiple Model Providers**: Support for 6+ providers:
   - DeepSeek (v3.1, v3.2, R1, etc.)
@@ -707,6 +713,35 @@ upstream_mode = "anthropic-messages"
 The embedding endpoint checks `[models.embedding]` in the proxy config first. If `base_url` and `api_key` are configured there, they take priority over defaults. Falls back to `[models.default]` / `[upstream]` when not set in `[models.embedding]`.
 
 See `docs/test_embeding.md` for more details.
+
+### Dashboard API
+
+The proxy includes a built-in web dashboard for config editing and runtime stats.
+
+**Page**:
+- `GET /dashboard`
+
+**Config APIs**:
+- `GET /dashboard/api/config`
+  - Returns sanitized config for dashboard editing (`models.*`, `composite`)
+  - `api_key` values are never returned
+  - Includes `read_only: true` when `PROXY_CONFIG_URL` is configured
+- `PUT /dashboard/api/config`
+  - Applies dashboard edits to local `proxy_config.toml`
+  - Available only when using file config mode
+  - Read-only/disabled when `PROXY_CONFIG_URL` is configured
+
+**Stats APIs**:
+- `GET /dashboard/api/stats/models`
+  - Requests, input tokens, output tokens by model (DESC)
+- `GET /dashboard/api/stats/agents`
+  - Requests by `user-agent-prefix / tool-name`
+- `GET /dashboard/api/stats/requests`
+  - Requests by endpoint
+  - Responses by upstream base URL
+  - Response status codes split into:
+    - from upstreams
+    - to endpoints
 
 ## 🔧 Configuration
 

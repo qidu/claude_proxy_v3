@@ -19,6 +19,7 @@ import { createStreamTransformer } from '../converters/streaming.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { addForwardedHeaders } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
+import { recordResponseStatusCodeFromUpstream } from '../utils/dashboard-stats.js';
 
 /**
  * Gemini API configuration
@@ -209,7 +210,8 @@ async function handleGeminiInteractionsRequest(
     });
     
     activeLogger.debug(requestId, `Response status: ${response.status}`);
-    
+    recordResponseStatusCodeFromUpstream(response.status);
+
     if (!response.ok) {
         const errorText = await response.text();
         activeLogger.error(requestId, `Gemini API error: ${errorText}`);
@@ -322,6 +324,8 @@ async function handleGeminiToOpenAIMode(
         headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify(openaiRequest),
     });
+
+    recordResponseStatusCodeFromUpstream(response.status);
 
     if (!response.ok) {
         const bodyPreview = JSON.stringify(openaiRequest).substring(0, 1000);
@@ -501,6 +505,8 @@ async function handleGeminiToGeminiMode(
             body: JSON.stringify(geminiRequest),
         });
 
+        recordResponseStatusCodeFromUpstream(response.status);
+
         // Handle target API errors
         if (!response.ok) {
             const bodyPreview = JSON.stringify(geminiRequest).substring(0, 1000);
@@ -599,6 +605,8 @@ async function handleGeminiGenerateContentRequest(
             headers: geminiHeaders,
             body: JSON.stringify(geminiRequest),
         });
+
+        recordResponseStatusCodeFromUpstream(response.status);
 
         // Handle target API errors
         if (!response.ok) {

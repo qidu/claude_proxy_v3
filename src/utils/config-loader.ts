@@ -5,7 +5,7 @@
  */
 
 import { Env } from '../types/shared.js';
-import { mkdirSync, writeFileSync } from 'fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 
 // Check if we're running in Node.js environment
@@ -571,7 +571,7 @@ function serializeCompositeModelConfig(config: CompositeModelConfig): string {
   return `{${entries.join(', ')}}`;
 }
 
-function serializeProxyConfigToml(config: ProxyConfig): string {
+export function serializeProxyConfigToml(config: ProxyConfig): string {
   const lines: string[] = [];
 
   if (config.upstream) {
@@ -716,7 +716,7 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
 /**
  * Simple TOML parser for category-based structure
  */
-function parseSimpleToml(content: string): ProxyConfig {
+export function parseSimpleToml(content: string): ProxyConfig {
   const config: ProxyConfig = {};
   const lines = content.split('\n');
   let currentSection: string | null = null;
@@ -855,11 +855,11 @@ function parseSimpleToml(content: string): ProxyConfig {
  */
 export function getModelConfig(config: ProxyConfig, modelName: string) {
   if (!config.models) return undefined;
-  
+
   // Search for model in all categories
   for (const [categoryName, categoryConfig] of Object.entries(config.models)) {
     if (Array.isArray(categoryConfig)) continue;
-    
+
     const modelEntry = categoryConfig[modelName];
     if (modelEntry !== undefined) {
       return {
@@ -869,6 +869,249 @@ export function getModelConfig(config: ProxyConfig, modelName: string) {
       };
     }
   }
-  
+
   return undefined;
+}
+
+export type DashboardModelArrayConfig = [string, string];
+
+export interface DashboardModelCategoryConfig {
+  upstream_mode?: string;
+  base_url?: string;
+  [modelId: string]: string | DashboardModelArrayConfig | undefined;
+}
+
+export interface DashboardConfigPayload {
+  models: Record<string, DashboardModelCategoryConfig>;
+  composite: Record<string, CompositeModelConfig>;
+}
+
+function sanitizeDashboardCategoryConfig(categoryConfig: ModelCategoryConfig): DashboardModelCategoryConfig {
+  const sanitized: DashboardModelCategoryConfig = {};
+
+  for (const [key, value] of Object.entries(categoryConfig)) {
+    if (key === 'api_key') {
+      continue;
+    }
+
+    if (Array.isArray(value)) {
+      sanitized[key] = [value[0] || '', value[1] || ''];
+    } else if (typeof value === 'string') {
+      sanitized[key] = value;
+    }
+  }
+
+  return sanitized;
+}
+
+function sanitizeCompositeConfig(composite: ProxyConfig['composite']): Record<string, CompositeModelConfig> {
+  if (!composite) {
+    return {};
+  }
+
+  const result: Record<string, CompositeModelConfig> = {};
+  for (const [alias, targets] of Object.entries(composite)) {
+    const safeTargets: CompositeModelConfig = {};
+    for (const [targetModel, config] of Object.entries(targets || {})) {
+      const safeTarget: CompositeTargetConfig = {};
+      if (typeof config.share === 'number' && Number.isFinite(config.share)) {
+        safeTarget.share = config.share;
+      }
+      if (typeof config.primary === 'boolean') {
+        safeTarget.primary = config.primary;
+      }
+      if (typeof config.fallback === 'number' && Number.isFinite(config.fallback)) {
+        safeTarget.fallback = config.fallback;
+      }
+      safeTargets[targetModel] = safeTarget;
+    }
+    result[alias] = safeTargets;
+  }
+  return result;
+}
+
+export function toDashboardConfigPayload(config: ProxyConfig): DashboardConfigPayload {
+  const models: Record<string, DashboardModelCategoryConfig> = {};
+
+  if (config.models) {
+    for (const [categoryName, categoryConfig] of Object.entries(config.models)) {
+      if (Array.isArray(categoryConfig)) {
+        continue;
+      }
+      models[categoryName] = sanitizeDashboardCategoryConfig(categoryConfig);
+    }
+  }
+
+  return {
+    models,
+    composite: sanitizeCompositeConfig(config.composite),
+  };
+}
+
+function isSafeModelArray(value: unknown): value is DashboardModelArrayConfig {
+  if (!Array.isArray(value) || value.length < 2) {
+    return false;
+  }
+  return typeof value[0] === 'string' && typeof value[1] === 'string';
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validateAndNormalizeComposite(payload: unknown): Record<string, CompositeModelConfig> {
+  if (!isPlainObject(payload)) {
+    throw new Error('Invalid composite payload');
+  }
+
+  const result: Record<string, CompositeModelConfig> = {};
+  for (const [alias, targetValue] of Object.entries(payload)) {
+    if (!isPlainObject(targetValue)) {
+      throw new Error(`Invalid composite targets for alias: ${alias}`);
+    }
+
+    const targetConfig: CompositeModelConfig = {};
+    for (const [targetModel, rawConfig] of Object.entries(targetValue)) {
+      if (!isPlainObject(rawConfig)) {
+        throw new Error(`Invalid composite target config for: ${alias}.${targetModel}`);
+      }
+
+      const entry: CompositeTargetConfig = {};
+      if ('share' in rawConfig) {
+        if (typeof rawConfig.share !== 'number' || !Number.isFinite(rawConfig.share)) {
+          throw new Error(`Invalid share for: ${alias}.${targetModel}`);
+        }
+        entry.share = rawConfig.share;
+      }
+      if ('primary' in rawConfig) {
+        if (typeof rawConfig.primary !== 'boolean') {
+          throw new Error(`Invalid primary for: ${alias}.${targetModel}`);
+        }
+        entry.primary = rawConfig.primary;
+      }
+      if ('fallback' in rawConfig) {
+        if (typeof rawConfig.fallback !== 'number' || !Number.isFinite(rawConfig.fallback)) {
+          throw new Error(`Invalid fallback for: ${alias}.${targetModel}`);
+        }
+        entry.fallback = rawConfig.fallback;
+      }
+
+      targetConfig[targetModel] = entry;
+    }
+
+    result[alias] = targetConfig;
+  }
+
+  return result;
+}
+
+function validateAndNormalizeDashboardModels(payload: unknown): Record<string, DashboardModelCategoryConfig> {
+  if (!isPlainObject(payload)) {
+    throw new Error('Invalid models payload');
+  }
+
+  const result: Record<string, DashboardModelCategoryConfig> = {};
+
+  for (const [categoryName, rawCategory] of Object.entries(payload)) {
+    if (!isPlainObject(rawCategory)) {
+      throw new Error(`Invalid models category: ${categoryName}`);
+    }
+
+    const category: DashboardModelCategoryConfig = {};
+    for (const [key, value] of Object.entries(rawCategory)) {
+      if (key === 'api_key') {
+        throw new Error(`api_key is not editable in dashboard (${categoryName})`);
+      }
+
+      if (key === 'upstream_mode' || key === 'base_url') {
+        if (typeof value !== 'string') {
+          throw new Error(`Invalid value for ${categoryName}.${key}`);
+        }
+        category[key] = value;
+        continue;
+      }
+
+      if (typeof value === 'string') {
+        category[key] = value;
+        continue;
+      }
+
+      if (isSafeModelArray(value)) {
+        category[key] = [value[0], value[1]];
+        continue;
+      }
+
+      throw new Error(`Invalid model entry for ${categoryName}.${key}`);
+    }
+
+    result[categoryName] = category;
+  }
+
+  return result;
+}
+
+export function applyDashboardConfigUpdate(baseConfig: ProxyConfig, payload: unknown): ProxyConfig {
+  if (!isPlainObject(payload)) {
+    throw new Error('Invalid dashboard config payload');
+  }
+
+  const modelsPayload = validateAndNormalizeDashboardModels(payload.models);
+  const compositePayload = validateAndNormalizeComposite(payload.composite ?? {});
+
+  const nextConfig: ProxyConfig = {
+    ...baseConfig,
+    models: { ...(baseConfig.models || {}) },
+    composite: compositePayload,
+  };
+
+  for (const [categoryName, dashboardCategory] of Object.entries(modelsPayload)) {
+    const existingCategory = nextConfig.models?.[categoryName];
+    const preservedApiKey = !existingCategory || Array.isArray(existingCategory)
+      ? undefined
+      : existingCategory.api_key;
+
+    const rebuiltCategory: ModelCategoryConfig = {};
+    if (dashboardCategory.upstream_mode !== undefined) {
+      rebuiltCategory.upstream_mode = dashboardCategory.upstream_mode;
+    }
+    if (dashboardCategory.base_url !== undefined) {
+      rebuiltCategory.base_url = dashboardCategory.base_url;
+    }
+    if (preservedApiKey !== undefined) {
+      rebuiltCategory.api_key = preservedApiKey;
+    }
+
+    for (const [key, value] of Object.entries(dashboardCategory)) {
+      if (key === 'upstream_mode' || key === 'base_url') {
+        continue;
+      }
+
+      if (typeof value === 'string') {
+        rebuiltCategory[key] = value;
+      } else if (Array.isArray(value)) {
+        const existingEntry = !existingCategory || Array.isArray(existingCategory)
+          ? undefined
+          : existingCategory[key];
+        const preservedModelApiKey = Array.isArray(existingEntry) ? (existingEntry[2] || '') : '';
+        rebuiltCategory[key] = [value[0] || '', value[1] || '', preservedModelApiKey];
+      }
+    }
+
+    if (!nextConfig.models) {
+      nextConfig.models = {};
+    }
+    nextConfig.models[categoryName] = rebuiltCategory;
+  }
+
+  return nextConfig;
+}
+
+export function persistProxyConfigToPath(configPath: string, config: ProxyConfig): void {
+  const serialized = serializeProxyConfigToml(config);
+  writeFileSync(configPath, serialized, 'utf-8');
+}
+
+export function loadProxyConfigFromPath(configPath: string): ProxyConfig {
+  const content = readFileSync(configPath, 'utf-8');
+  return parseSimpleToml(content);
 }

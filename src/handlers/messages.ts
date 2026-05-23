@@ -17,6 +17,7 @@ import { isSdkUrl, handleSdkOpenAIRequest, handleSdkAnthropicRequest } from '../
 import { addForwardedHeaders } from '../utils/routing.js';
 import { getLocalTokenCountingConfig } from '../utils/token-counting.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
+import { recordResponseStatusCodeFromUpstream } from '../utils/dashboard-stats.js';
 
 /**
  * Get token counting configuration from environment
@@ -137,7 +138,8 @@ export async function handleMessagesRequest(
         );
     }
 
-    const response = await fetch(targetUrl, {
+      const response = await fetch(targetUrl, {
+
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -146,6 +148,8 @@ export async function handleMessagesRequest(
       body: JSON.stringify(openaiRequestBody),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
+
+    recordResponseStatusCodeFromUpstream(response.status);
 
     // Handle target API errors
     if (!response.ok) {
@@ -255,7 +259,8 @@ export async function handleMessagesRequest(
   const upstreamRequest = JSON.stringify(openaiRequest);
   activeLogger.debug(requestId, `Converted request (claude->openai): ${upstreamRequest.substring(0, 250)} ... ${upstreamRequest.substring(upstreamRequest.length - 250)}`);
 
-  const response = await fetch(targetUrl, {
+    const response = await fetch(targetUrl, {
+
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -264,6 +269,8 @@ export async function handleMessagesRequest(
     body: JSON.stringify(openaiRequest),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
+
+  recordResponseStatusCodeFromUpstream(response.status);
 
   // Handle target API errors
   if (!response.ok) {

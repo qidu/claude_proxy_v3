@@ -14,6 +14,7 @@ import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fe
 import { convertResponsesToChatCompletions } from '../converters/responses-to-completions.js';
 import { convertCompletionsToResponses, convertCompletionsToCompactedResponse } from '../converters/completions-to-responses.js';
 import { getConversation, saveConversation, normalizeInputToItems } from '../utils/conversation-store.js';
+import { recordResponseStatusCodeFromUpstream } from '../utils/dashboard-stats.js';
 
 /**
  * Handle responses API request
@@ -99,6 +100,8 @@ async function handleAsCompletions(
     body: JSON.stringify(completionsRequest),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
+
+  recordResponseStatusCodeFromUpstream(response.status);
 
   if (!response.ok) {
     const bodyPreview = JSON.stringify(completionsRequest);
@@ -509,7 +512,9 @@ export async function handleResponsesInputTokensRequest(
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 
-    if (!response.ok) {
+    recordResponseStatusCodeFromUpstream(response.status);
+
+  if (!response.ok) {
       activeLogger.error(requestId, `Responses input_tokens error: ${response.status}, URL: ${targetUrl}`);
       handleTargetApiError(response, 'Responses input_tokens (via Completions)', { url: targetUrl });
     }
@@ -537,6 +542,8 @@ export async function handleResponsesInputTokensRequest(
     body: JSON.stringify(requestBody),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
+
+  recordResponseStatusCodeFromUpstream(response.status);
 
   if (!response.ok) {
     activeLogger.error(requestId, `Responses input_tokens passthrough error: ${response.status}, URL: ${targetUrl}`);
@@ -591,7 +598,9 @@ export async function handleResponsesCompactRequest(
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 
-    if (!response.ok) {
+    recordResponseStatusCodeFromUpstream(response.status);
+
+  if (!response.ok) {
       activeLogger.error(requestId, `Responses compact error: ${response.status}, URL: ${targetUrl}`);
       handleTargetApiError(response, 'Responses compact (via Completions)', { url: targetUrl });
     }
@@ -619,6 +628,8 @@ export async function handleResponsesCompactRequest(
     body: JSON.stringify(requestBody),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
+
+  recordResponseStatusCodeFromUpstream(response.status);
 
   if (!response.ok) {
     activeLogger.error(requestId, `Responses compact passthrough error: ${response.status}, URL: ${targetUrl}`);
@@ -656,6 +667,8 @@ async function handleAsPassthrough(
     body: JSON.stringify(requestBody),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
+
+  recordResponseStatusCodeFromUpstream(response.status);
 
   if (!response.ok) {
     const bodyPreview = JSON.stringify(requestBody);

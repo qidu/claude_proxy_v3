@@ -17,7 +17,27 @@ import { handleGeminiRequest, handleGeminiRequestForMessages } from './handlers/
 import { handleOpenAIRequest } from './handlers/openai.js';
 import { handleClaudeRequest } from './handlers/claude.js';
 import { handleEmbeddingsRequest } from './handlers/embeddings.js';
+import {
+  handleDashboardAgentStats,
+  handleDashboardGetConfig,
+  handleDashboardModelStats,
+  handleDashboardPage,
+  handleDashboardPutConfig,
+  handleDashboardRequestStats,
+} from './handlers/dashboard.js';
 import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, ModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
+import {
+  extractToolNamesFromBody,
+  extractUsageFromResponsePayload,
+  extractUserAgentPrefix,
+  recordAgentStat,
+  recordModelStat,
+  recordModelUsage,
+  recordRequestEndpoint,
+  recordResponseStatusCodeFromUpstream,
+  recordResponseStatusCodeToEndpoint,
+  recordResponseUpstream,
+} from './utils/dashboard-stats.js';
 import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
 
 /**
@@ -379,6 +399,30 @@ export default {
         return handleOptionsRequest(request, env);
       }
 
+      if (path === '/dashboard' && request.method === 'GET') {
+        return applyCorsHeaders(handleDashboardPage(), request, env);
+      }
+
+      if (path === '/dashboard/api/config' && request.method === 'GET') {
+        return applyCorsHeaders(handleDashboardGetConfig(proxyConfig, env), request, env);
+      }
+
+      if (path === '/dashboard/api/config' && request.method === 'PUT') {
+        const response = await handleDashboardPutConfig(request, env, proxyConfig);
+        return applyCorsHeaders(response, request, env);
+      }
+
+      if (path === '/dashboard/api/stats/models' && request.method === 'GET') {
+        return applyCorsHeaders(handleDashboardModelStats(), request, env);
+      }
+
+      if (path === '/dashboard/api/stats/agents' && request.method === 'GET') {
+        return applyCorsHeaders(handleDashboardAgentStats(), request, env);
+      }
+
+      if (path === '/dashboard/api/stats/requests' && request.method === 'GET') {
+        return applyCorsHeaders(handleDashboardRequestStats(), request, env);
+      }
 
       // Skip favicon requests
       if (path === '/favicon.ico') {
@@ -420,6 +464,8 @@ export default {
         });
       }
 
+      recordRequestEndpoint(path);
+
       // Request body size limit (10MB)
       const contentLength = request.headers.get('content-length');
       if (contentLength) {
@@ -437,6 +483,8 @@ export default {
       let upstreamMode: string | undefined;
       let forceStreaming: boolean = false;
       let isGeminiBypass = false;
+      const userAgentPrefix = extractUserAgentPrefix(request.headers.get('user-agent'));
+      let requestToolNames: string[] = ['none'];
 
       type RouteAttemptHandlerType = 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' | 'responses-compact' | 'responses-input-tokens' | 'embeddings';
       type RouteAttempt = {
@@ -464,6 +512,7 @@ export default {
         try {
           const bodyText = await request.text();
           const body = JSON.parse(bodyText);
+          requestToolNames = extractToolNamesFromBody(body as Record<string, unknown>);
           let modelName = body.model;
           
           // For generateContent endpoint, extract model from URL if not in body
@@ -780,6 +829,30 @@ export default {
 
           default:
             throw new Error(`Unsupported handler type: ${attemptHandlerType}`);
+        }
+
+        if (attemptModelId) {
+          recordModelStat(attemptModelId);
+        }
+        recordAgentStat(userAgentPrefix, requestToolNames);
+
+        recordResponseUpstream(attemptTargetUrl);
+        recordResponseStatusCodeToEndpoint(response.status);
+
+        if (!attemptForceStreaming) {
+          try {
+            const responseForStats = response.clone();
+            const contentType = responseForStats.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+              const payload = await responseForStats.json();
+              const usage = extractUsageFromResponsePayload(payload);
+              if (attemptModelId && usage) {
+                recordModelUsage(attemptModelId, usage);
+              }
+            }
+          } catch {
+            // ignore stats extraction failures
+          }
         }
 
         return response;
