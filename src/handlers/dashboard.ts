@@ -145,7 +145,7 @@ export function handleDashboardPage(): Response {
     <section class="card">
       <h2>Model Statistic</h2>
       <table id="modelStats">
-        <thead><tr><th>Model</th><th>Requests</th><th>Input Tokens</th><th>Output Tokens</th></tr></thead>
+        <thead><tr><th>Model</th><th>Requests</th><th>Input Tokens</th><th>Cached Tokens</th><th>Cache Writen Tokens</th><th>Output Tokens</th><th>Total Tokens</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
@@ -489,7 +489,7 @@ export function handleDashboardPage(): Response {
         const res = await fetch('/dashboard/api/stats/models');
         const json = await res.json();
         renderRows('#modelStats', json.data || [], (row) =>
-          '<tr><td>' + row.model + '</td><td>' + row.requests + '</td><td>' + row.input_tokens + '</td><td>' + row.output_tokens + '</td></tr>'
+          '<tr><td>' + row.model + '</td><td>' + row.requests + '</td><td>' + row.input_tokens + '</td><td>' + row.cached_tokens + '</td><td>' + row.cache_writen_tokens + '</td><td>' + row.output_tokens + '</td><td>' + row.total_tokens + '</td></tr>'
         );
       }
 

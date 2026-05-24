@@ -743,6 +743,30 @@ The proxy includes a built-in web dashboard for config editing and runtime stats
     - from upstreams
     - to endpoints
 
+### Token Stats (Normalized Mapping)
+
+Dashboard/API token stats can be normalized to a single shape:
+
+- `input_tokens`
+- `cached_tokens`
+- `cache_writen_tokens`
+- `output_tokens`
+- `total_tokens`
+
+| Endpoint family | input_tokens | cached_tokens | cache_writen_tokens | output_tokens | total_tokens |
+|---|---:|---:|---:|---:|---:|
+| Claude `/v1/messages` | `usage.input_tokens` | `usage.cache_read_input_tokens` | `usage.cache_creation_input_tokens` | `usage.output_tokens` | `input + cached + cache_writen + output` |
+| OpenAI `/v1/chat/completions` | `usage.prompt_tokens` | `0` | `0` | `usage.completion_tokens` | `usage.total_tokens` |
+| OpenAI `/v1/responses` | `usage.input_tokens` | `usage.input_tokens_details.cached_tokens` | `0` | `usage.output_tokens` | `usage.total_tokens` |
+| Gemini `generateContent` | `usageMetadata.promptTokenCount` | `0` | `0` | `usageMetadata.candidatesTokenCount` *(or `responseTokenCount` in SSE)* | `usageMetadata.totalTokenCount` |
+| Gemini `/v1/interactions` | `usage.total_input_tokens` | sum of `usage.cached_tokens_by_modality[*].token_count` *(if present)* | `0` | `usage.total_output_tokens` | `input_tokens + output_tokens` |
+| Embeddings `/v1/embeddings` | `usage.prompt_tokens` | `0` | `0` | `0` | `usage.total_tokens` |
+| Count-tokens endpoints (`/v1/messages/count_tokens`, `:countTokens`) | endpoint-specific input count | `0` | `0` | `0` | same as input |
+
+Fallback rules:
+- Missing fields are treated as `0`.
+- Prefer provider-returned `total_tokens`; otherwise derive from normalized fields.
+
 ## 🔧 Configuration
 
 ### Environment Variables

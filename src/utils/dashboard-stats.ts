@@ -1,13 +1,19 @@
 type UsageStats = {
   input_tokens?: number;
+  cached_tokens?: number;
+  cache_writen_tokens?: number;
   output_tokens?: number;
+  total_tokens?: number;
 };
 
 type ModelStatsEntry = {
   model: string;
   requests: number;
   input_tokens: number;
+  cached_tokens: number;
+  cache_writen_tokens: number;
   output_tokens: number;
+  total_tokens: number;
 };
 
 type AgentStatsEntry = {
@@ -101,24 +107,65 @@ export function extractUsageFromResponsePayload(payload: unknown): UsageStats | 
     return undefined;
   }
 
-  const usage = (payload as Record<string, unknown>).usage;
-  if (!usage || typeof usage !== 'object') {
-    return undefined;
+  const root = payload as Record<string, unknown>;
+
+  // Claude / OpenAI / Interactions usage object
+  const usage = root.usage;
+  if (usage && typeof usage === 'object') {
+    const usageRecord = usage as Record<string, unknown>;
+
+    const input_tokens = toSafeNumber(
+      usageRecord.input_tokens ?? usageRecord.total_input_tokens ?? usageRecord.prompt_tokens
+    );
+
+    const cached_tokens = toSafeNumber(
+      usageRecord.cache_read_input_tokens ??
+      (usageRecord.input_tokens_details && typeof usageRecord.input_tokens_details === 'object'
+        ? (usageRecord.input_tokens_details as Record<string, unknown>).cached_tokens
+        : 0)
+    );
+
+    const cache_writen_tokens = toSafeNumber(
+      usageRecord.cache_creation_input_tokens
+    );
+
+    const output_tokens = toSafeNumber(
+      usageRecord.output_tokens ?? usageRecord.total_output_tokens ?? usageRecord.completion_tokens
+    );
+
+    const total_tokens = toSafeNumber(
+      usageRecord.total_tokens ?? (input_tokens + cached_tokens + cache_writen_tokens + output_tokens)
+    );
+
+    if (input_tokens === 0 && cached_tokens === 0 && cache_writen_tokens === 0 && output_tokens === 0 && total_tokens === 0) {
+      return undefined;
+    }
+
+    return { input_tokens, cached_tokens, cache_writen_tokens, output_tokens, total_tokens };
   }
 
-  const usageRecord = usage as Record<string, unknown>;
-  const input_tokens = toSafeNumber(
-    usageRecord.input_tokens ?? usageRecord.total_input_tokens ?? usageRecord.prompt_tokens
-  );
-  const output_tokens = toSafeNumber(
-    usageRecord.output_tokens ?? usageRecord.total_output_tokens ?? usageRecord.completion_tokens
-  );
+  // Gemini usageMetadata object
+  const usageMetadata = root.usageMetadata;
+  if (usageMetadata && typeof usageMetadata === 'object') {
+    const metadata = usageMetadata as Record<string, unknown>;
+    const input_tokens = toSafeNumber(metadata.promptTokenCount);
+    const output_tokens = toSafeNumber(metadata.candidatesTokenCount ?? metadata.responseTokenCount);
+    const total_tokens = toSafeNumber(metadata.totalTokenCount ?? (input_tokens + output_tokens));
 
-  if (input_tokens === 0 && output_tokens === 0) {
-    return undefined;
+    if (input_tokens === 0 && output_tokens === 0 && total_tokens === 0) {
+      return undefined;
+    }
+
+    return {
+      input_tokens,
+      cached_tokens: 0,
+      cache_writen_tokens: 0,
+      output_tokens,
+      total_tokens,
+    };
   }
 
-  return { input_tokens, output_tokens };
+  return undefined;
 }
 
 function getOrCreateModelStat(model: string): ModelStatsEntry {
@@ -126,7 +173,10 @@ function getOrCreateModelStat(model: string): ModelStatsEntry {
     model,
     requests: 0,
     input_tokens: 0,
+    cached_tokens: 0,
+    cache_writen_tokens: 0,
     output_tokens: 0,
+    total_tokens: 0,
   };
 }
 
@@ -138,7 +188,10 @@ export function recordModelStat(model: string | undefined, usage?: UsageStats): 
   const current = getOrCreateModelStat(model);
   current.requests += 1;
   current.input_tokens += toSafeNumber(usage?.input_tokens);
+  current.cached_tokens += toSafeNumber(usage?.cached_tokens);
+  current.cache_writen_tokens += toSafeNumber(usage?.cache_writen_tokens);
   current.output_tokens += toSafeNumber(usage?.output_tokens);
+  current.total_tokens += toSafeNumber(usage?.total_tokens);
   modelStats.set(model, current);
 }
 
@@ -149,7 +202,10 @@ export function recordModelUsage(model: string | undefined, usage?: UsageStats):
 
   const current = getOrCreateModelStat(model);
   current.input_tokens += toSafeNumber(usage.input_tokens);
+  current.cached_tokens += toSafeNumber(usage.cached_tokens);
+  current.cache_writen_tokens += toSafeNumber(usage.cache_writen_tokens);
   current.output_tokens += toSafeNumber(usage.output_tokens);
+  current.total_tokens += toSafeNumber(usage.total_tokens);
   modelStats.set(model, current);
 }
 
@@ -171,8 +227,8 @@ export function getModelStatsDesc(): ModelStatsEntry[] {
       return b.requests - a.requests;
     }
 
-    const aTokens = a.input_tokens + a.output_tokens;
-    const bTokens = b.input_tokens + b.output_tokens;
+    const aTokens = a.total_tokens;
+    const bTokens = b.total_tokens;
     if (bTokens !== aTokens) {
       return bTokens - aTokens;
     }
