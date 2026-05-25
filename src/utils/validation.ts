@@ -270,8 +270,8 @@ export function validateClaudeContentBlock(
       break;
 
     case 'thinking':
-      if (block.text === undefined || typeof block.text !== 'string') {
-        throw new ValidationError(`${context}.text is required for thinking blocks`);
+      if (block.thinking === undefined || typeof block.thinking !== 'string') {
+        throw new ValidationError(`${context}.thinking is required for thinking blocks`);
       }
       break;
 

@@ -788,6 +788,45 @@ export function parseSimpleToml(content: string): ProxyConfig {
       continue;
     }
 
+    // Handle arrays: "model-id" = ["alias", "url", "key"]
+    // Must be checked before unquotedMatch to avoid greedy (.+) capture stealing array values.
+    const arrayMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*\[([^\]]*)\]/);
+    if (arrayMatch) {
+      const [, key, arrayContent] = arrayMatch;
+      const cleanKey = key.trim().replace(/^"|"$/g, '');
+
+      // Parse array elements
+      const elements: string[] = [];
+      let current = '';
+      let inQuotes = false;
+
+      for (let j = 0; j < arrayContent.length; j++) {
+        const char = arrayContent[j];
+        if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+          elements.push(current.trim().replace(/^"|"$/g, ''));
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      if (current.trim()) {
+        elements.push(current.trim().replace(/^"|"$/g, ''));
+      }
+
+      // Ensure we have exactly 3 elements
+      while (elements.length < 3) {
+        elements.push('');
+      }
+
+      if (currentSection === 'models' && currentCategory && config.models) {
+        const category = config.models[currentCategory] as ModelCategoryConfig;
+        category[cleanKey] = [elements[0], elements[1], elements[2]];
+      }
+      continue;
+    }
+
     // Handle unquoted numbers and other values: key = value
     const unquotedMatch = trimmed.match(/^([a-zA-Z0-9_-]+)\s*=\s*(.+)$/);
     if (unquotedMatch) {
@@ -804,44 +843,6 @@ export function parseSimpleToml(content: string): ProxyConfig {
         (config.upstream as any)[cleanKey] = cleanValue;
       } else if (currentSection === 'defaults' && config.defaults) {
         (config.defaults as any)[cleanKey] = cleanValue;
-      }
-      continue;
-    }
-
-    // Handle arrays: "model-id" = ["alias", "url", "key"]
-    const arrayMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*\[([^\]]*)\]/);
-    if (arrayMatch) {
-      const [, key, arrayContent] = arrayMatch;
-      const cleanKey = key.trim().replace(/^"|"$/g, '');
-      
-      // Parse array elements
-      const elements: string[] = [];
-      let current = '';
-      let inQuotes = false;
-      
-      for (let j = 0; j < arrayContent.length; j++) {
-        const char = arrayContent[j];
-        if (char === '"') {
-          inQuotes = !inQuotes;
-        } else if (char === ',' && !inQuotes) {
-          elements.push(current.trim().replace(/^"|"$/g, ''));
-          current = '';
-        } else {
-          current += char;
-        }
-      }
-      if (current.trim()) {
-        elements.push(current.trim().replace(/^"|"$/g, ''));
-      }
-      
-      // Ensure we have exactly 3 elements
-      while (elements.length < 3) {
-        elements.push('');
-      }
-      
-      if (currentSection === 'models' && currentCategory && config.models) {
-        const category = config.models[currentCategory] as ModelCategoryConfig;
-        category[cleanKey] = [elements[0], elements[1], elements[2]];
       }
       continue;
     }
