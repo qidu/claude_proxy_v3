@@ -1,7 +1,7 @@
 type UsageStats = {
   input_tokens?: number;
   cached_tokens?: number;
-  cache_writen_tokens?: number;
+  cache_written_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
 };
@@ -9,9 +9,10 @@ type UsageStats = {
 type ModelStatsEntry = {
   model: string;
   requests: number;
+  failed_requests: number;
   input_tokens: number;
   cached_tokens: number;
-  cache_writen_tokens: number;
+  cache_written_tokens: number;
   output_tokens: number;
   total_tokens: number;
 };
@@ -125,7 +126,7 @@ export function extractUsageFromResponsePayload(payload: unknown): UsageStats | 
         : 0)
     );
 
-    const cache_writen_tokens = toSafeNumber(
+    const cache_written_tokens = toSafeNumber(
       usageRecord.cache_creation_input_tokens
     );
 
@@ -134,14 +135,14 @@ export function extractUsageFromResponsePayload(payload: unknown): UsageStats | 
     );
 
     const total_tokens = toSafeNumber(
-      usageRecord.total_tokens ?? (input_tokens + cached_tokens + cache_writen_tokens + output_tokens)
+      usageRecord.total_tokens ?? (input_tokens + cached_tokens + cache_written_tokens + output_tokens)
     );
 
-    if (input_tokens === 0 && cached_tokens === 0 && cache_writen_tokens === 0 && output_tokens === 0 && total_tokens === 0) {
+    if (input_tokens === 0 && cached_tokens === 0 && cache_written_tokens === 0 && output_tokens === 0 && total_tokens === 0) {
       return undefined;
     }
 
-    return { input_tokens, cached_tokens, cache_writen_tokens, output_tokens, total_tokens };
+    return { input_tokens, cached_tokens, cache_written_tokens, output_tokens, total_tokens };
   }
 
   // Gemini usageMetadata object
@@ -159,7 +160,7 @@ export function extractUsageFromResponsePayload(payload: unknown): UsageStats | 
     return {
       input_tokens,
       cached_tokens: 0,
-      cache_writen_tokens: 0,
+      cache_written_tokens: 0,
       output_tokens,
       total_tokens,
     };
@@ -172,12 +173,23 @@ function getOrCreateModelStat(model: string): ModelStatsEntry {
   return modelStats.get(model) || {
     model,
     requests: 0,
+    failed_requests: 0,
     input_tokens: 0,
     cached_tokens: 0,
-    cache_writen_tokens: 0,
+    cache_written_tokens: 0,
     output_tokens: 0,
     total_tokens: 0,
   };
+}
+
+export function recordModelFailedRequest(model: string | undefined): void {
+  if (!model) {
+    return;
+  }
+
+  const current = getOrCreateModelStat(model);
+  current.failed_requests += 1;
+  modelStats.set(model, current);
 }
 
 export function recordModelStat(model: string | undefined, usage?: UsageStats): void {
@@ -189,7 +201,7 @@ export function recordModelStat(model: string | undefined, usage?: UsageStats): 
   current.requests += 1;
   current.input_tokens += toSafeNumber(usage?.input_tokens);
   current.cached_tokens += toSafeNumber(usage?.cached_tokens);
-  current.cache_writen_tokens += toSafeNumber(usage?.cache_writen_tokens);
+  current.cache_written_tokens += toSafeNumber(usage?.cache_written_tokens);
   current.output_tokens += toSafeNumber(usage?.output_tokens);
   current.total_tokens += toSafeNumber(usage?.total_tokens);
   modelStats.set(model, current);
@@ -203,7 +215,7 @@ export function recordModelUsage(model: string | undefined, usage?: UsageStats):
   const current = getOrCreateModelStat(model);
   current.input_tokens += toSafeNumber(usage.input_tokens);
   current.cached_tokens += toSafeNumber(usage.cached_tokens);
-  current.cache_writen_tokens += toSafeNumber(usage.cache_writen_tokens);
+  current.cache_written_tokens += toSafeNumber(usage.cache_written_tokens);
   current.output_tokens += toSafeNumber(usage.output_tokens);
   current.total_tokens += toSafeNumber(usage.total_tokens);
   modelStats.set(model, current);
@@ -234,6 +246,71 @@ export function getModelStatsDesc(): ModelStatsEntry[] {
     }
 
     return a.model.localeCompare(b.model);
+  });
+}
+
+/**
+ * Create a TransformStream that intercepts SSE streaming data to capture
+ * token usage from Claude SSE events (message_start.usage.input_tokens
+ * and message_delta.usage.output_tokens). Records usage via recordModelUsage
+ * when the stream ends.
+ */
+export function createUsageTrackingTransformStream(model: string): TransformStream<Uint8Array, Uint8Array> {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let foundUsage = false;
+  let remainder = '';
+  const decoder = new TextDecoder();
+
+  return new TransformStream({
+    transform(chunk: Uint8Array, controller: TransformStreamDefaultController<Uint8Array>) {
+      const text = remainder + decoder.decode(chunk, { stream: true });
+      const parts = text.split('\n\n');
+      remainder = parts.pop() || '';
+
+      for (const part of parts) {
+        // Match Claude SSE event name
+        const eventLine = part.match(/^event: (.+)$/m);
+        const dataLine = part.match(/^data: (.+)$/m);
+        if (eventLine && dataLine) {
+          const eventType = eventLine[1];
+          try {
+            const data = JSON.parse(dataLine[1]);
+            if (eventType === 'message_start' && data.message?.usage) {
+              const val = data.message.usage.input_tokens;
+              if (typeof val === 'number') {
+                inputTokens = val;
+                foundUsage = true;
+              }
+            } else if (eventType === 'message_delta' && data.usage) {
+              const val = data.usage.output_tokens;
+              if (typeof val === 'number') {
+                outputTokens = val;
+                foundUsage = true;
+              }
+              const valIn = data.usage.input_tokens;
+              if (typeof valIn === 'number') {
+                inputTokens = valIn;
+                foundUsage = true;
+              }
+            }
+          } catch {
+            // Not JSON data, skip
+          }
+        }
+      }
+
+      controller.enqueue(chunk);
+    },
+    flush() {
+      if (foundUsage) {
+        recordModelUsage(model, {
+          input_tokens: inputTokens > 0 ? inputTokens : undefined,
+          output_tokens: outputTokens > 0 ? outputTokens : undefined,
+          total_tokens: (inputTokens > 0 || outputTokens > 0) ? (inputTokens + outputTokens) : undefined,
+        });
+      }
+    },
   });
 }
 

@@ -51,6 +51,7 @@ export function handleDashboardPage(): Response {
       table { width: 100%; border-collapse: collapse; margin-top: 20px; }
       th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
       th { background-color: #f5f5f5; }
+      .num { text-align: right; }
       .card { background: #f9f9f9; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
       .badge { display: inline-block; padding: 2px 8px; background: #4caf50; color: white; border-radius: 4px; font-size: 12px; }
       .model-tag { display: inline-block; padding: 2px 6px; background: #e3f2fd; border: 1px solid #90caf9; border-radius: 4px; font-size: 11px; margin: 2px; }
@@ -145,15 +146,7 @@ export function handleDashboardPage(): Response {
     <section class="card">
       <h2>Model Statistic</h2>
       <table id="modelStats">
-        <thead><tr><th>Model</th><th>Requests</th><th>Input Tokens</th><th>Cached Tokens</th><th>Cache Writen Tokens</th><th>Output Tokens</th><th>Total Tokens</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </section>
-
-    <section class="card">
-      <h2>Agent Statistic</h2>
-      <table id="agentStats">
-        <thead><tr><th>Agent / Tool</th><th>Requests</th></tr></thead>
+        <thead><tr><th>Model</th><th class="num">Requests</th><th class="num">Failed</th><th class="num">Input Tokens</th><th class="num">Cached Tokens</th><th class="num">Cache Written Tokens</th><th class="num">Output Tokens</th><th class="num">Total Tokens</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
@@ -164,7 +157,7 @@ export function handleDashboardPage(): Response {
       <div class="request-submodule">
         <h3>Requests Numbers</h3>
         <table id="requestEndpointStats">
-          <thead><tr><th>Endpoint</th><th>Requests</th></tr></thead>
+          <thead><tr><th>Endpoint</th><th class="num">Requests</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -172,7 +165,7 @@ export function handleDashboardPage(): Response {
       <div class="request-submodule">
         <h3>Responses Numbers</h3>
         <table id="requestUpstreamStats">
-          <thead><tr><th>Upstream Base URL</th><th>Responses</th></tr></thead>
+          <thead><tr><th>Upstream Base URL</th><th class="num">Responses</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -180,7 +173,7 @@ export function handleDashboardPage(): Response {
       <div class="request-submodule">
         <h3>Response (from upstreams)</h3>
         <table id="requestStatusCodeFromUpstreamStats">
-          <thead><tr><th>Status Code</th><th>Responses</th></tr></thead>
+          <thead><tr><th>Status Code</th><th class="num">Responses</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -188,10 +181,18 @@ export function handleDashboardPage(): Response {
       <div class="request-submodule">
         <h3>Response (to endpoints)</h3>
         <table id="requestStatusCodeToEndpointStats">
-          <thead><tr><th>Status Code</th><th>Responses</th></tr></thead>
+          <thead><tr><th>Status Code</th><th class="num">Responses</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
+    </section>
+
+    <section class="card">
+      <h2>Agent Statistic <button id="toggleAgentStats" class="mini-btn" style="font-size:12px;">Show all</button></h2>
+      <table id="agentStats">
+        <thead><tr><th>Agent / Tool</th><th class="num">Requests</th></tr></thead>
+        <tbody></tbody>
+      </table>
     </section>
 
     <script>
@@ -200,6 +201,7 @@ export function handleDashboardPage(): Response {
       const saveButton = document.getElementById('saveConfig');
       let currentConfig = { models: {}, composite: {} };
       let isReadOnly = false;
+      let configPathHint = '';
 
       function escapeHtml(value) {
         return String(value ?? '')
@@ -211,31 +213,34 @@ export function handleDashboardPage(): Response {
       }
 
       function upstreamModeSelect(categoryName, currentMode) {
+        const disabledAttr = isReadOnly ? ' disabled' : '';
         const options = ['anthropic-messages', 'openai-completions', 'openai-responses', 'gemini-generatecontent', 'gemini-interactions'];
         const optionHtml = options.map((mode) => {
           const selected = mode === currentMode ? ' selected' : '';
           return '<option value="' + escapeHtml(mode) + '"' + selected + '>' + escapeHtml(mode) + '</option>';
         }).join('');
 
-        return '<select class="wide" data-kind="cat-upstream" data-category="' + escapeHtml(categoryName) + '">'
+        return '<select class="wide" data-kind="cat-upstream" data-category="' + escapeHtml(categoryName) + '"' + disabledAttr + '>'
           + optionHtml
           + '</select>';
       }
 
       function modelEntryRow(categoryName, modelKey, modelValue) {
+        const disabledAttr = isReadOnly ? ' disabled' : '';
         const alias = Array.isArray(modelValue) ? modelValue[0] || '' : (modelValue || '');
         const base = Array.isArray(modelValue) ? modelValue[1] || '' : '';
         return '<div class="config-row">'
           + '<label>' + escapeHtml(modelKey) + '</label>'
-          + '<input type="text" data-kind="model-alias" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '" value="' + escapeHtml(alias) + '" placeholder="model alias" />'
+          + '<input type="text" data-kind="model-alias" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '" value="' + escapeHtml(alias) + '" placeholder="model alias"' + disabledAttr + ' />'
           + '<div class="row-actions">'
-            + '<input type="text" data-kind="model-base" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '" value="' + escapeHtml(base) + '" placeholder="base_url override" />'
-            + '<button type="button" class="mini-btn danger" data-action="remove-model" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '"' + (isReadOnly ? ' disabled' : '') + '>Remove</button>'
+            + '<input type="text" data-kind="model-base" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '" value="' + escapeHtml(base) + '" placeholder="base_url override"' + disabledAttr + ' />'
+            + '<button type="button" class="mini-btn danger" data-action="remove-model" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
           + '</div>'
           + '</div>';
       }
 
       function compositeEntryRows(aliasName, targets) {
+        const disabledAttr = isReadOnly ? ' disabled' : '';
         const keys = Object.keys(targets || {});
         if (keys.length === 0) {
           return '<div class="config-row"><label>' + escapeHtml(aliasName) + '</label><div class="wide">(empty)</div></div>';
@@ -247,11 +252,11 @@ export function handleDashboardPage(): Response {
           const primary = cfg.primary === true ? 'checked' : '';
           return '<div class="config-row">'
             + '<label>' + escapeHtml(targetName) + '</label>'
-            + '<input type="number" data-kind="comp-share" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(share) + '" placeholder="share" />'
+            + '<input type="number" data-kind="comp-share" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(share) + '" placeholder="share"' + disabledAttr + ' />'
             + '<div class="row-actions">'
-              + '<input type="number" data-kind="comp-fallback" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(fallback) + '" placeholder="fallback" style="width: 120px;" />'
-              + '<label class="primary-label"><input type="checkbox" data-kind="comp-primary" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" ' + primary + ' /> primary</label>'
-              + '<button type="button" class="mini-btn danger" data-action="remove-composite-target" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + (isReadOnly ? ' disabled' : '') + '>Remove</button>'
+              + '<input type="number" data-kind="comp-fallback" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(fallback) + '" placeholder="fallback" style="width: 120px;"' + disabledAttr + ' />'
+              + '<label class="primary-label"><input type="checkbox" data-kind="comp-primary" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" ' + primary + disabledAttr + ' /> primary</label>'
+              + '<button type="button" class="mini-btn danger" data-action="remove-composite-target" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
             + '</div>'
             + '</div>';
         }).join('');
@@ -259,9 +264,10 @@ export function handleDashboardPage(): Response {
 
       function renderConfigForm(config) {
         const modelBlocks = Object.entries(config.models || {}).map(([categoryName, category]) => {
+          const disabledAttr = isReadOnly ? ' disabled' : '';
           const rows = [];
           rows.push('<div class="config-row"><label>' + escapeHtml(categoryName + '.upstream_mode') + '</label>' + upstreamModeSelect(categoryName, category.upstream_mode || '') + '</div>');
-          rows.push('<div class="config-row"><label>' + escapeHtml(categoryName + '.base_url') + '</label><input class="wide" type="text" data-kind="cat-base" data-category="' + escapeHtml(categoryName) + '" value="' + escapeHtml(category.base_url || '') + '" /></div>');
+          rows.push('<div class="config-row"><label>' + escapeHtml(categoryName + '.base_url') + '</label><input class="wide" type="text" data-kind="cat-base" data-category="' + escapeHtml(categoryName) + '" value="' + escapeHtml(category.base_url || '') + '"' + disabledAttr + ' /></div>');
 
           Object.entries(category).forEach(([key, value]) => {
             if (key === 'upstream_mode' || key === 'base_url') return;
@@ -451,7 +457,12 @@ export function handleDashboardPage(): Response {
         };
         renderConfigForm(currentConfig);
         saveButton.disabled = isReadOnly;
-        configStatus.textContent = isReadOnly ? 'Loaded (read-only: PROXY_CONFIG_URL configured)' : 'Loaded';
+        configPathHint = json.config_path ? ' (' + json.config_path + ')' : '';
+        if (isReadOnly) {
+          configStatus.textContent = 'Loaded (read-only: remote)' + configPathHint;
+        } else {
+          configStatus.textContent = 'Loaded' + configPathHint;
+        }
       }
 
       async function saveConfig() {
@@ -474,7 +485,7 @@ export function handleDashboardPage(): Response {
           }
           currentConfig = result.config;
           renderConfigForm(currentConfig);
-          configStatus.textContent = 'Saved';
+          configStatus.textContent = 'Saved' + configPathHint;
         } catch (err) {
           configStatus.textContent = 'Error: ' + err.message;
         }
@@ -489,36 +500,61 @@ export function handleDashboardPage(): Response {
         const res = await fetch('/dashboard/api/stats/models');
         const json = await res.json();
         renderRows('#modelStats', json.data || [], (row) =>
-          '<tr><td>' + row.model + '</td><td>' + row.requests + '</td><td>' + row.input_tokens + '</td><td>' + row.cached_tokens + '</td><td>' + row.cache_writen_tokens + '</td><td>' + row.output_tokens + '</td><td>' + row.total_tokens + '</td></tr>'
+          '<tr><td>' + row.model + '</td><td class="num">' + row.requests + '</td><td class="num">' + (row.failed_requests || 0) + '</td><td class="num">' + row.input_tokens + '</td><td class="num">' + row.cached_tokens + '</td><td class="num">' + row.cache_written_tokens + '</td><td class="num">' + row.output_tokens + '</td><td class="num">' + row.total_tokens + '</td></tr>'
         );
+      }
+
+      let agentStatsExpanded = false;
+
+      function renderAgentRows(data) {
+        const tbody = document.querySelector('#agentStats tbody');
+        if (agentStatsExpanded) {
+          tbody.innerHTML = data.map((row) =>
+            '<tr><td>' + row.key + '</td><td class="num">' + row.requests + '</td></tr>'
+          ).join('');
+        } else {
+          tbody.innerHTML = data.slice(0, 10).map((row) =>
+            '<tr><td>' + row.key + '</td><td class="num">' + row.requests + '</td></tr>'
+          ).join('');
+        }
+        const btn = document.getElementById('toggleAgentStats');
+        if (data.length > 10) {
+          btn.style.display = 'inline-block';
+          btn.textContent = agentStatsExpanded ? 'Collapse' : 'Show all (' + data.length + ')';
+        } else {
+          btn.style.display = 'none';
+        }
       }
 
       async function loadAgentStats() {
         const res = await fetch('/dashboard/api/stats/agents');
         const json = await res.json();
-        renderRows('#agentStats', json.data || [], (row) =>
-          '<tr><td>' + row.key + '</td><td>' + row.requests + '</td></tr>'
-        );
+        renderAgentRows(json.data || []);
       }
+
+      document.getElementById('toggleAgentStats').addEventListener('click', () => {
+        agentStatsExpanded = !agentStatsExpanded;
+        loadAgentStats();
+      });
 
       async function loadRequestStats() {
         const res = await fetch('/dashboard/api/stats/requests');
         const json = await res.json();
 
         renderRows('#requestEndpointStats', json.endpoints || [], (row) =>
-          '<tr><td>' + row.endpoint + '</td><td>' + row.requests + '</td></tr>'
+          '<tr><td>' + row.endpoint + '</td><td class="num">' + row.requests + '</td></tr>'
         );
 
         renderRows('#requestUpstreamStats', json.upstreams || [], (row) =>
-          '<tr><td>' + row.upstream_base_url + '</td><td>' + row.responses + '</td></tr>'
+          '<tr><td>' + row.upstream_base_url + '</td><td class="num">' + row.responses + '</td></tr>'
         );
 
         renderRows('#requestStatusCodeFromUpstreamStats', json.status_codes_from_upstreams || [], (row) =>
-          '<tr><td>' + row.status_code + '</td><td>' + row.responses + '</td></tr>'
+          '<tr><td>' + row.status_code + '</td><td class="num">' + row.responses + '</td></tr>'
         );
 
         renderRows('#requestStatusCodeToEndpointStats', json.status_codes_to_endpoints || [], (row) =>
-          '<tr><td>' + row.status_code + '</td><td>' + row.responses + '</td></tr>'
+          '<tr><td>' + row.status_code + '</td><td class="num">' + row.responses + '</td></tr>'
         );
       }
 
@@ -551,6 +587,7 @@ export function handleDashboardGetConfig(proxyConfig: ProxyConfig, env: Env): Re
   return jsonResponse({
     ...payload,
     read_only: isDashboardReadOnly(env),
+    config_path: env.PROXY_CONFIG_PATH || null,
   });
 }
 

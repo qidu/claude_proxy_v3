@@ -749,7 +749,7 @@ Dashboard/API token stats can be normalized to a single shape:
 
 - `input_tokens`
 - `cached_tokens`
-- `cache_writen_tokens`
+- `cache_written_tokens`
 - `output_tokens`
 - `total_tokens`
 

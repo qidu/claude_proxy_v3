@@ -243,12 +243,15 @@ export function createStreamTransformer(
 
                     // Determine final stop reason
                     let finalStopReason = "end_turn";
+                    // Upstream token usage from final chunk (OpenAI format has usage.prompt_tokens / usage.completion_tokens)
+                    let upstreamPromptTokens = 0;
+                    let upstreamCompletionTokens = 0;
                     try {
                         // Find the last data chunk before [DONE]
+                        let lastDataChunk: any = null;
                         // We need to look backward from the current line (which is [DONE])
                         // The lines array includes all lines from buffer.split("\n"), including empty lines
                         // We need to find the last non-empty data line before [DONE]
-                        let lastDataChunk = null;
 
                         // Iterate backward through lines to find the last data chunk
                         for (let i = lines.length - 2; i >= 0; i--) {
@@ -273,17 +276,30 @@ export function createStreamTransformer(
                             else if (finishReason === 'length') finalStopReason = 'max_tokens';
                             else if (finishReason === 'content_filter') finalStopReason = 'content_filter';
                             else if ((!finishReason || finishReason === 'stop') && hasToolCalls) finalStopReason = 'tool_use';
+
+                            // Extract upstream token usage from the final chunk
+                            if (lastDataChunk.usage) {
+                                upstreamPromptTokens = lastDataChunk.usage.prompt_tokens ?? 0;
+                                upstreamCompletionTokens = lastDataChunk.usage.completion_tokens ?? 0;
+                            }
+                            // Use upstream usage if local token counting didn't produce values
+                            if (inputTokens === 0 && upstreamPromptTokens > 0) {
+                                inputTokens = upstreamPromptTokens;
+                            }
+                            if (outputTokens === 0 && upstreamCompletionTokens > 0) {
+                                outputTokens = upstreamCompletionTokens;
+                            }
                         } else if (hasToolCalls) {
                             // If we can't find the last chunk but we have tool calls, default to tool_use
                             finalStopReason = 'tool_use';
                         }
                     } catch (e) { }
 
-                    // Send message_delta with final output token count
+                    // Send message_delta with final token counts
                     sendEvent(controller, 'message_delta', {
                         type: 'message_delta',
                         delta: { stop_reason: finalStopReason, stop_sequence: null },
-                        usage: { output_tokens: outputTokens }
+                        usage: { input_tokens: inputTokens, output_tokens: outputTokens }
                     });
 
                     // Send message_stop
@@ -469,7 +485,7 @@ export function createStreamTransformer(
                 sendEvent(controller, 'message_delta', {
                     type: 'message_delta',
                     delta: { stop_reason: hasToolCalls ? "tool_use" : "end_turn", stop_sequence: null },
-                    usage: { output_tokens: outputTokens }
+                    usage: { input_tokens: inputTokens, output_tokens: outputTokens }
                 });
 
                 sendEvent(controller, 'message_stop', {

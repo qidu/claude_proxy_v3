@@ -90,6 +90,7 @@ export interface OpenAIRequest {
 export interface OpenAITokenCountingRequest {
     model: string;
     messages: OpenAIMessage[];
+    max_tokens?: number;
     tools?: Array<{
         type: "function";
         function: {

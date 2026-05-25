@@ -32,11 +32,13 @@ import {
   extractUserAgentPrefix,
   recordAgentStat,
   recordModelStat,
+  recordModelFailedRequest,
   recordModelUsage,
   recordRequestEndpoint,
   recordResponseStatusCodeFromUpstream,
   recordResponseStatusCodeToEndpoint,
   recordResponseUpstream,
+  createUsageTrackingTransformStream,
 } from './utils/dashboard-stats.js';
 import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
 
@@ -832,26 +834,36 @@ export default {
         }
 
         if (attemptModelId) {
-          recordModelStat(attemptModelId);
+          if (response.status >= 400) {
+            recordModelFailedRequest(attemptModelId);
+          } else {
+            recordModelStat(attemptModelId);
+          }
         }
         recordAgentStat(userAgentPrefix, requestToolNames);
 
         recordResponseUpstream(attemptTargetUrl);
         recordResponseStatusCodeToEndpoint(response.status);
 
-        if (!attemptForceStreaming) {
-          try {
-            const responseForStats = response.clone();
-            const contentType = responseForStats.headers.get('content-type') || '';
-            if (contentType.includes('application/json')) {
+        if (response.ok && attemptModelId) {
+          const contentType = response.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            try {
+              const responseForStats = response.clone();
               const payload = await responseForStats.json();
               const usage = extractUsageFromResponsePayload(payload);
-              if (attemptModelId && usage) {
+              if (usage) {
                 recordModelUsage(attemptModelId, usage);
               }
+            } catch {
+              // ignore stats extraction failures
             }
-          } catch {
-            // ignore stats extraction failures
+          } else if (contentType.includes('text/event-stream')) {
+            // For streaming responses, intercept the SSE stream to capture token usage
+            // from Claude SSE events (message_start.usage.input_tokens,
+            // message_delta.usage.output_tokens)
+            const usageStream = createUsageTrackingTransformStream(attemptModelId);
+            response = new Response(response.body!.pipeThrough(usageStream), response);
           }
         }
 

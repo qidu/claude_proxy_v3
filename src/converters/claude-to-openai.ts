@@ -286,10 +286,12 @@ export function convertClaudeTokenCountingToOpenAI(
         }
     }
 
-    // Build OpenAI token counting request
+    // Build OpenAI token counting request with max_tokens=1
+    // to minimize costs — we only need the usage data
     const openaiRequest: OpenAITokenCountingRequest = {
         model: modelName,
         messages: openaiMessages,
+        max_tokens: 1,
     };
 
     // Handle tools
