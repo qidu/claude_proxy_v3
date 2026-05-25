@@ -1361,6 +1361,12 @@ MIT
 
 ### Latest Changes (Current)
 
+**Composite Fallback to Default Upstream**: Composite aliases now support unresolved target models by falling back to the default upstream route (`getDefaultModelRoute`) while preserving the target model as `modelAlias`. This allows aliases such as `code-small` to route even when the target is not explicitly declared in `models.*`.
+
+**Messages Format Detection Fix (Claude blocks vs OpenAI passthrough)**: `/v1/messages` request detection now treats block-style Claude content (`content: [{type:"text"|"tool_use"|"tool_result"|"thinking", ...}]`) as Claude format, forcing Claude→OpenAI conversion for `openai-completions` upstreams. This prevents malformed passthrough payloads to `/v1/chat/completions`.
+
+**Dashboard Side-Nav Active Style**: The active side navigation item in `/dashboard` now has a visible border (light gray) for clearer section focus.
+
 **TOML Parser Regex Order Fix**: The `parseSimpleToml()` function in `config-loader.ts` checked `unquotedMatch` (regex `key = (.+)`) before `arrayMatch` (regex `key = [...]`). For model IDs containing only hyphens and underscores (e.g., `deepseek-v4-flash`), the greedy `unquotedMatch` captured the array value but silently discarded it since `models` sections are not in its handling scope. Models with dots (e.g., `gpt-5.4-mini`) were unaffected because `.` is outside the `[a-zA-Z0-9_-]` character class. Fixed by swapping the check order — `arrayMatch` is now evaluated before `unquotedMatch`, with a comment explaining the ordering constraint. This fixes composite model resolution (e.g., `code-small` → `deepseek-v4-flash`) where the candidate model key was previously never found in its category.
 
 **Thinking Block Validation Field Fix**: `ThinkingBlock` type defines field `thinking: string`, but `validateClaudeContentBlock()` in `validation.ts` was checking `block.text` for `type: "thinking"` blocks. This caused validation to throw `text is required for thinking blocks` when Claude CLI sent requests with thinking content blocks in assistant messages (the field is `thinking`, not `text`). Fixed by changing the check to `block.thinking`.

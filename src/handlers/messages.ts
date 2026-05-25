@@ -67,7 +67,25 @@ export async function handleMessagesRequest(
   // Check if request is already in OpenAI format
   // OpenAI format: { model, messages, stream, temperature, ... }
   // Claude format: { model, messages, max_tokens, thinking, system, ... }
-  const isOpenAIFormat = !requestBody.system && !requestBody.thinking && !requestBody.stop_sequences;
+  const hasClaudeContentBlocks = Array.isArray(requestBody.messages) && requestBody.messages.some((message) => {
+    if (!message || typeof message !== 'object') {
+      return false;
+    }
+    const content = (message as Record<string, unknown>).content;
+    if (!Array.isArray(content)) {
+      return false;
+    }
+
+    return content.some((part) => {
+      if (!part || typeof part !== 'object') {
+        return false;
+      }
+      const partType = (part as Record<string, unknown>).type;
+      return partType === 'text' || partType === 'tool_use' || partType === 'tool_result' || partType === 'thinking';
+    });
+  });
+
+  const isOpenAIFormat = !requestBody.system && !requestBody.thinking && !requestBody.stop_sequences && !hasClaudeContentBlocks;
 
   // Additional check: if request has tools, check if they're in Claude format
   // Claude tools format: { name: string, description?: string, input_schema: any }

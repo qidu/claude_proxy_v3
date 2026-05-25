@@ -118,7 +118,7 @@ export function handleDashboardPage(): Response {
       .side-nav { position: fixed; top: 50%; right: 0; transform: translateY(-50%); display: flex; flex-direction: column; gap: 2px; z-index: 1000; }
       .side-nav a { display: block; padding: 8px 14px; background: #e0e0e0; color: #333; text-decoration: none; font-size: 13px; border-radius: 6px 0 0 6px; transition: background 0.15s; opacity: 0.7; }
       .side-nav a:hover { opacity: 1; }
-      .side-nav a.active { background: white; opacity: 0.7; }
+      .side-nav a.active { background: white; opacity: 0.9; border: 1px solid #d3d3d3; border-right: none; }
       #configStatus {
         margin-left: 8px;
         font-size: 11px;

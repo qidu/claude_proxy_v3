@@ -126,11 +126,10 @@ function getOrderedCompositeTargets(
   const skippedTargets: string[] = [];
   const resolvedTargets = Object.entries(compositeConfig)
     .map(([targetModelName, targetConfig], index) => {
-      const route = resolveModelRouteFromConfig(targetModelName, proxyConfig);
-      if (!route) {
-        skippedTargets.push(targetModelName);
-        return undefined;
-      }
+      const route = resolveModelRouteFromConfig(targetModelName, proxyConfig) || {
+        ...getDefaultModelRoute(proxyConfig),
+        modelAlias: targetModelName,
+      };
 
       return {
         targetModelName,
