@@ -405,6 +405,8 @@ export default {
 
     const proxyConfig = await loadProxyConfig(env);
     const configuredModelIds = getConfiguredModelIds(proxyConfig);
+    let failedModelId: string | undefined;
+    let modelFailureRecorded = false;
 
     if (!hasLoggedUpstreamConfig && proxyConfig.upstream) {
       logger.debug(requestId, `Upstream config: \n\tbudget_to_effort_low=${proxyConfig.upstream.budget_to_effort_low}, \n\tbudget_to_effort_medium=${proxyConfig.upstream.budget_to_effort_medium}, \n\tbudget_to_effort_high=${proxyConfig.upstream.budget_to_effort_high}`);
@@ -504,6 +506,22 @@ export default {
       const userAgentPrefix = extractUserAgentPrefix(request.headers.get('user-agent'));
       let requestToolNames: string[] = ['none'];
 
+      // Collect tool names from request body for all JSON endpoints (without consuming request body).
+      if (request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'OPTIONS') {
+        try {
+          const contentType = request.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const bodyForToolStats = await request.clone().json() as Record<string, unknown>;
+            requestToolNames = extractToolNamesFromBody(bodyForToolStats);
+          }
+        } catch {
+          // ignore parse failures for stats collection
+        }
+      }
+
+      // Count Agent/Tool for all incoming requests (including failures later in routing/upstream).
+      recordAgentStat(userAgentPrefix, requestToolNames);
+
       type RouteAttemptHandlerType = 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' | 'responses-compact' | 'responses-input-tokens' | 'embeddings';
       type RouteAttempt = {
         request: Request;
@@ -530,7 +548,6 @@ export default {
         try {
           const bodyText = await request.text();
           const body = JSON.parse(bodyText);
-          requestToolNames = extractToolNamesFromBody(body as Record<string, unknown>);
           let modelName = body.model;
           
           // For generateContent endpoint, extract model from URL if not in body
@@ -856,8 +873,6 @@ export default {
             recordModelStat(attemptModelId);
           }
         }
-        recordAgentStat(userAgentPrefix, requestToolNames);
-
         recordResponseUpstream(attemptTargetUrl);
         recordResponseStatusCodeToEndpoint(response.status);
 
@@ -895,6 +910,11 @@ export default {
             return applyCorsHeaders(response, attempt.request, env);
           } catch (error) {
             lastError = error;
+            if (attempt.modelId) {
+              failedModelId = attempt.modelId;
+              recordModelFailedRequest(attempt.modelId);
+              modelFailureRecorded = true;
+            }
             if (i < compositeAttempts.length - 1) {
               logger.warn(requestId, `Composite attempt ${i + 1}/${compositeAttempts.length} failed for model=${attempt.modelId}: ${(error as Error).message}; retrying next candidate`);
             }
@@ -903,6 +923,7 @@ export default {
         throw (lastError as Error);
       }
 
+      failedModelId = modelId;
       const response = await runAttempt({
         request,
         targetUrl,
@@ -918,6 +939,9 @@ export default {
 
     } catch (error) {
       // Handle errors with Claude API format (without exposing sensitive info)
+      if (!modelFailureRecorded && failedModelId) {
+        recordModelFailedRequest(failedModelId);
+      }
       logger.error(requestId, `Error: ${(error as Error).message}`);
       return createErrorResponse(error as Error, requestId);
     }
