@@ -31,7 +31,7 @@ function convertFinishReasonToStopReason(finishReason: string | null): string | 
 /**
  * Extract token counts from various response formats
  * Handles standard OpenAI format and non-standard formats like QNAIGC
- * Uses local token counting as fallback when LOCAL_TOKEN_COUNTING is enabled
+ * Uses local token counting as fallback when LOCAL_TIKTOKEN is enabled
  */
 export async function extractTokenCounts(
     usage: Record<string, any> | undefined,

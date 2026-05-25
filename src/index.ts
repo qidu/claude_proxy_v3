@@ -42,6 +42,8 @@ import {
 } from './utils/dashboard-stats.js';
 import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
 
+let hasLoggedUpstreamConfig = false;
+
 /**
  * Generate a unique request ID
  */
@@ -53,6 +55,21 @@ function generateRequestId(): string {
  * Get CORS origin based on environment configuration
  */
 function getCorsOrigin(request: Request, env: Env): string {
+  const requestOrigin = request.headers.get('origin');
+  const isLocalhostOrigin = requestOrigin === 'http://localhost' ||
+    requestOrigin === 'https://localhost' ||
+    requestOrigin?.startsWith('http://localhost:') ||
+    requestOrigin?.startsWith('https://localhost:') ||
+    requestOrigin === 'http://127.0.0.1' ||
+    requestOrigin === 'https://127.0.0.1' ||
+    requestOrigin?.startsWith('http://127.0.0.1:') ||
+    requestOrigin?.startsWith('https://127.0.0.1:');
+
+  // Always allow localhost origins for local dashboard/API usage.
+  if (isLocalhostOrigin && requestOrigin) {
+    return requestOrigin;
+  }
+
   // Development mode: allow all origins
   if (env.DEV_MODE === 'true' || env.DEV_MODE === '1') {
     return '*';
@@ -62,11 +79,10 @@ function getCorsOrigin(request: Request, env: Env): string {
   const allowedOrigins = env.ALLOWED_ORIGINS;
   if (!allowedOrigins) {
     // No configuration - be restrictive in production
-    const origin = request.headers.get('origin');
-    if (origin) {
+    if (requestOrigin) {
       // In production without ALLOWED_ORIGINS, only allow the request's origin
       // This is a safe middle ground
-      return origin;
+      return requestOrigin;
     }
     return 'null'; // No origin header (e.g., curl requests)
   }
@@ -80,7 +96,6 @@ function getCorsOrigin(request: Request, env: Env): string {
   }
 
   // Check if request origin is in the allowed list
-  const requestOrigin = request.headers.get('origin');
   if (requestOrigin && allowedList.includes(requestOrigin)) {
     return requestOrigin;
   }
@@ -361,9 +376,9 @@ export default {
     // Load proxy config on first request
     const configPath = env.PROXY_CONFIG_PATH;
     const configUrl = env.PROXY_CONFIG_URL;
-    logger.debug(requestId, `Config path: ${configPath}, Config URL: ${configUrl}`);
 
-    if (path === '/reload') {
+    if (path === '/config-reload') {
+      logger.debug(requestId, `${path} Config path: ${configPath}, Config URL: ${configUrl}`);
       try {
         if (!env.PROXY_CONFIG_URL) {
           throw new Error('proxy config url is not set.');
@@ -391,8 +406,9 @@ export default {
     const proxyConfig = await loadProxyConfig(env);
     const configuredModelIds = getConfiguredModelIds(proxyConfig);
 
-    if (proxyConfig.upstream) {
-      logger.debug(requestId, `Upstream config: budget_to_effort_low=${proxyConfig.upstream.budget_to_effort_low}, \n\tbudget_to_effort_medium=${proxyConfig.upstream.budget_to_effort_medium}, \n\tbudget_to_effort_high=${proxyConfig.upstream.budget_to_effort_high}`);
+    if (!hasLoggedUpstreamConfig && proxyConfig.upstream) {
+      logger.debug(requestId, `Upstream config: \n\tbudget_to_effort_low=${proxyConfig.upstream.budget_to_effort_low}, \n\tbudget_to_effort_medium=${proxyConfig.upstream.budget_to_effort_medium}, \n\tbudget_to_effort_high=${proxyConfig.upstream.budget_to_effort_high}`);
+      hasLoggedUpstreamConfig = true;
     }
 
     try {

@@ -20,10 +20,10 @@ export interface Env {
     VERSION?: string;
 
     /**
-     * Enable local token counting (no API call).
+     * Enable local token counting via tiktoken (no API call).
      * Set to "true" or "1" to enable.
      */
-    LOCAL_TOKEN_COUNTING?: string;
+    LOCAL_TIKTOKEN?: string;
 
     /**
      * Comma-separated list of allowed CORS origins.

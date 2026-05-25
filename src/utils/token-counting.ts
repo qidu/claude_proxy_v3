@@ -6,7 +6,7 @@
  * OpenAI-compatible APIs that don't have a native count_tokens endpoint.
  *
  * Configuration:
- * - LOCAL_TOKEN_COUNTING: Set to "true" to enable local token counting
+ * - LOCAL_TIKTOKEN: Set to "true"/"1" to enable local token counting via tiktoken
  * - TIKTOKEN_MODEL: Model name for tiktoken encoding (default: o200k_base)
  *   Supported models: cl100k_base, p50k_base, p50k_edit, r50k_base, gpt2, o200k_base
  * - TIKTOKEN_BPE_URL: URL to fetch tiktoken BPE data from (default: OpenAI's CDN)
@@ -360,11 +360,10 @@ export function getLocalTokenCountingConfig(env?: Record<string, string>): {
   // Otherwise fall back to globalThis.process.env for local development
   const envVars = env || (typeof globalThis !== 'undefined' && (globalThis as any).process?.env ? (globalThis as any).process.env as Record<string, string> : {});
 
-  const enabled = envVars.LOCAL_TOKEN_COUNTING === 'true' ||
-    envVars.LOCAL_TOKEN_COUNTING === '1';
+  const enabled = envVars.LOCAL_TIKTOKEN === 'true' || envVars.LOCAL_TIKTOKEN === '1';
 
   // Tiktoken options
-  const useTiktoken = envVars.LOCAL_TIKTOKEN !== 'false' && envVars.LOCAL_TIKTOKEN !== '0';
+  const useTiktoken = enabled;
   const modelName = envVars.TIKTOKEN_MODEL || 'o200k_base';
   const bpeUrl = envVars.TIKTOKEN_BPE_URL;
 

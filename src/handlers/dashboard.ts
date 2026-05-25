@@ -607,6 +607,10 @@ export function handleDashboardPage(): Response {
         loadRequestStats();
       }, 5000);
 
+      setInterval(() => {
+        loadConfig();
+      }, 30000);
+
       // Scroll spy for side nav
       const sections = ['section-config', 'section-model', 'section-request', 'section-agent'];
       const navLinks = document.querySelectorAll('.side-nav a');

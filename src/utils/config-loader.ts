@@ -322,6 +322,24 @@ type ConsulKvEntry = {
 
 const CONSUL_CONFIG_PREFIX = 'model-proxy-v3';
 
+function normalizeUpstreamThresholdValue(key: string, rawValue: string | number): string | number {
+  if (key !== 'budget_to_effort_low' && key !== 'budget_to_effort_medium' && key !== 'budget_to_effort_high') {
+    return rawValue;
+  }
+
+  if (typeof rawValue === 'number') {
+    return rawValue;
+  }
+
+  const numericMatch = rawValue.match(/-?\d+/);
+  if (!numericMatch) {
+    return rawValue;
+  }
+
+  const parsed = Number(numericMatch[0]);
+  return Number.isNaN(parsed) ? rawValue : parsed;
+}
+
 function decodeBase64(value: string): string {
   if (typeof Buffer !== 'undefined') {
     return Buffer.from(value, 'base64').toString('utf-8');
@@ -764,7 +782,7 @@ export function parseSimpleToml(content: string): ProxyConfig {
       const cleanKey = key.trim().replace(/^"|"$/g, '');
 
       if (currentSection === 'upstream' && config.upstream) {
-        (config.upstream as any)[cleanKey] = value;
+        (config.upstream as any)[cleanKey] = normalizeUpstreamThresholdValue(cleanKey, value);
       } else if (currentSection === 'models' && currentCategory && config.models) {
         const category = config.models[currentCategory] as ModelCategoryConfig;
         if (cleanKey === 'upstream_mode' || cleanKey === 'base_url' || cleanKey === 'api_key') {
@@ -839,7 +857,7 @@ export function parseSimpleToml(content: string): ProxyConfig {
       }
 
       if (currentSection === 'upstream' && config.upstream) {
-        (config.upstream as any)[cleanKey] = cleanValue;
+        (config.upstream as any)[cleanKey] = normalizeUpstreamThresholdValue(cleanKey, cleanValue);
       } else if (currentSection === 'defaults' && config.defaults) {
         (config.defaults as any)[cleanKey] = cleanValue;
       }

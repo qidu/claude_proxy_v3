@@ -5,8 +5,8 @@
  *
  * Features:
  * - Supports both API-based and local token counting
- * - Local counting is enabled via LOCAL_TOKEN_COUNTING=true environment variable
- * - Falls back to API-based counting if local counting is disabled or fails
+ * - Local counting is enabled via LOCAL_TIKTOKEN=true environment variable
+ * - Falls back to byte-based counting for user text when API-based counting fails
  * - Uses tiktoken for accurate BPE token counting when LOCAL_TIKTOKEN=true
  */
 
@@ -143,6 +143,47 @@ async function handleLocalTokenCounting(
  *
  * Note: This may incur API costs and make an actual API call.
  */
+function extractUserTextBytesAsTokenEstimate(claudeRequest: ClaudeTokenCountingRequest): number {
+  let totalBytes = 0;
+
+  for (const message of claudeRequest.messages || []) {
+    if (message.role !== 'user') {
+      continue;
+    }
+
+    if (typeof message.content === 'string') {
+      totalBytes += new TextEncoder().encode(message.content).length;
+      continue;
+    }
+
+    if (Array.isArray(message.content)) {
+      for (const part of message.content) {
+        if (part?.type === 'text' && typeof part.text === 'string') {
+          totalBytes += new TextEncoder().encode(part.text).length;
+        }
+      }
+    }
+  }
+
+  return totalBytes;
+}
+
+function buildByteFallbackTokenCountResponse(requestId: string, inputTokens: number): Response {
+  const claudeResponse: ClaudeTokenCountingResponse = {
+    type: 'token_count',
+    input_tokens: inputTokens,
+  };
+
+  return new Response(JSON.stringify(claudeResponse), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-request-id': requestId,
+      'x-token-counting': 'bytes-fallback',
+    },
+  });
+}
+
 async function handleApiBasedTokenCounting(
   claudeRequest: ClaudeTokenCountingRequest,
   targetUrl: string,
@@ -181,10 +222,12 @@ async function handleApiBasedTokenCounting(
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
-  // Handle target API errors
+  // Handle target API errors (fallback to byte-based estimate for user text)
   if (!response.ok) {
     const bodyPreview = JSON.stringify(openaiRequest).substring(0, 1000);
-    handleTargetApiError(response, 'Token Counting API', { url: targetUrl, body: bodyPreview });
+    logger.warn(requestId, `API-based token counting failed (${response.status}), falling back to byte-based estimate`);
+    const byteEstimate = extractUserTextBytesAsTokenEstimate(claudeRequest);
+    return buildByteFallbackTokenCountResponse(requestId, byteEstimate);
   }
 
   // Parse target API response

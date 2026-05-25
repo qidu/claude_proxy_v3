@@ -70,7 +70,7 @@ npm install
 #### Basic Configuration (`wrangler.toml`):
 ```toml
 [vars]
-LOCAL_TOKEN_COUNTING = "false"
+LOCAL_TIKTOKEN = "false"
 PROXY_CONFIG_PATH = "./proxy_config.toml"
 ```
 
@@ -180,7 +180,7 @@ consul watch -type=key -key=model-proxy-v3/models/free/api_key
 After updating Consul KV, trigger a reload:
 
 ```bash
-curl http://localhost:8788/reload
+curl http://localhost:8788/config-reload
 ```
 
 On success, the proxy also dumps the reloaded config to `./config-dumps/` as a timestamped TOML file.
@@ -795,7 +795,7 @@ PROXY_CONFIG_PATH = "./proxy_config.toml"
 # PROXY_CONFIG_URL = "http://eureka-server/config/proxy_config.toml"
 
 # Optional settings
-LOCAL_TOKEN_COUNTING = "false"
+LOCAL_TIKTOKEN = "false"
 ALLOWED_HOSTS = "127.0.0.1,localhost,api.qnaigc.com"
 LOG_LEVEL = "debug"
 
@@ -1366,6 +1366,10 @@ MIT
 **Messages Format Detection Fix (Claude blocks vs OpenAI passthrough)**: `/v1/messages` request detection now treats block-style Claude content (`content: [{type:"text"|"tool_use"|"tool_result"|"thinking", ...}]`) as Claude format, forcing Claude→OpenAI conversion for `openai-completions` upstreams. This prevents malformed passthrough payloads to `/v1/chat/completions`.
 
 **Dashboard Side-Nav Active Style**: The active side navigation item in `/dashboard` now has a visible border (light gray) for clearer section focus.
+
+**Config Reload Endpoint Rename**: The config reload endpoint is now `/config-reload` (previously `/reload`).
+
+**Token Counting Toggle Simplification**: Removed `LOCAL_TOKEN_COUNTING`. Local token counting is now controlled only by `LOCAL_TIKTOKEN` (`true`/`1` enables tiktoken-based local counting). If API-based token counting fails, the proxy falls back to byte-based counting for user text.
 
 **TOML Parser Regex Order Fix**: The `parseSimpleToml()` function in `config-loader.ts` checked `unquotedMatch` (regex `key = (.+)`) before `arrayMatch` (regex `key = [...]`). For model IDs containing only hyphens and underscores (e.g., `deepseek-v4-flash`), the greedy `unquotedMatch` captured the array value but silently discarded it since `models` sections are not in its handling scope. Models with dots (e.g., `gpt-5.4-mini`) were unaffected because `.` is outside the `[a-zA-Z0-9_-]` character class. Fixed by swapping the check order — `arrayMatch` is now evaluated before `unquotedMatch`, with a comment explaining the ordering constraint. This fixes composite model resolution (e.g., `code-small` → `deepseek-v4-flash`) where the candidate model key was previously never found in its category.
 

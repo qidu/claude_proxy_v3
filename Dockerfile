@@ -41,7 +41,6 @@ COPY --from=git /tmp/proxy_version /tmp/proxy_version
 COPY wrangler.toml ./
 
 ENV VERSION=$(cat /tmp/proxy_version | tr -d '\n')
-ENV LOCAL_TOKEN_COUNTING=true      # Enable local counting
 ENV LOCAL_TIKTOKEN=true            # Use tiktoken (accurate)
 ENV TIKTOKEN_MODEL="o200k_base"    # Encoding model (default: cl100k_base)
 
