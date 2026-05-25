@@ -21,6 +21,7 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
   - `GET /dashboard/api/config` - Read sanitized editable config (`models.*`, `composite`; hides `api_key`)
   - `PUT /dashboard/api/config` - Save dashboard config edits (file mode only; read-only when `PROXY_CONFIG_URL` is set)
   - `GET /dashboard/api/stats/models` - Model request + token stats
+  - Dashboard "Export CSV" button reads table data from the DOM and triggers a download; it does **not** change the in-memory stats data.
   - `GET /dashboard/api/stats/agents` - User-agent prefix + tool stats
   - `GET /dashboard/api/stats/requests` - Request/response stats by endpoint, upstream, and status code
 

@@ -114,6 +114,11 @@ export function handleDashboardPage(): Response {
       }
       button:hover { background: #f3f6fb; }
       button:disabled { opacity: 0.6; cursor: default; }
+      /* Floating side nav */
+      .side-nav { position: fixed; top: 50%; right: 0; transform: translateY(-50%); display: flex; flex-direction: column; gap: 2px; z-index: 1000; }
+      .side-nav a { display: block; padding: 8px 14px; background: #e0e0e0; color: #333; text-decoration: none; font-size: 13px; border-radius: 6px 0 0 6px; transition: background 0.15s; opacity: 0.7; }
+      .side-nav a:hover { opacity: 1; }
+      .side-nav a.active { background: white; opacity: 0.7; }
       #configStatus {
         margin-left: 8px;
         font-size: 11px;
@@ -131,7 +136,14 @@ export function handleDashboardPage(): Response {
   <body>
     <h1>Proxy Dashboard</h1>
 
-    <section class="card">
+    <div class="side-nav" id="sideNav">
+      <a href="#section-config">Config</a>
+      <a href="#section-model">Model</a>
+      <a href="#section-request">Request</a>
+      <a href="#section-agent">Agent</a>
+    </div>
+
+    <section class="card" id="section-config">
       <h2>Config Module</h2>
       <p>Edit <code>models.*</code> and <code>composite</code>. <code>api_key</code> fields are hidden and not editable.</p>
       <div id="configForm"></div>
@@ -143,15 +155,15 @@ export function handleDashboardPage(): Response {
       </div>
     </section>
 
-    <section class="card">
-      <h2>Model Statistic</h2>
+    <section class="card" id="section-model">
+      <h2>Model Statistic <button id="exportModelStatsCsv" class="mini-btn" style="font-size:12px;">Export CSV</button></h2>
       <table id="modelStats">
         <thead><tr><th>Model</th><th class="num">Requests</th><th class="num">Failed</th><th class="num">Input Tokens</th><th class="num">Cached Tokens</th><th class="num">Cache Written Tokens</th><th class="num">Output Tokens</th><th class="num">Total Tokens</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
 
-    <section class="card">
+    <section class="card" id="section-request">
       <h2>Request Statistic</h2>
 
       <div class="request-submodule">
@@ -187,7 +199,7 @@ export function handleDashboardPage(): Response {
       </div>
     </section>
 
-    <section class="card">
+    <section class="card" id="section-agent">
       <h2>Agent Statistic <button id="toggleAgentStats" class="mini-btn" style="font-size:12px;">Show all</button></h2>
       <table id="agentStats">
         <thead><tr><th>Agent / Tool</th><th class="num">Requests</th></tr></thead>
@@ -537,6 +549,28 @@ export function handleDashboardPage(): Response {
         loadAgentStats();
       });
 
+      document.getElementById('exportModelStatsCsv').addEventListener('click', () => {
+        const rows = [
+          ['Model', 'Requests', 'Failed', 'Input Tokens', 'Cached Tokens', 'Cache Written Tokens', 'Output Tokens', 'Total Tokens']
+        ];
+        document.querySelectorAll('#modelStats tbody tr').forEach((tr) => {
+          const cols = [];
+          tr.querySelectorAll('td').forEach((td) => cols.push(td.textContent.trim()));
+          if (cols.length > 0) rows.push(cols);
+        });
+        const bom = '\\uFEFF';
+        const csv = rows.map((r) => r.map((c) => '"' + c.replace(/"/g, '""') + '"').join(',')).join('\\n');
+        const blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const now = new Date();
+        const ts = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0') + '_' + String(now.getHours()).padStart(2, '0') + '-' + String(now.getMinutes()).padStart(2, '0') + '-' + String(now.getSeconds()).padStart(2, '0');
+        a.download = 'model_stats_' + ts + '.csv';
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+
       async function loadRequestStats() {
         const res = await fetch('/dashboard/api/stats/requests');
         const json = await res.json();
@@ -572,6 +606,20 @@ export function handleDashboardPage(): Response {
         loadAgentStats();
         loadRequestStats();
       }, 5000);
+
+      // Scroll spy for side nav
+      const sections = ['section-config', 'section-model', 'section-request', 'section-agent'];
+      const navLinks = document.querySelectorAll('.side-nav a');
+      const observer = new IntersectionObserver((entries) => {
+        let activeId = '';
+        for (const entry of entries) {
+          if (entry.isIntersecting) activeId = entry.target.id;
+        }
+        navLinks.forEach((a) => {
+          a.classList.toggle('active', a.getAttribute('href') === '#' + activeId);
+        });
+      }, { rootMargin: '-20% 0px -70% 0px' });
+      sections.forEach((id) => observer.observe(document.getElementById(id)));
     </script>
   </body>
 </html>`;
