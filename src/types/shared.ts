@@ -145,6 +145,12 @@ export interface Env {
      * Set to "true" or "1" to enable.
      */
     CONVERSATION?: string;
+
+    /**
+     * When "true", /v1/chat/completions is forwarded as-is to the default upstream
+     * without format conversion. Set to "true" or "1" to enable.
+     */
+    DEV_PASS_THROUGH?: string;
 }
 
 

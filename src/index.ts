@@ -17,6 +17,7 @@ import { handleGeminiRequest, handleGeminiRequestForMessages } from './handlers/
 import { handleOpenAIRequest } from './handlers/openai.js';
 import { handleClaudeRequest } from './handlers/claude.js';
 import { handleEmbeddingsRequest } from './handlers/embeddings.js';
+import { handleChatCompletionsPassthrough } from './handlers/chat-completions.js';
 import {
   handleDashboardAgentStats,
   handleDashboardGetConfig,
@@ -164,7 +165,7 @@ function isDynamicRoute(path: string): boolean {
 function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
   targetUrl: string;
   targetEndpoint: string;
-  handlerType: 'messages' | 'interactions' | 'generateContent' | 'models' | 'token-counting' | 'responses' | 'responses-compact' | 'responses-input-tokens' | 'embeddings';
+  handlerType: 'messages' | 'interactions' | 'generateContent' | 'models' | 'token-counting' | 'responses' | 'responses-compact' | 'responses-input-tokens' | 'embeddings' | 'chat-completions';
   upstreamMode?: string;
   modelId?: string;
   forceStreaming?: boolean;
@@ -266,8 +267,16 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     }
   }
 
-  // 4. Block /v1/chat/completions - DO NOT process
+  // 4. /v1/chat/completions — passthrough (when DEV_PASS_THROUGH is enabled)
   if (path === '/v1/chat/completions' || path.startsWith('/v1/chat/completions?')) {
+    if (env.DEV_PASS_THROUGH === 'true' || env.DEV_PASS_THROUGH === '1') {
+      return {
+        targetUrl: `${defaultBaseUrl}/v1/chat/completions`,
+        targetEndpoint: 'v1/chat/completions',
+        handlerType: 'chat-completions' as const,
+        upstreamMode: 'openai-completions',
+      };
+    }
     throw new Error('Direct access to /v1/chat/completions is not allowed. Use /v1/messages instead.');
   }
 
@@ -501,7 +510,7 @@ export default {
       }
 
       let targetUrl: string = '';
-      let handlerType: 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' | 'responses-compact' | 'responses-input-tokens' | 'embeddings' = 'messages';
+      let handlerType: 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' | 'responses-compact' | 'responses-input-tokens' | 'embeddings' | 'chat-completions' = 'messages';
       let modelId: string | undefined;
       let upstreamMode: string | undefined;
       let forceStreaming: boolean = false;
@@ -525,7 +534,7 @@ export default {
       // Count Agent/Tool for all incoming requests (including failures later in routing/upstream).
       recordAgentStat(userAgentPrefix, requestToolNames);
 
-      type RouteAttemptHandlerType = 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' | 'responses-compact' | 'responses-input-tokens' | 'embeddings';
+      type RouteAttemptHandlerType = 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' | 'responses-compact' | 'responses-input-tokens' | 'embeddings' | 'chat-completions';
       type RouteAttempt = {
         request: Request;
         targetUrl: string;
@@ -547,6 +556,8 @@ export default {
           path === '/v1/responses' || path.startsWith('/v1/responses?') ||
           path === '/v1/responses/compact' || path.startsWith('/v1/responses/compact?') ||
           path === '/v1/responses/input_tokens' || path.startsWith('/v1/responses/input_tokens?') ||
+          ((path === '/v1/chat/completions' || path.startsWith('/v1/chat/completions?')) &&
+           (env.DEV_PASS_THROUGH === 'true' || env.DEV_PASS_THROUGH === '1')) ||
           ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent')))) {
         try {
           const bodyText = await request.text();
@@ -560,8 +571,31 @@ export default {
               modelName = decodeURIComponent(modelMatch[2]);
             }
           }
-          
-          if (modelName && proxyConfig.models) {
+
+          // Passthrough for /v1/chat/completions: use fixed routing but extract model name for stats.
+          // When passthrough is NOT enabled, skip routing vars entirely — the outer "else" block
+          // (fixed routing) calls parseFixedRoute() which throws the block error.
+          if (path === '/v1/chat/completions' || path.startsWith('/v1/chat/completions?')) {
+            if (env.DEV_PASS_THROUGH === 'true' || env.DEV_PASS_THROUGH === '1') {
+              const fixedRoute = parseFixedRoute(path, proxyConfig, env);
+              targetUrl = fixedRoute.targetUrl;
+              handlerType = fixedRoute.handlerType;
+              upstreamMode = fixedRoute.upstreamMode;
+              modelId = modelName; // Use extracted model name for dashboard stats
+              forceStreaming = fixedRoute.forceStreaming || false;
+
+              // Recreate request with original body (forwarded as-is, no conversion)
+              request = new Request(request.url, {
+                method: request.method,
+                headers: request.headers,
+                body: bodyText,
+              });
+
+              // Transform auth headers for openai-completions upstream
+              modelAuthHeaders = transformAuthHeadersForUpstream(request, upstreamMode || 'openai-completions', path, requestId, env as Record<string, unknown>);
+            }
+            // passthrough disabled: don't set routing vars — falls through to outer fixed-routing block
+          } else if (modelName && proxyConfig.models) {
             const compositeCandidates = getCompositeRouteCandidates(modelName, proxyConfig);
             const routeCandidates: Array<{ modelName: string; route: ModelRouteConfig }> = compositeCandidates.length > 0
               ? compositeCandidates
@@ -859,6 +893,13 @@ export default {
 
           case 'responses-compact':
             response = await handleResponsesCompactRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptUpstreamMode);
+            break;
+
+          case 'chat-completions':
+            response = await handleChatCompletionsPassthrough(
+              attemptRequest, attemptTargetUrl, attemptAuthHeaders,
+              requestId, logger, env, attemptModelId
+            );
             break;
 
           case 'embeddings':

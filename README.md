@@ -806,6 +806,11 @@ LOG_LEVEL = "debug"
 # Stringify method for JSON serialization in format converters
 # Options: "json" (default, built-in JSON.stringify), "safe-stable" (safe-stable-stringify), "fast-safe" (fast-safe-stringify)
 # JSON_STRINGIFY_METHOD = "json"
+
+# Passthrough mode for /v1/chat/completions (OpenAI-compatible clients)
+# When true, /v1/chat/completions forwards requests as-is to the default upstream
+# without format conversion. Dashboard stats are still recorded.
+DEV_PASS_THROUGH = "false" # default value is `false`
 ```
 
 ### Performance Benchmark

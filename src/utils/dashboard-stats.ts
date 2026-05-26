@@ -267,6 +267,7 @@ export function getModelStatsDesc(): ModelStatsEntry[] {
 export function createUsageTrackingTransformStream(model: string): TransformStream<Uint8Array, Uint8Array> {
   let inputTokens = 0;
   let outputTokens = 0;
+  let totalTokens = 0;
   let foundUsage = false;
   let remainder = '';
   const decoder = new TextDecoder();
@@ -306,6 +307,29 @@ export function createUsageTrackingTransformStream(model: string): TransformStre
           } catch {
             // Not JSON data, skip
           }
+        } else if (dataLine && !eventLine) {
+          // OpenAI-style SSE (no event: line) — check data for usage
+          try {
+            const dataText = dataLine[1].trim();
+            if (dataText === '[DONE]') {
+              continue;
+            }
+            const data = JSON.parse(dataText);
+            if (data.usage) {
+              const usage = data.usage as Record<string, unknown>;
+              const pt = toSafeNumber(usage.prompt_tokens);
+              const ct = toSafeNumber(usage.completion_tokens);
+              const tt = toSafeNumber(usage.total_tokens);
+              if (pt > 0 || ct > 0) {
+                inputTokens = pt;
+                outputTokens = ct;
+                totalTokens = tt;
+                foundUsage = true;
+              }
+            }
+          } catch {
+            // Not JSON data, skip
+          }
         }
       }
 
@@ -316,7 +340,7 @@ export function createUsageTrackingTransformStream(model: string): TransformStre
         recordModelUsage(model, {
           input_tokens: inputTokens > 0 ? inputTokens : undefined,
           output_tokens: outputTokens > 0 ? outputTokens : undefined,
-          total_tokens: (inputTokens > 0 || outputTokens > 0) ? (inputTokens + outputTokens) : undefined,
+          total_tokens: totalTokens > 0 ? totalTokens : (inputTokens > 0 || outputTokens > 0 ? inputTokens + outputTokens : undefined),
         });
       }
     },

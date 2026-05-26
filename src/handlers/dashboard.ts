@@ -101,7 +101,7 @@ export function handleDashboardPage(): Response {
       .mini-btn { padding: 4px 8px; font-size: 12px; }
       .danger { background: #fff1f1; border: 1px solid #ffcccc; }
       .section-actions { margin-top: 8px; }
-      .config-divider { margin: 14px 0; border-top: 1px solid #ddd; }
+      .config-divider { margin: 14px 0; border-top: 3px solid #fff; }
       .config-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
       .request-submodule { margin-top: 18px; }
       .primary-label { font-size: 11px; color: #444; }
@@ -307,7 +307,7 @@ export function handleDashboardPage(): Response {
 
         const compositeGlobalActions = '<div class="section-actions"><button type="button" class="mini-btn" data-action="add-composite-alias"' + (isReadOnly ? ' disabled' : '') + '>Add composite alias</button></div>';
 
-        configForm.innerHTML = modelBlocks + compositeBlocks + compositeGlobalActions;
+        configForm.innerHTML = modelBlocks + '<div class="config-divider"></div>' + compositeBlocks + compositeGlobalActions;
       }
 
       function collectConfigPayload() {
