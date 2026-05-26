@@ -35,6 +35,7 @@ import {
   recordModelFailedRequest,
   recordModelUsage,
   recordRequestEndpoint,
+  recordRequestTiming,
   recordResponseStatusCodeFromUpstream,
   recordResponseStatusCodeToEndpoint,
   recordResponseUpstream,
@@ -407,6 +408,7 @@ export default {
     const configuredModelIds = getConfiguredModelIds(proxyConfig);
     let failedModelId: string | undefined;
     let modelFailureRecorded = false;
+    let requestStartTime = 0;
 
     if (!hasLoggedUpstreamConfig && proxyConfig.upstream) {
       logger.debug(requestId, `Upstream config: \n\tbudget_to_effort_low=${proxyConfig.upstream.budget_to_effort_low}, \n\tbudget_to_effort_medium=${proxyConfig.upstream.budget_to_effort_medium}, \n\tbudget_to_effort_high=${proxyConfig.upstream.budget_to_effort_high}`);
@@ -485,6 +487,7 @@ export default {
       }
 
       recordRequestEndpoint(path);
+      requestStartTime = Date.now();
 
       // Request body size limit (10MB)
       const contentLength = request.headers.get('content-length');
@@ -907,6 +910,7 @@ export default {
           const attempt = compositeAttempts[i];
           try {
             const response = await runAttempt(attempt);
+            recordRequestTiming(path, Date.now() - requestStartTime);
             return applyCorsHeaders(response, attempt.request, env);
           } catch (error) {
             lastError = error;
@@ -935,6 +939,7 @@ export default {
       });
 
       // Apply CORS headers
+      recordRequestTiming(path, Date.now() - requestStartTime);
       return applyCorsHeaders(response, request, env);
 
     } catch (error) {
@@ -943,6 +948,7 @@ export default {
         recordModelFailedRequest(failedModelId);
       }
       logger.error(requestId, `Error: ${(error as Error).message}`);
+      recordRequestTiming(path, Date.now() - requestStartTime);
       return createErrorResponse(error as Error, requestId);
     }
   },

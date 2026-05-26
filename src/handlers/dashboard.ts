@@ -11,6 +11,7 @@ import {
   getAgentStatsDesc,
   getModelStatsDesc,
   getRequestEndpointStatsDesc,
+  getRequestEndpointTimingStatsDesc,
   getRequestStatusCodeFromUpstreamStatsDesc,
   getRequestStatusCodeToEndpointStatsDesc,
   getRequestUpstreamStatsDesc,
@@ -183,17 +184,23 @@ export function handleDashboardPage(): Response {
       </div>
 
       <div class="request-submodule">
-        <h3>Response (from upstreams)</h3>
         <table id="requestStatusCodeFromUpstreamStats">
-          <thead><tr><th>Status Code</th><th class="num">Responses</th></tr></thead>
+          <thead><tr><th>Status Code of Upstreams</th><th class="num">Responses</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
 
       <div class="request-submodule">
-        <h3>Response (to endpoints)</h3>
         <table id="requestStatusCodeToEndpointStats">
-          <thead><tr><th>Status Code</th><th class="num">Responses</th></tr></thead>
+          <thead><tr><th>Status Code of Endpoints</th><th class="num">Responses</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="request-submodule">
+        <h3>Timing</h3>
+        <table id="requestEndpointTimingStats">
+          <thead><tr><th>Endpoint</th><th class="num">Min (ms)</th><th class="num">Avg (ms)</th><th class="num">Max (ms)</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -590,6 +597,10 @@ export function handleDashboardPage(): Response {
         renderRows('#requestStatusCodeToEndpointStats', json.status_codes_to_endpoints || [], (row) =>
           '<tr><td>' + row.status_code + '</td><td class="num">' + row.responses + '</td></tr>'
         );
+
+        renderRows('#requestEndpointTimingStats', json.endpoint_timings || [], (row) =>
+          '<tr><td>' + row.endpoint + '</td><td class="num">' + row.min_time_ms + '</td><td class="num">' + row.avg_time_ms + '</td><td class="num">' + row.max_time_ms + '</td></tr>'
+        );
       }
 
       document.getElementById('reloadConfig').addEventListener('click', loadConfig);
@@ -674,5 +685,6 @@ export function handleDashboardRequestStats(): Response {
     upstreams: getRequestUpstreamStatsDesc(),
     status_codes_from_upstreams: getRequestStatusCodeFromUpstreamStatsDesc(),
     status_codes_to_endpoints: getRequestStatusCodeToEndpointStatsDesc(),
+    endpoint_timings: getRequestEndpointTimingStatsDesc(),
   });
 }

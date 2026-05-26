@@ -37,12 +37,21 @@ type RequestStatusCodeStatsEntry = {
   responses: number;
 };
 
+type RequestEndpointTimingStatsEntry = {
+  endpoint: string;
+  max_time_ms: number;
+  min_time_ms: number;
+  total_time_ms: number;
+  count: number;
+};
+
 const modelStats = new Map<string, ModelStatsEntry>();
 const agentStats = new Map<string, AgentStatsEntry>();
 const requestEndpointStats = new Map<string, RequestEndpointStatsEntry>();
 const requestUpstreamStats = new Map<string, RequestUpstreamStatsEntry>();
 const requestStatusCodeToEndpointStats = new Map<number, RequestStatusCodeStatsEntry>();
 const requestStatusCodeFromUpstreamStats = new Map<number, RequestStatusCodeStatsEntry>();
+const requestEndpointTimingStats = new Map<string, RequestEndpointTimingStatsEntry>();
 
 function toSafeNumber(value: unknown): number {
   if (typeof value !== 'number' || Number.isNaN(value)) {
@@ -322,6 +331,35 @@ export function recordRequestEndpoint(endpoint: string): void {
   const current = requestEndpointStats.get(endpoint) || { endpoint, requests: 0 };
   current.requests += 1;
   requestEndpointStats.set(endpoint, current);
+}
+
+export function recordRequestTiming(endpoint: string, elapsedMs: number): void {
+  if (!endpoint || typeof elapsedMs !== 'number' || elapsedMs < 0) {
+    return;
+  }
+
+  const current: RequestEndpointTimingStatsEntry = requestEndpointTimingStats.get(endpoint) || { endpoint, max_time_ms: 0, min_time_ms: Infinity, total_time_ms: 0, count: 0 };
+  if (elapsedMs > current.max_time_ms) {
+    current.max_time_ms = elapsedMs;
+  }
+  if (elapsedMs < current.min_time_ms) {
+    current.min_time_ms = elapsedMs;
+  }
+  current.total_time_ms += elapsedMs;
+  current.count += 1;
+  requestEndpointTimingStats.set(endpoint, current);
+}
+
+export function getRequestEndpointTimingStatsDesc(): (RequestEndpointTimingStatsEntry & { avg_time_ms: number })[] {
+  return [...requestEndpointTimingStats.values()].sort((a, b) => {
+    if (b.max_time_ms !== a.max_time_ms) {
+      return b.max_time_ms - a.max_time_ms;
+    }
+    return a.endpoint.localeCompare(b.endpoint);
+  }).map((entry) => ({
+    ...entry,
+    avg_time_ms: entry.count > 0 ? Math.round(entry.total_time_ms / entry.count) : 0,
+  }));
 }
 
 function normalizeUpstreamBaseUrl(urlLike: string): string {
