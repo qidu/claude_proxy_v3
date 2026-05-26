@@ -5,6 +5,7 @@
 
 import { ClaudeMessagesRequest, ClaudeContentBlock, ClaudeTool, ClaudeMessage, ClaudeTextBlock, ClaudeImageBlock, ClaudeToolUseBlock, ClaudeToolResultBlock, ThinkingBlock } from '../types/claude.js';
 import { GeminiInteractionRequest, GeminiTool, GeminiContent, GeminiGenerationConfig, GeminiInput } from '../types/gemini.js';
+import { stringify } from '../utils/stringify.js';
 
 /**
  * Convert Claude request to Gemini generateContent format
@@ -217,7 +218,7 @@ function convertClaudeContentToGemini(
                 // Handle unknown block types
                 geminiContent.push({
                     type: 'text',
-                    text: JSON.stringify(block),
+                    text: stringify(block),
                 });
         }
     }

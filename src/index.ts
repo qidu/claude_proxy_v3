@@ -572,7 +572,7 @@ export default {
             const clientPort = request.headers.get('x-client-port') || 'unknown';
 
             compositeAttempts = routeCandidates.map(({ modelName: candidateName, route }) => {
-              logger.info(requestId, `Model: ${modelName}, Candidate: ${candidateName}, Mode: ${route.upstreamMode}, TargetURL: ${route.targetUrl}, Endpoint: ${url.pathname}, Client: ${clientAddress}:${clientPort}`);
+              logger.info(requestId, `${url.pathname} for ${modelName} (${candidateName}) to ${route.targetUrl} (${route.upstreamMode}) from ${clientAddress}:${clientPort}`);
 
               const upstreamModelName = route.modelAlias || candidateName;
               const forwardedBodyText = JSON.stringify({

@@ -802,7 +802,30 @@ LOG_LEVEL = "debug"
 # Default max_tokens for requests that don't include it (anthropic-messages mode)
 # Some upstreams (e.g. DeepSeek) require max_tokens in every request
 # DEFAULT_MAX_TOKENS = "8192"
+
+# Stringify method for JSON serialization in format converters
+# Options: "json" (default, built-in JSON.stringify), "safe-stable" (safe-stable-stringify), "fast-safe" (fast-safe-stringify)
+# JSON_STRINGIFY_METHOD = "json"
 ```
+
+### Performance Benchmark
+
+Run `npx tsx tests/test_performance_benchmark.ts` to get current results.
+
+Results on Node.js v24.6.0 (linux x64):
+
+| Module | Time |
+|--------|------|
+| **Stringify — JSON.stringify** (built-in) | **0.17 µs/op** baseline |
+| **Stringify — fast-safe-stringify** | 0.31 µs/op (1.8×) |
+| **Stringify — safe-stable-stringify** | 0.57 µs/op (3.4×) |
+| **claude→openai** converter | 0.11–0.63 µs/op |
+| **openai→claude** converter | 0.67–1.64 µs/op |
+| **Token counting** | 0.13–0.21 µs/op |
+| **Round-trip** (both converters) | 0.53 µs/op (~1.9M ops/sec) |
+| **Dashboard stats** per-request overhead | ~0.69 µs/1M ops |
+
+> Built-in `JSON.stringify` is fastest for normal JSON. Use `fast-safe-stringify` if your payloads may contain circular references. The proxy's own processing overhead is negligible — real latency comes from upstream LLM inference and network I/O.
 
 ### Model Configuration
 

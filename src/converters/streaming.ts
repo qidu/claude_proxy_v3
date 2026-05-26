@@ -4,6 +4,7 @@
 
 import { countClaudeRequestTokens, countTokensWithTiktoken, getTiktokenTokenizer, TokenCountingOptions } from '../utils/token-counting.js';
 import { TokenCountingConfig } from './openai-to-claude.js';
+import { stringify } from '../utils/stringify.js';
 
 export function createStreamTransformer(
     model: string,
@@ -93,7 +94,7 @@ export function createStreamTransformer(
     };
 
     const sendEvent = (controller: TransformStreamDefaultController, event: string, data: object) => {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${stringify(data)}\n\n`));
     };
 
     // Process thinking extraction from text content

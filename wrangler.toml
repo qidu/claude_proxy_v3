@@ -8,6 +8,8 @@ VERSION = "v1.7.1@feature/composite"  # Set to commit id, tag, or branch name
 LOCAL_TIKTOKEN=true            # Use tiktoken (accurate)
 TIKTOKEN_MODEL="o200k_base"    # Encoding model
 
+JSON_STRINGIFY_METHOD="json"   # "json" (JSON.stringify), "safe-stable" (safe-stable-stringify), "fast-safe" (fast-safe-stringify)
+
 MODELS_CACHE_TTL=300           # cache models list from upstream
 UPSTREAM_BODY_TIMEOUT_MS=600000    # upstream body fetch timeout in ms
 

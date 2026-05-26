@@ -4,6 +4,7 @@
  */
 
 import { GeminiSSEEvent, GeminiContent } from '../types/gemini.js';
+import { stringify } from '../utils/stringify.js';
 
 /**
  * State for streaming conversion
@@ -124,7 +125,7 @@ function handleGeminiEvent(
                         usage: { input_tokens: 0, output_tokens: 0 },
                     },
                 };
-                controller.enqueue(`event: message_start\ndata: ${JSON.stringify(messageStart)}\n\n`);
+                controller.enqueue(`event: message_start\ndata: ${stringify(messageStart)}\n\n`);
                 state.hasStarted = true;
             }
             break;
@@ -138,7 +139,7 @@ function handleGeminiEvent(
                     index: event.index || 0,
                     content_block: { type: mapGeminiContentTypeToClaude(event.content.type) },
                 };
-                controller.enqueue(`event: content_block_start\ndata: ${JSON.stringify(contentStart)}\n\n`);
+                controller.enqueue(`event: content_block_start\ndata: ${stringify(contentStart)}\n\n`);
             }
             break;
 
@@ -153,7 +154,7 @@ function handleGeminiEvent(
                         index: event.index || 0,
                         delta: { type: 'text_delta', text: delta.text },
                     };
-                    controller.enqueue(`event: content_block_delta\ndata: ${JSON.stringify(deltaEvent)}\n\n`);
+                    controller.enqueue(`event: content_block_delta\ndata: ${stringify(deltaEvent)}\n\n`);
                 } else if (delta.type === 'function_call') {
                     const toolUseEvent = {
                         type: 'content_block_delta',
@@ -165,7 +166,7 @@ function handleGeminiEvent(
                             input: delta.arguments || {},
                         },
                     };
-                    controller.enqueue(`event: content_block_delta\ndata: ${JSON.stringify(toolUseEvent)}\n\n`);
+                    controller.enqueue(`event: content_block_delta\ndata: ${stringify(toolUseEvent)}\n\n`);
                 } else if (delta.type === 'function_result') {
                     const toolResultEvent = {
                         type: 'content_block_delta',
@@ -177,7 +178,7 @@ function handleGeminiEvent(
                             is_error: delta.is_error,
                         },
                     };
-                    controller.enqueue(`event: content_block_delta\ndata: ${JSON.stringify(toolResultEvent)}\n\n`);
+                    controller.enqueue(`event: content_block_delta\ndata: ${stringify(toolResultEvent)}\n\n`);
                 } else {
                     // Generic delta
                     const genericEvent = {
@@ -185,7 +186,7 @@ function handleGeminiEvent(
                         index: event.index || 0,
                         delta,
                     };
-                    controller.enqueue(`event: content_block_delta\ndata: ${JSON.stringify(genericEvent)}\n\n`);
+                    controller.enqueue(`event: content_block_delta\ndata: ${stringify(genericEvent)}\n\n`);
                 }
             }
             break;
@@ -203,7 +204,7 @@ function handleGeminiEvent(
                 type: 'message_delta',
                 delta: { stop_reason: 'end_turn' },
             };
-            controller.enqueue(`event: message_delta\ndata: ${JSON.stringify(messageDelta)}\n\n`);
+            controller.enqueue(`event: message_delta\ndata: ${stringify(messageDelta)}\n\n`);
             // Send message stop
             controller.enqueue(`event: message_stop\ndata: {"type":"message_stop","index":0}\n\n`);
             break;
@@ -215,7 +216,7 @@ function handleGeminiEvent(
                     type: 'message_delta',
                     delta: { stop_reason: 'max_tokens' },
                 };
-                controller.enqueue(`event: message_delta\ndata: ${JSON.stringify(errorDelta)}\n\n`);
+                controller.enqueue(`event: message_delta\ndata: ${stringify(errorDelta)}\n\n`);
             }
             break;
 
@@ -228,7 +229,7 @@ function handleGeminiEvent(
                     message: event.error?.message || 'Unknown error occurred',
                 },
             };
-            controller.enqueue(`event: error\ndata: ${JSON.stringify(errorEvent)}\n\n`);
+            controller.enqueue(`event: error\ndata: ${stringify(errorEvent)}\n\n`);
             break;
     }
 }
@@ -249,7 +250,7 @@ function processContentDelta(
         index: state.contentIndex,
         delta: { type: 'text_delta', text },
     };
-    controller.enqueue(`event: content_block_delta\ndata: ${JSON.stringify(deltaEvent)}\n\n`);
+    controller.enqueue(`event: content_block_delta\ndata: ${stringify(deltaEvent)}\n\n`);
 }
 
 /**

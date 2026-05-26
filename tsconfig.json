@@ -5,6 +5,7 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "types": ["@cloudflare/workers-types", "node"],
+"allowImportingTsExtensions": true,
     "strict": true,
     "skipLibCheck": true,
     "noEmit": false,

@@ -4,6 +4,7 @@
 
 import { ClaudeMessagesRequest, ClaudeTokenCountingRequest, ClaudeContent, ClaudeContentBlock, ClaudeTool, ThinkingConfigParam } from '../types/claude.js';
 import { OpenAIRequest, OpenAITokenCountingRequest, OpenAIMessage, OpenAIToolCall } from '../types/openai.js';
+import { stringify } from '../utils/stringify.js';
 
 /**
  * Recursively cleans a JSON Schema to make it compatible with target APIs like Google Gemini.
@@ -191,7 +192,7 @@ function extractToolResultsFromClaudeContent(content: ClaudeContentBlock[]): Arr
         .filter(block => block.type === 'tool_result')
         .map(block => ({
             tool_use_id: block.tool_use_id,
-            content: typeof block.content === 'string' ? block.content : JSON.stringify(block.content)
+            content: typeof block.content === 'string' ? block.content : stringify(block.content)
         }));
 }
 
@@ -265,7 +266,7 @@ export function convertClaudeTokenCountingToOpenAI(
                             type: 'function',
                             function: {
                                 name: block.name,
-                                arguments: JSON.stringify(block.input || {})
+                                arguments: stringify(block.input || {})
                             },
                         });
                     }
@@ -374,7 +375,7 @@ export function convertClaudeToOpenAIRequest(
                             type: 'function',
                             function: {
                                 name: block.name,
-                                arguments: JSON.stringify(block.input || {})
+                                arguments: stringify(block.input || {})
                             },
                         });
                     }

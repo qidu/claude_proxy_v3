@@ -3,6 +3,7 @@
  */
 
 import { OpenAIRequest, OpenAIMessage } from '../types/openai.js';
+import { stringify } from '../utils/stringify.js';
 
 /**
  * Convert OpenAI Responses API request to Chat Completions request
@@ -44,7 +45,7 @@ export function convertResponsesToChatCompletions(
       // Object input - treat as user message
       messages.push({
         role: 'user',
-        content: JSON.stringify(input),
+        content: stringify(input),
       });
     }
   }
@@ -239,5 +240,5 @@ function convertContentToString(content: unknown): string {
     return texts.join('\n');
   }
 
-  return JSON.stringify(content);
+  return stringify(content);
 }
