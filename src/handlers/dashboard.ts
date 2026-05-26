@@ -146,7 +146,7 @@ export function handleDashboardPage(): Response {
 
     <section class="card" id="section-config">
       <h2>Config Module</h2>
-      <p>Edit <code>models.*</code> and <code>composite</code>. <code>api_key</code> fields are hidden and not editable.</p>
+      <p>Edit config for <code>models.*</code> and <code>composite.*</code> as models alias. Note the <code>api_key</code> fields are hidden and not editable.</p>
       <div id="configForm"></div>
       <div class="config-divider"></div>
       <div class="config-toolbar">
@@ -401,6 +401,7 @@ export function handleDashboardPage(): Response {
           }
           currentConfig.models[category][key] = ['', ''];
           renderConfigForm(currentConfig);
+          saveConfig();
           return;
         }
 
@@ -411,6 +412,7 @@ export function handleDashboardPage(): Response {
           if (!window.confirm('Remove models.' + category + '.' + key + '?')) return;
           delete currentConfig.models[category][key];
           renderConfigForm(currentConfig);
+          saveConfig();
           return;
         }
 
@@ -423,6 +425,7 @@ export function handleDashboardPage(): Response {
           }
           currentConfig.composite[alias] = {};
           renderConfigForm(currentConfig);
+          saveConfig();
           return;
         }
 
@@ -432,6 +435,7 @@ export function handleDashboardPage(): Response {
           if (!window.confirm('Remove composite.' + alias + '?')) return;
           delete currentConfig.composite[alias];
           renderConfigForm(currentConfig);
+          saveConfig();
           return;
         }
 
@@ -449,6 +453,7 @@ export function handleDashboardPage(): Response {
           }
           currentConfig.composite[alias][targetModel] = {};
           renderConfigForm(currentConfig);
+          saveConfig();
           return;
         }
 
@@ -461,6 +466,7 @@ export function handleDashboardPage(): Response {
             delete currentConfig.composite[alias][targetModel];
           }
           renderConfigForm(currentConfig);
+          saveConfig();
           return;
         }
       }
