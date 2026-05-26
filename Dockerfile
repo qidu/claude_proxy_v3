@@ -6,6 +6,7 @@ WORKDIR /app
 # Install build tools (no python needed - sharp/esbuild have prebuilt binaries)
 RUN apk add --no-cache make g++
 
+ARG VERSION
 # Copy package files first for better caching
 COPY package*.json ./
 
@@ -22,10 +23,7 @@ COPY tsconfig.json ./
 COPY tsconfig.server.json ./
 COPY wrangler.toml ./
 COPY src/ ./src/
-
-RUN git describe --tags --abbrev=0 > /tmp/proxy_version
-RUN git branch | grep "*" >> /tmp/proxy_version
-RUN git rev-parse --short HEAD >> /tmp/proxy_version
+COPY submodules/ ./submodules/
 
 RUN npm run build
 
@@ -36,13 +34,13 @@ WORKDIR /app
 
 # Copy only what's needed from builder
 COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/submodules ./submodules
 COPY --from=builder /app/dist ./dist
-COPY --from=git /tmp/proxy_version /tmp/proxy_version
 COPY wrangler.toml ./
 
-ENV VERSION=$(cat /tmp/proxy_version | tr -d '\n')
-ENV LOCAL_TIKTOKEN=true            # Use tiktoken (accurate)
-ENV TIKTOKEN_MODEL="o200k_base"    # Encoding model (default: cl100k_base)
+ENV VERSION=$VERSION
+ENV LOCAL_TIKTOKEN=true
+ENV TIKTOKEN_MODEL="o200k_base"
 
 EXPOSE 8788
 
