@@ -24,6 +24,7 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
   - Dashboard "Export CSV" button reads table data from the DOM and triggers a download; it does **not** change the in-memory stats data.
   - `GET /dashboard/api/stats/agents` - User-agent prefix + tool stats
   - `GET /dashboard/api/stats/requests` - Request/response stats by endpoint, upstream, and status code
+  - `TUI=true npm run server` - Terminal dashboard for live stats and composite alias editing
 
 - **Multiple Model Providers**: Support for 6+ providers:
   - DeepSeek (v3.1, v3.2, R1, etc.)
@@ -200,6 +201,28 @@ npm run build-chatjimmy
 npm run build
 PROXY_CONFIG_PATH=./proxy_config.toml npx tsx dist/server.js
 ```
+
+### 3.1 Terminal Dashboard
+
+Run the server with `TUI=true` to open the terminal dashboard in the same process:
+
+```bash
+TUI=true PROXY_CONFIG_PATH=./proxy_config.toml npx tsx dist/server.js
+```
+
+The TUI shows live:
+- model token stats
+- request and agent stats
+- composite alias summaries
+
+Keyboard shortcuts:
+- `↑/↓` or `j/k` to move
+- `a` add a composite alias
+- `t` add a target to the selected alias
+- `e` edit the selected target
+- `d` delete the selected alias/target
+- `r` reload config
+- `Ctrl+C` quit the TUI
 
 ### 4. Deploy
 

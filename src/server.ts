@@ -5,6 +5,8 @@
 
 import { createServer } from 'http';
 import type { Env } from './types/shared.js';
+import { loadProxyConfig } from './utils/config-loader.js';
+import { startTUI } from './tui.js';
 
 const port = parseInt(process.env.PORT || '8788', 10);
 
@@ -80,7 +82,23 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(port, '0.0.0.0', () => {
+let stopTui: (() => void) | undefined;
+
+server.listen(port, '0.0.0.0', async () => {
   console.log(`Server running on http://0.0.0.0:${port}`);
   console.log(` and dashboard at http://0.0.0.0:${port}/dashboard`);
+
+  const tuiEnabled = process.env.TUI === 'true' || process.env.TUI === '1';
+  if (tuiEnabled && process.stdin.isTTY && process.stdout.isTTY) {
+    stopTui = startTUI({
+      env,
+      loadConfig: async () => loadProxyConfig(env),
+      readOnly: !!env.PROXY_CONFIG_URL,
+    });
+  }
+});
+
+process.on('SIGINT', () => {
+  stopTui?.();
+  server.close(() => process.exit(0));
 });

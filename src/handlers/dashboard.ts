@@ -1,10 +1,17 @@
 import { Env } from '../types/shared.js';
 import {
   ProxyConfig,
+  CompositeTargetPatch,
   applyDashboardConfigUpdate,
+  addCompositeAlias,
+  getCompositeRouteCandidates,
+  getConfiguredModelIds,
   loadProxyConfigFromPath,
   persistProxyConfigToPath,
+  removeCompositeAlias,
+  removeCompositeTarget,
   toDashboardConfigPayload,
+  upsertCompositeTarget,
   clearProxyConfigCache,
 } from '../utils/config-loader.js';
 import {
@@ -38,6 +45,101 @@ function getConfigPathForWrite(env: Env): string {
   }
 
   return env.PROXY_CONFIG_PATH;
+}
+
+export interface DashboardSnapshot {
+  config: ReturnType<typeof toDashboardConfigPayload> & {
+    read_only: boolean;
+    config_path: string | null;
+  };
+  modelStats: ReturnType<typeof getModelStatsDesc>;
+  agentStats: ReturnType<typeof getAgentStatsDesc>;
+  requestStats: {
+    endpoints: ReturnType<typeof getRequestEndpointStatsDesc>;
+    upstreams: ReturnType<typeof getRequestUpstreamStatsDesc>;
+    status_codes_from_upstreams: ReturnType<typeof getRequestStatusCodeFromUpstreamStatsDesc>;
+    status_codes_to_endpoints: ReturnType<typeof getRequestStatusCodeToEndpointStatsDesc>;
+    endpoint_timings: ReturnType<typeof getRequestEndpointTimingStatsDesc>;
+  };
+  compositeResolved: Array<{
+    alias: string;
+    targets: Array<{
+      model: string;
+      routeModel: string | undefined;
+      upstreamMode: string;
+      targetUrl: string;
+    }>;
+  }>;
+}
+
+export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): DashboardSnapshot {
+  const config = {
+    ...toDashboardConfigPayload(proxyConfig),
+    read_only: isDashboardReadOnly(env),
+    config_path: env.PROXY_CONFIG_PATH || null,
+  };
+
+  const compositeResolved = Object.keys(config.composite)
+    .sort((a, b) => a.localeCompare(b))
+    .map((alias) => ({
+      alias,
+      targets: getCompositeRouteCandidates(alias, proxyConfig).map((candidate) => ({
+        model: candidate.modelName,
+        routeModel: candidate.route.modelAlias,
+        upstreamMode: candidate.route.upstreamMode,
+        targetUrl: candidate.route.targetUrl,
+      })),
+    }));
+
+  return {
+    config,
+    modelStats: getModelStatsDesc(),
+    agentStats: getAgentStatsDesc(),
+    requestStats: {
+      endpoints: getRequestEndpointStatsDesc(),
+      upstreams: getRequestUpstreamStatsDesc(),
+      status_codes_from_upstreams: getRequestStatusCodeFromUpstreamStatsDesc(),
+      status_codes_to_endpoints: getRequestStatusCodeToEndpointStatsDesc(),
+      endpoint_timings: getRequestEndpointTimingStatsDesc(),
+    },
+    compositeResolved,
+  };
+}
+
+function saveConfigMutation(env: Env, mutate: (baseConfig: ProxyConfig) => ProxyConfig): ReturnType<typeof toDashboardConfigPayload> {
+  const configPath = getConfigPathForWrite(env);
+  const baseConfig = loadProxyConfigFromPath(configPath);
+  const nextConfig = mutate(baseConfig);
+  persistProxyConfigToPath(configPath, nextConfig);
+  clearProxyConfigCache();
+  return toDashboardConfigPayload(nextConfig);
+}
+
+export function addCompositeAliasFromDashboard(env: Env, alias: string): ReturnType<typeof toDashboardConfigPayload> {
+  return saveConfigMutation(env, (baseConfig) => addCompositeAlias(baseConfig, alias));
+}
+
+export function removeCompositeAliasFromDashboard(env: Env, alias: string): ReturnType<typeof toDashboardConfigPayload> {
+  return saveConfigMutation(env, (baseConfig) => removeCompositeAlias(baseConfig, alias));
+}
+
+export function upsertCompositeTargetFromDashboard(
+  env: Env,
+  alias: string,
+  targetModel: string,
+  patch: CompositeTargetPatch,
+): ReturnType<typeof toDashboardConfigPayload> {
+  return saveConfigMutation(env, (baseConfig) =>
+    upsertCompositeTarget(baseConfig, alias, targetModel, patch, getConfiguredModelIds(baseConfig)),
+  );
+}
+
+export function removeCompositeTargetFromDashboard(
+  env: Env,
+  alias: string,
+  targetModel: string,
+): ReturnType<typeof toDashboardConfigPayload> {
+  return saveConfigMutation(env, (baseConfig) => removeCompositeTarget(baseConfig, alias, targetModel));
 }
 
 export function handleDashboardPage(): Response {
@@ -652,15 +754,10 @@ export function handleDashboardPage(): Response {
 }
 
 export function handleDashboardGetConfig(proxyConfig: ProxyConfig, env: Env): Response {
-  const payload = toDashboardConfigPayload(proxyConfig);
-  return jsonResponse({
-    ...payload,
-    read_only: isDashboardReadOnly(env),
-    config_path: env.PROXY_CONFIG_PATH || null,
-  });
+  return jsonResponse(getDashboardSnapshot(proxyConfig, env).config);
 }
 
-export async function handleDashboardPutConfig(request: Request, env: Env, proxyConfig: ProxyConfig): Promise<Response> {
+export async function handleDashboardPutConfig(request: Request, env: Env, _proxyConfig: ProxyConfig): Promise<Response> {
   try {
     const payload = await request.json();
     const configPath = getConfigPathForWrite(env);

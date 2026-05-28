@@ -1124,6 +1124,146 @@ export function applyDashboardConfigUpdate(baseConfig: ProxyConfig, payload: unk
   return nextConfig;
 }
 
+export interface CompositeTargetPatch {
+  share?: number | null;
+  fallback?: number | null;
+  primary?: boolean;
+}
+
+function cloneCompositeConfig(composite: ProxyConfig['composite']): Record<string, CompositeModelConfig> {
+  const nextComposite: Record<string, CompositeModelConfig> = {};
+
+  for (const [alias, targets] of Object.entries(composite || {})) {
+    nextComposite[alias] = {};
+    for (const [targetModel, config] of Object.entries(targets || {})) {
+      nextComposite[alias][targetModel] = { ...(config || {}) };
+    }
+  }
+
+  return nextComposite;
+}
+
+function assertNonEmptyCompositeName(kind: 'alias' | 'target model', value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`${kind} is required`);
+  }
+  return trimmed;
+}
+
+export function addCompositeAlias(baseConfig: ProxyConfig, alias: string): ProxyConfig {
+  const aliasName = assertNonEmptyCompositeName('alias', alias);
+  const nextConfig: ProxyConfig = {
+    ...baseConfig,
+    composite: cloneCompositeConfig(baseConfig.composite),
+  };
+
+  if (nextConfig.composite?.[aliasName]) {
+    throw new Error(`Composite alias already exists: ${aliasName}`);
+  }
+
+  nextConfig.composite ??= {};
+  nextConfig.composite[aliasName] = {};
+  return nextConfig;
+}
+
+export function removeCompositeAlias(baseConfig: ProxyConfig, alias: string): ProxyConfig {
+  const aliasName = assertNonEmptyCompositeName('alias', alias);
+  const nextConfig: ProxyConfig = {
+    ...baseConfig,
+    composite: cloneCompositeConfig(baseConfig.composite),
+  };
+
+  if (!nextConfig.composite?.[aliasName]) {
+    throw new Error(`Composite alias not found: ${aliasName}`);
+  }
+
+  delete nextConfig.composite[aliasName];
+  return nextConfig;
+}
+
+export function upsertCompositeTarget(
+  baseConfig: ProxyConfig,
+  alias: string,
+  targetModel: string,
+  patch: CompositeTargetPatch = {},
+  configuredModelIds: string[] = [],
+): ProxyConfig {
+  const aliasName = assertNonEmptyCompositeName('alias', alias);
+  const targetName = assertNonEmptyCompositeName('target model', targetModel);
+  const nextConfig: ProxyConfig = {
+    ...baseConfig,
+    composite: cloneCompositeConfig(baseConfig.composite),
+  };
+
+  nextConfig.composite ??= {};
+  const existingTargets = nextConfig.composite[aliasName] ?? {};
+  const targetExists = !!existingTargets[targetName];
+  if (!targetExists && configuredModelIds.length > 0 && !configuredModelIds.includes(targetName)) {
+    throw new Error(`Unknown target model: ${targetName}`);
+  }
+
+  const nextTargets: CompositeModelConfig = {};
+  for (const [name, config] of Object.entries(existingTargets)) {
+    nextTargets[name] = { ...(config || {}) };
+  }
+
+  const nextTarget: CompositeTargetConfig = { ...(nextTargets[targetName] || {}) };
+
+  if (patch.share !== undefined) {
+    if (patch.share === null) {
+      delete nextTarget.share;
+    } else if (!Number.isFinite(patch.share)) {
+      throw new Error(`Invalid share for ${aliasName}.${targetName}`);
+    } else {
+      nextTarget.share = patch.share;
+    }
+  }
+
+  if (patch.fallback !== undefined) {
+    if (patch.fallback === null) {
+      delete nextTarget.fallback;
+    } else if (!Number.isFinite(patch.fallback)) {
+      throw new Error(`Invalid fallback for ${aliasName}.${targetName}`);
+    } else {
+      nextTarget.fallback = patch.fallback;
+    }
+  }
+
+  if (patch.primary === true) {
+    for (const config of Object.values(nextTargets)) {
+      delete config.primary;
+    }
+    nextTarget.primary = true;
+  } else if (patch.primary === false) {
+    delete nextTarget.primary;
+  }
+
+  nextTargets[targetName] = nextTarget;
+  nextConfig.composite[aliasName] = nextTargets;
+  return nextConfig;
+}
+
+export function removeCompositeTarget(baseConfig: ProxyConfig, alias: string, targetModel: string): ProxyConfig {
+  const aliasName = assertNonEmptyCompositeName('alias', alias);
+  const targetName = assertNonEmptyCompositeName('target model', targetModel);
+  const nextConfig: ProxyConfig = {
+    ...baseConfig,
+    composite: cloneCompositeConfig(baseConfig.composite),
+  };
+
+  const existingTargets = nextConfig.composite?.[aliasName];
+  if (!existingTargets) {
+    throw new Error(`Composite alias not found: ${aliasName}`);
+  }
+  if (!existingTargets[targetName]) {
+    throw new Error(`Composite target not found: ${aliasName}.${targetName}`);
+  }
+
+  delete existingTargets[targetName];
+  return nextConfig;
+}
+
 export function persistProxyConfigToPath(configPath: string, config: ProxyConfig): void {
   const serialized = serializeProxyConfigToml(config);
   writeFileSync(configPath, serialized, 'utf-8');
