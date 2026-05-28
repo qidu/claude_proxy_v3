@@ -29,8 +29,10 @@ import {
 import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, ModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
 import {
   extractToolNamesFromBody,
+  extractToolNamesFromResponsePayload,
   extractUsageFromResponsePayload,
   extractUserAgentPrefix,
+  recordAgentResponseStat,
   recordAgentStat,
   recordModelStat,
   recordModelFailedRequest,
@@ -930,6 +932,8 @@ export default {
               if (usage) {
                 recordModelUsage(attemptModelId, usage);
               }
+              const responseToolNames = extractToolNamesFromResponsePayload(payload);
+              recordAgentResponseStat(userAgentPrefix, responseToolNames);
             } catch {
               // ignore stats extraction failures
             }

@@ -20,6 +20,7 @@ type ModelStatsEntry = {
 type AgentStatsEntry = {
   key: string;
   requests: number;
+  responses: number;
 };
 
 type RequestEndpointStatsEntry = {
@@ -109,6 +110,85 @@ export function extractToolNamesFromBody(body: Record<string, unknown> | undefin
     }
   }
 
+  return names.size > 0 ? [...names] : ['none'];
+}
+
+function addToolName(names: Set<string>, value: unknown): void {
+  if (typeof value === 'string' && value.trim()) {
+    names.add(value.trim());
+  }
+}
+
+function collectToolNamesFromResponseNode(node: unknown, names: Set<string>): void {
+  if (!node || typeof node !== 'object') {
+    return;
+  }
+
+  const record = node as Record<string, unknown>;
+
+  if (Array.isArray(record.tool_calls)) {
+    for (const toolCall of record.tool_calls) {
+      if (!toolCall || typeof toolCall !== 'object') {
+        continue;
+      }
+      const fn = (toolCall as Record<string, unknown>).function;
+      if (fn && typeof fn === 'object') {
+        addToolName(names, (fn as Record<string, unknown>).name);
+      }
+    }
+  }
+
+  if (Array.isArray(record.content)) {
+    for (const block of record.content) {
+      if (!block || typeof block !== 'object') {
+        continue;
+      }
+      if ((block as Record<string, unknown>).type === 'tool_use') {
+        addToolName(names, (block as Record<string, unknown>).name);
+      }
+    }
+  }
+
+  if (Array.isArray(record.output)) {
+    for (const item of record.output) {
+      if (!item || typeof item !== 'object') {
+        continue;
+      }
+      const outputItem = item as Record<string, unknown>;
+      if (outputItem.type === 'function_call') {
+        addToolName(names, outputItem.name);
+      }
+      if (outputItem.type === 'message') {
+        collectToolNamesFromResponseNode(outputItem, names);
+      }
+    }
+  }
+
+  if (record.message && typeof record.message === 'object') {
+    collectToolNamesFromResponseNode(record.message, names);
+  }
+
+  if (Array.isArray(record.choices)) {
+    for (const choice of record.choices) {
+      if (!choice || typeof choice !== 'object') {
+        continue;
+      }
+      collectToolNamesFromResponseNode((choice as Record<string, unknown>).message, names);
+    }
+  }
+
+  if (record.response && typeof record.response === 'object') {
+    collectToolNamesFromResponseNode(record.response, names);
+  }
+}
+
+export function extractToolNamesFromResponsePayload(payload: unknown): string[] {
+  if (!payload || typeof payload !== 'object') {
+    return ['none'];
+  }
+
+  const names = new Set<string>();
+  collectToolNamesFromResponseNode(payload, names);
   return names.size > 0 ? [...names] : ['none'];
 }
 
@@ -236,8 +316,20 @@ export function recordAgentStat(userAgentPrefix: string, toolNames: string[]): v
 
   for (const toolName of effectiveTools) {
     const key = `${ua} / ${toolName}`;
-    const current = agentStats.get(key) || { key, requests: 0 };
+    const current = agentStats.get(key) || { key, requests: 0, responses: 0 };
     current.requests += 1;
+    agentStats.set(key, current);
+  }
+}
+
+export function recordAgentResponseStat(userAgentPrefix: string, toolNames: string[]): void {
+  const ua = userAgentPrefix || 'unknown';
+  const effectiveTools = toolNames.length > 0 ? toolNames : ['none'];
+
+  for (const toolName of effectiveTools) {
+    const key = `${ua} / ${toolName}`;
+    const current = agentStats.get(key) || { key, requests: 0, responses: 0 };
+    current.responses += 1;
     agentStats.set(key, current);
   }
 }

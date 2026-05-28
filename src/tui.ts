@@ -54,6 +54,11 @@ function pad(text: string, width: number): string {
   if (current >= width) return clip(text, width);
   return text + ' '.repeat(width - current);
 }
+function alignRight(text: string, width: number): string {
+  const current = visibleWidth(text);
+  if (current >= width) return clip(text, width);
+  return ' '.repeat(width - current) + text;
+}
 function titleCase(value: string): string {
   return value
     .split(/[_-]/g)
@@ -62,8 +67,9 @@ function titleCase(value: string): string {
     .join(' ');
 }
 function fmt(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
 }
 function frame(title: string, body: string[], width: number): string[] {
@@ -274,35 +280,41 @@ class DashboardView implements Component {
       if (!entries.length) lines.push(`    ${dim('(empty)')}`);
       for (const [target, cfg] of entries.sort(([a], [b]) => a.localeCompare(b))) {
         const selectedTarget = selected?.kind === 'target' && selected.alias === alias && selected.target === target;
-        const mark = selectedTarget ? cyan('>') : dim('·');
-        const summary = `${cfg.share ?? '-'}${cfg.primary ? ' *' : ''}${cfg.fallback !== undefined ? ` f${cfg.fallback}` : ''}`;
-        lines.push(`    ${mark} ${clip(target, 22)} ${dim(summary)}`);
+        const mark = selectedTarget ? green('>') : dim('·');
+        const summary = `${cfg.share ?? '-'}${cfg.primary ? ' P' : ''}${cfg.fallback !== undefined ? ` FB${cfg.fallback}` : ''}`;
+        lines.push(`  ${dim('|')} ${mark} ${clip(target, 22)} ${dim(summary)}`);
       }
     }
 
     lines.push('');
     lines.push(bold('Top models'));
-    lines.push(dim('  model                       req   failed   in       cached   wrote    out      total'));
+    lines.push(dim('  model                         req   failed | token in  cached    wrote    out      total'));
     for (const row of snap.modelStats.slice(0, 5)) {
       lines.push(
-        `  ${pad(row.model, 26)} ${pad(fmt(row.requests), 5)} ${pad(fmt(row.failed_requests), 8)} ${pad(fmt(row.input_tokens), 8)} ${pad(fmt(row.cached_tokens), 8)} ${pad(fmt(row.cache_written_tokens), 8)} ${pad(fmt(row.output_tokens), 8)} ${pad(fmt(row.total_tokens), 8)}`,
+        `  ${pad(row.model, 26)}  ${alignRight(fmt(row.requests), 5)} ${alignRight(fmt(row.failed_requests), 6)} ${alignRight(fmt(row.input_tokens), 8)}  ${alignRight(fmt(row.cached_tokens), 8)} ${alignRight(fmt(row.cache_written_tokens), 8)} ${alignRight(fmt(row.output_tokens), 8)}  ${alignRight(fmt(row.total_tokens), 8)}`,
       );
     }
 
     lines.push('');
-    lines.push(bold('Top endpoints'));
-    for (const row of snap.requestStats.endpoints.slice(0, 5)) {
-      lines.push(`  ${pad(row.endpoint, 26)} ${fmt(row.requests)} req`);
-    }
-
-    lines.push('');
     lines.push(bold('Top agents'));
+    lines.push(dim('  tools                         requests   responses'));
     for (const row of snap.agentStats.slice(0, 5)) {
-      lines.push(`  ${pad(row.key, 26)} ${fmt(row.requests)} req`);
+      lines.push(`  ${pad(row.key, 36)} ${pad(fmt(row.requests), 9)} ${pad(fmt(row.responses), 10)}`);
     }
 
     lines.push('');
-    lines.push(dim('A add alias  T add target  E edit target  D delete  R reload  Ctrl+C quit  ↑↓ move  Enter select'));
+    lines.push(bold('Top endpoints'));
+    lines.push(dim('  endpoint                      req  min (ms)  avg (ms)  max (ms)'));
+    const endpointRows = new Map(snap.requestStats.endpoints.map((row) => [row.endpoint, row]));
+    for (const row of snap.requestStats.endpoint_timings.slice(0, 5)) {
+      const requestRow = endpointRows.get(row.endpoint);
+      lines.push(
+        `  ${pad(row.endpoint, 26)} ${alignRight(fmt(requestRow?.requests ?? 0), 5)} ${alignRight(fmt(row.min_time_ms), 8)} ${alignRight(fmt(row.avg_time_ms), 8)} ${alignRight(fmt(row.max_time_ms), 8)}`,
+      );
+    }
+
+    lines.push('');
+    lines.push(`A ${dim('add alias')} T ${dim('add target')} E ${dim('edit target')} D ${dim('delete')} R ${dim('reload')} Ctrl+C ${dim('quit')} ↑↓ ${dim('move')} Enter ${dim('select')}`);
     lines.push(this.message ? yellow(this.message) : dim('Ready'));
 
     return lines.map((line) => clip(line, width));

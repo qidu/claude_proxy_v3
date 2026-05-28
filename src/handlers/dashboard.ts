@@ -278,7 +278,7 @@ export function handleDashboardPage(): Response {
       </div>
 
       <div class="request-submodule">
-        <h3>Responses Numbers</h3>
+        <h3>Top agents</h3>
         <table id="requestUpstreamStats">
           <thead><tr><th>Upstream Base URL</th><th class="num">Responses</th></tr></thead>
           <tbody></tbody>
@@ -311,7 +311,7 @@ export function handleDashboardPage(): Response {
     <section class="card" id="section-agent">
       <h2>Agent Statistic <button id="toggleAgentStats" class="mini-btn" style="font-size:12px;">Show all</button></h2>
       <table id="agentStats">
-        <thead><tr><th>Agent / Tool</th><th class="num">Requests</th></tr></thead>
+        <thead><tr><th>Agent / Tool</th><th class="num">Requests</th><th class="num">Responses</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
@@ -637,11 +637,11 @@ export function handleDashboardPage(): Response {
         const tbody = document.querySelector('#agentStats tbody');
         if (agentStatsExpanded) {
           tbody.innerHTML = data.map((row) =>
-            '<tr><td>' + row.key + '</td><td class="num">' + row.requests + '</td></tr>'
+            '<tr><td>' + row.key + '</td><td class="num">' + row.requests + '</td><td class="num">' + (row.responses || 0) + '</td></tr>'
           ).join('');
         } else {
           tbody.innerHTML = data.slice(0, 10).map((row) =>
-            '<tr><td>' + row.key + '</td><td class="num">' + row.requests + '</td></tr>'
+            '<tr><td>' + row.key + '</td><td class="num">' + row.requests + '</td><td class="num">' + (row.responses || 0) + '</td></tr>'
           ).join('');
         }
         const btn = document.getElementById('toggleAgentStats');

@@ -90,6 +90,12 @@ server.listen(port, '0.0.0.0', async () => {
 
   const tuiEnabled = process.env.TUI === 'true' || process.env.TUI === '1';
   if (tuiEnabled && process.stdin.isTTY && process.stdout.isTTY) {
+    console.log = () => {};
+    console.info = () => {};
+    console.warn = () => {};
+    console.error = () => {};
+    console.debug = () => {};
+
     stopTui = startTUI({
       env,
       loadConfig: async () => loadProxyConfig(env),
