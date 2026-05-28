@@ -1,5 +1,24 @@
 import { stdin, stdout } from 'process';
-import { addCompositeAliasFromDashboard, getDashboardSnapshot, removeCompositeTargetFromDashboard, upsertCompositeTargetFromDashboard } from './handlers/dashboard.js';
+import {
+  type Component,
+  type Focusable,
+  type OverlayHandle,
+  type SelectItem,
+  type SelectListTheme,
+  Input,
+  ProcessTerminal,
+  SelectList,
+  TUI,
+  matchesKey,
+  truncateToWidth,
+  visibleWidth,
+} from '@mariozechner/pi-tui';
+import {
+  addCompositeAliasFromDashboard,
+  getDashboardSnapshot,
+  removeCompositeTargetFromDashboard,
+  upsertCompositeTargetFromDashboard,
+} from './handlers/dashboard.js';
 import type { Env } from './types/shared.js';
 import type { ProxyConfig } from './utils/config-loader.js';
 
@@ -9,50 +28,31 @@ export type DashboardSource = {
   readOnly: boolean;
 };
 
-type InputMode = 'normal' | 'add-alias' | 'pick-target' | 'share-target' | 'edit-target' | 'confirm-delete';
-
 type Selection =
   | { kind: 'alias'; alias: string }
   | { kind: 'target'; alias: string; target: string }
   | null;
 
-type ModelChoice = {
+type ModelChoice = SelectItem & {
   category: string;
-  model: string;
-  label: string;
+  modelId: string;
 };
 
-function ansi(code: number): string {
-  return `\u001b[${code}m`;
+function fg(code: number, text: string): string {
+  return `\u001b[${code}m${text}\u001b[0m`;
 }
-function reset(): string { return ansi(0); }
-function bold(s: string): string { return `${ansi(1)}${s}${reset()}`; }
-function dim(s: string): string { return `${ansi(2)}${s}${reset()}`; }
-function green(s: string): string { return `${ansi(32)}${s}${reset()}`; }
-function yellow(s: string): string { return `${ansi(33)}${s}${reset()}`; }
-function cyan(s: string): string { return `${ansi(36)}${s}${reset()}`; }
-function clear(): string { return '\u001b[2J\u001b[H'; }
-function hideCursor(): string { return '\u001b[?25l'; }
-function showCursor(): string { return '\u001b[?25h'; }
-function stripAnsi(value: string): string { return value.replace(/\u001b\[[0-9;]*m/g, ''); }
-function truncate(value: string, width: number): string {
-  if (width <= 0) return '';
-  const clean = stripAnsi(value);
-  if (clean.length <= width) return value;
-  return clean.slice(0, Math.max(0, width - 1)) + '…';
+function bold(text: string): string { return fg(1, text); }
+function dim(text: string): string { return fg(2, text); }
+function green(text: string): string { return fg(32, text); }
+function yellow(text: string): string { return fg(33, text); }
+function cyan(text: string): string { return fg(36, text); }
+function clip(text: string, width: number): string {
+  return width <= 0 ? '' : truncateToWidth(text, width, '');
 }
-function pad(value: string, width: number): string {
-  const clean = stripAnsi(value);
-  if (clean.length >= width) return truncate(value, width);
-  return value + ' '.repeat(width - clean.length);
-}
-function fmt(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
-  return String(n);
-}
-function getWidth(): number {
-  return Math.max(80, stdout.columns || 80);
+function pad(text: string, width: number): string {
+  const current = visibleWidth(text);
+  if (current >= width) return clip(text, width);
+  return text + ' '.repeat(width - current);
 }
 function titleCase(value: string): string {
   return value
@@ -61,346 +61,509 @@ function titleCase(value: string): string {
     .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
     .join(' ');
 }
-
-class BufferLine {
-  private buf = '';
-  constructor(private onSubmit: (value: string) => void) {}
-  input(ch: string): void {
-    if (ch === '\r' || ch === '\n') {
-      this.onSubmit(this.buf.trim());
-      this.buf = '';
-      return;
-    }
-    if (ch === '\x7f') {
-      this.buf = this.buf.slice(0, -1);
-      return;
-    }
-    if (ch >= ' ' && ch <= '~') {
-      this.buf += ch;
-    }
+function fmt(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
+  return String(n);
+}
+function frame(title: string, body: string[], width: number): string[] {
+  const boxWidth = Math.min(Math.max(width, 10), 88);
+  const inner = Math.max(1, boxWidth - 2);
+  const lines: string[] = [];
+  lines.push(`┌${'─'.repeat(inner)}┐`);
+  lines.push(`│${pad(title, inner)}│`);
+  for (const line of body) {
+    lines.push(`│${pad(line, inner)}│`);
   }
-  text(): string { return this.buf; }
+  lines.push(`└${'─'.repeat(inner)}┘`);
+  return lines;
 }
 
-class ModelPicker {
-  private index = 0;
-  done = false;
-  selectedValue = '';
+const SELECT_LIST_THEME: SelectListTheme = {
+  selectedPrefix: (text) => green(text),
+  selectedText: (text) => green(text),
+  description: (text) => dim(text),
+  scrollInfo: (text) => dim(text),
+  noMatch: (text) => dim(text),
+};
 
-  constructor(private choices: ModelChoice[]) {}
+class PromptOverlay implements Component, Focusable {
+  focused = false;
+  private readonly input = new Input();
+
+  constructor(
+    private readonly title: string,
+    private readonly prompt: string,
+    initialValue: string,
+    private readonly onSubmit: (value: string) => void,
+    private readonly onCancel: () => void,
+  ) {
+    this.input.setValue(initialValue);
+    this.input.onSubmit = (value) => this.onSubmit(value);
+    this.input.onEscape = () => this.onCancel();
+  }
 
   handleInput(data: string): void {
-    if (this.done) return;
+    this.input.handleInput(data);
+  }
 
-    if (data === '\u001b' || data === '\x03') {
-      this.done = true;
-      this.selectedValue = '';
+  invalidate(): void {
+    this.input.invalidate();
+  }
+
+  render(width: number): string[] {
+    this.input.focused = this.focused;
+    const innerWidth = Math.max(1, Math.min(width - 2, 76));
+    const bodyWidth = Math.max(1, innerWidth - 2);
+    const inputLine = this.input.render(bodyWidth)[0] ?? '';
+    return frame(this.title, [clip(this.prompt, bodyWidth), clip(inputLine, bodyWidth), dim('Enter submit  Esc cancel')], innerWidth);
+  }
+}
+
+class ListOverlay implements Component {
+  private readonly list: SelectList;
+
+  constructor(
+    title: string,
+    subtitle: string,
+    items: SelectItem[],
+    onSelect: (item: SelectItem) => void,
+    onCancel: () => void,
+    maxVisible = 8,
+  ) {
+    this.list = new SelectList(items, maxVisible, SELECT_LIST_THEME, {
+      truncatePrimary: ({ text, maxWidth }) => clip(text, maxWidth),
+    });
+    this.list.onSelect = onSelect;
+    this.list.onCancel = onCancel;
+    this.title = title;
+    this.subtitle = subtitle;
+  }
+
+  private readonly title: string;
+  private readonly subtitle: string;
+
+  handleInput(data: string): void {
+    this.list.handleInput(data);
+  }
+
+  invalidate(): void {
+    this.list.invalidate();
+  }
+
+  render(width: number): string[] {
+    const innerWidth = Math.max(1, Math.min(width - 2, 76));
+    const bodyWidth = Math.max(1, innerWidth - 2);
+    const listLines = this.list.render(bodyWidth).map((line) => clip(line, bodyWidth));
+    return frame(this.title, [clip(this.subtitle, bodyWidth), ...listLines], innerWidth);
+  }
+}
+
+class DashboardView implements Component {
+  private snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
+  private message = 'Ready';
+  private selectionIndex = 0;
+
+  constructor(private readonly app: DashboardApp) {}
+
+  setSnapshot(snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null): void {
+    this.snapshot = snapshot;
+    const total = this.selectionCount();
+    if (this.selectionIndex >= total) {
+      this.selectionIndex = Math.max(0, total - 1);
+    }
+  }
+
+  setMessage(message: string): void {
+    this.message = message;
+  }
+
+  focusAlias(alias: string): void {
+    const index = this.selections().findIndex((selection) => selection?.kind === 'alias' && selection.alias === alias);
+    if (index >= 0) {
+      this.selectionIndex = index;
+    }
+  }
+
+  bumpSelection(delta: number): void {
+    const total = this.selectionCount();
+    if (total === 0) return;
+    this.selectionIndex = Math.max(0, Math.min(total - 1, this.selectionIndex + delta));
+  }
+
+  selectCurrent(): Selection {
+    return this.selections()[this.selectionIndex] ?? null;
+  }
+
+  invalidate(): void {}
+
+  handleInput(data: string): void {
+    if (matchesKey(data, 'ctrl+c') || matchesKey(data, 'q')) {
+      this.app.stopAndExit();
+      return;
+    }
+    if (matchesKey(data, 'r')) {
+      void this.app.refresh();
+      return;
+    }
+    if (matchesKey(data, 'down') || matchesKey(data, 'j')) {
+      this.bumpSelection(1);
+      this.app.requestRender();
+      return;
+    }
+    if (matchesKey(data, 'up') || matchesKey(data, 'k')) {
+      this.bumpSelection(-1);
+      this.app.requestRender();
       return;
     }
 
-    if (data === '\r' || data === '\n') {
-      const choice = this.choices[this.index];
-      if (choice) {
-        this.selectedValue = choice.model;
-        this.done = true;
+    const selected = this.selectCurrent();
+    if (matchesKey(data, 'a')) {
+      this.app.openAddAliasPrompt();
+      return;
+    }
+    if (matchesKey(data, 't') || matchesKey(data, 'shift+t')) {
+      const alias = selected?.kind === 'alias' ? selected.alias : selected?.kind === 'target' ? selected.alias : undefined;
+      if (alias) {
+        this.app.openTargetPicker(alias);
+      } else {
+        this.setMessage('Select an alias first');
+        this.app.requestRender();
       }
       return;
     }
-
-    if (data === 'ArrowUp' || data === 'k') {
-      if (this.index > 0) this.index -= 1;
+    if (matchesKey(data, 'e') && selected?.kind === 'target') {
+      this.app.openEditTargetPrompt(selected.alias, selected.target);
       return;
     }
-
-    if (data === 'ArrowDown' || data === 'j') {
-      if (this.index < this.choices.length - 1) this.index += 1;
+    if (matchesKey(data, 'd') && selected?.kind === 'target') {
+      this.app.openDeleteConfirm(selected.alias, selected.target);
+      return;
+    }
+    if (matchesKey(data, 'enter') || matchesKey(data, 'return')) {
+      this.setMessage(selected ? `${selected.kind} selected` : '');
+      this.app.requestRender();
     }
   }
 
   render(width: number): string[] {
-    const boxWidth = Math.min(76, Math.max(50, width - 6));
-    const leftPad = Math.max(0, Math.floor((width - boxWidth) / 2));
-    const inner = boxWidth - 2;
+    const snap = this.snapshot;
     const lines: string[] = [];
-    const entries = this.choices.slice(this.index - 4 < 0 ? 0 : this.index - 4, this.index + 5);
+    lines.push(bold('Proxy TUI') + dim(`  ${new Date().toLocaleTimeString()}`));
+    lines.push(dim('─'.repeat(Math.max(0, width))));
 
+    if (!snap) {
+      lines.push('Loading…');
+      return lines.map((line) => clip(line, width));
+    }
+
+    lines.push(`${bold('Config')}: ${snap.config.config_path ?? 'memory'} ${snap.config.read_only ? yellow('(read-only)') : green('(writable)')}`);
+    lines.push(`${bold('Models')}: ${fmt(snap.modelStats.length)}  ${bold('Agents')}: ${fmt(snap.agentStats.length)}  ${bold('Requests')}: ${fmt(snap.requestStats.endpoints.length)}`);
     lines.push('');
-    lines.push(' '.repeat(leftPad) + bold('┌' + '─'.repeat(inner - 2) + '┐'));
-    lines.push(' '.repeat(leftPad) + '│' + pad(` ${bold('Select target model')} `, inner) + '│');
-    lines.push(' '.repeat(leftPad) + '├' + '─'.repeat(inner - 2) + '┤');
-    lines.push(' '.repeat(leftPad) + '│' + pad(dim(' ↑/↓ move   Enter select   Esc cancel '), inner) + '│');
-    lines.push(' '.repeat(leftPad) + '├' + '─'.repeat(inner - 2) + '┤');
+    lines.push(bold('Composite aliases'));
 
-    if (entries.length === 0) {
-      lines.push(' '.repeat(leftPad) + '│' + pad(dim(' No custom models available '), inner) + '│');
-    } else {
-      for (const choice of entries) {
-        const selected = this.choices[this.index] === choice;
-        const marker = selected ? green('>') : dim('│');
-        const text = `${marker} ${choice.label}`;
-        lines.push(' '.repeat(leftPad) + '│' + pad(selected ? green(text) : text, inner) + '│');
+    const selections = this.selections();
+    const selected = selections[this.selectionIndex] ?? null;
+    const composites = Object.entries(snap.config.composite).sort(([a], [b]) => a.localeCompare(b));
+    if (!composites.length) lines.push(dim('  none'));
+    for (const [alias, targets] of composites) {
+      const selectedAlias = selected?.kind === 'alias' && selected.alias === alias;
+      const prefix = selectedAlias ? green('>') : dim('│');
+      lines.push(`  ${prefix} ${bold(alias)}`);
+      const entries = Object.entries(targets || {});
+      if (!entries.length) lines.push(`    ${dim('(empty)')}`);
+      for (const [target, cfg] of entries.sort(([a], [b]) => a.localeCompare(b))) {
+        const selectedTarget = selected?.kind === 'target' && selected.alias === alias && selected.target === target;
+        const mark = selectedTarget ? cyan('>') : dim('·');
+        const summary = `${cfg.share ?? '-'}${cfg.primary ? ' *' : ''}${cfg.fallback !== undefined ? ` f${cfg.fallback}` : ''}`;
+        lines.push(`    ${mark} ${clip(target, 22)} ${dim(summary)}`);
       }
     }
 
-    lines.push(' '.repeat(leftPad) + bold('└' + '─'.repeat(inner - 2) + '┘'));
-    return lines;
+    lines.push('');
+    lines.push(bold('Top models'));
+    lines.push(dim('  model                       req   failed   in       cached   wrote    out      total'));
+    for (const row of snap.modelStats.slice(0, 5)) {
+      lines.push(
+        `  ${pad(row.model, 26)} ${pad(fmt(row.requests), 5)} ${pad(fmt(row.failed_requests), 8)} ${pad(fmt(row.input_tokens), 8)} ${pad(fmt(row.cached_tokens), 8)} ${pad(fmt(row.cache_written_tokens), 8)} ${pad(fmt(row.output_tokens), 8)} ${pad(fmt(row.total_tokens), 8)}`,
+      );
+    }
+
+    lines.push('');
+    lines.push(bold('Top endpoints'));
+    for (const row of snap.requestStats.endpoints.slice(0, 5)) {
+      lines.push(`  ${pad(row.endpoint, 26)} ${fmt(row.requests)} req`);
+    }
+
+    lines.push('');
+    lines.push(bold('Top agents'));
+    for (const row of snap.agentStats.slice(0, 5)) {
+      lines.push(`  ${pad(row.key, 26)} ${fmt(row.requests)} req`);
+    }
+
+    lines.push('');
+    lines.push(dim('A add alias  T add target  E edit target  D delete  R reload  Ctrl+C quit  ↑↓ move  Enter select'));
+    lines.push(this.message ? yellow(this.message) : dim('Ready'));
+
+    return lines.map((line) => clip(line, width));
+  }
+
+  private selections(): Selection[] {
+    const snap = this.snapshot;
+    if (!snap) return [];
+    const out: Selection[] = [];
+    for (const alias of Object.keys(snap.config.composite).sort()) {
+      out.push({ kind: 'alias', alias });
+      for (const target of Object.keys(snap.config.composite?.[alias] || {}).sort()) {
+        out.push({ kind: 'target', alias, target });
+      }
+    }
+    return out;
+  }
+
+  private selectionCount(): number {
+    return this.selections().length;
+  }
+}
+
+class DashboardApp {
+  private readonly terminal = new ProcessTerminal();
+  private readonly tui = new TUI(this.terminal);
+  private readonly view = new DashboardView(this);
+  private overlay: OverlayHandle | null = null;
+  private refreshTimer: ReturnType<typeof setInterval> | null = null;
+  private stopped = false;
+
+  constructor(private readonly source: DashboardSource) {}
+
+  async start(): Promise<() => void> {
+    this.tui.addChild(this.view);
+    this.tui.setFocus(this.view);
+    this.tui.addInputListener((data) => {
+      if (matchesKey(data, 'ctrl+c')) {
+        this.stopAndExit();
+        return { consume: true };
+      }
+      return undefined;
+    });
+    this.tui.start();
+    await this.refresh();
+    this.refreshTimer = setInterval(() => {
+      void this.refresh();
+    }, 1500);
+    return () => this.stop();
+  }
+
+  requestRender(): void {
+    this.tui.requestRender();
+  }
+
+  async refresh(): Promise<void> {
+    try {
+      const proxyConfig = await this.source.loadConfig();
+      this.view.setSnapshot(getDashboardSnapshot(proxyConfig, this.source.env));
+      this.view.setMessage('Ready');
+      this.tui.requestRender();
+    } catch (error) {
+      this.view.setMessage((error as Error).message);
+      this.tui.requestRender();
+    }
+  }
+
+  openAddAliasPrompt(): void {
+    this.openPrompt('Add alias', 'Alias name:', '', async (value) => {
+      const trimmed = value.trim();
+      if (!trimmed) return;
+      addCompositeAliasFromDashboard(this.source.env, trimmed);
+      await this.refresh();
+      this.view.focusAlias(trimmed);
+      this.openTargetPicker(trimmed);
+    });
+  }
+
+  openTargetPicker(alias: string): void {
+    const choices = this.modelChoices();
+    if (choices.length === 0) {
+      this.view.setMessage('No custom models available');
+      this.requestRender();
+      return;
+    }
+
+    this.closeOverlay();
+    const overlay = new ListOverlay(
+      `Add target to ${alias}`,
+      '↑/↓ move  Enter select  Esc cancel',
+      choices,
+      (item) => {
+        this.closeOverlay();
+        this.openPrompt(`Share for ${item.value}`, 'Blank = equal share', '', async (value) => {
+          const trimmed = value.trim();
+          const share = trimmed.length > 0 ? Number(trimmed) : undefined;
+          if (trimmed.length > 0 && Number.isNaN(share)) {
+            this.view.setMessage('Share must be a number or blank');
+            await this.refresh();
+            this.view.focusAlias(alias);
+            this.requestRender();
+            return;
+          }
+          upsertCompositeTargetFromDashboard(this.source.env, alias, item.value, { share });
+          await this.refresh();
+          this.view.focusAlias(alias);
+          this.view.setMessage(`added ${item.value} to ${alias}`);
+          this.requestRender();
+        });
+      },
+      () => {
+        this.closeOverlay();
+        this.view.setMessage('add target cancelled');
+        this.requestRender();
+      },
+    );
+    this.overlay = this.tui.showOverlay(overlay, { width: '70%', maxHeight: '50%', anchor: 'center' });
+    this.overlay.focus();
+  }
+
+  openEditTargetPrompt(alias: string, target: string): void {
+    this.openPrompt(`Edit ${alias}.${target}`, 'share fallback primary', '', async (value) => {
+      const [share, fallback, primary] = value.split(/\s+/);
+      const parsedShare = share ? Number(share) : undefined;
+      const parsedFallback = fallback ? Number(fallback) : undefined;
+      const parsedPrimary = primary === 'true' ? true : primary === 'false' ? false : undefined;
+      if (share && Number.isNaN(parsedShare)) {
+        this.view.setMessage('Share must be a number');
+        await this.refresh();
+        return;
+      }
+      if (fallback && Number.isNaN(parsedFallback)) {
+        this.view.setMessage('Fallback must be a number');
+        await this.refresh();
+        return;
+      }
+      upsertCompositeTargetFromDashboard(this.source.env, alias, target, {
+        share: parsedShare,
+        fallback: parsedFallback,
+        primary: parsedPrimary,
+      });
+      this.view.setMessage(`updated ${alias}.${target}`);
+      await this.refresh();
+    });
+  }
+
+  openDeleteConfirm(alias: string, target: string): void {
+    this.closeOverlay();
+    const overlay = new ListOverlay(
+      `Delete ${alias}.${target}?`,
+      'Enter confirm  Esc cancel',
+      [
+        { value: 'yes', label: 'Yes', description: 'Delete target' },
+        { value: 'no', label: 'No', description: 'Cancel' },
+      ],
+      (item) => {
+        this.closeOverlay();
+        if (item.value === 'yes') {
+          removeCompositeTargetFromDashboard(this.source.env, alias, target);
+          this.view.setMessage(`deleted ${alias}.${target}`);
+        } else {
+          this.view.setMessage('delete cancelled');
+        }
+        void this.refresh();
+      },
+      () => {
+        this.closeOverlay();
+        this.view.setMessage('delete cancelled');
+        this.requestRender();
+      },
+      2,
+    );
+    this.overlay = this.tui.showOverlay(overlay, { width: '50%', maxHeight: '30%', anchor: 'center' });
+    this.overlay.focus();
+  }
+
+  stop(): void {
+    if (this.stopped) return;
+    this.stopped = true;
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
+    this.refreshTimer = null;
+    this.closeOverlay();
+    this.tui.stop();
+  }
+
+  stopAndExit(): void {
+    this.stop();
+    process.exit(0);
+  }
+
+  private closeOverlay(): void {
+    this.overlay?.hide();
+    this.overlay = null;
+    this.tui.setFocus(this.view);
+  }
+
+  private openPrompt(
+    title: string,
+    prompt: string,
+    initialValue: string,
+    onSubmit: (value: string) => Promise<void> | void,
+  ): void {
+    this.closeOverlay();
+    const overlay = new PromptOverlay(
+      title,
+      prompt,
+      initialValue,
+      (value) => {
+        void (async () => {
+          try {
+            this.closeOverlay();
+            await onSubmit(value);
+          } catch (error) {
+            this.view.setMessage((error as Error).message);
+            await this.refresh();
+          }
+        })();
+      },
+      () => {
+        this.closeOverlay();
+        this.view.setMessage('cancelled');
+        this.requestRender();
+      },
+    );
+    this.overlay = this.tui.showOverlay(overlay, { width: '60%', maxHeight: '40%', anchor: 'center' });
+    this.overlay.focus();
+  }
+
+  private modelChoices(): ModelChoice[] {
+    const snapshot = this.viewSnapshot();
+    if (!snapshot) return [];
+    const seen = new Set<string>();
+    const choices: ModelChoice[] = [];
+
+    for (const [category, categoryConfig] of Object.entries(snapshot.config.models)) {
+      for (const [key, value] of Object.entries(categoryConfig || {})) {
+        if (key === 'upstream_mode' || key === 'base_url' || key === 'api_key') continue;
+        if (value === undefined || seen.has(key)) continue;
+        seen.add(key);
+        choices.push({
+          category,
+          modelId: key,
+          value: key,
+          label: key,
+          description: titleCase(category),
+        });
+      }
+    }
+
+    return choices.sort((a, b) => a.modelId.localeCompare(b.modelId));
+  }
+
+  private viewSnapshot(): Awaited<ReturnType<typeof getDashboardSnapshot>> | null {
+    return (this.view as unknown as { snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null }).snapshot;
   }
 }
 
 export function startTUI(source: DashboardSource): () => void {
   if (!stdin.isTTY || !stdout.isTTY) return () => {};
 
-  const state = {
-    snapshot: null as Awaited<ReturnType<typeof getDashboardSnapshot>> | null,
-    selectionIndex: 0,
-    inputMode: 'normal' as InputMode,
-    pendingDelete: null as Selection,
-    pendingTargetModel: '',
-    input: new BufferLine(() => {}),
-    picker: null as ModelPicker | null,
-    message: '',
-    stop: false,
-  };
-
-  const aliasOrder = () => (state.snapshot ? Object.keys(state.snapshot.config.composite).sort() : []);
-  const targetList = (alias: string) => Object.keys(state.snapshot?.config.composite?.[alias] || {}).sort();
-  const selections = (): Selection[] => {
-    const out: Selection[] = [];
-    for (const alias of aliasOrder()) {
-      out.push({ kind: 'alias', alias });
-      for (const target of targetList(alias)) out.push({ kind: 'target', alias, target });
-    }
-    return out;
-  };
-  const modelChoices = (): ModelChoice[] => {
-    const snap = state.snapshot;
-    if (!snap) return [];
-    const seen = new Set<string>();
-    const choices: ModelChoice[] = [];
-
-    for (const [category, categoryConfig] of Object.entries(snap.config.models)) {
-      for (const [key, value] of Object.entries(categoryConfig || {})) {
-        if (key === 'upstream_mode' || key === 'base_url' || key === 'api_key') continue;
-        if (value === undefined || seen.has(key)) continue;
-        seen.add(key);
-        choices.push({ category, model: key, label: `${key}  ${dim(`(${titleCase(category)})`)}` });
-      }
-    }
-
-    return choices.sort((a, b) => a.model.localeCompare(b.model));
-  };
-
-  const render = (): void => {
-    const width = getWidth();
-    const snap = state.snapshot;
-    const sels = selections();
-    const sel = sels[state.selectionIndex] ?? null;
-    const lines: string[] = [];
-
-    lines.push(bold('Proxy TUI') + dim(`  ${new Date().toLocaleTimeString()}`));
-    lines.push(dim('─'.repeat(width)));
-
-    if (!snap) {
-      lines.push('Loading…');
-    } else {
-      lines.push(`${bold('Config')}: ${snap.config.config_path ?? 'memory'} ${snap.config.read_only ? yellow('(read-only)') : green('(writable)')}`);
-      lines.push(`${bold('Models')}: ${fmt(snap.modelStats.length)}  ${bold('Agents')}: ${fmt(snap.agentStats.length)}  ${bold('Requests')}: ${fmt(snap.requestStats.endpoints.length)}`);
-      lines.push('');
-      lines.push(bold('Composite aliases'));
-      const composites = Object.entries(snap.config.composite).sort(([a], [b]) => a.localeCompare(b));
-      if (!composites.length) lines.push(dim('  none'));
-      for (const [alias, targets] of composites) {
-        const selectedAlias = sel?.kind === 'alias' && sel.alias === alias;
-        const prefix = selectedAlias ? green('>') : dim('│');
-        lines.push(`  ${prefix} ${bold(alias)}`);
-        const entries = Object.entries(targets || {});
-        if (!entries.length) lines.push(`    ${dim('(empty)')}`);
-        for (const [target, cfg] of entries.sort(([a], [b]) => a.localeCompare(b))) {
-          const selectedTarget = sel?.kind === 'target' && sel.alias === alias && sel.target === target;
-          const mark = selectedTarget ? cyan('>') : dim('·');
-          const summary = `${cfg.share ?? '-'}${cfg.primary ? ' *' : ''}${cfg.fallback !== undefined ? ` f${cfg.fallback}` : ''}`;
-          lines.push(`    ${mark} ${truncate(target, 22)} ${dim(summary)}`);
-        }
-      }
-
-      lines.push('');
-      lines.push(bold('Top models'));
-      lines.push(dim('  model                       req   failed   in       cached   wrote    out      total'));
-      for (const row of snap.modelStats.slice(0, 5)) {
-        lines.push(
-          `  ${pad(row.model, 26)} ${pad(fmt(row.requests), 5)} ${pad(fmt(row.failed_requests), 8)} ${pad(fmt(row.input_tokens), 8)} ${pad(fmt(row.cached_tokens), 8)} ${pad(fmt(row.cache_written_tokens), 8)} ${pad(fmt(row.output_tokens), 8)} ${pad(fmt(row.total_tokens), 8)}`,
-        );
-      }
-
-      lines.push('');
-      lines.push(bold('Top endpoints'));
-      for (const row of snap.requestStats.endpoints.slice(0, 5)) lines.push(`  ${pad(row.endpoint, 26)} ${fmt(row.requests)} req`);
-
-      lines.push('');
-      lines.push(bold('Top agents'));
-      for (const row of snap.agentStats.slice(0, 5)) lines.push(`  ${pad(row.key, 26)} ${fmt(row.requests)} req`);
-
-      lines.push('');
-      lines.push(dim('A add alias  T add target  E edit target  D delete  R reload  Ctrl+C quit  ↑↓ move  Enter select'));
-      lines.push(state.message ? yellow(state.message) : dim('Ready'));
-      if (state.inputMode !== 'normal') lines.push(dim(`Input: ${state.input.text()}`));
-
-      if (state.inputMode === 'pick-target' && state.picker) {
-        lines.push(...state.picker.render(width));
-      } else if (state.inputMode === 'share-target' || state.inputMode === 'edit-target' || state.inputMode === 'add-alias' || state.inputMode === 'confirm-delete') {
-        lines.push('');
-        const prompt =
-          state.inputMode === 'share-target'
-            ? `Share for ${state.pendingTargetModel} (blank = equal):`
-            : state.inputMode === 'edit-target'
-              ? `Edit target ${sel?.kind === 'target' ? `${sel.alias}.${sel.target}` : ''} (share fallback primary):`
-              : state.inputMode === 'confirm-delete'
-                ? `Delete ${sel?.kind === 'target' ? `${sel.alias}.${sel.target}` : ''}? y/n`
-                : 'Alias name:';
-        lines.push(dim(prompt));
-      }
-    }
-
-    stdout.write(clear() + hideCursor() + lines.map((line) => truncate(line, width)).join('\n'));
-  };
-
-  const refresh = async (): Promise<void> => {
-    state.snapshot = getDashboardSnapshot(await source.loadConfig(), source.env);
-    if (state.selectionIndex >= selections().length) state.selectionIndex = Math.max(0, selections().length - 1);
-    render();
-  };
-
-  const ask = (mode: InputMode, action: (value: string) => Promise<void> | void): void => {
-    state.inputMode = mode;
-    state.input = new BufferLine(async (value) => {
-      try {
-        await action(value);
-      } catch (err) {
-        state.message = (err as Error).message;
-      }
-      state.inputMode = 'normal';
-      state.pendingDelete = null;
-      state.pendingTargetModel = '';
-      await refresh();
-    });
-  };
-
-  const startTargetPicker = (): void => {
-    const choices = modelChoices();
-    state.picker = new ModelPicker(choices);
-    state.inputMode = 'pick-target';
-    render();
-  };
-
-  const handleKey = async (key: string): Promise<void> => {
-    if (state.inputMode === 'pick-target' && state.picker) {
-      state.picker.handleInput(key);
-      if (state.picker.done) {
-        const selected = state.picker.selectedValue;
-        state.picker = null;
-        if (!selected) {
-          state.inputMode = 'normal';
-          render();
-          return;
-        }
-        state.pendingTargetModel = selected;
-        ask('share-target', async (value) => {
-          const trimmed = value.trim();
-          const share = trimmed.length > 0 ? Number(trimmed) : undefined;
-          if (trimmed.length > 0 && Number.isNaN(share)) {
-            throw new Error('Share must be a number or blank');
-          }
-          const selectedAlias = selections()[state.selectionIndex];
-          if (!selectedAlias || selectedAlias.kind !== 'alias') {
-            throw new Error('Select an alias first');
-          }
-          upsertCompositeTargetFromDashboard(source.env, selectedAlias.alias, state.pendingTargetModel, {
-            share,
-          });
-          state.message = `added ${state.pendingTargetModel} to ${selectedAlias.alias}`;
-        });
-      }
-      render();
-      return;
-    }
-
-    if (state.inputMode !== 'normal') {
-      state.input.input(key);
-      render();
-      return;
-    }
-
-    const sels = selections();
-    const sel = sels[state.selectionIndex] ?? null;
-    if (key === '\u0003' || key === 'q') { stop(); return; }
-    if (key === 'r') { await refresh(); return; }
-    if (key === 'ArrowDown' || key === 'j') { state.selectionIndex = Math.min(sels.length - 1, state.selectionIndex + 1); render(); return; }
-    if (key === 'ArrowUp' || key === 'k') { state.selectionIndex = Math.max(0, state.selectionIndex - 1); render(); return; }
-    if (key === 'a') {
-      ask('add-alias', async (value) => {
-        if (!value) return;
-        addCompositeAliasFromDashboard(source.env, value);
-        state.message = `added alias ${value}`;
-      });
-      render();
-      return;
-    }
-    if (key === 't' && sel?.kind === 'alias') {
-      startTargetPicker();
-      return;
-    }
-    if (key === 'e' && sel?.kind === 'target') {
-      ask('edit-target', async (value) => {
-        const [share, fallback, primary] = value.split(/\s+/);
-        const parsedShare = share ? Number(share) : undefined;
-        const parsedFallback = fallback ? Number(fallback) : undefined;
-        const parsedPrimary = primary === 'true' ? true : primary === 'false' ? false : undefined;
-        if (share && Number.isNaN(parsedShare)) throw new Error('Share must be a number');
-        if (fallback && Number.isNaN(parsedFallback)) throw new Error('Fallback must be a number');
-        upsertCompositeTargetFromDashboard(source.env, sel.alias, sel.target, {
-          share: parsedShare,
-          fallback: parsedFallback,
-          primary: parsedPrimary,
-        });
-        state.message = `updated ${sel.alias}.${sel.target}`;
-      });
-      render();
-      return;
-    }
-    if (key === 'd' && sel?.kind === 'target') {
-      state.pendingDelete = sel;
-      ask('confirm-delete', async (value) => {
-        if (value.toLowerCase() !== 'y' && value.toLowerCase() !== 'yes') {
-          state.message = 'delete cancelled';
-          return;
-        }
-        removeCompositeTargetFromDashboard(source.env, sel.alias, sel.target);
-        state.message = `deleted ${sel.alias}.${sel.target}`;
-      });
-      render();
-      return;
-    }
-    if (key === '\r' || key === '\n') { state.message = sel ? `${sel.kind} selected` : ''; render(); return; }
-  };
-
-  const onData = (buf: Buffer): void => {
-    const s = buf.toString('utf8');
-    if (s === '\u001b[A') { void handleKey('ArrowUp'); return; }
-    if (s === '\u001b[B') { void handleKey('ArrowDown'); return; }
-    for (const ch of s) void handleKey(ch);
-  };
-
-  const stop = (): void => {
-    state.stop = true;
-    stdin.off('data', onData);
-    if (stdin.isTTY) stdin.setRawMode(false);
-    stdout.write(showCursor() + reset() + '\n');
-  };
-
-  if (stdin.isTTY) stdin.setRawMode(true);
-  stdin.resume();
-  stdin.on('data', onData);
-  void refresh();
-  const timer = setInterval(() => { if (!state.stop) void refresh(); }, 1500);
-  return () => { clearInterval(timer); stop(); };
+  const app = new DashboardApp(source);
+  void app.start();
+  return () => app.stop();
 }
