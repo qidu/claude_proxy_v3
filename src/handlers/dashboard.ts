@@ -278,7 +278,7 @@ export function handleDashboardPage(): Response {
       </div>
 
       <div class="request-submodule">
-        <h3>Top agents</h3>
+        <h3>Status Count</h3>
         <table id="requestUpstreamStats">
           <thead><tr><th>Upstream Base URL</th><th class="num">Responses</th></tr></thead>
           <tbody></tbody>
