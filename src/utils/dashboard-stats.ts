@@ -19,8 +19,13 @@ type ModelStatsEntry = {
 
 type AgentStatsEntry = {
   key: string;
-  requests: number;
-  responses: number;
+  uses: number;
+};
+
+type ToolUsageStatsEntry = {
+  tool_name: string;
+  in_requests: number;
+  in_responses: number;
 };
 
 type RequestEndpointStatsEntry = {
@@ -38,6 +43,11 @@ type RequestStatusCodeStatsEntry = {
   responses: number;
 };
 
+type UpstreamResponseToolStatsEntry = {
+  tool_name: string;
+  tools: number;
+};
+
 type RequestEndpointTimingStatsEntry = {
   endpoint: string;
   max_time_ms: number;
@@ -52,6 +62,7 @@ const requestEndpointStats = new Map<string, RequestEndpointStatsEntry>();
 const requestUpstreamStats = new Map<string, RequestUpstreamStatsEntry>();
 const requestStatusCodeToEndpointStats = new Map<number, RequestStatusCodeStatsEntry>();
 const requestStatusCodeFromUpstreamStats = new Map<number, RequestStatusCodeStatsEntry>();
+const upstreamResponseToolStats = new Map<string, UpstreamResponseToolStatsEntry>();
 const requestEndpointTimingStats = new Map<string, RequestEndpointTimingStatsEntry>();
 
 function toSafeNumber(value: unknown): number {
@@ -113,13 +124,16 @@ export function extractToolNamesFromBody(body: Record<string, unknown> | undefin
   return names.size > 0 ? [...names] : ['none'];
 }
 
-function addToolName(names: Set<string>, value: unknown): void {
+function addToolName(names: string[], value: unknown): boolean {
   if (typeof value === 'string' && value.trim()) {
-    names.add(value.trim());
+    names.push(value.trim());
+    return true;
   }
+
+  return false;
 }
 
-function collectToolNamesFromResponseNode(node: unknown, names: Set<string>): void {
+function collectToolNamesFromResponseNode(node: unknown, names: string[]): void {
   if (!node || typeof node !== 'object') {
     return;
   }
@@ -187,9 +201,75 @@ export function extractToolNamesFromResponsePayload(payload: unknown): string[] 
     return ['none'];
   }
 
-  const names = new Set<string>();
+  const names: string[] = [];
   collectToolNamesFromResponseNode(payload, names);
-  return names.size > 0 ? [...names] : ['none'];
+  return names.length > 0 ? names : ['none'];
+}
+
+function countToolOccurrencesFromResponseNode(node: unknown): number {
+  if (!node || typeof node !== 'object') {
+    return 0;
+  }
+
+  const record = node as Record<string, unknown>;
+  let count = 0;
+
+  if (Array.isArray(record.tool_calls)) {
+    count += record.tool_calls.filter((toolCall) => toolCall && typeof toolCall === 'object').length;
+  }
+
+  if (Array.isArray(record.content)) {
+    for (const block of record.content) {
+      if (!block || typeof block !== 'object') {
+        continue;
+      }
+      if ((block as Record<string, unknown>).type === 'tool_use') {
+        count += 1;
+      }
+    }
+  }
+
+  if (Array.isArray(record.output)) {
+    for (const item of record.output) {
+      if (!item || typeof item !== 'object') {
+        continue;
+      }
+      const outputItem = item as Record<string, unknown>;
+      if (outputItem.type === 'function_call') {
+        count += 1;
+      }
+      if (outputItem.type === 'message') {
+        count += countToolOccurrencesFromResponseNode(outputItem);
+      }
+    }
+  }
+
+  if (record.message && typeof record.message === 'object') {
+    count += countToolOccurrencesFromResponseNode(record.message);
+  }
+
+  if (Array.isArray(record.choices)) {
+    for (const choice of record.choices) {
+      if (!choice || typeof choice !== 'object') {
+        continue;
+      }
+      count += countToolOccurrencesFromResponseNode((choice as Record<string, unknown>).message);
+    }
+  }
+
+  if (record.response && typeof record.response === 'object') {
+    count += countToolOccurrencesFromResponseNode(record.response);
+  }
+
+  return count;
+}
+
+export function extractToolCountFromResponsePayload(payload: unknown): number {
+  if (!payload || typeof payload !== 'object') {
+    return 0;
+  }
+
+  return countToolOccurrencesFromResponseNode(payload);
 }
 
 export function extractUsageFromResponsePayload(payload: unknown): UsageStats | undefined {
@@ -316,23 +396,12 @@ export function recordAgentStat(userAgentPrefix: string, toolNames: string[]): v
 
   for (const toolName of effectiveTools) {
     const key = `${ua} / ${toolName}`;
-    const current = agentStats.get(key) || { key, requests: 0, responses: 0 };
-    current.requests += 1;
+    const current = agentStats.get(key) || { key, uses: 0 };
+    current.uses += 1;
     agentStats.set(key, current);
   }
 }
 
-export function recordAgentResponseStat(userAgentPrefix: string, toolNames: string[]): void {
-  const ua = userAgentPrefix || 'unknown';
-  const effectiveTools = toolNames.length > 0 ? toolNames : ['none'];
-
-  for (const toolName of effectiveTools) {
-    const key = `${ua} / ${toolName}`;
-    const current = agentStats.get(key) || { key, requests: 0, responses: 0 };
-    current.responses += 1;
-    agentStats.set(key, current);
-  }
-}
 
 export function getModelStatsDesc(): ModelStatsEntry[] {
   return [...modelStats.values()].sort((a, b) => {
@@ -518,12 +587,59 @@ export function recordResponseStatusCodeFromUpstream(statusCode: number): void {
   requestStatusCodeFromUpstreamStats.set(statusCode, current);
 }
 
+export function recordUpstreamResponseToolNames(toolNames: string[]): void {
+  if (!Array.isArray(toolNames) || toolNames.length === 0) {
+    return;
+  }
+
+  for (const toolName of toolNames) {
+    const current = upstreamResponseToolStats.get(toolName) || { tool_name: toolName, tools: 0 };
+    current.tools += 1;
+    upstreamResponseToolStats.set(toolName, current);
+  }
+}
+
+export function recordUpstreamResponseToolCount(_upstreamMode: string | undefined, _toolCount = 0): void {
+  void _upstreamMode;
+  void _toolCount;
+}
+
 export function getAgentStatsDesc(): AgentStatsEntry[] {
   return [...agentStats.values()].sort((a, b) => {
-    if (b.requests !== a.requests) {
-      return b.requests - a.requests;
+    if (b.uses !== a.uses) {
+      return b.uses - a.uses;
     }
     return a.key.localeCompare(b.key);
+  });
+}
+
+export function getToolUsageStatsDesc(): ToolUsageStatsEntry[] {
+  const combined = new Map<string, ToolUsageStatsEntry>();
+
+  for (const entry of agentStats.values()) {
+    const tool_name = entry.key.includes(' / ') ? entry.key.slice(entry.key.lastIndexOf(' / ') + 3) : entry.key;
+    const current = combined.get(tool_name) || { tool_name, in_requests: 0, in_responses: 0 };
+    current.in_requests += entry.uses;
+    combined.set(tool_name, current);
+  }
+
+  for (const entry of upstreamResponseToolStats.values()) {
+    const tool_name = entry.tool_name;
+    const current = combined.get(tool_name) || { tool_name, in_requests: 0, in_responses: 0 };
+    current.in_responses += entry.tools;
+    combined.set(tool_name, current);
+  }
+
+  return [...combined.values()].sort((a, b) => {
+    const aTotal = a.in_requests + a.in_responses;
+    const bTotal = b.in_requests + b.in_responses;
+    if (bTotal !== aTotal) {
+      return bTotal - aTotal;
+    }
+    if (b.in_requests !== a.in_requests) {
+      return b.in_requests - a.in_requests;
+    }
+    return a.tool_name.localeCompare(b.tool_name);
   });
 }
 
@@ -560,4 +676,125 @@ export function getRequestStatusCodeToEndpointStatsDesc(): RequestStatusCodeStat
 
 export function getRequestStatusCodeFromUpstreamStatsDesc(): RequestStatusCodeStatsEntry[] {
   return sortStatusCodeStatsDesc([...requestStatusCodeFromUpstreamStats.values()]);
+}
+
+export function getUpstreamResponseToolStatsDesc(): UpstreamResponseToolStatsEntry[] {
+  return [...upstreamResponseToolStats.values()].sort((a, b) => {
+    if (b.tools !== a.tools) {
+      return b.tools - a.tools;
+    }
+    return a.tool_name.localeCompare(b.tool_name);
+  });
+}
+
+export function createResponseToolTrackingTransformStream(
+  onNames: (toolNames: string[]) => void,
+): TransformStream<Uint8Array, Uint8Array> {
+  const decoder = new TextDecoder();
+  let remainder = '';
+  const toolNames: string[] = [];
+
+  function collectToolNamesFromPayload(payload: unknown): void {
+    if (!payload || typeof payload !== 'object') {
+      return;
+    }
+
+    const root = payload as Record<string, unknown>;
+
+    if (Array.isArray(root.choices)) {
+      for (const choice of root.choices) {
+        if (!choice || typeof choice !== 'object') continue;
+        const delta = (choice as Record<string, unknown>).delta as Record<string, unknown> | undefined;
+        if (delta && Array.isArray(delta.tool_calls)) {
+          for (const toolCall of delta.tool_calls) {
+            if (!toolCall || typeof toolCall !== 'object') continue;
+            const fn = (toolCall as Record<string, unknown>).function;
+            if (fn && typeof fn === 'object') {
+              addToolName(toolNames, (fn as Record<string, unknown>).name);
+            }
+          }
+        }
+        const message = (choice as Record<string, unknown>).message;
+        if (message && typeof message === 'object') {
+          collectToolNamesFromPayload(message);
+        }
+      }
+    }
+
+    if (Array.isArray(root.output)) {
+      for (const item of root.output) {
+        if (!item || typeof item !== 'object') continue;
+        const outputItem = item as Record<string, unknown>;
+        if (outputItem.type === 'function_call') {
+          addToolName(toolNames, outputItem.name);
+        }
+        if (outputItem.type === 'message') {
+          collectToolNamesFromPayload(outputItem);
+        }
+      }
+    }
+
+    if (Array.isArray(root.content)) {
+      for (const block of root.content) {
+        if (!block || typeof block !== 'object') continue;
+        if ((block as Record<string, unknown>).type === 'tool_use') {
+          addToolName(toolNames, (block as Record<string, unknown>).name);
+        }
+      }
+    }
+
+    if (root.content_block && typeof root.content_block === 'object') {
+      const contentBlock = root.content_block as Record<string, unknown>;
+      if (contentBlock.type === 'tool_use') {
+        addToolName(toolNames, contentBlock.name);
+      }
+    }
+
+    if (root.item && typeof root.item === 'object') {
+      const item = root.item as Record<string, unknown>;
+      if (item.type === 'function_call') {
+        addToolName(toolNames, item.name);
+      }
+    }
+  }
+
+  return new TransformStream({
+    transform(chunk: Uint8Array, controller: TransformStreamDefaultController<Uint8Array>) {
+      const text = remainder + decoder.decode(chunk, { stream: true });
+      const lines = text.split('\n');
+      remainder = lines.pop() || '';
+
+      let currentEvent: string | undefined;
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim();
+          continue;
+        }
+        if (!line.startsWith('data: ')) {
+          continue;
+        }
+
+        const dataText = line.slice(6).trim();
+        if (dataText === '[DONE]') {
+          continue;
+        }
+
+        try {
+          const payload = JSON.parse(dataText);
+          if (currentEvent === 'content_block_start' || currentEvent === 'response.output_item.added' || currentEvent === 'response.output_item.done' || !currentEvent) {
+            collectToolNamesFromPayload(payload);
+          }
+        } catch {
+          // ignore parse failures
+        }
+      }
+
+      controller.enqueue(chunk);
+    },
+    flush() {
+      if (toolNames.length > 0) {
+        onNames(toolNames);
+      }
+    },
+  });
 }

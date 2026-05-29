@@ -32,7 +32,7 @@ import {
   extractToolNamesFromResponsePayload,
   extractUsageFromResponsePayload,
   extractUserAgentPrefix,
-  recordAgentResponseStat,
+  createResponseToolTrackingTransformStream,
   recordAgentStat,
   recordModelStat,
   recordModelFailedRequest,
@@ -932,8 +932,7 @@ export default {
               if (usage) {
                 recordModelUsage(attemptModelId, usage);
               }
-              const responseToolNames = extractToolNamesFromResponsePayload(payload);
-              recordAgentResponseStat(userAgentPrefix, responseToolNames);
+              // no-op: tool stats are aggregated in the dashboard layer
             } catch {
               // ignore stats extraction failures
             }
@@ -942,7 +941,8 @@ export default {
             // from Claude SSE events (message_start.usage.input_tokens,
             // message_delta.usage.output_tokens)
             const usageStream = createUsageTrackingTransformStream(attemptModelId);
-            response = new Response(response.body!.pipeThrough(usageStream), response);
+            const toolStream = createResponseToolTrackingTransformStream(() => {});
+            response = new Response(response.body!.pipeThrough(usageStream).pipeThrough(toolStream), response);
           }
         }
 

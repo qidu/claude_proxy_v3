@@ -9,7 +9,7 @@ import { handleTargetApiError } from '../utils/errors.js';
 import { isSdkUrl, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
 import { addForwardedHeaders } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
-import { recordResponseStatusCodeFromUpstream } from '../utils/dashboard-stats.js';
+import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
 
 /**
  * Handle native Claude API request (pass-through)
@@ -122,6 +122,7 @@ export async function handleClaudeRequest(
     });
 
     recordResponseStatusCodeFromUpstream(response.status);
+    recordUpstreamResponseToolCount('anthropic-messages', 0);
 
     if (!response.ok) {
         // Read upstream response body for diagnostics

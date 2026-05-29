@@ -14,7 +14,7 @@ import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fe
 import { convertResponsesToChatCompletions } from '../converters/responses-to-completions.js';
 import { convertCompletionsToResponses, convertCompletionsToCompactedResponse } from '../converters/completions-to-responses.js';
 import { getConversation, saveConversation, normalizeInputToItems } from '../utils/conversation-store.js';
-import { recordResponseStatusCodeFromUpstream } from '../utils/dashboard-stats.js';
+import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
 
 /**
  * Handle responses API request
@@ -102,6 +102,7 @@ async function handleAsCompletions(
   });
 
   recordResponseStatusCodeFromUpstream(response.status);
+  recordUpstreamResponseToolCount('openai-completions', 0);
 
   if (!response.ok) {
     const bodyPreview = JSON.stringify(completionsRequest);
@@ -513,6 +514,7 @@ export async function handleResponsesInputTokensRequest(
     });
 
     recordResponseStatusCodeFromUpstream(response.status);
+  recordUpstreamResponseToolCount('openai-completions', 0);
 
   if (!response.ok) {
       activeLogger.error(requestId, `Responses input_tokens error: ${response.status}, URL: ${targetUrl}`);
@@ -544,6 +546,7 @@ export async function handleResponsesInputTokensRequest(
   });
 
   recordResponseStatusCodeFromUpstream(response.status);
+  recordUpstreamResponseToolCount('openai-completions', 0);
 
   if (!response.ok) {
     activeLogger.error(requestId, `Responses input_tokens passthrough error: ${response.status}, URL: ${targetUrl}`);
@@ -599,6 +602,7 @@ export async function handleResponsesCompactRequest(
     });
 
     recordResponseStatusCodeFromUpstream(response.status);
+  recordUpstreamResponseToolCount('openai-completions', 0);
 
   if (!response.ok) {
       activeLogger.error(requestId, `Responses compact error: ${response.status}, URL: ${targetUrl}`);
@@ -630,6 +634,7 @@ export async function handleResponsesCompactRequest(
   });
 
   recordResponseStatusCodeFromUpstream(response.status);
+  recordUpstreamResponseToolCount('openai-completions', 0);
 
   if (!response.ok) {
     activeLogger.error(requestId, `Responses compact passthrough error: ${response.status}, URL: ${targetUrl}`);
@@ -669,6 +674,7 @@ async function handleAsPassthrough(
   });
 
   recordResponseStatusCodeFromUpstream(response.status);
+  recordUpstreamResponseToolCount('openai-completions', 0);
 
   if (!response.ok) {
     const bodyPreview = JSON.stringify(requestBody);

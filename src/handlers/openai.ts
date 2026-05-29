@@ -7,7 +7,7 @@ import { isSdkUrl, handleSdkOpenAIRequest } from '../utils/sdk-handler.js';
 import type { Env, Logger } from '../types/shared.js';
 import { addForwardedHeaders } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
-import { recordResponseStatusCodeFromUpstream } from '../utils/dashboard-stats.js';
+import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
 
 /**
  * Check if request is in Gemini Interactions format
@@ -217,6 +217,7 @@ export async function handleOpenAIRequest(
         });
 
         recordResponseStatusCodeFromUpstream(response.status);
+        recordUpstreamResponseToolCount('openai-completions', 0);
 
         // Handle target API errors
         if (!response.ok) {

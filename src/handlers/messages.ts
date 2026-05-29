@@ -17,7 +17,7 @@ import { isSdkUrl, handleSdkOpenAIRequest, handleSdkAnthropicRequest } from '../
 import { addForwardedHeaders } from '../utils/routing.js';
 import { getLocalTokenCountingConfig } from '../utils/token-counting.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
-import { recordResponseStatusCodeFromUpstream } from '../utils/dashboard-stats.js';
+import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
 
 /**
  * Get token counting configuration from environment
@@ -168,6 +168,7 @@ export async function handleMessagesRequest(
     });
 
     recordResponseStatusCodeFromUpstream(response.status);
+    recordUpstreamResponseToolCount('openai-completions', 0);
 
     // Handle target API errors
     if (!response.ok) {
@@ -289,6 +290,7 @@ export async function handleMessagesRequest(
   });
 
   recordResponseStatusCodeFromUpstream(response.status);
+  recordUpstreamResponseToolCount('openai-completions', 0);
 
   // Handle target API errors
   if (!response.ok) {

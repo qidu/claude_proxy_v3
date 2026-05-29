@@ -10,6 +10,7 @@ import { Env, Logger } from '../types/shared.js';
 import { createLogger } from './logger.js';
 import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
 import { createStreamTransformer } from '../converters/streaming.js';
+import { recordUpstreamResponseToolCount } from './dashboard-stats.js';
 
 /**
  * Check if target URL is an SDK URL (sdk://)
@@ -248,6 +249,7 @@ export async function handleSdkOpenAIRequest(
         // Handle streaming request
         const stream = client.createChatCompletionStream(chatJimmyRequest);
         const encoder = new TextEncoder();
+        recordUpstreamResponseToolCount(outputFormat === 'claude' ? 'anthropic-messages' : 'openai-completions', 0);
 
         if (outputFormat === 'claude') {
           const transformer = createStreamTransformer(
@@ -306,6 +308,8 @@ export async function handleSdkOpenAIRequest(
       ...chatJimmyRequest,
       stream: false,
     }) as OpenAIResponse;
+
+    recordUpstreamResponseToolCount('openai-completions', 0);
 
     if (outputFormat === 'claude') {
       const claudeResponse: ClaudeMessagesResponse = await convertOpenAIToClaudeResponse(
@@ -404,6 +408,7 @@ export async function handleSdkAnthropicRequest(
         // Handle streaming request and convert OpenAI SSE to Claude SSE
         const stream = client.createChatCompletionStream(chatJimmyRequest);
         const encoder = new TextEncoder();
+        recordUpstreamResponseToolCount('anthropic-messages', 0);
         const transformer = createStreamTransformer(
           modelAlias || claudeRequest.model,
           requestId,
@@ -443,6 +448,7 @@ export async function handleSdkAnthropicRequest(
       ...chatJimmyRequest,
       stream: false,
     }) as OpenAIResponse;
+    recordUpstreamResponseToolCount('anthropic-messages', 0);
     const claudeResponse: ClaudeMessagesResponse = await convertOpenAIToClaudeResponse(
       response,
       modelAlias || claudeRequest.model,

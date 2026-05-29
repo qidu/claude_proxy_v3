@@ -22,6 +22,8 @@ import {
   getRequestStatusCodeFromUpstreamStatsDesc,
   getRequestStatusCodeToEndpointStatsDesc,
   getRequestUpstreamStatsDesc,
+  getToolUsageStatsDesc,
+  getUpstreamResponseToolStatsDesc,
 } from '../utils/dashboard-stats.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -53,10 +55,11 @@ export interface DashboardSnapshot {
     config_path: string | null;
   };
   modelStats: ReturnType<typeof getModelStatsDesc>;
-  agentStats: ReturnType<typeof getAgentStatsDesc>;
+  toolStats: ReturnType<typeof getToolUsageStatsDesc>;
   requestStats: {
     endpoints: ReturnType<typeof getRequestEndpointStatsDesc>;
     upstreams: ReturnType<typeof getRequestUpstreamStatsDesc>;
+    upstream_response_tools: ReturnType<typeof getUpstreamResponseToolStatsDesc>;
     status_codes_from_upstreams: ReturnType<typeof getRequestStatusCodeFromUpstreamStatsDesc>;
     status_codes_to_endpoints: ReturnType<typeof getRequestStatusCodeToEndpointStatsDesc>;
     endpoint_timings: ReturnType<typeof getRequestEndpointTimingStatsDesc>;
@@ -94,10 +97,11 @@ export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): Dashbo
   return {
     config,
     modelStats: getModelStatsDesc(),
-    agentStats: getAgentStatsDesc(),
+    toolStats: getToolUsageStatsDesc(),
     requestStats: {
       endpoints: getRequestEndpointStatsDesc(),
       upstreams: getRequestUpstreamStatsDesc(),
+      upstream_response_tools: getUpstreamResponseToolStatsDesc(),
       status_codes_from_upstreams: getRequestStatusCodeFromUpstreamStatsDesc(),
       status_codes_to_endpoints: getRequestStatusCodeToEndpointStatsDesc(),
       endpoint_timings: getRequestEndpointTimingStatsDesc(),
@@ -309,9 +313,9 @@ export function handleDashboardPage(): Response {
     </section>
 
     <section class="card" id="section-agent">
-      <h2>Agent Statistic <button id="toggleAgentStats" class="mini-btn" style="font-size:12px;">Show all</button></h2>
-      <table id="agentStats">
-        <thead><tr><th>Agent / Tool</th><th class="num">Requests</th><th class="num">Responses</th></tr></thead>
+      <h2>Tool Usage <button id="toggleToolStats" class="mini-btn" style="font-size:12px;">Show all</button></h2>
+      <table id="toolStats">
+        <thead><tr><th>Tool</th><th class="num">In requests</th><th class="num">In responses</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
@@ -631,37 +635,32 @@ export function handleDashboardPage(): Response {
         );
       }
 
-      let agentStatsExpanded = false;
+      let toolStatsExpanded = false;
 
-      function renderAgentRows(data) {
-        const tbody = document.querySelector('#agentStats tbody');
-        if (agentStatsExpanded) {
-          tbody.innerHTML = data.map((row) =>
-            '<tr><td>' + row.key + '</td><td class="num">' + row.requests + '</td><td class="num">' + (row.responses || 0) + '</td></tr>'
-          ).join('');
-        } else {
-          tbody.innerHTML = data.slice(0, 10).map((row) =>
-            '<tr><td>' + row.key + '</td><td class="num">' + row.requests + '</td><td class="num">' + (row.responses || 0) + '</td></tr>'
-          ).join('');
-        }
-        const btn = document.getElementById('toggleAgentStats');
+      function renderToolRows(data) {
+        const tbody = document.querySelector('#toolStats tbody');
+        const rows = toolStatsExpanded ? data : data.slice(0, 10);
+        tbody.innerHTML = rows.map((row) =>
+          '<tr><td>' + row.tool_name + '</td><td class="num">' + row.in_requests + '</td><td class="num">' + row.in_responses + '</td></tr>'
+        ).join('');
+        const btn = document.getElementById('toggleToolStats');
         if (data.length > 10) {
           btn.style.display = 'inline-block';
-          btn.textContent = agentStatsExpanded ? 'Collapse' : 'Show all (' + data.length + ')';
+          btn.textContent = toolStatsExpanded ? 'Collapse' : 'Show all (' + data.length + ')';
         } else {
           btn.style.display = 'none';
         }
       }
 
-      async function loadAgentStats() {
+      async function loadToolStats() {
         const res = await fetch('/dashboard/api/stats/agents');
         const json = await res.json();
-        renderAgentRows(json.data || []);
+        renderToolRows(json.data || []);
       }
 
-      document.getElementById('toggleAgentStats').addEventListener('click', () => {
-        agentStatsExpanded = !agentStatsExpanded;
-        loadAgentStats();
+      document.getElementById('toggleToolStats').addEventListener('click', () => {
+        toolStatsExpanded = !toolStatsExpanded;
+        loadToolStats();
       });
 
       document.getElementById('exportModelStatsCsv').addEventListener('click', () => {
@@ -779,13 +778,14 @@ export function handleDashboardModelStats(): Response {
 }
 
 export function handleDashboardAgentStats(): Response {
-  return jsonResponse({ data: getAgentStatsDesc() });
+  return jsonResponse({ data: getToolUsageStatsDesc() });
 }
 
 export function handleDashboardRequestStats(): Response {
   return jsonResponse({
     endpoints: getRequestEndpointStatsDesc(),
     upstreams: getRequestUpstreamStatsDesc(),
+    upstream_response_tools: getUpstreamResponseToolStatsDesc(),
     status_codes_from_upstreams: getRequestStatusCodeFromUpstreamStatsDesc(),
     status_codes_to_endpoints: getRequestStatusCodeToEndpointStatsDesc(),
     endpoint_timings: getRequestEndpointTimingStatsDesc(),

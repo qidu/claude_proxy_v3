@@ -33,6 +33,7 @@ type Selection =
   | { kind: 'target'; alias: string; target: string }
   | null;
 
+
 type ModelChoice = SelectItem & {
   category: string;
   modelId: string;
@@ -263,8 +264,9 @@ class DashboardView implements Component {
       return lines.map((line) => clip(line, width));
     }
 
+    const toolStats = snap.toolStats || [];
     lines.push(`${bold('Config')}: ${snap.config.config_path ?? 'memory'} ${snap.config.read_only ? yellow('(read-only)') : green('(writable)')}`);
-    lines.push(`${bold('Models')}: ${fmt(snap.modelStats.length)}  ${bold('Agents')}: ${fmt(snap.agentStats.length)}  ${bold('Requests')}: ${fmt(snap.requestStats.endpoints.length)}`);
+    lines.push(`${bold('Models')}: ${fmt(snap.modelStats.length)}  ${bold('Tools')}: ${fmt(toolStats.length)}  ${bold('Requests')}: ${fmt(snap.requestStats.endpoints.length)}`);
     lines.push('');
     lines.push(bold('Composite aliases'));
 
@@ -282,7 +284,7 @@ class DashboardView implements Component {
         const selectedTarget = selected?.kind === 'target' && selected.alias === alias && selected.target === target;
         const mark = selectedTarget ? green('>') : dim('·');
         const summary = `${cfg.share ?? '-'}${cfg.primary ? ' P' : ''}${cfg.fallback !== undefined ? ` FB${cfg.fallback}` : ''}`;
-        lines.push(`  ${dim('|')} ${mark} ${clip(target, 22)} ${dim(summary)}`);
+        lines.push(`  ${dim('│')} ${mark} ${clip(target, 22)} ${dim(summary)}`);
       }
     }
 
@@ -291,15 +293,15 @@ class DashboardView implements Component {
     lines.push(dim('  model                         req   failed | token in  cached    wrote    out      total'));
     for (const row of snap.modelStats.slice(0, 5)) {
       lines.push(
-        `  ${pad(row.model, 26)}  ${alignRight(fmt(row.requests), 5)} ${alignRight(fmt(row.failed_requests), 6)} ${alignRight(fmt(row.input_tokens), 8)}  ${alignRight(fmt(row.cached_tokens), 8)} ${alignRight(fmt(row.cache_written_tokens), 8)} ${alignRight(fmt(row.output_tokens), 8)}  ${alignRight(fmt(row.total_tokens), 8)}`,
+        `  ${pad(row.model, 26)}  ${alignRight(fmt(row.requests), 5)} ${alignRight(fmt(row.failed_requests), 8)}  ${alignRight(fmt(row.input_tokens), 8)}  ${alignRight(fmt(row.cached_tokens), 8)} ${alignRight(fmt(row.cache_written_tokens), 8)} ${alignRight(fmt(row.output_tokens), 8)}  ${alignRight(fmt(row.total_tokens), 8)}`,
       );
     }
 
     lines.push('');
-    lines.push(bold('Top agents'));
-    lines.push(dim('  tools                         requests   responses'));
-    for (const row of snap.agentStats.slice(0, 5)) {
-      lines.push(`  ${pad(row.key, 36)} ${pad(fmt(row.requests), 9)} ${pad(fmt(row.responses), 10)}`);
+    lines.push(bold('Tool usage'));
+    lines.push(dim('  tool                          in req   in resp'));
+    for (const row of toolStats.slice(0, 5)) {
+      lines.push(`  ${pad(row.tool_name, 30)} ${alignRight(fmt(row.in_requests), 7)} ${alignRight(fmt(row.in_responses), 8)}`);
     }
 
     lines.push('');

@@ -7,7 +7,7 @@
 import type { Env, Logger } from '../types/shared.js';
 import { addForwardedHeaders } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
-import { recordResponseStatusCodeFromUpstream } from '../utils/dashboard-stats.js';
+import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
 
 export async function handleChatCompletionsPassthrough(
   request: Request,
