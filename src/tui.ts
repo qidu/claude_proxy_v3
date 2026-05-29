@@ -73,6 +73,9 @@ function fmt(n: number): string {
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
 }
+function fmtSeconds(ms: number): string {
+  return (ms / 1000).toFixed(2);
+}
 function frame(title: string, body: string[], width: number): string[] {
   const boxWidth = Math.min(Math.max(width, 10), 88);
   const inner = Math.max(1, boxWidth - 2);
@@ -306,12 +309,12 @@ class DashboardView implements Component {
 
     lines.push('');
     lines.push(bold('Top endpoints'));
-    lines.push(dim('  endpoint                      req  min (ms)  avg (ms)  max (ms)'));
+    lines.push(dim('  endpoint                      req  min (s)  avg (s)  max (s)'));
     const endpointRows = new Map(snap.requestStats.endpoints.map((row) => [row.endpoint, row]));
     for (const row of snap.requestStats.endpoint_timings.slice(0, 5)) {
       const requestRow = endpointRows.get(row.endpoint);
       lines.push(
-        `  ${pad(row.endpoint, 26)} ${alignRight(fmt(requestRow?.requests ?? 0), 5)} ${alignRight(fmt(row.min_time_ms), 8)} ${alignRight(fmt(row.avg_time_ms), 8)} ${alignRight(fmt(row.max_time_ms), 8)}`,
+        `  ${pad(row.endpoint, 26)} ${alignRight(fmt(requestRow?.requests ?? 0), 5)} ${alignRight(fmtSeconds(row.min_time_ms), 8)} ${alignRight(fmtSeconds(row.avg_time_ms), 8)} ${alignRight(fmtSeconds(row.max_time_ms), 8)}`,
       );
     }
 
