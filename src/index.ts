@@ -35,6 +35,7 @@ import {
   createResponseToolTrackingTransformStream,
   recordAgentStat,
   recordModelStat,
+  recordUpstreamResponseToolNames,
   recordModelFailedRequest,
   recordModelUsage,
   recordRequestEndpoint,
@@ -932,7 +933,8 @@ export default {
               if (usage) {
                 recordModelUsage(attemptModelId, usage);
               }
-              // no-op: tool stats are aggregated in the dashboard layer
+              const toolNames = extractToolNamesFromResponsePayload(payload);
+              recordUpstreamResponseToolNames(toolNames);
             } catch {
               // ignore stats extraction failures
             }
@@ -941,7 +943,7 @@ export default {
             // from Claude SSE events (message_start.usage.input_tokens,
             // message_delta.usage.output_tokens)
             const usageStream = createUsageTrackingTransformStream(attemptModelId);
-            const toolStream = createResponseToolTrackingTransformStream(() => {});
+            const toolStream = createResponseToolTrackingTransformStream(recordUpstreamResponseToolNames);
             response = new Response(response.body!.pipeThrough(usageStream).pipeThrough(toolStream), response);
           }
         }
