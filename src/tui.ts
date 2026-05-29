@@ -290,7 +290,7 @@ class DashboardView implements Component {
 
     lines.push('');
     lines.push(bold('Top models'));
-    lines.push(dim('  model                         req   failed | token in    cached    wrote    out      total'));
+    lines.push(dim('  model                         req   failed | token in    cached    wrote     out     total'));
     for (const row of snap.modelStats.slice(0, 5)) {
       lines.push(
         `  ${pad(row.model, 26)}  ${alignRight(fmt(row.requests), 5)} ${alignRight(fmt(row.failed_requests), 8)}  ${alignRight(fmt(row.input_tokens), 8)}  ${alignRight(fmt(row.cached_tokens), 8)} ${alignRight(fmt(row.cache_written_tokens), 8)} ${alignRight(fmt(row.output_tokens), 8)}  ${alignRight(fmt(row.total_tokens), 8)}`,
@@ -301,7 +301,7 @@ class DashboardView implements Component {
     lines.push(bold('Tool usage'));
     lines.push(dim('  tool                          in req     in resp'));
     for (const row of toolStats.slice(0, 5)) {
-      lines.push(`  ${pad(row.tool_name, 30)} ${alignRight(fmt(row.in_requests), 7)} ${alignRight(fmt(row.in_responses), 8)}`);
+      lines.push(`  ${pad(row.tool_name, 28)} ${alignRight(fmt(row.in_requests), 7)}   ${alignRight(fmt(row.in_responses), 8)}`);
     }
 
     lines.push('');
