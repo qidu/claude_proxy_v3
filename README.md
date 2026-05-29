@@ -124,7 +124,7 @@ upstream_mode = "openai-completions"
 ```
 
 Composite behavior:
-- `total_token_limit`: shared token cap for the alias. The proxy tracks accumulated input+output tokens in memory across all targets under the alias. Once the accumulated total reaches the limit, subsequent requests return **HTTP 413** and are not forwarded upstream. Usage resets to zero on proxy restart; the limit value itself is persisted in the config file.
+- `total_token_limit`: shared token cap for the alias. The proxy tracks accumulated input+output tokens in memory across all targets under the alias. Once the accumulated total reaches the `limit`, subsequent requests return **HTTP 413** and are not forwarded upstream. `Usage` resets to `0` on proxy restart; the value of `limit (known as credits of tokens)` is persisted in the config file.
 - `primary: true`: always try this target first, then fail over to others (ignores `share`).
 - `fallback: N`: lower number = higher retry priority when primary is absent (ignores `share`).
 - `share`: when no `primary`/`fallback` is set, each request picks a target via **weighted random selection**. Total weight = sum of all targets' `share` (defaults to 1 if unset). Each request independently rolls the dice — e.g. `{"a": {"share": 70}, "b": {"share": 30}}` routes ~70% of requests to a and ~30% to b. Set `share: 0` to exclude a target from random selection (it still participates as a retry fallback when the first target fails).
