@@ -17,6 +17,7 @@ import {
   addCompositeAliasFromDashboard,
   getDashboardSnapshot,
   removeCompositeTargetFromDashboard,
+  upsertCompositeAliasLimitFromDashboard,
   upsertCompositeTargetFromDashboard,
 } from './handlers/dashboard.js';
 import type { Env } from './types/shared.js';
@@ -232,7 +233,11 @@ class DashboardView implements Component {
       this.app.openAddAliasPrompt();
       return;
     }
-    if (matchesKey(data, 't') || matchesKey(data, 'shift+t')) {
+    if (matchesKey(data, 't') && selected?.kind === 'alias') {
+      this.app.openEditAliasLimitPrompt(selected.alias);
+      return;
+    }
+    if (matchesKey(data, 'm')) {
       const alias = selected?.kind === 'alias' ? selected.alias : selected?.kind === 'target' ? selected.alias : undefined;
       if (alias) {
         this.app.openTargetPicker(alias);
@@ -280,13 +285,26 @@ class DashboardView implements Component {
     for (const [alias, targets] of composites) {
       const selectedAlias = selected?.kind === 'alias' && selected.alias === alias;
       const prefix = selectedAlias ? green('>') : dim('│');
-      lines.push(`  ${prefix} ${bold(alias)}`);
-      const entries = Object.entries(targets || {});
+      const typedTargets = targets as { total_token_limit?: number } | undefined;
+      const aliasLimit = typedTargets?.total_token_limit;
+      // Sum accumulated total_tokens across all resolved target models for this alias
+      const resolvedAlias = snap.compositeResolved.find(r => r.alias === alias);
+      const totalUsed = resolvedAlias?.targets.reduce((sum, t) => {
+        const statKey = t.routeModel || t.model;
+        const entry = snap.modelStats.find(m => m.model === statKey);
+        return sum + (entry?.total_tokens ?? 0);
+      }, 0) ?? 0;
+      const aliasSummary = aliasLimit !== undefined
+        ? ` ${dim(fmt(totalUsed))} ${dim('/')} ${dim(fmt(aliasLimit))}${dim(' (TL)')}`
+        : '';
+      lines.push(`  ${prefix} ${bold(alias)}${aliasSummary}`);
+      const entries = Object.entries(targets || {}).filter(([target]) => target !== 'total_token_limit');
       if (!entries.length) lines.push(`    ${dim('(empty)')}`);
       for (const [target, cfg] of entries.sort(([a], [b]) => a.localeCompare(b))) {
         const selectedTarget = selected?.kind === 'target' && selected.alias === alias && selected.target === target;
         const mark = selectedTarget ? green('>') : dim('·');
-        const summary = `${cfg.share ?? '-'}${cfg.primary ? ' P' : ''}${cfg.fallback !== undefined ? ` FB${cfg.fallback}` : ''}`;
+        const typedCfg = cfg as { share?: number; primary?: boolean; fallback?: number } | undefined;
+        const summary = `${typedCfg?.share ?? '-'}${typedCfg?.primary ? ' P' : ''}${typedCfg?.fallback !== undefined ? ` FB${typedCfg.fallback}` : ''}`;
         lines.push(`  ${dim('│')} ${mark} ${clip(target, 22)} ${dim(summary)}`);
       }
     }
@@ -309,7 +327,7 @@ class DashboardView implements Component {
 
     lines.push('');
     lines.push(bold('Top endpoints'));
-    lines.push(dim('  endpoint                      req  min (s)  avg (s)  max (s)'));
+    lines.push(dim('  endpoint                     req    min(s)   avg(s)   max(s)'));
     const endpointRows = new Map(snap.requestStats.endpoints.map((row) => [row.endpoint, row]));
     for (const row of snap.requestStats.endpoint_timings.slice(0, 5)) {
       const requestRow = endpointRows.get(row.endpoint);
@@ -319,7 +337,7 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(`A ${dim('add alias')} T ${dim('add target')} E ${dim('edit target')} D ${dim('delete')} R ${dim('reload')} Ctrl+C ${dim('quit')} ↑↓ ${dim('move')} Enter ${dim('select')}`);
+    lines.push(`A ${dim('add alias')} T ${dim('token limit')} M ${dim('add target')} E ${dim('edit target')} D ${dim('delete')} R ${dim('reload')} Ctrl+C ${dim('quit')} ↑↓ ${dim('move')} Enter ${dim('select')}`);
     lines.push(this.message ? yellow(this.message) : dim('Ready'));
 
     return lines.map((line) => clip(line, width));
@@ -398,6 +416,31 @@ class DashboardApp {
     });
   }
 
+  openEditAliasLimitPrompt(alias: string): void {
+    const snapshot = this.viewSnapshot();
+    const current = snapshot?.config.composite?.[alias]?.total_token_limit;
+    this.openPrompt(
+      `Total token limit for ${alias}`,
+      'Blank clears the alias-level token limit',
+      current === undefined ? '' : String(current),
+      async (value) => {
+        const trimmed = value.trim();
+        if (trimmed.length > 0 && Number.isNaN(Number(trimmed))) {
+          this.view.setMessage('Total token limit must be a number or blank');
+          await this.refresh();
+          this.view.focusAlias(alias);
+          this.requestRender();
+          return;
+        }
+        upsertCompositeAliasLimitFromDashboard(this.source.env, alias, trimmed.length > 0 ? Number(trimmed) : null);
+        await this.refresh();
+        this.view.focusAlias(alias);
+        this.view.setMessage(`updated ${alias} total token limit`);
+        this.requestRender();
+      },
+    );
+  }
+
   openTargetPicker(alias: string): void {
     const choices = this.modelChoices();
     if (choices.length === 0) {
@@ -441,7 +484,7 @@ class DashboardApp {
   }
 
   openEditTargetPrompt(alias: string, target: string): void {
-    this.openPrompt(`Edit ${alias}.${target}`, 'share fallback primary', '', async (value) => {
+    this.openPrompt(`Edit ${alias}.${target}`, 'input <share> <fallback> <primary>', '', async (value) => {
       const [share, fallback, primary] = value.split(/\s+/);
       const parsedShare = share ? Number(share) : undefined;
       const parsedFallback = fallback ? Number(fallback) : undefined;

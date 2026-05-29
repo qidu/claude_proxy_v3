@@ -351,6 +351,15 @@ function getOrCreateModelStat(model: string): ModelStatsEntry {
   };
 }
 
+/**
+ * Get accumulated total_tokens for a model (0 if no usage recorded yet).
+ */
+export function getModelTotalTokens(model: string | undefined): number {
+  if (!model) return 0;
+  const entry = modelStats.get(model);
+  return entry ? entry.total_tokens : 0;
+}
+
 export function recordModelFailedRequest(model: string | undefined): void {
   if (!model) {
     return;

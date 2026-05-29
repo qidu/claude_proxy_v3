@@ -7,7 +7,7 @@
 
 import { Env } from './types/shared.js';
 import { extractAuthHeaders, transformAuthHeadersForUpstream, formatApiKeyForUpstream } from './utils/routing.js';
-import { createErrorResponse } from './utils/errors.js';
+import { createErrorResponse, OverLimitError } from './utils/errors.js';
 import { createLogger } from './utils/logger.js';
 import { handleModelsRequest, getModelCount } from './handlers/models.js';
 import { handleTokenCountingRequest } from './handlers/token-counting.js';
@@ -38,6 +38,7 @@ import {
   recordUpstreamResponseToolNames,
   recordModelFailedRequest,
   recordModelUsage,
+  getModelTotalTokens,
   recordRequestEndpoint,
   recordRequestTiming,
   recordResponseStatusCodeFromUpstream,
@@ -600,6 +601,24 @@ export default {
             // passthrough disabled: don't set routing vars — falls through to outer fixed-routing block
           } else if (modelName && proxyConfig.models) {
             const compositeCandidates = getCompositeRouteCandidates(modelName, proxyConfig);
+
+            // Token-limit enforcement: check accumulated total_tokens across all
+            // alias targets against the alias-level total_token_limit.
+            if (compositeCandidates.length > 0 && proxyConfig.composite?.[modelName]?.total_token_limit !== undefined) {
+              const aliasLimit = proxyConfig.composite[modelName].total_token_limit!;
+              const totalUsed = compositeCandidates.reduce(
+                (sum, c) => sum + getModelTotalTokens(c.route.modelAlias || c.modelName),
+                0,
+              );
+              logger.debug(requestId, `Composite alias ${modelName}: accumulated ${totalUsed} tokens across ${compositeCandidates.length} targets, limit ${aliasLimit}`);
+              if (totalUsed >= aliasLimit) {
+                logger.info(requestId, `Rejecting request for ${modelName}: ${totalUsed} accumulated tokens >= limit ${aliasLimit}`);
+                throw new OverLimitError(
+                  `Composite alias '${modelName}' token limit (${aliasLimit}) reached (${totalUsed}). No further requests will be routed through this alias.`
+                );
+              }
+            }
+
             const routeCandidates: Array<{ modelName: string; route: ModelRouteConfig }> = compositeCandidates.length > 0
               ? compositeCandidates
               : [{ modelName, route: getModelRouteConfig(modelName, proxyConfig) }];

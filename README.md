@@ -112,23 +112,23 @@ upstream_mode = "openai-completions"
 - **Model names**: Preserve original names (no normalization) - `"deepseek/deepseek-v3.2"`, `"gemini-2.5-flash"`
 - **Inheritance chain**: Model array → Category defaults → [upstream] defaults
 
-**Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, but each individual model still maps to a single upstream.
+**Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `total_token_limit` across all of its targets.
 
 #### Composite aliases
 
 ```toml
 [composite]
-"gpt-all" = {"gpt-5.4-mini": {"share": 50}, "gpt-5-mini": {"share": 20}, "nvidia/nemotron-3-super-120b-a12b-free": {}}
-"gpt-5" = {"gpt-5.4-mini": {"fallback": 1}, "gpt-5-mini": {"primary": true}, "nvidia/nemotron-3-super-120b-a12b-free": {"fallback": 2}}
-"llama" = {"llama3": {}, "g5-mini": {}}
+"gpt-all" = {"total_token_limit": 120000, "gpt-5.4-mini": {"share": 50}, "gpt-5-mini": {"share": 20}, "nvidia/nemotron-3-super-120b-a12b-free": {}}
+"gpt-5" = {"total_token_limit": 80000, "gpt-5.4-mini": {"fallback": 1}, "gpt-5-mini": {"primary": true}, "nvidia/nemotron-3-super-120b-a12b-free": {"fallback": 2}}
+"llama" = {"total_token_limit": 40000, "llama3": {}, "g5-mini": {}}
 ```
 
 Composite behavior:
-- `primary: true`: always try this target first, then fail over to others.
-- `fallback: N`: lower number means higher retry priority when primary is absent.
-- `share`: weighted random selection for first attempt when no `primary`/`fallback` is configured.
-- no `share`/`primary`/`fallback`: equal random first-attempt distribution across targets.
-- if one upstream fails, proxy retries the next configured candidate automatically.
+- `total_token_limit`: shared token cap for the alias. The proxy tracks accumulated input+output tokens in memory across all targets under the alias. Once the accumulated total reaches the limit, subsequent requests return **HTTP 413** and are not forwarded upstream. Usage resets to zero on proxy restart; the limit value itself is persisted in the config file.
+- `primary: true`: always try this target first, then fail over to others (ignores `share`).
+- `fallback: N`: lower number = higher retry priority when primary is absent (ignores `share`).
+- `share`: when no `primary`/`fallback` is set, each request picks a target via **weighted random selection**. Total weight = sum of all targets' `share` (defaults to 1 if unset). Each request independently rolls the dice — e.g. `{"a": {"share": 70}, "b": {"share": 30}}` routes ~70% of requests to a and ~30% to b. Set `share: 0` to exclude a target from random selection (it still participates as a retry fallback when the first target fails).
+- if one upstream fails, the proxy automatically retries the next candidate in the order determined by `primary`/`fallback`, or weighted selection for the first attempt then remaining targets as fallbacks.
 
 #### Consul-backed config
 
@@ -213,7 +213,8 @@ TUI=true PROXY_CONFIG_PATH=./proxy_config.toml npx tsx dist/server.js
 The TUI shows live:
 - model token stats
 - combined tool usage stats by tool (`req` aggregates across UA prefixes; `resp` is by tool)
-- composite alias summaries
+- composite alias summaries with live token usage (`used / limit (TL)` for aliases with `total_token_limit`)
+- `T` set/clear the alias-level token limit
 
 Keyboard shortcuts:
 - `↑/↓` or `j/k` to move
@@ -907,13 +908,15 @@ upstream_mode = "openai-completions"
 - **Model names**: Preserve original names (no normalization) - `"deepseek/deepseek-v3.2"`, `"gemini-2.5-flash"`
 - **Inheritance chain**: Model array → Category defaults → [upstream] defaults
 
-**Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, but each individual model still maps to a single upstream.
+**Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `total_token_limit` across all of its targets.
 
 #### Composite aliases
 
 ```toml
 [composite]
-##### refer to previous 'Composite aliases' examples
+"gpt-all" = {"total_token_limit": 120000, "gpt-5.4-mini": {"share": 50}, "gpt-5-mini": {"share": 20}, "nvidia/nemotron-3-super-120b-a12b-free": {}}
+"gpt-5" = {"total_token_limit": 80000, "gpt-5.4-mini": {"fallback": 1}, "gpt-5-mini": {"primary": true}, "nvidia/nemotron-3-super-120b-a12b-free": {"fallback": 2}}
+"llama" = {"total_token_limit": 40000, "llama3": {}, "g5-mini": {}}
 ```
 
 ### Configuration Loading

@@ -11,6 +11,7 @@ import {
   removeCompositeAlias,
   removeCompositeTarget,
   toDashboardConfigPayload,
+  upsertCompositeAliasLimit,
   upsertCompositeTarget,
   clearProxyConfigCache,
 } from '../utils/config-loader.js';
@@ -136,6 +137,14 @@ export function upsertCompositeTargetFromDashboard(
   return saveConfigMutation(env, (baseConfig) =>
     upsertCompositeTarget(baseConfig, alias, targetModel, patch, getConfiguredModelIds(baseConfig)),
   );
+}
+
+export function upsertCompositeAliasLimitFromDashboard(
+  env: Env,
+  alias: string,
+  totalTokenLimit: number | null,
+): ReturnType<typeof toDashboardConfigPayload> {
+  return saveConfigMutation(env, (baseConfig) => upsertCompositeAliasLimit(baseConfig, alias, totalTokenLimit));
 }
 
 export function removeCompositeTargetFromDashboard(
@@ -327,6 +336,18 @@ export function handleDashboardPage(): Response {
       let currentConfig = { models: {}, composite: {} };
       let isReadOnly = false;
       let configPathHint = '';
+      let compositeResolved = [];
+      let modelStats = [];
+
+      function getAliasUsed(aliasName) {
+        const resolved = compositeResolved.find(r => r.alias === aliasName);
+        if (!resolved) return 0;
+        return resolved.targets.reduce((sum, t) => {
+          const statKey = t.routeModel || t.model;
+          const entry = modelStats.find(m => m.model === statKey);
+          return sum + (entry ? entry.total_tokens : 0);
+        }, 0);
+      }
 
       function escapeHtml(value) {
         return String(value ?? '')
@@ -366,11 +387,22 @@ export function handleDashboardPage(): Response {
 
       function compositeEntryRows(aliasName, targets) {
         const disabledAttr = isReadOnly ? ' disabled' : '';
-        const keys = Object.keys(targets || {});
+        const keys = Object.keys(targets || {}).filter((key) => key !== 'total_token_limit');
+        const totalTokenLimit = targets.total_token_limit ?? '';
+        const aliasUsed = getAliasUsed(aliasName);
+        const usageLabel = '<span style="font-size:13px;color:#666;margin-left:6px;">Used: ' + aliasUsed + ' (reset after proxy restarted.)</span>';
+        const rows = [
+          '<div class="config-row">'
+            + '<label>' + escapeHtml(aliasName + '.total_token_limit') + '</label>'
+            + '<input type="number" data-kind="comp-total-limit" data-alias="' + escapeHtml(aliasName) + '" value="' + escapeHtml(totalTokenLimit) + '" placeholder="token limit"' + disabledAttr + ' />'
+            + usageLabel
+            + '</div>'
+        ];
         if (keys.length === 0) {
-          return '<div class="config-row"><label>' + escapeHtml(aliasName) + '</label><div class="wide">(empty)</div></div>';
+          rows.push('<div class="config-row"><label>' + escapeHtml(aliasName) + '</label><div class="wide">(empty)</div></div>');
+          return rows.join('');
         }
-        return keys.map((targetName) => {
+        return rows.concat(keys.map((targetName) => {
           const cfg = targets[targetName] || {};
           const share = cfg.share ?? '';
           const fallback = cfg.fallback ?? '';
@@ -384,7 +416,7 @@ export function handleDashboardPage(): Response {
               + '<button type="button" class="mini-btn danger" data-action="remove-composite-target" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
             + '</div>'
             + '</div>';
-        }).join('');
+        })).join('');
       }
 
       function renderConfigForm(config) {
@@ -451,7 +483,12 @@ export function handleDashboardPage(): Response {
 
         Object.entries(currentConfig.composite || {}).forEach(([aliasName, targets]) => {
           payload.composite[aliasName] = {};
+          const totalLimitEl = document.querySelector('[data-kind="comp-total-limit"][data-alias="' + aliasName + '"]');
+          if (totalLimitEl && totalLimitEl.value !== '') {
+            payload.composite[aliasName].total_token_limit = Number(totalLimitEl.value);
+          }
           Object.keys(targets || {}).forEach((targetName) => {
+            if (targetName === 'total_token_limit') return;
             const shareEl = document.querySelector('[data-kind="comp-share"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
             const fallbackEl = document.querySelector('[data-kind="comp-fallback"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
             const entry = {};
@@ -563,6 +600,20 @@ export function handleDashboardPage(): Response {
           return;
         }
 
+        if (target.dataset.kind === 'comp-total-limit') {
+          const alias = target.dataset.alias;
+          if (!alias) return;
+          const value = target.value.trim();
+          if (value !== '' && Number.isNaN(Number(value))) {
+            window.alert('Total token limit must be a number or blank');
+            return;
+          }
+          currentConfig.composite[alias].total_token_limit = value === '' ? undefined : Number(value);
+          renderConfigForm(currentConfig);
+          saveConfig();
+          return;
+        }
+
         if (action === 'remove-composite-target') {
           const alias = target.dataset.alias;
           const targetModel = target.dataset.target;
@@ -581,14 +632,16 @@ export function handleDashboardPage(): Response {
         configStatus.textContent = 'Loading...';
         const res = await fetch('/dashboard/api/config');
         const json = await res.json();
-        isReadOnly = json.read_only === true;
+        isReadOnly = json.config.read_only === true;
         currentConfig = {
-          models: json.models || {},
-          composite: json.composite || {},
+          models: json.config.models || {},
+          composite: json.config.composite || {},
         };
+        compositeResolved = json.compositeResolved || [];
+        modelStats = json.modelStats || [];
         renderConfigForm(currentConfig);
         saveButton.disabled = isReadOnly;
-        configPathHint = json.config_path ? ' (' + json.config_path + ')' : '';
+        configPathHint = json.config.config_path ? ' (' + json.config.config_path + ')' : '';
         if (isReadOnly) {
           configStatus.textContent = 'Loaded (read-only: remote)' + configPathHint;
         } else {
@@ -753,7 +806,9 @@ export function handleDashboardPage(): Response {
 }
 
 export function handleDashboardGetConfig(proxyConfig: ProxyConfig, env: Env): Response {
-  return jsonResponse(getDashboardSnapshot(proxyConfig, env).config);
+  // Return the full snapshot so the dashboard has modelStats and compositeResolved
+  // for computing live token usage alongside config editing.
+  return jsonResponse(getDashboardSnapshot(proxyConfig, env));
 }
 
 export async function handleDashboardPutConfig(request: Request, env: Env, _proxyConfig: ProxyConfig): Promise<Response> {

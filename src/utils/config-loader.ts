@@ -43,7 +43,19 @@ export interface CompositeTargetConfig {
   fallback?: number;
 }
 
-export type CompositeModelConfig = Record<string, CompositeTargetConfig>;
+export interface CompositeModelConfig {
+  total_token_limit?: number;
+  [modelName: string]: CompositeTargetConfig | number | undefined;
+}
+
+function getCompositeTargetEntries(config: CompositeModelConfig | undefined): Array<[string, CompositeTargetConfig]> {
+  return Object.entries(config || {}).filter(([key]) => key !== 'total_token_limit') as Array<[string, CompositeTargetConfig]>;
+}
+
+function getCompositeTotalTokenLimit(config: CompositeModelConfig | undefined): number | undefined {
+  const limit = config?.total_token_limit;
+  return typeof limit === 'number' && Number.isFinite(limit) ? limit : undefined;
+}
 
 export interface ModelRouteConfig {
   targetUrl: string;
@@ -124,7 +136,7 @@ function getOrderedCompositeTargets(
   }
 
   const skippedTargets: string[] = [];
-  const resolvedTargets = Object.entries(compositeConfig)
+  const resolvedTargets = getCompositeTargetEntries(compositeConfig)
     .map(([targetModelName, targetConfig], index) => {
       const route = resolveModelRouteFromConfig(targetModelName, proxyConfig) || {
         ...getDefaultModelRoute(proxyConfig),
@@ -532,11 +544,18 @@ function parseCompositeModelConfig(rawValue: string): CompositeModelConfig {
 
   for (const entry of entries) {
     const match = entry.match(/^"([^"]+)"\s*:\s*(\{.*\})$/);
-    if (!match) {
+    if (match) {
+      config[match[1]] = parseCompositeTargetConfig(match[2]);
       continue;
     }
 
-    config[match[1]] = parseCompositeTargetConfig(match[2]);
+    const limitMatch = entry.match(/^"?(total_token_limit)"?\s*:\s*(.+)$/);
+    if (limitMatch) {
+      const numeric = Number(limitMatch[2].trim().replace(/,$/, ''));
+      if (!Number.isNaN(numeric)) {
+        config.total_token_limit = numeric;
+      }
+    }
   }
 
   return config;
@@ -581,10 +600,14 @@ function serializeCompositeTargetConfig(config: CompositeTargetConfig): string {
 }
 
 function serializeCompositeModelConfig(config: CompositeModelConfig): string {
-  const entries = Object.entries(config).map(([modelName, targetConfig]) => {
-    const serializedTarget = serializeCompositeTargetConfig(targetConfig || {});
-    return `${JSON.stringify(modelName)}: ${serializedTarget}`;
-  });
+  const entries: string[] = [];
+  if (typeof config.total_token_limit === 'number' && Number.isFinite(config.total_token_limit)) {
+    entries.push(`"total_token_limit": ${config.total_token_limit}`);
+  }
+  for (const [modelName, targetConfig] of getCompositeTargetEntries(config)) {
+    const serializedTarget = serializeCompositeTargetConfig((targetConfig || {}) as CompositeTargetConfig);
+    entries.push(`${JSON.stringify(modelName)}: ${serializedTarget}`);
+  }
   return `{${entries.join(', ')}}`;
 }
 
@@ -930,16 +953,27 @@ function sanitizeCompositeConfig(composite: ProxyConfig['composite']): Record<st
   const result: Record<string, CompositeModelConfig> = {};
   for (const [alias, targets] of Object.entries(composite)) {
     const safeTargets: CompositeModelConfig = {};
+    const aliasLimit = getCompositeTotalTokenLimit(targets as CompositeModelConfig);
+    if (aliasLimit !== undefined) {
+      safeTargets.total_token_limit = aliasLimit;
+    }
+
     for (const [targetModel, config] of Object.entries(targets || {})) {
+      if (targetModel === 'total_token_limit') {
+        continue;
+      }
+
       const safeTarget: CompositeTargetConfig = {};
-      if (typeof config.share === 'number' && Number.isFinite(config.share)) {
-        safeTarget.share = config.share;
-      }
-      if (typeof config.primary === 'boolean') {
-        safeTarget.primary = config.primary;
-      }
-      if (typeof config.fallback === 'number' && Number.isFinite(config.fallback)) {
-        safeTarget.fallback = config.fallback;
+      if (typeof config === 'object' && config !== null && !Array.isArray(config)) {
+        if (typeof config.share === 'number' && Number.isFinite(config.share)) {
+          safeTarget.share = config.share;
+        }
+        if (typeof config.primary === 'boolean') {
+          safeTarget.primary = config.primary;
+        }
+        if (typeof config.fallback === 'number' && Number.isFinite(config.fallback)) {
+          safeTarget.fallback = config.fallback;
+        }
       }
       safeTargets[targetModel] = safeTarget;
     }
@@ -989,32 +1023,40 @@ function validateAndNormalizeComposite(payload: unknown): Record<string, Composi
     }
 
     const targetConfig: CompositeModelConfig = {};
-    for (const [targetModel, rawConfig] of Object.entries(targetValue)) {
-      if (!isPlainObject(rawConfig)) {
-        throw new Error(`Invalid composite target config for: ${alias}.${targetModel}`);
+    for (const [key, rawValue] of Object.entries(targetValue)) {
+      if (key === 'total_token_limit') {
+        if (typeof rawValue !== 'number' || !Number.isFinite(rawValue)) {
+          throw new Error(`Invalid total_token_limit for alias: ${alias}`);
+        }
+        targetConfig.total_token_limit = rawValue;
+        continue;
+      }
+
+      if (!isPlainObject(rawValue)) {
+        throw new Error(`Invalid composite target config for: ${alias}.${key}`);
       }
 
       const entry: CompositeTargetConfig = {};
-      if ('share' in rawConfig) {
-        if (typeof rawConfig.share !== 'number' || !Number.isFinite(rawConfig.share)) {
-          throw new Error(`Invalid share for: ${alias}.${targetModel}`);
+      if ('share' in rawValue) {
+        if (typeof rawValue.share !== 'number' || !Number.isFinite(rawValue.share)) {
+          throw new Error(`Invalid share for: ${alias}.${key}`);
         }
-        entry.share = rawConfig.share;
+        entry.share = rawValue.share;
       }
-      if ('primary' in rawConfig) {
-        if (typeof rawConfig.primary !== 'boolean') {
-          throw new Error(`Invalid primary for: ${alias}.${targetModel}`);
+      if ('primary' in rawValue) {
+        if (typeof rawValue.primary !== 'boolean') {
+          throw new Error(`Invalid primary for: ${alias}.${key}`);
         }
-        entry.primary = rawConfig.primary;
+        entry.primary = rawValue.primary;
       }
-      if ('fallback' in rawConfig) {
-        if (typeof rawConfig.fallback !== 'number' || !Number.isFinite(rawConfig.fallback)) {
-          throw new Error(`Invalid fallback for: ${alias}.${targetModel}`);
+      if ('fallback' in rawValue) {
+        if (typeof rawValue.fallback !== 'number' || !Number.isFinite(rawValue.fallback)) {
+          throw new Error(`Invalid fallback for: ${alias}.${key}`);
         }
-        entry.fallback = rawConfig.fallback;
+        entry.fallback = rawValue.fallback;
       }
 
-      targetConfig[targetModel] = entry;
+      targetConfig[key] = entry;
     }
 
     result[alias] = targetConfig;
@@ -1134,10 +1176,22 @@ function cloneCompositeConfig(composite: ProxyConfig['composite']): Record<strin
   const nextComposite: Record<string, CompositeModelConfig> = {};
 
   for (const [alias, targets] of Object.entries(composite || {})) {
-    nextComposite[alias] = {};
-    for (const [targetModel, config] of Object.entries(targets || {})) {
-      nextComposite[alias][targetModel] = { ...(config || {}) };
+    const nextTargets: CompositeModelConfig = {};
+    if (targets && typeof targets === 'object' && !Array.isArray(targets)) {
+      const aliasLimit = (targets as CompositeModelConfig).total_token_limit;
+      if (typeof aliasLimit === 'number' && Number.isFinite(aliasLimit)) {
+        nextTargets.total_token_limit = aliasLimit;
+      }
+      for (const [targetModel, config] of Object.entries(targets as Record<string, unknown>)) {
+        if (targetModel === 'total_token_limit') {
+          continue;
+        }
+        if (config && typeof config === 'object' && !Array.isArray(config)) {
+          nextTargets[targetModel] = { ...(config as Record<string, unknown>) } as CompositeTargetConfig;
+        }
+      }
     }
+    nextComposite[alias] = nextTargets;
   }
 
   return nextComposite;
@@ -1182,6 +1236,29 @@ export function removeCompositeAlias(baseConfig: ProxyConfig, alias: string): Pr
   return nextConfig;
 }
 
+export function upsertCompositeAliasLimit(baseConfig: ProxyConfig, alias: string, totalTokenLimit: number | null): ProxyConfig {
+  const aliasName = assertNonEmptyCompositeName('alias', alias);
+  const nextConfig: ProxyConfig = {
+    ...baseConfig,
+    composite: cloneCompositeConfig(baseConfig.composite),
+  };
+
+  const existingTargets = nextConfig.composite?.[aliasName];
+  if (!existingTargets) {
+    throw new Error(`Composite alias not found: ${aliasName}`);
+  }
+
+  if (totalTokenLimit === null) {
+    delete existingTargets.total_token_limit;
+  } else if (!Number.isFinite(totalTokenLimit)) {
+    throw new Error(`Invalid total token limit for ${aliasName}`);
+  } else {
+    existingTargets.total_token_limit = totalTokenLimit;
+  }
+
+  return nextConfig;
+}
+
 export function upsertCompositeTarget(
   baseConfig: ProxyConfig,
   alias: string,
@@ -1204,11 +1281,23 @@ export function upsertCompositeTarget(
   }
 
   const nextTargets: CompositeModelConfig = {};
+  const existingAliasLimit = existingTargets.total_token_limit;
+  if (typeof existingAliasLimit === 'number' && Number.isFinite(existingAliasLimit)) {
+    nextTargets.total_token_limit = existingAliasLimit;
+  }
   for (const [name, config] of Object.entries(existingTargets)) {
-    nextTargets[name] = { ...(config || {}) };
+    if (name === 'total_token_limit') {
+      continue;
+    }
+    if (config && typeof config === 'object' && !Array.isArray(config)) {
+      nextTargets[name] = { ...(config as Record<string, unknown>) } as CompositeTargetConfig;
+    }
   }
 
-  const nextTarget: CompositeTargetConfig = { ...(nextTargets[targetName] || {}) };
+  const currentTarget = nextTargets[targetName];
+  const nextTarget: CompositeTargetConfig = (currentTarget && typeof currentTarget === 'object' && !Array.isArray(currentTarget))
+    ? { ...(currentTarget as Record<string, unknown>) } as CompositeTargetConfig
+    : {};
 
   if (patch.share !== undefined) {
     if (patch.share === null) {
@@ -1231,7 +1320,10 @@ export function upsertCompositeTarget(
   }
 
   if (patch.primary === true) {
-    for (const config of Object.values(nextTargets)) {
+    for (const [name, config] of Object.entries(nextTargets)) {
+      if (name === 'total_token_limit' || !config || typeof config !== 'object' || Array.isArray(config)) {
+        continue;
+      }
       delete config.primary;
     }
     nextTarget.primary = true;
