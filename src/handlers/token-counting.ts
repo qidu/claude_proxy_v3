@@ -143,8 +143,8 @@ async function handleLocalTokenCounting(
  *
  * Note: This may incur API costs and make an actual API call.
  */
-function extractUserTextBytesAsTokenEstimate(claudeRequest: ClaudeTokenCountingRequest): number {
-  let totalBytes = 0;
+function extractUserTextCharsAsTokenEstimate(claudeRequest: ClaudeTokenCountingRequest): number {
+  let totalChars = 0;
 
   for (const message of claudeRequest.messages || []) {
     if (message.role !== 'user') {
@@ -152,26 +152,27 @@ function extractUserTextBytesAsTokenEstimate(claudeRequest: ClaudeTokenCountingR
     }
 
     if (typeof message.content === 'string') {
-      totalBytes += new TextEncoder().encode(message.content).length;
+      totalChars += message.content.length;
       continue;
     }
 
     if (Array.isArray(message.content)) {
       for (const part of message.content) {
         if (part?.type === 'text' && typeof part.text === 'string') {
-          totalBytes += new TextEncoder().encode(part.text).length;
+          totalChars += part.text.length;
         }
       }
     }
   }
 
-  return totalBytes;
+  return Math.floor(totalChars / 3);
 }
 
-function buildByteFallbackTokenCountResponse(requestId: string, inputTokens: number): Response {
+function buildCharFallbackTokenCountResponse(requestId: string, inputTokens: number): Response {
+  const normalizedInputTokens = Math.floor(inputTokens);
   const claudeResponse: ClaudeTokenCountingResponse = {
     type: 'token_count',
-    input_tokens: inputTokens,
+    input_tokens: normalizedInputTokens,
   };
 
   return new Response(JSON.stringify(claudeResponse), {
@@ -179,7 +180,7 @@ function buildByteFallbackTokenCountResponse(requestId: string, inputTokens: num
     headers: {
       'Content-Type': 'application/json',
       'x-request-id': requestId,
-      'x-token-counting': 'bytes-fallback',
+      'x-token-counting': 'chars-fallback',
     },
   });
 }
@@ -225,9 +226,9 @@ async function handleApiBasedTokenCounting(
   // Handle target API errors (fallback to byte-based estimate for user text)
   if (!response.ok) {
     const bodyPreview = JSON.stringify(openaiRequest).substring(0, 1000);
-    logger.warn(requestId, `API-based token counting failed (${response.status}), falling back to byte-based estimate`);
-    const byteEstimate = extractUserTextBytesAsTokenEstimate(claudeRequest);
-    return buildByteFallbackTokenCountResponse(requestId, byteEstimate);
+    logger.warn(requestId, `API-based token counting failed (${response.status}), falling back to character-based estimate`);
+    const charEstimate = extractUserTextCharsAsTokenEstimate(claudeRequest);
+    return buildCharFallbackTokenCountResponse(requestId, charEstimate);
   }
 
   // Parse target API response
