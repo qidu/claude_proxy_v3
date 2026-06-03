@@ -6,6 +6,7 @@
 
 import { Env } from '../types/shared.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { homedir } from 'os';
 import { dirname, join } from 'path';
 
 // Check if we're running in Node.js environment
@@ -1364,4 +1365,67 @@ export function persistProxyConfigToPath(configPath: string, config: ProxyConfig
 export function loadProxyConfigFromPath(configPath: string): ProxyConfig {
   const content = readFileSync(configPath, 'utf-8');
   return parseSimpleToml(content);
+}
+
+export interface OpenClawProviderModelConfig {
+  id: string;
+  name?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  reasoning?: boolean;
+  [key: string]: unknown;
+}
+
+export interface OpenClawProviderConfig {
+  id: string;
+  baseUrl?: string;
+  apiKey?: string;
+  apiSchema?: 'anthropic-messages' | 'openai-completions';
+  models?: OpenClawProviderModelConfig[];
+  [key: string]: unknown;
+}
+
+export interface OpenClawConfig {
+  models?: {
+    providers?: OpenClawProviderConfig[];
+    [key: string]: unknown;
+  };
+  agents?: {
+    defaults?: {
+      models?: string[];
+      model?: {
+        primary?: string;
+        fallback?: string;
+        [key: string]: unknown;
+      };
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export const DEFAULT_OPENCLAW_CONFIG_PATH = join(homedir(), '.openclaw', 'openclaw.json');
+
+export function resolveOpenClawConfigPath(configPath?: string | null): string {
+  const trimmed = configPath?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : DEFAULT_OPENCLAW_CONFIG_PATH;
+}
+
+export function loadOpenClawConfigFromPath(configPath = DEFAULT_OPENCLAW_CONFIG_PATH): OpenClawConfig {
+  try {
+    const content = readFileSync(configPath, 'utf-8');
+    const parsed = JSON.parse(content);
+    return isPlainObject(parsed) ? (parsed as OpenClawConfig) : {};
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return {};
+    }
+    throw error;
+  }
+}
+
+export function persistOpenClawConfigToPath(configPath: string, config: OpenClawConfig): void {
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
 }

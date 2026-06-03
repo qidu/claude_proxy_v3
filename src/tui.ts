@@ -310,7 +310,7 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(bold('Top models'));
+    lines.push(bold('Top Models'));
     lines.push(dim('  model                         req   failed | token in    cached    wrote     out     total'));
     for (const row of snap.modelStats.slice(0, 5)) {
       lines.push(
@@ -319,14 +319,14 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(bold('Tool usage'));
+    lines.push(bold(`Tools Used (${fmt(toolStats.length)})`));
     lines.push(dim('  tool                          in req     in resp'));
     for (const row of toolStats.slice(0, 5)) {
       lines.push(`  ${pad(row.tool_name, 28)} ${alignRight(fmt(row.in_requests), 7)}   ${alignRight(fmt(row.in_responses), 8)}`);
     }
 
     lines.push('');
-    lines.push(bold('Top endpoints'));
+    lines.push(bold('Top Endpoints'));
     lines.push(dim('  endpoint                     req    min(s)   avg(s)   max(s)'));
     const endpointRows = new Map(snap.requestStats.endpoints.map((row) => [row.endpoint, row]));
     for (const row of snap.requestStats.endpoint_timings.slice(0, 5)) {
