@@ -20,8 +20,17 @@ import {
   upsertCompositeAliasLimitFromDashboard,
   upsertCompositeTargetFromDashboard,
 } from './handlers/dashboard.js';
+import { buildHeatmap, renderHeatmapPanel } from './heatmap.js';
 import type { Env } from './types/shared.js';
 import type { ProxyConfig } from './utils/config-loader.js';
+
+const EXAMPLE_HEATMAP = buildHeatmap([
+  { weekday: 1, hour: 9, values: 42 },
+  { weekday: 1, hour: 9, values: 8 },
+  { weekday: 2, hour: 14, values: 19 },
+  { weekday: 4, hour: 17, values: 73 },
+  { weekday: 6, hour: 2, values: 5 },
+]);
 
 export type DashboardSource = {
   env: Env;
@@ -77,6 +86,7 @@ function fmt(n: number): string {
 function fmtSeconds(ms: number): string {
   return (ms / 1000).toFixed(2);
 }
+
 function frame(title: string, body: string[], width: number): string[] {
   const boxWidth = Math.min(Math.max(width, 10), 88);
   const inner = Math.max(1, boxWidth - 2);
@@ -374,6 +384,8 @@ class DashboardView implements Component {
     lines.push(`${bold('Config')}: ${snap.config.config_path ?? 'memory'} ${snap.config.read_only ? yellow('(read-only)') : green('(writable)')}`);
     lines.push(`${bold('Models')}: ${fmt(snap.modelStats.length)}  ${bold('Tools')}: ${fmt(toolStats.length)}  ${bold('Requests')}: ${fmt(snap.requestStats.endpoints.length)}`);
     lines.push('');
+    lines.push(...renderHeatmapPanel(EXAMPLE_HEATMAP, { title: 'Example Values' }).split('\n'));
+    lines.push('');
     lines.push(bold('Custom models'));
     const customModels = this.customModels();
     if (!customModels.length) {
@@ -383,8 +395,6 @@ class DashboardView implements Component {
         lines.push(`  ${bold(row.modelId)} ${dim(`(${titleCase(row.category)})`)}`);
       }
     }
-
-    lines.push('');
     lines.push(bold('Top Models'));
     lines.push(dim('  model                         req   failed | token in    cached    wrote     out     total'));
     for (const row of snap.modelStats.slice(0, 5)) {
@@ -544,8 +554,8 @@ class DashboardApp {
 
     this.closeOverlay();
     const overlay = new ListOverlay(
-      `Add target to ${alias}`,
-      '↑/↓ move  Enter select  Esc cancel',
+      `Add target to ${bold(alias)}`,
+      `↑/↓ ${dim('move')}  Enter ${dim('select')}  Esc ${dim('cancel')}`,
       choices,
       (item) => {
         this.closeOverlay();
