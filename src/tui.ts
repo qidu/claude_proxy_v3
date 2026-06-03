@@ -170,7 +170,8 @@ class ListOverlay implements Component {
   }
 }
 
-class DashboardView implements Component {
+class CompositeAliasesOverlay implements Component, Focusable {
+  focused = false;
   private snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
   private message = 'Ready';
   private selectionIndex = 0;
@@ -209,6 +210,10 @@ class DashboardView implements Component {
   invalidate(): void {}
 
   handleInput(data: string): void {
+    if (matchesKey(data, 'escape')) {
+      this.app.closeOverlay();
+      return;
+    }
     if (matchesKey(data, 'ctrl+c') || matchesKey(data, 'q')) {
       this.app.stopAndExit();
       return;
@@ -264,6 +269,99 @@ class DashboardView implements Component {
   render(width: number): string[] {
     const snap = this.snapshot;
     const lines: string[] = [];
+    lines.push(`Esc ${dim('hide panel')}  A ${dim('add alias')} T ${dim('token limit')}  M ${dim('add target')}  E ${dim('edit')}  D ${dim('delete')} ↑↓ ${dim('move')} `);
+
+    if (!snap) {
+      return frame('Composite Aliases', [...lines, 'Loading…'], width).map((line) => clip(line, width));
+    }
+
+    const selections = this.selections();
+    const selected = selections[this.selectionIndex] ?? null;
+    const composites = Object.entries(snap.config.composite).sort(([a], [b]) => a.localeCompare(b));
+    if (!composites.length) lines.push(dim('  none'));
+    for (const [alias, targets] of composites) {
+      const selectedAlias = selected?.kind === 'alias' && selected.alias === alias;
+      const prefix = selectedAlias ? green('>') : dim('│');
+      const typedTargets = targets as { total_token_limit?: number } | undefined;
+      const aliasLimit = typedTargets?.total_token_limit;
+      const resolvedAlias = snap.compositeResolved.find((r) => r.alias === alias);
+      const totalUsed = resolvedAlias?.targets.reduce((sum, t) => {
+        const statKey = t.routeModel || t.model;
+        const entry = snap.modelStats.find((m) => m.model === statKey);
+        return sum + (entry?.total_tokens ?? 0);
+      }, 0) ?? 0;
+      const aliasSummary = aliasLimit !== undefined
+        ? ` ${dim(fmt(totalUsed))} ${dim('/')} ${dim(fmt(aliasLimit))}${dim(' (Limit)')}`
+        : '';
+      lines.push(`  ${prefix} ${bold(alias)}${aliasSummary}`);
+      const entries = Object.entries(targets || {}).filter(([target]) => target !== 'total_token_limit');
+      if (!entries.length) lines.push(`    ${dim('(empty)')}`);
+      for (const [target, cfg] of entries.sort(([a], [b]) => a.localeCompare(b))) {
+        const selectedTarget = selected?.kind === 'target' && selected.alias === alias && selected.target === target;
+        const mark = selectedTarget ? green('>') : dim('·');
+        const typedCfg = cfg as { share?: number; primary?: boolean; fallback?: number } | undefined;
+        const summary = `${typedCfg?.share ?? '-'}${typedCfg?.primary ? ' P' : ''}${typedCfg?.fallback !== undefined ? ` FB${typedCfg.fallback}` : ''}`;
+        lines.push(`  ${dim('│')} ${mark} ${clip(target, 22)} ${dim(summary)}`);
+      }
+    }
+
+    lines.push('');
+    lines.push(this.message ? yellow(this.message) : dim('Ready'));
+    return frame('Composite Aliases', lines, width).map((line) => clip(line, width));
+  }
+
+  private selections(): Selection[] {
+    const snap = this.snapshot;
+    if (!snap) return [];
+    const out: Selection[] = [];
+    for (const alias of Object.keys(snap.config.composite).sort()) {
+      out.push({ kind: 'alias', alias });
+      for (const target of Object.keys(snap.config.composite?.[alias] || {}).sort()) {
+        out.push({ kind: 'target', alias, target });
+      }
+    }
+    return out;
+  }
+
+  private selectionCount(): number {
+    return this.selections().length;
+  }
+}
+
+class DashboardView implements Component {
+  private snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
+  private message = 'Ready';
+
+  constructor(private readonly app: DashboardApp) {}
+
+  setSnapshot(snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null): void {
+    this.snapshot = snapshot;
+  }
+
+  setMessage(message: string): void {
+    this.message = message;
+  }
+
+  invalidate(): void {}
+
+  handleInput(data: string): void {
+    if (matchesKey(data, 'ctrl+c') || matchesKey(data, 'q')) {
+      this.app.stopAndExit();
+      return;
+    }
+    if (matchesKey(data, 'r')) {
+      void this.app.refresh();
+      return;
+    }
+    if (matchesKey(data, 'shift+c') || matchesKey(data, 'c')) {
+      this.app.openCompositeAliasesOverlay();
+      return;
+    }
+  }
+
+  render(width: number): string[] {
+    const snap = this.snapshot;
+    const lines: string[] = [];
     lines.push(bold('Proxy TUI') + dim(`  ${new Date().toLocaleTimeString()}`));
     lines.push(dim('─'.repeat(Math.max(0, width))));
 
@@ -276,36 +374,13 @@ class DashboardView implements Component {
     lines.push(`${bold('Config')}: ${snap.config.config_path ?? 'memory'} ${snap.config.read_only ? yellow('(read-only)') : green('(writable)')}`);
     lines.push(`${bold('Models')}: ${fmt(snap.modelStats.length)}  ${bold('Tools')}: ${fmt(toolStats.length)}  ${bold('Requests')}: ${fmt(snap.requestStats.endpoints.length)}`);
     lines.push('');
-    lines.push(bold('Composite aliases'));
-
-    const selections = this.selections();
-    const selected = selections[this.selectionIndex] ?? null;
-    const composites = Object.entries(snap.config.composite).sort(([a], [b]) => a.localeCompare(b));
-    if (!composites.length) lines.push(dim('  none'));
-    for (const [alias, targets] of composites) {
-      const selectedAlias = selected?.kind === 'alias' && selected.alias === alias;
-      const prefix = selectedAlias ? green('>') : dim('│');
-      const typedTargets = targets as { total_token_limit?: number } | undefined;
-      const aliasLimit = typedTargets?.total_token_limit;
-      // Sum accumulated total_tokens across all resolved target models for this alias
-      const resolvedAlias = snap.compositeResolved.find(r => r.alias === alias);
-      const totalUsed = resolvedAlias?.targets.reduce((sum, t) => {
-        const statKey = t.routeModel || t.model;
-        const entry = snap.modelStats.find(m => m.model === statKey);
-        return sum + (entry?.total_tokens ?? 0);
-      }, 0) ?? 0;
-      const aliasSummary = aliasLimit !== undefined
-        ? ` ${dim(fmt(totalUsed))} ${dim('/')} ${dim(fmt(aliasLimit))}${dim(' (TL)')}`
-        : '';
-      lines.push(`  ${prefix} ${bold(alias)}${aliasSummary}`);
-      const entries = Object.entries(targets || {}).filter(([target]) => target !== 'total_token_limit');
-      if (!entries.length) lines.push(`    ${dim('(empty)')}`);
-      for (const [target, cfg] of entries.sort(([a], [b]) => a.localeCompare(b))) {
-        const selectedTarget = selected?.kind === 'target' && selected.alias === alias && selected.target === target;
-        const mark = selectedTarget ? green('>') : dim('·');
-        const typedCfg = cfg as { share?: number; primary?: boolean; fallback?: number } | undefined;
-        const summary = `${typedCfg?.share ?? '-'}${typedCfg?.primary ? ' P' : ''}${typedCfg?.fallback !== undefined ? ` FB${typedCfg.fallback}` : ''}`;
-        lines.push(`  ${dim('│')} ${mark} ${clip(target, 22)} ${dim(summary)}`);
+    lines.push(bold('Custom models'));
+    const customModels = this.customModels();
+    if (!customModels.length) {
+      lines.push(dim('  none'));
+    } else {
+      for (const row of customModels) {
+        lines.push(`  ${bold(row.modelId)} ${dim(`(${titleCase(row.category)})`)}`);
       }
     }
 
@@ -337,27 +412,28 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(`A ${dim('add alias')} T ${dim('token limit')} M ${dim('add target')} E ${dim('edit target')} D ${dim('delete')} R ${dim('reload')} Ctrl+C ${dim('quit')} ↑↓ ${dim('move')} Enter ${dim('select')}`);
+    lines.push(`C ${dim('composite aliases')}  R ${dim('reload')}  Ctrl+C ${dim('quit')}  q ${dim('quit')}`);
     lines.push(this.message ? yellow(this.message) : dim('Ready'));
 
     return lines.map((line) => clip(line, width));
   }
 
-  private selections(): Selection[] {
+  private customModels(): Array<{ category: string; modelId: string }> {
     const snap = this.snapshot;
     if (!snap) return [];
-    const out: Selection[] = [];
-    for (const alias of Object.keys(snap.config.composite).sort()) {
-      out.push({ kind: 'alias', alias });
-      for (const target of Object.keys(snap.config.composite?.[alias] || {}).sort()) {
-        out.push({ kind: 'target', alias, target });
+    const seen = new Set<string>();
+    const models: Array<{ category: string; modelId: string }> = [];
+
+    for (const [category, categoryConfig] of Object.entries(snap.config.models)) {
+      for (const [key, value] of Object.entries(categoryConfig || {})) {
+        if (key === 'upstream_mode' || key === 'base_url' || key === 'api_key') continue;
+        if (value === undefined || seen.has(key)) continue;
+        seen.add(key);
+        models.push({ category, modelId: key });
       }
     }
-    return out;
-  }
 
-  private selectionCount(): number {
-    return this.selections().length;
+    return models.sort((a, b) => a.modelId.localeCompare(b.modelId));
   }
 }
 
@@ -366,6 +442,7 @@ class DashboardApp {
   private readonly tui = new TUI(this.terminal);
   private readonly view = new DashboardView(this);
   private overlay: OverlayHandle | null = null;
+  private compositeOverlay: CompositeAliasesOverlay | null = null;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
 
@@ -396,7 +473,9 @@ class DashboardApp {
   async refresh(): Promise<void> {
     try {
       const proxyConfig = await this.source.loadConfig();
-      this.view.setSnapshot(getDashboardSnapshot(proxyConfig, this.source.env));
+      const snapshot = getDashboardSnapshot(proxyConfig, this.source.env);
+      this.view.setSnapshot(snapshot);
+      this.compositeOverlay?.setSnapshot(snapshot);
       this.view.setMessage('Ready');
       this.tui.requestRender();
     } catch (error) {
@@ -411,9 +490,23 @@ class DashboardApp {
       if (!trimmed) return;
       addCompositeAliasFromDashboard(this.source.env, trimmed);
       await this.refresh();
-      this.view.focusAlias(trimmed);
+      this.compositeOverlay?.focusAlias(trimmed);
       this.openTargetPicker(trimmed);
     });
+  }
+
+  openCompositeAliasesOverlay(): void {
+    if (this.compositeOverlay) {
+      this.closeOverlay();
+      return;
+    }
+    this.closeOverlay();
+    const overlay = new CompositeAliasesOverlay(this);
+    this.compositeOverlay = overlay;
+    this.overlay = this.tui.showOverlay(overlay, { width: '80%', maxHeight: '70%', anchor: 'center' });
+    overlay.setSnapshot(this.viewSnapshot());
+    this.tui.setFocus(overlay);
+    this.requestRender();
   }
 
   openEditAliasLimitPrompt(alias: string): void {
@@ -428,13 +521,13 @@ class DashboardApp {
         if (trimmed.length > 0 && Number.isNaN(Number(trimmed))) {
           this.view.setMessage('Total token limit must be a number or blank');
           await this.refresh();
-          this.view.focusAlias(alias);
+          this.compositeOverlay?.focusAlias(alias);
           this.requestRender();
           return;
         }
         upsertCompositeAliasLimitFromDashboard(this.source.env, alias, trimmed.length > 0 ? Number(trimmed) : null);
         await this.refresh();
-        this.view.focusAlias(alias);
+        this.compositeOverlay?.focusAlias(alias);
         this.view.setMessage(`updated ${alias} total token limit`);
         this.requestRender();
       },
@@ -462,13 +555,13 @@ class DashboardApp {
           if (trimmed.length > 0 && Number.isNaN(share)) {
             this.view.setMessage('Share must be a number or blank');
             await this.refresh();
-            this.view.focusAlias(alias);
+            this.compositeOverlay?.focusAlias(alias);
             this.requestRender();
             return;
           }
           upsertCompositeTargetFromDashboard(this.source.env, alias, item.value, { share });
           await this.refresh();
-          this.view.focusAlias(alias);
+          this.compositeOverlay?.focusAlias(alias);
           this.view.setMessage(`added ${item.value} to ${alias}`);
           this.requestRender();
         });
@@ -553,9 +646,10 @@ class DashboardApp {
     process.exit(0);
   }
 
-  private closeOverlay(): void {
+  closeOverlay(): void {
     this.overlay?.hide();
     this.overlay = null;
+    this.compositeOverlay = null;
     this.tui.setFocus(this.view);
   }
 
