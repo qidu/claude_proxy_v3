@@ -56,6 +56,13 @@ type RequestEndpointTimingStatsEntry = {
   count: number;
 };
 
+type TokenHeatmapEvent = {
+  timestamp: number;
+  values: number;
+};
+
+const TOKEN_HEATMAP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
 const modelStats = new Map<string, ModelStatsEntry>();
 const agentStats = new Map<string, AgentStatsEntry>();
 const requestEndpointStats = new Map<string, RequestEndpointStatsEntry>();
@@ -64,6 +71,7 @@ const requestStatusCodeToEndpointStats = new Map<number, RequestStatusCodeStatsE
 const requestStatusCodeFromUpstreamStats = new Map<number, RequestStatusCodeStatsEntry>();
 const upstreamResponseToolStats = new Map<string, UpstreamResponseToolStatsEntry>();
 const requestEndpointTimingStats = new Map<string, RequestEndpointTimingStatsEntry>();
+const tokenHeatmapEvents: TokenHeatmapEvent[] = [];
 
 function toSafeNumber(value: unknown): number {
   if (typeof value !== 'number' || Number.isNaN(value)) {
@@ -385,6 +393,18 @@ export function recordModelStat(model: string | undefined, usage?: UsageStats): 
   modelStats.set(model, current);
 }
 
+function recordTokenHeatmapEvent(values: number, timestamp = Date.now()): void {
+  if (!Number.isFinite(values) || values <= 0) {
+    return;
+  }
+
+  tokenHeatmapEvents.push({ timestamp, values });
+  const cutoff = timestamp - TOKEN_HEATMAP_WINDOW_MS;
+  while (tokenHeatmapEvents.length > 0 && tokenHeatmapEvents[0].timestamp < cutoff) {
+    tokenHeatmapEvents.shift();
+  }
+}
+
 export function recordModelUsage(model: string | undefined, usage?: UsageStats): void {
   if (!model || !usage) {
     return;
@@ -397,6 +417,7 @@ export function recordModelUsage(model: string | undefined, usage?: UsageStats):
   current.output_tokens += toSafeNumber(usage.output_tokens);
   current.total_tokens += toSafeNumber(usage.total_tokens);
   modelStats.set(model, current);
+  recordTokenHeatmapEvent(toSafeNumber(usage.total_tokens));
 }
 
 export function recordAgentStat(userAgentPrefix: string, toolNames: string[]): void {
@@ -554,6 +575,35 @@ export function getRequestEndpointTimingStatsDesc(): (RequestEndpointTimingStats
     ...entry,
     avg_time_ms: entry.count > 0 ? Math.round(entry.total_time_ms / entry.count) : 0,
   }));
+}
+
+export function getTokenHeatmapStatsDesc(): Array<{ weekday: number; hour: number; values: number }> {
+  const cutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
+  const buckets = new Map<string, { weekday: number; hour: number; values: number }>();
+
+  for (const event of tokenHeatmapEvents) {
+    if (event.timestamp < cutoff) {
+      continue;
+    }
+
+    const date = new Date(event.timestamp);
+    const weekday = date.getDay();
+    const hour = date.getHours();
+    const key = `${weekday}:${hour}`;
+    const current = buckets.get(key) || { weekday, hour, values: 0 };
+    current.values += event.values;
+    buckets.set(key, current);
+  }
+
+  return [...buckets.values()].sort((a, b) => {
+    if (a.weekday !== b.weekday) {
+      return a.weekday - b.weekday;
+    }
+    if (a.hour !== b.hour) {
+      return a.hour - b.hour;
+    }
+    return a.values - b.values;
+  });
 }
 
 function normalizeUpstreamBaseUrl(urlLike: string): string {

@@ -23,6 +23,7 @@ import {
   getRequestStatusCodeFromUpstreamStatsDesc,
   getRequestStatusCodeToEndpointStatsDesc,
   getRequestUpstreamStatsDesc,
+  getTokenHeatmapStatsDesc,
   getToolUsageStatsDesc,
   getUpstreamResponseToolStatsDesc,
 } from '../utils/dashboard-stats.js';
@@ -65,6 +66,7 @@ export interface DashboardSnapshot {
     status_codes_to_endpoints: ReturnType<typeof getRequestStatusCodeToEndpointStatsDesc>;
     endpoint_timings: ReturnType<typeof getRequestEndpointTimingStatsDesc>;
   };
+  tokenHeatmap: ReturnType<typeof getTokenHeatmapStatsDesc>;
   compositeResolved: Array<{
     alias: string;
     targets: Array<{
@@ -107,6 +109,7 @@ export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): Dashbo
       status_codes_to_endpoints: getRequestStatusCodeToEndpointStatsDesc(),
       endpoint_timings: getRequestEndpointTimingStatsDesc(),
     },
+    tokenHeatmap: getTokenHeatmapStatsDesc(),
     compositeResolved,
   };
 }

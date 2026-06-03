@@ -24,14 +24,6 @@ import { buildHeatmap, renderHeatmapPanel } from './heatmap.js';
 import type { Env } from './types/shared.js';
 import type { ProxyConfig } from './utils/config-loader.js';
 
-const EXAMPLE_HEATMAP = buildHeatmap([
-  { weekday: 1, hour: 9, values: 42 },
-  { weekday: 1, hour: 9, values: 8 },
-  { weekday: 2, hour: 14, values: 19 },
-  { weekday: 4, hour: 17, values: 73 },
-  { weekday: 6, hour: 2, values: 5 },
-]);
-
 export type DashboardSource = {
   env: Env;
   loadConfig: () => Promise<ProxyConfig>;
@@ -384,15 +376,16 @@ class DashboardView implements Component {
     lines.push(`${bold('Config')}: ${snap.config.config_path ?? 'memory'} ${snap.config.read_only ? yellow('(read-only)') : green('(writable)')}`);
     lines.push(`${bold('Models')}: ${fmt(snap.modelStats.length)}  ${bold('Tools')}: ${fmt(toolStats.length)}  ${bold('Requests')}: ${fmt(snap.requestStats.endpoints.length)}`);
     lines.push('');
-    lines.push(...renderHeatmapPanel(EXAMPLE_HEATMAP, { title: 'Example Values' }).split('\n'));
+    const tokenHeatmap = snap.tokenHeatmap;
+    lines.push(...renderHeatmapPanel(buildHeatmap(tokenHeatmap), { title: 'Token Values (7d)' }).split('\n'));
     lines.push('');
-    lines.push(bold('Custom models'));
+    lines.push(bold('Custom Models'));
     const customModels = this.customModels();
     if (!customModels.length) {
       lines.push(dim('  none'));
     } else {
       for (const row of customModels) {
-        lines.push(`  ${bold(row.modelId)} ${dim(`(${titleCase(row.category)})`)}`);
+        lines.push(`  ${dim(row.modelId)} ${dim(`(${titleCase(row.category)})`)}`);
       }
     }
     lines.push(bold('Top Models'));
@@ -443,7 +436,7 @@ class DashboardView implements Component {
       }
     }
 
-    return models.sort((a, b) => a.modelId.localeCompare(b.modelId));
+    return models.sort((a, b) => a.category.localeCompare(b.category) && a.modelId.localeCompare(b.modelId));
   }
 }
 
