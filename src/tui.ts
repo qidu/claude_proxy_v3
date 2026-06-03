@@ -274,7 +274,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
     lines.push(`Esc ${dim('hide panel')}  A ${dim('add alias')} T ${dim('token limit')}  M ${dim('add target')}  E ${dim('edit')}  D ${dim('delete')} ↑↓ ${dim('move')} `);
 
     if (!snap) {
-      return frame('Composite Aliases', [...lines, 'Loading…'], width).map((line) => clip(line, width));
+      return frame('Edit Composite Aliases Config', [...lines, 'Loading…'], width).map((line) => clip(line, width));
     }
 
     const selections = this.selections();
@@ -309,7 +309,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
 
     lines.push('');
     lines.push(this.message ? yellow(this.message) : dim('Ready'));
-    return frame('Composite Aliases', lines, width).map((line) => clip(line, width));
+    return frame('Edit Composite Aliases Config', lines, width).map((line) => clip(line, width));
   }
 
   private selections(): Selection[] {
@@ -374,10 +374,12 @@ class DashboardView implements Component {
 
     const toolStats = snap.toolStats || [];
     lines.push(`${bold('Config')}: ${snap.config.config_path ?? 'memory'} ${snap.config.read_only ? yellow('(read-only)') : green('(writable)')}`);
-    lines.push(`${bold('Models')}: ${fmt(snap.modelStats.length)}  ${bold('Tools')}: ${fmt(toolStats.length)}  ${bold('Requests')}: ${fmt(snap.requestStats.endpoints.length)}`);
+    lines.push(`${bold('Tools')}: ${fmt(toolStats.length)}`);
     lines.push('');
-    const tokenHeatmap = snap.tokenHeatmap;
-    lines.push(...renderHeatmapPanel(buildHeatmap(tokenHeatmap), { title: 'Token Values (7d)' }).split('\n'));
+    const tokenHeatmap = buildHeatmap(snap.tokenHeatmap);
+    const tokenHeatmapLines = renderHeatmapPanel(tokenHeatmap, { title: 'Tokens Panel' }).split('\n');
+    tokenHeatmapLines[0] = `${bold('Tokens Panel')} (${fmt(tokenHeatmap.totalValues)})`;
+    lines.push(...tokenHeatmapLines);
     lines.push('');
     lines.push(bold('Custom Models'));
     const customModels = this.customModels();
@@ -388,7 +390,7 @@ class DashboardView implements Component {
         lines.push(`  ${dim(row.modelId)} ${dim(`(${titleCase(row.category)})`)}`);
       }
     }
-    lines.push(bold('Top Models'));
+    lines.push(`${bold('Top Models')} (${fmt(snap.modelStats.length)})`);
     lines.push(dim('  model                         req   failed | token in    cached    wrote     out     total'));
     for (const row of snap.modelStats.slice(0, 5)) {
       lines.push(
@@ -397,14 +399,14 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(bold(`Tools Used (${fmt(toolStats.length)})`));
+    lines.push(`${bold('Tools Used')} (${fmt(toolStats.length)})`);
     lines.push(dim('  tool                          in req     in resp'));
     for (const row of toolStats.slice(0, 5)) {
       lines.push(`  ${pad(row.tool_name, 28)} ${alignRight(fmt(row.in_requests), 7)}   ${alignRight(fmt(row.in_responses), 8)}`);
     }
 
     lines.push('');
-    lines.push(bold('Top Endpoints'));
+    lines.push(`${bold('Top Endpoints')} (${fmt(snap.requestStats.endpoints.length)})`);
     lines.push(dim('  endpoint                     req    min(s)   avg(s)   max(s)'));
     const endpointRows = new Map(snap.requestStats.endpoints.map((row) => [row.endpoint, row]));
     for (const row of snap.requestStats.endpoint_timings.slice(0, 5)) {
