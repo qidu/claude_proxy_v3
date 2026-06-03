@@ -502,7 +502,14 @@ class DashboardApp {
 
   openCompositeAliasesOverlay(): void {
     if (this.compositeOverlay) {
-      this.closeOverlay();
+      if (this.overlay) {
+        this.closeOverlay();
+      } else {
+        this.overlay = this.tui.showOverlay(this.compositeOverlay, { width: '80%', maxHeight: '70%', anchor: 'center' });
+        this.compositeOverlay.setSnapshot(this.viewSnapshot());
+        this.tui.setFocus(this.compositeOverlay);
+        this.requestRender();
+      }
       return;
     }
     this.closeOverlay();
@@ -547,13 +554,13 @@ class DashboardApp {
       return;
     }
 
-    this.closeOverlay();
+    this.hideOverlay();
     const overlay = new ListOverlay(
       `Add target to ${bold(alias)}`,
       `↑/↓ ${dim('move')}  Enter ${dim('select')}  Esc ${dim('cancel')}`,
       choices,
       (item) => {
-        this.closeOverlay();
+        this.hideOverlay();
         this.openPrompt(`Share for ${item.value}`, 'Blank = equal share', '', async (value) => {
           const trimmed = value.trim();
           const share = trimmed.length > 0 ? Number(trimmed) : undefined;
@@ -572,7 +579,7 @@ class DashboardApp {
         });
       },
       () => {
-        this.closeOverlay();
+        this.hideOverlay();
         this.view.setMessage('add target cancelled');
         this.requestRender();
       },
@@ -658,13 +665,27 @@ class DashboardApp {
     this.tui.setFocus(this.view);
   }
 
+  private hideOverlay(): void {
+    this.overlay?.hide();
+    this.overlay = null;
+    this.tui.setFocus(this.view);
+  }
+
+  private showCompositeOverlay(): void {
+    if (!this.compositeOverlay || this.overlay) return;
+    this.overlay = this.tui.showOverlay(this.compositeOverlay, { width: '80%', maxHeight: '70%', anchor: 'center' });
+    this.compositeOverlay.setSnapshot(this.viewSnapshot());
+    this.tui.setFocus(this.compositeOverlay);
+  }
+
   private openPrompt(
     title: string,
     prompt: string,
     initialValue: string,
     onSubmit: (value: string) => Promise<void> | void,
   ): void {
-    this.closeOverlay();
+    const restoreCompositeOverlay = this.compositeOverlay !== null;
+    this.hideOverlay();
     const overlay = new PromptOverlay(
       title,
       prompt,
@@ -672,8 +693,12 @@ class DashboardApp {
       (value) => {
         void (async () => {
           try {
-            this.closeOverlay();
+            this.hideOverlay();
             await onSubmit(value);
+            if (restoreCompositeOverlay) {
+              this.showCompositeOverlay();
+            }
+            this.requestRender();
           } catch (error) {
             this.view.setMessage((error as Error).message);
             await this.refresh();
@@ -681,7 +706,10 @@ class DashboardApp {
         })();
       },
       () => {
-        this.closeOverlay();
+        this.hideOverlay();
+        if (restoreCompositeOverlay) {
+          this.showCompositeOverlay();
+        }
         this.view.setMessage('cancelled');
         this.requestRender();
       },
