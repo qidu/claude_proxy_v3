@@ -302,7 +302,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
         const selectedTarget = selected?.kind === 'target' && selected.alias === alias && selected.target === target;
         const mark = selectedTarget ? green('>') : dim('·');
         const typedCfg = cfg as { share?: number; primary?: boolean; fallback?: number } | undefined;
-        const summary = `${typedCfg?.share ?? '-'}${typedCfg?.primary ? ' P' : ''}${typedCfg?.fallback !== undefined ? ` FB${typedCfg.fallback}` : ''}`;
+        const summary = `${typedCfg?.share ?? '-'}${typedCfg?.primary ? ' P' : ''}${typedCfg?.fallback === 0 ? ' no FB' : typedCfg?.fallback !== undefined ? ` FB${typedCfg.fallback}` : ''}`;
         lines.push(`  ${dim('│')} ${mark} ${clip(target, 22)} ${dim(summary)}`);
       }
     }
@@ -373,9 +373,7 @@ class DashboardView implements Component {
     }
 
     const toolStats = snap.toolStats || [];
-    lines.push(`${bold('Config')}: ${snap.config.config_path ?? 'memory'} ${snap.config.read_only ? yellow('(read-only)') : green('(writable)')}`);
-    lines.push(`${bold('Tools')}: ${fmt(toolStats.length)}`);
-    lines.push('');
+    lines.push(`${dim('Config:')} ${dim(snap.config.config_path ?? 'memory')} ${snap.config.read_only ? yellow('(read-only)') : green('(writable)')}`);
     const tokenHeatmap = buildHeatmap(snap.tokenHeatmap);
     const tokenHeatmapLines = renderHeatmapPanel(tokenHeatmap, { title: 'Tokens Panel' }).split('\n');
     tokenHeatmapLines[0] = `${bold('Tokens Panel')} (${fmt(tokenHeatmap.totalValues)})`;
@@ -391,28 +389,28 @@ class DashboardView implements Component {
       }
     }
     lines.push(`${bold('Top Models')} (${fmt(snap.modelStats.length)})`);
-    lines.push(dim('  model                         req   failed | token in    cached    wrote     out     total'));
+    lines.push(dim(`  ${'model'.padEnd(32)}req   failed | token in    cached    wrote     out     total`));
     for (const row of snap.modelStats.slice(0, 5)) {
       lines.push(
-        `  ${pad(row.model, 26)}  ${alignRight(fmt(row.requests), 5)} ${alignRight(fmt(row.failed_requests), 8)}  ${alignRight(fmt(row.input_tokens), 8)}  ${alignRight(fmt(row.cached_tokens), 8)} ${alignRight(fmt(row.cache_written_tokens), 8)} ${alignRight(fmt(row.output_tokens), 8)}  ${alignRight(fmt(row.total_tokens), 8)}`,
+        `  ${(row.model.split('/').pop() || row.model).padEnd(30)}${alignRight(fmt(row.requests), 5)} ${alignRight(fmt(row.failed_requests), 8)}  ${alignRight(fmt(row.input_tokens), 8)}  ${alignRight(fmt(row.cached_tokens), 8)} ${alignRight(fmt(row.cache_written_tokens), 8)} ${alignRight(fmt(row.output_tokens), 8)}  ${alignRight(fmt(row.total_tokens), 8)}`,
       );
     }
 
     lines.push('');
     lines.push(`${bold('Tools Used')} (${fmt(toolStats.length)})`);
-    lines.push(dim('  tool                          in req     in resp'));
+    lines.push(dim(`  ${'tool'.padEnd(32)}in req     in resp     total len`));
     for (const row of toolStats.slice(0, 5)) {
-      lines.push(`  ${pad(row.tool_name, 28)} ${alignRight(fmt(row.in_requests), 7)}   ${alignRight(fmt(row.in_responses), 8)}`);
+      lines.push(`  ${row.tool_name.padEnd(30)}${alignRight(fmt(row.in_requests), 7)}   ${alignRight(fmt(row.in_responses), 8)}   ${alignRight(fmt(row.in_request_chars), 10)}`);
     }
 
     lines.push('');
     lines.push(`${bold('Top Endpoints')} (${fmt(snap.requestStats.endpoints.length)})`);
-    lines.push(dim('  endpoint                     req    min(s)   avg(s)   max(s)'));
+    lines.push(dim(`  ${'endpoint'.padEnd(32)}req   min(s)   avg(s)   max(s)`));
     const endpointRows = new Map(snap.requestStats.endpoints.map((row) => [row.endpoint, row]));
     for (const row of snap.requestStats.endpoint_timings.slice(0, 5)) {
       const requestRow = endpointRows.get(row.endpoint);
       lines.push(
-        `  ${pad(row.endpoint, 26)} ${alignRight(fmt(requestRow?.requests ?? 0), 5)} ${alignRight(fmtSeconds(row.min_time_ms), 8)} ${alignRight(fmtSeconds(row.avg_time_ms), 8)} ${alignRight(fmtSeconds(row.max_time_ms), 8)}`,
+        `  ${row.endpoint.padEnd(30)}${alignRight(fmt(requestRow?.requests ?? 0), 5)} ${alignRight(fmtSeconds(row.min_time_ms), 8)} ${alignRight(fmtSeconds(row.avg_time_ms), 8)} ${alignRight(fmtSeconds(row.max_time_ms), 8)}`,
       );
     }
 
@@ -561,17 +559,49 @@ class DashboardApp {
       choices,
       (item) => {
         this.hideOverlay();
-        this.openPrompt(`Share for ${item.value}`, 'Blank = equal share', '', async (value) => {
-          const trimmed = value.trim();
-          const share = trimmed.length > 0 ? Number(trimmed) : undefined;
-          if (trimmed.length > 0 && Number.isNaN(share)) {
-            this.view.setMessage('Share must be a number or blank');
+        this.openPrompt(`Add ${item.value} to ${alias}`, 'input <share> <primary> <fallback>', '', async (value) => {
+          const parts = value.trim().split(/\s+/).filter(Boolean);
+          if (parts.length < 1 || parts.length > 3) {
+            this.view.setMessage('Use: share [primary] [fallback]');
             await this.refresh();
             this.compositeOverlay?.focusAlias(alias);
             this.requestRender();
             return;
           }
-          upsertCompositeTargetFromDashboard(this.source.env, alias, item.value, { share });
+
+          const [shareText, primaryText, fallbackText] = parts;
+          const share = Number(shareText);
+          if (Number.isNaN(share)) {
+            this.view.setMessage('Share must be a number');
+            await this.refresh();
+            this.compositeOverlay?.focusAlias(alias);
+            this.requestRender();
+            return;
+          }
+
+          const parsedPrimary = primaryText === undefined ? undefined : primaryText === 'true' || primaryText === '1' ? true : primaryText === 'false' || primaryText === '0' ? false : null;
+          if (parsedPrimary === null) {
+            this.view.setMessage('Primary must be true, 1, false, or 0');
+            await this.refresh();
+            this.compositeOverlay?.focusAlias(alias);
+            this.requestRender();
+            return;
+          }
+
+          const fallback = fallbackText === undefined ? undefined : Number(fallbackText);
+          if (fallbackText !== undefined && Number.isNaN(fallback)) {
+            this.view.setMessage('Fallback must be a number');
+            await this.refresh();
+            this.compositeOverlay?.focusAlias(alias);
+            this.requestRender();
+            return;
+          }
+
+          upsertCompositeTargetFromDashboard(this.source.env, alias, item.value, {
+            share,
+            primary: parsedPrimary === undefined ? undefined : parsedPrimary,
+            fallback,
+          });
           await this.refresh();
           this.compositeOverlay?.focusAlias(alias);
           this.view.setMessage(`added ${item.value} to ${alias}`);
@@ -589,25 +619,40 @@ class DashboardApp {
   }
 
   openEditTargetPrompt(alias: string, target: string): void {
-    this.openPrompt(`Edit ${alias}.${target}`, 'input <share> <fallback> <primary>', '', async (value) => {
-      const [share, fallback, primary] = value.split(/\s+/);
-      const parsedShare = share ? Number(share) : undefined;
-      const parsedFallback = fallback ? Number(fallback) : undefined;
-      const parsedPrimary = primary === 'true' ? true : primary === 'false' ? false : undefined;
-      if (share && Number.isNaN(parsedShare)) {
+    this.openPrompt(`Edit ${alias}.${target}`, 'input <share> <primary> <fallback>', '', async (value) => {
+      const parts = value.trim().split(/\s+/).filter(Boolean);
+      if (parts.length < 1 || parts.length > 3) {
+        this.view.setMessage('Use: share [primary] [fallback]');
+        await this.refresh();
+        return;
+      }
+
+      const [shareText, primaryText, fallbackText] = parts;
+      const share = Number(shareText);
+      if (Number.isNaN(share)) {
         this.view.setMessage('Share must be a number');
         await this.refresh();
         return;
       }
-      if (fallback && Number.isNaN(parsedFallback)) {
+
+      const parsedPrimary = primaryText === undefined ? undefined : primaryText === 'true' || primaryText === '1' ? true : primaryText === 'false' || primaryText === '0' ? false : null;
+      if (parsedPrimary === null) {
+        this.view.setMessage('Primary must be true, 1, false, or 0');
+        await this.refresh();
+        return;
+      }
+
+      const fallback = fallbackText === undefined ? undefined : Number(fallbackText);
+      if (fallbackText !== undefined && Number.isNaN(fallback)) {
         this.view.setMessage('Fallback must be a number');
         await this.refresh();
         return;
       }
+
       upsertCompositeTargetFromDashboard(this.source.env, alias, target, {
-        share: parsedShare,
-        fallback: parsedFallback,
-        primary: parsedPrimary,
+        share,
+        primary: parsedPrimary === undefined ? undefined : parsedPrimary,
+        fallback,
       });
       this.view.setMessage(`updated ${alias}.${target}`);
       await this.refresh();

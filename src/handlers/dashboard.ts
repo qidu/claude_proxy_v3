@@ -14,6 +14,7 @@ import {
   upsertCompositeAliasLimit,
   upsertCompositeTarget,
   clearProxyConfigCache,
+  loadProxyConfig,
 } from '../utils/config-loader.js';
 import {
   getAgentStatsDesc,
@@ -277,7 +278,7 @@ export function handleDashboardPage(): Response {
     <section class="card" id="section-model">
       <h2>Model Statistic <button id="exportModelStatsCsv" class="mini-btn" style="font-size:12px;">Export CSV</button></h2>
       <table id="modelStats">
-        <thead><tr><th>Model</th><th class="num">Requests</th><th class="num">Failed</th><th class="num">Input Tokens</th><th class="num">Cached Tokens</th><th class="num">Cache Written Tokens</th><th class="num">Output Tokens</th><th class="num">Total Tokens</th></tr></thead>
+        <thead><tr><th>Model ID</th><th class="num">Requests</th><th class="num">Failed</th><th class="num">Input Tokens</th><th class="num">Cached Tokens</th><th class="num">Cache Written Tokens</th><th class="num">Output Tokens</th><th class="num">Total Tokens</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
@@ -327,7 +328,7 @@ export function handleDashboardPage(): Response {
     <section class="card" id="section-agent">
       <h2>Tool Usage <button id="toggleToolStats" class="mini-btn" style="font-size:12px;">Show all</button></h2>
       <table id="toolStats">
-        <thead><tr><th>Tool</th><th class="num">In requests</th><th class="num">In responses</th></tr></thead>
+        <thead><tr><th>Tool</th><th class="num">In requests</th><th class="num">In responses</th><th class="num">Total len</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
@@ -408,14 +409,14 @@ export function handleDashboardPage(): Response {
         return rows.concat(keys.map((targetName) => {
           const cfg = targets[targetName] || {};
           const share = cfg.share ?? '';
-          const fallback = cfg.fallback ?? '';
+          const fallback = cfg.fallback === 0 ? 'no FB' : cfg.fallback ?? '';
           const primary = cfg.primary === true ? 'checked' : '';
           return '<div class="config-row">'
             + '<label>' + escapeHtml(targetName) + '</label>'
             + '<input type="number" data-kind="comp-share" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(share) + '" placeholder="share"' + disabledAttr + ' />'
             + '<div class="row-actions">'
-              + '<input type="number" data-kind="comp-fallback" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(fallback) + '" placeholder="fallback" style="width: 120px;"' + disabledAttr + ' />'
               + '<label class="primary-label"><input type="checkbox" data-kind="comp-primary" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" ' + primary + disabledAttr + ' /> primary</label>'
+              + '<input type="number" data-kind="comp-fallback" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(fallback) + '" placeholder="fallback" style="width: 120px;"' + disabledAttr + ' />'
               + '<button type="button" class="mini-btn danger" data-action="remove-composite-target" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
             + '</div>'
             + '</div>';
@@ -496,7 +497,12 @@ export function handleDashboardPage(): Response {
             const fallbackEl = document.querySelector('[data-kind="comp-fallback"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
             const entry = {};
             if (shareEl && shareEl.value !== '') entry.share = Number(shareEl.value);
-            if (fallbackEl && fallbackEl.value !== '') entry.fallback = Number(fallbackEl.value);
+            if (fallbackEl && fallbackEl.value !== '') {
+              const fallbackValue = Number(fallbackEl.value);
+              if (fallbackValue !== 0) entry.fallback = fallbackValue;
+            }
+            const primaryEl = document.querySelector('[data-kind="comp-primary"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
+            if (primaryEl && primaryEl.checked) entry.primary = true;
             if (selectedPrimaryByAlias[aliasName] === targetName) entry.primary = true;
             payload.composite[aliasName][targetName] = entry;
           });
@@ -670,8 +676,7 @@ export function handleDashboardPage(): Response {
           if (!res.ok) {
             throw new Error(result.error || 'Save failed');
           }
-          currentConfig = result.config;
-          renderConfigForm(currentConfig);
+          await loadConfig();
           configStatus.textContent = 'Saved' + configPathHint;
         } catch (err) {
           configStatus.textContent = 'Error: ' + err.message;
@@ -687,7 +692,7 @@ export function handleDashboardPage(): Response {
         const res = await fetch('/dashboard/api/stats/models');
         const json = await res.json();
         renderRows('#modelStats', json.data || [], (row) =>
-          '<tr><td>' + row.model + '</td><td class="num">' + row.requests + '</td><td class="num">' + (row.failed_requests || 0) + '</td><td class="num">' + row.input_tokens + '</td><td class="num">' + row.cached_tokens + '</td><td class="num">' + row.cache_written_tokens + '</td><td class="num">' + row.output_tokens + '</td><td class="num">' + row.total_tokens + '</td></tr>'
+          '<tr><td>' + (row.model.split('/').pop() || row.model) + '</td><td class="num">' + row.requests + '</td><td class="num">' + (row.failed_requests || 0) + '</td><td class="num">' + row.input_tokens + '</td><td class="num">' + row.cached_tokens + '</td><td class="num">' + row.cache_written_tokens + '</td><td class="num">' + row.output_tokens + '</td><td class="num">' + row.total_tokens + '</td></tr>'
         );
       }
 
@@ -697,7 +702,7 @@ export function handleDashboardPage(): Response {
         const tbody = document.querySelector('#toolStats tbody');
         const rows = toolStatsExpanded ? data : data.slice(0, 10);
         tbody.innerHTML = rows.map((row) =>
-          '<tr><td>' + row.tool_name + '</td><td class="num">' + row.in_requests + '</td><td class="num">' + row.in_responses + '</td></tr>'
+          '<tr><td>' + row.tool_name + '</td><td class="num">' + row.in_requests + '</td><td class="num">' + row.in_responses + '</td><td class="num">' + (row.in_request_chars || 0) + '</td></tr>'
         ).join('');
         const btn = document.getElementById('toggleToolStats');
         if (data.length > 10) {
@@ -825,7 +830,8 @@ export async function handleDashboardPutConfig(request: Request, env: Env, _prox
     persistProxyConfigToPath(configPath, nextConfig);
     clearProxyConfigCache();
 
-    return jsonResponse({ status: 'ok', config: toDashboardConfigPayload(nextConfig) });
+    const reloadedConfig = await loadProxyConfig(env);
+    return jsonResponse(getDashboardSnapshot(reloadedConfig, env));
   } catch (error) {
     return jsonResponse({ error: (error as Error).message }, 400);
   }

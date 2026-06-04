@@ -166,9 +166,9 @@ function getOrderedCompositeTargets(
           const leftFallback = left.targetConfig.fallback;
           const rightFallback = right.targetConfig.fallback;
 
-          if (leftFallback !== undefined || rightFallback !== undefined) {
-            const normalizedLeft = leftFallback ?? Number.POSITIVE_INFINITY;
-            const normalizedRight = rightFallback ?? Number.POSITIVE_INFINITY;
+          if ((leftFallback !== undefined && leftFallback > 0) || (rightFallback !== undefined && rightFallback > 0)) {
+            const normalizedLeft = leftFallback && leftFallback > 0 ? leftFallback : Number.POSITIVE_INFINITY;
+            const normalizedRight = rightFallback && rightFallback > 0 ? rightFallback : Number.POSITIVE_INFINITY;
             if (normalizedLeft !== normalizedRight) {
               return normalizedLeft - normalizedRight;
             }
@@ -194,7 +194,7 @@ function resolveCompositeModelRoute(
     return undefined;
   }
 
-  const selectedCandidate = orderedTargets.some(candidate => candidate.targetConfig.fallback !== undefined || candidate.targetConfig.primary)
+  const selectedCandidate = orderedTargets.some(candidate => candidate.targetConfig.primary || (candidate.targetConfig.fallback !== undefined && candidate.targetConfig.fallback > 0))
     ? orderedTargets[0]
     : selectWeightedCompositeCandidate(orderedTargets);
 
@@ -270,7 +270,7 @@ export function getCompositeRouteCandidates(
   }
 
   const { orderedTargets } = orderedComposite;
-  const hasPriorityOrder = orderedTargets.some(candidate => candidate.targetConfig.primary || candidate.targetConfig.fallback !== undefined);
+  const hasPriorityOrder = orderedTargets.some(candidate => candidate.targetConfig.primary || (candidate.targetConfig.fallback !== undefined && candidate.targetConfig.fallback > 0));
 
   let attemptOrder = orderedTargets;
   if (!hasPriorityOrder) {
@@ -1311,7 +1311,7 @@ export function upsertCompositeTarget(
   }
 
   if (patch.fallback !== undefined) {
-    if (patch.fallback === null) {
+    if (patch.fallback === null || patch.fallback === 0) {
       delete nextTarget.fallback;
     } else if (!Number.isFinite(patch.fallback)) {
       throw new Error(`Invalid fallback for ${aliasName}.${targetName}`);

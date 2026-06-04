@@ -1,3 +1,5 @@
+import { stringify } from './stringify.js';
+
 type UsageStats = {
   input_tokens?: number;
   cached_tokens?: number;
@@ -26,6 +28,12 @@ type ToolUsageStatsEntry = {
   tool_name: string;
   in_requests: number;
   in_responses: number;
+  in_request_chars: number;
+};
+
+type ToolRequestStatsEntry = {
+  tool_name: string;
+  request_chars: number;
 };
 
 type RequestEndpointStatsEntry = {
@@ -65,6 +73,7 @@ const TOKEN_HEATMAP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 const modelStats = new Map<string, ModelStatsEntry>();
 const agentStats = new Map<string, AgentStatsEntry>();
+const toolRequestChars = new Map<string, number>();
 const requestEndpointStats = new Map<string, RequestEndpointStatsEntry>();
 const requestUpstreamStats = new Map<string, RequestUpstreamStatsEntry>();
 const requestStatusCodeToEndpointStats = new Map<number, RequestStatusCodeStatsEntry>();
@@ -130,6 +139,63 @@ export function extractToolNamesFromBody(body: Record<string, unknown> | undefin
   }
 
   return names.size > 0 ? [...names] : ['none'];
+}
+
+function extractSystemText(body: Record<string, unknown>): string {
+  const system = body.system;
+  if (typeof system === 'string') {
+    return system;
+  }
+  if (Array.isArray(system)) {
+    return system
+      .map((block) => (block && typeof block === 'object' ? (block as Record<string, unknown>).text : ''))
+      .filter((text) => typeof text === 'string' && text.length > 0)
+      .join('\n');
+  }
+  return '';
+}
+
+export function extractToolRequestCharLengthsFromBody(body: Record<string, unknown> | undefined): Array<{ tool_name: string; request_chars: number }> {
+  if (!body) {
+    return [];
+  }
+
+  const tools = body.tools;
+  if (!Array.isArray(tools) || tools.length === 0) {
+    return [];
+  }
+
+  const systemText = extractSystemText(body);
+  const totals = new Map<string, number>();
+
+  for (const tool of tools) {
+    if (!tool || typeof tool !== 'object') {
+      continue;
+    }
+
+    const record = tool as Record<string, unknown>;
+    const claudeToolName = typeof record.name === 'string' && record.name.trim()
+      ? record.name.trim()
+      : undefined;
+    const openAiFunction = record.function && typeof record.function === 'object'
+      ? (record.function as Record<string, unknown>)
+      : undefined;
+    const openAiName = typeof openAiFunction?.name === 'string' && openAiFunction.name.trim()
+      ? openAiFunction.name.trim()
+      : undefined;
+    const toolName = claudeToolName || openAiName;
+    if (!toolName) {
+      continue;
+    }
+
+    let requestChars = stringify(record).length;
+    if (systemText && systemText.includes(toolName)) {
+      requestChars += systemText.length;
+    }
+    totals.set(toolName, (totals.get(toolName) ?? 0) + requestChars);
+  }
+
+  return [...totals.entries()].map(([tool_name, request_chars]) => ({ tool_name, request_chars }));
 }
 
 function addToolName(names: string[], value: unknown): boolean {
@@ -346,9 +412,15 @@ export function extractUsageFromResponsePayload(payload: unknown): UsageStats | 
   return undefined;
 }
 
+function normalizeModelStatKey(model: string): string {
+  const suffixMatch = model.match(/^(.*?):\s+https?:\/\/.+$/);
+  return suffixMatch ? suffixMatch[1] : model;
+}
+
 function getOrCreateModelStat(model: string): ModelStatsEntry {
-  return modelStats.get(model) || {
-    model,
+  const normalizedModel = normalizeModelStatKey(model);
+  return modelStats.get(normalizedModel) || {
+    model: normalizedModel,
     requests: 0,
     failed_requests: 0,
     input_tokens: 0,
@@ -364,7 +436,7 @@ function getOrCreateModelStat(model: string): ModelStatsEntry {
  */
 export function getModelTotalTokens(model: string | undefined): number {
   if (!model) return 0;
-  const entry = modelStats.get(model);
+  const entry = modelStats.get(normalizeModelStatKey(model));
   return entry ? entry.total_tokens : 0;
 }
 
@@ -373,9 +445,10 @@ export function recordModelFailedRequest(model: string | undefined): void {
     return;
   }
 
-  const current = getOrCreateModelStat(model);
+  const normalizedModel = normalizeModelStatKey(model);
+  const current = getOrCreateModelStat(normalizedModel);
   current.failed_requests += 1;
-  modelStats.set(model, current);
+  modelStats.set(normalizedModel, current);
 }
 
 export function recordModelStat(model: string | undefined, usage?: UsageStats): void {
@@ -383,14 +456,15 @@ export function recordModelStat(model: string | undefined, usage?: UsageStats): 
     return;
   }
 
-  const current = getOrCreateModelStat(model);
+  const normalizedModel = normalizeModelStatKey(model);
+  const current = getOrCreateModelStat(normalizedModel);
   current.requests += 1;
   current.input_tokens += toSafeNumber(usage?.input_tokens);
   current.cached_tokens += toSafeNumber(usage?.cached_tokens);
   current.cache_written_tokens += toSafeNumber(usage?.cache_written_tokens);
   current.output_tokens += toSafeNumber(usage?.output_tokens);
   current.total_tokens += toSafeNumber(usage?.total_tokens);
-  modelStats.set(model, current);
+  modelStats.set(normalizedModel, current);
 }
 
 function recordTokenHeatmapEvent(values: number, timestamp = Date.now()): void {
@@ -410,13 +484,14 @@ export function recordModelUsage(model: string | undefined, usage?: UsageStats):
     return;
   }
 
-  const current = getOrCreateModelStat(model);
+  const normalizedModel = normalizeModelStatKey(model);
+  const current = getOrCreateModelStat(normalizedModel);
   current.input_tokens += toSafeNumber(usage.input_tokens);
   current.cached_tokens += toSafeNumber(usage.cached_tokens);
   current.cache_written_tokens += toSafeNumber(usage.cache_written_tokens);
   current.output_tokens += toSafeNumber(usage.output_tokens);
   current.total_tokens += toSafeNumber(usage.total_tokens);
-  modelStats.set(model, current);
+  modelStats.set(normalizedModel, current);
   recordTokenHeatmapEvent(toSafeNumber(usage.total_tokens));
 }
 
@@ -429,6 +504,21 @@ export function recordAgentStat(userAgentPrefix: string, toolNames: string[]): v
     const current = agentStats.get(key) || { key, uses: 0 };
     current.uses += 1;
     agentStats.set(key, current);
+  }
+}
+
+export function recordToolRequestChars(toolChars: Array<{ tool_name: string; request_chars: number }>): void {
+  if (!Array.isArray(toolChars) || toolChars.length === 0) {
+    return;
+  }
+
+  for (const entry of toolChars) {
+    if (!entry || typeof entry.tool_name !== 'string' || !entry.tool_name.trim()) {
+      continue;
+    }
+    const toolName = entry.tool_name.trim();
+    const requestChars = Number.isFinite(entry.request_chars) ? Math.max(0, Math.floor(entry.request_chars)) : 0;
+    toolRequestChars.set(toolName, (toolRequestChars.get(toolName) ?? 0) + requestChars);
   }
 }
 
@@ -677,21 +767,27 @@ export function getToolUsageStatsDesc(): ToolUsageStatsEntry[] {
 
   for (const entry of agentStats.values()) {
     const tool_name = entry.key.includes(' / ') ? entry.key.slice(entry.key.lastIndexOf(' / ') + 3) : entry.key;
-    const current = combined.get(tool_name) || { tool_name, in_requests: 0, in_responses: 0 };
+    const current = combined.get(tool_name) || { tool_name, in_requests: 0, in_responses: 0, in_request_chars: 0 };
     current.in_requests += entry.uses;
+    combined.set(tool_name, current);
+  }
+
+  for (const [tool_name, request_chars] of toolRequestChars.entries()) {
+    const current = combined.get(tool_name) || { tool_name, in_requests: 0, in_responses: 0, in_request_chars: 0 };
+    current.in_request_chars += request_chars;
     combined.set(tool_name, current);
   }
 
   for (const entry of upstreamResponseToolStats.values()) {
     const tool_name = entry.tool_name;
-    const current = combined.get(tool_name) || { tool_name, in_requests: 0, in_responses: 0 };
+    const current = combined.get(tool_name) || { tool_name, in_requests: 0, in_responses: 0, in_request_chars: 0 };
     current.in_responses += entry.tools;
     combined.set(tool_name, current);
   }
 
   return [...combined.values()].sort((a, b) => {
-    const aTotal = a.in_requests + a.in_responses;
-    const bTotal = b.in_requests + b.in_responses;
+    const aTotal = a.in_requests + a.in_responses + a.in_request_chars;
+    const bTotal = b.in_requests + b.in_responses + b.in_request_chars;
     if (bTotal !== aTotal) {
       return bTotal - aTotal;
     }

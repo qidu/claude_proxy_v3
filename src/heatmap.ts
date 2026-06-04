@@ -112,7 +112,5 @@ export function renderHeatmapPanel(heatmap: HeatmapData, options: TuiOptions = {
     lines.push(`  ${label} ${cells.join(' ')}`);
   }
 
-  lines.push('');
-  lines.push('  Press q or Esc to quit');
   return lines.join('\n');
 }

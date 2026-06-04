@@ -29,12 +29,14 @@ import {
 import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, ModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
 import {
   extractToolNamesFromBody,
+  extractToolRequestCharLengthsFromBody,
   extractToolNamesFromResponsePayload,
   extractUsageFromResponsePayload,
   extractUserAgentPrefix,
   createResponseToolTrackingTransformStream,
   recordAgentStat,
   recordModelStat,
+  recordToolRequestChars,
   recordUpstreamResponseToolNames,
   recordModelFailedRequest,
   recordModelUsage,
@@ -529,6 +531,7 @@ export default {
           if (contentType.includes('application/json')) {
             const bodyForToolStats = await request.clone().json() as Record<string, unknown>;
             requestToolNames = extractToolNamesFromBody(bodyForToolStats);
+            recordToolRequestChars(extractToolRequestCharLengthsFromBody(bodyForToolStats));
           }
         } catch {
           // ignore parse failures for stats collection

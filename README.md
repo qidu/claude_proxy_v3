@@ -19,7 +19,7 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
   - `POST /v1/embeddings` - Generate embeddings (proxied to upstream OpenAI-compatible API)
   - `GET /dashboard` - Web dashboard for config and runtime statistics
   - `GET /dashboard/api/config` - Read sanitized editable config (`models.*`, `composite`; hides `api_key`)
-  - `PUT /dashboard/api/config` - Save dashboard config edits (file mode only; read-only when `PROXY_CONFIG_URL` is set)
+  - `PUT /dashboard/api/config` - Save dashboard config edits, persist them, and reload the updated config back into `/dashboard` and the TUI (file mode only; read-only when `PROXY_CONFIG_URL` is set)
   - `GET /dashboard/api/stats/models` - Model request + token stats
   - Dashboard "Export CSV" button reads table data from the DOM and triggers a download; it does **not** change the in-memory stats data.
   - `GET /dashboard/api/stats/agents` - Combined tool usage stats by tool (`in requests` is aggregated across UA prefixes; `in responses` is by tool)
@@ -126,8 +126,8 @@ upstream_mode = "openai-completions"
 Composite behavior:
 - `total_token_limit`: shared token cap for the alias. The proxy tracks accumulated input+output tokens in memory across all targets under the alias. Once the accumulated total reaches the `limit`, subsequent requests return **HTTP 413** and are not forwarded upstream. `Usage` resets to `0` on proxy restart; the value of `limit (known as credits of tokens)` is persisted in the config file.
 - `primary: true`: always try this target first, then fail over to others (ignores `share`).
-- `fallback: N`: lower number = higher retry priority when primary is absent (ignores `share`).
-- `share`: when no `primary`/`fallback` is set, each request picks a target via **weighted random selection**. Total weight = sum of all targets' `share` (defaults to 1 if unset). Each request independently rolls the dice — e.g. `{"a": {"share": 70}, "b": {"share": 30}}` routes ~70% of requests to a and ~30% to b. Set `share: 0` to exclude a target from random selection (it still participates as a retry fallback when the first target fails).
+- `fallback: N`: lower number = higher retry priority when primary is absent (ignores `share`). Use `0` to disable fallback for that target; the UI shows this as `no FB`.
+- `share`: when no `primary`/`fallback` is set, each request picks a target via **weighted random selection**. Total weight = sum of all targets' `share` (defaults to 1 if unset). Each request independently rolls the dice — e.g. `{"a": {"share": 70}, "b": {"share": 30}}` routes ~70% of requests to a and ~30% to b. Set `share: 0` to exclude a target from random selection.
 - if one upstream fails, the proxy automatically retries the next candidate in the order determined by `primary`/`fallback`, or weighted selection for the first attempt then remaining targets as fallbacks.
 
 #### Consul-backed config
@@ -215,6 +215,7 @@ The TUI shows live:
 - combined tool usage stats by tool (`req` aggregates across UA prefixes; `resp` is by tool)
 - composite alias summaries with live token usage (`used / limit (TL)` for aliases with `total_token_limit`)
 - `T` set/clear the alias-level token limit
+- `Top Models` shows just the model id suffix, not the full routed upstream string
 
 Keyboard shortcuts:
 - `↑/↓` or `j/k` to move
