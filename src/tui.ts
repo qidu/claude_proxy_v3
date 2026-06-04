@@ -21,6 +21,7 @@ import {
   upsertCompositeTargetFromDashboard,
 } from './handlers/dashboard.js';
 import { buildHeatmap, renderHeatmapPanel } from './heatmap.js';
+import { dumpTodayTokens, TOKEN_LOG_FILE } from './utils/dashboard-stats.js';
 import type { Env } from './types/shared.js';
 import type { ProxyConfig } from './utils/config-loader.js';
 
@@ -73,7 +74,7 @@ function formatTestResultDetail(responseBody: unknown): string {
     lines.push(`content: ${toolDetails.join(' | ')}`);
   }
 
-  return lines.length > 0 ? lines.join('\n') : filterAndStringify(responseBody);
+  return lines.length > 0 ? lines.join(' | ') : filterAndStringify(responseBody);
 }
 
 function extractToolDetails(record: Record<string, unknown>): string[] {
@@ -427,12 +428,19 @@ class CompositeAliasesOverlay implements Component, Focusable {
   invalidate(): void {}
 
   handleInput(data: string): void {
+    console.error('[DEBUG] handleInput:', JSON.stringify(data), [...data].map((c) => c.charCodeAt(0)));
     if (matchesKey(data, 'escape')) {
       this.app.closeOverlay();
       return;
     }
-    if (matchesKey(data, 'ctrl+c') || matchesKey(data, 'q')) {
+    if (matchesKey(data, 'ctrl+c')) {
       this.app.stopAndExit();
+      return;
+    }
+    if (matchesKey(data, 'ctrl+o')) {
+      dumpTodayTokens();
+      this.setMessage(`dumped tokens -> ${TOKEN_LOG_FILE}`);
+      this.app.requestRender();
       return;
     }
     if (matchesKey(data, 'r')) {
@@ -517,7 +525,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
         const selectedTarget = selected?.kind === 'target' && selected.alias === alias && selected.target === target;
         const mark = selectedTarget ? green('>') : dim('·');
         const typedCfg = cfg as { share?: number; primary?: boolean; fallback?: number } | undefined;
-        const summary = `${typedCfg?.share ?? '-'}${typedCfg?.primary ? ' P' : ''}${typedCfg?.fallback === 0 ? ' no FB' : typedCfg?.fallback !== undefined ? ` FB${typedCfg.fallback}` : ''}`;
+        const summary = `${typedCfg?.share ?? '-'}${typedCfg?.primary ? ' P' : ''}${typedCfg?.fallback === 0 ? ' non-FB' : typedCfg?.fallback !== undefined ? ` FB${typedCfg.fallback}` : ''}`;
         lines.push(`  ${dim('│')} ${mark} ${clip(target, 22)} ${dim(summary)}`);
       }
     }
@@ -573,7 +581,7 @@ class DashboardView implements Component {
   }
 
   handleInput(data: string): void {
-    if (matchesKey(data, 'ctrl+c') || matchesKey(data, 'q')) {
+    if (matchesKey(data, 'ctrl+c')) {
       this.app.stopAndExit();
       return;
     }
@@ -649,7 +657,7 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(`C ${dim('composite aliases')}  T ${dim('test model')}  R ${dim('reload')}  Ctrl+C ${dim('quit')}  q ${dim('quit')}`);
+    lines.push(`C ${dim('config composite aliases')}  T ${dim('test models')}  R ${dim('reload config')}  Ctrl+O ${dim('dump data')}  Ctrl+C ${dim('quit')}`);
     lines.push(this.message ? yellow(this.message) : dim('Ready'));
 
     return lines.map((line) => clip(line, width));
@@ -694,6 +702,11 @@ class DashboardApp {
     this.tui.addInputListener((data) => {
       if (matchesKey(data, 'ctrl+c')) {
         this.stopAndExit();
+        return { consume: true };
+      }
+      if (matchesKey(data, 'ctrl+o')) {
+        dumpTodayTokens();
+        this.view.setMessage(`dumped tokens -> ${TOKEN_LOG_FILE}`);
         return { consume: true };
       }
       return undefined;
@@ -919,10 +932,10 @@ class DashboardApp {
       const usage = typeof responseBody === 'object' && responseBody !== null && 'usage' in responseBody
         ? JSON.stringify((responseBody as Record<string, unknown>).usage ?? {})
         : 'n/a';
-      const detailText = formatTestResultDetail(responseBody).split('\n').map((l) => l.length > 60 ? `${l.slice(0, 60)}…` : l).join('\n');
+      const detailText = formatTestResultDetail(responseBody).split('\n').map((l) => l.length > 60 ? `${l.slice(0, 60)}…` : l).join(' | ');
 
       if (!response.ok) {
-        this.view.setMessage(`test failed ${modelId} (${response.status})\n${detailText}`, 10000);
+        this.view.setMessage(`test failed ${modelId} (${response.status}) ${detailText}`, 10000);
         this.requestRender();
         return;
       }

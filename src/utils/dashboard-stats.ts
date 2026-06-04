@@ -1,3 +1,5 @@
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
+import { dirname } from 'path';
 import { stringify } from './stringify.js';
 
 type UsageStats = {
@@ -67,10 +69,12 @@ type RequestEndpointTimingStatsEntry = {
 type TokenHeatmapEvent = {
   timestamp: number;
   values: number;
+  model?: string;
 };
 
 const TOKEN_HEATMAP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
+// These must be declared before the daily token helpers that reference dailyTokenStats
 const modelStats = new Map<string, ModelStatsEntry>();
 const agentStats = new Map<string, AgentStatsEntry>();
 const toolRequestChars = new Map<string, number>();
@@ -81,6 +85,200 @@ const requestStatusCodeFromUpstreamStats = new Map<number, RequestStatusCodeStat
 const upstreamResponseToolStats = new Map<string, UpstreamResponseToolStatsEntry>();
 const requestEndpointTimingStats = new Map<string, RequestEndpointTimingStatsEntry>();
 const tokenHeatmapEvents: TokenHeatmapEvent[] = [];
+
+export const TOKEN_LOG_FILE = '/tmp/model_proxy_tokens.log';
+
+const dailyTokenStats = new Map<string, ModelStatsEntry>();
+
+let currentDaySlot = getTodayDateStr();
+
+let dailyDumpTimeoutId: ReturnType<typeof setTimeout> | undefined;
+
+function getTodayDateStr(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+function ensureTokenLogDir(filePath: string): void {
+  const dir = dirname(filePath);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+}
+
+function dumpDailyTokens(dateStr: string): void {
+  ensureTokenLogDir(TOKEN_LOG_FILE);
+  const timestamp = new Date().toISOString();
+  const cutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
+  const recentEvents = tokenHeatmapEvents.filter((e) => e.timestamp >= cutoff);
+  const logLine = JSON.stringify({
+    date: dateStr,
+    timestamp,
+    modelStats: [...dailyTokenStats.values()],
+    heatmapEvents: recentEvents,
+  }) + '\n';
+  writeFileSync(TOKEN_LOG_FILE, logLine, { flag: 'a' });
+}
+
+function scheduleNextDayDump(): void {
+  if (dailyDumpTimeoutId !== undefined) {
+    clearTimeout(dailyDumpTimeoutId);
+  }
+
+  const now = new Date();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(0, 0, 0, 0);
+  const msUntilMidnight = tomorrow.getTime() - now.getTime();
+
+  dailyDumpTimeoutId = setTimeout(() => {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+    dumpDailyTokens(yesterdayStr);
+    scheduleNextDayDump();
+  }, msUntilMidnight);
+}
+
+function getOrCreateDailyModelStat(model: string): ModelStatsEntry {
+  return dailyTokenStats.get(model) || {
+    model,
+    requests: 0,
+    failed_requests: 0,
+    input_tokens: 0,
+    cached_tokens: 0,
+    cache_written_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+  };
+}
+
+function advanceDaySlotIfNeeded(): void {
+  const today = getTodayDateStr();
+  if (today !== currentDaySlot) {
+    dumpDailyTokens(currentDaySlot);
+    dailyTokenStats.clear();
+    currentDaySlot = today;
+    scheduleNextDayDump();
+  }
+}
+
+function recordDailyToken(model: string, usage?: UsageStats, failed = false): void {
+  advanceDaySlotIfNeeded();
+  const stat = getOrCreateDailyModelStat(model);
+  stat.requests += 1;
+  if (failed) stat.failed_requests += 1;
+  stat.input_tokens += toSafeNumber(usage?.input_tokens);
+  stat.cached_tokens += toSafeNumber(usage?.cached_tokens);
+  stat.cache_written_tokens += toSafeNumber(usage?.cache_written_tokens);
+  stat.output_tokens += toSafeNumber(usage?.output_tokens);
+  stat.total_tokens += toSafeNumber(usage?.total_tokens);
+  dailyTokenStats.set(model, stat);
+}
+
+export function dumpTodayTokens(): void {
+  const today = getTodayDateStr();
+  ensureTokenLogDir(TOKEN_LOG_FILE);
+  const timestamp = new Date().toISOString();
+
+  const modelEntries = [...dailyTokenStats.values()];
+
+  // Collect heatmap events from the last 7 days
+  const cutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
+  const recentEvents = tokenHeatmapEvents.filter((e) => e.timestamp >= cutoff);
+
+  const logLine = JSON.stringify({
+    date: today,
+    timestamp,
+    modelStats: modelEntries,
+    heatmapEvents: recentEvents,
+  }) + '\n';
+  writeFileSync(TOKEN_LOG_FILE, logLine, { flag: 'a' });
+}
+
+export function loadTokenStatsFromLog(): void {
+  if (!existsSync(TOKEN_LOG_FILE)) return;
+  try {
+    const content = readFileSync(TOKEN_LOG_FILE, 'utf-8');
+    const lines = content.split('\n').filter((l) => l.trim());
+
+    // Build set of last 7 days (YYYY-MM-DD) for efficient lookup
+    const last7Days = new Set<string>();
+    for (let i = 0; i < 7; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      last7Days.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+    }
+
+    // First pass: find the latest timestamp per date
+    const latestPerDate = new Map<string, string>();
+    for (const line of lines) {
+      try {
+        const record = JSON.parse(line) as { date: string; timestamp?: string };
+        if (!last7Days.has(record.date)) continue;
+        const existing = latestPerDate.get(record.date);
+        if (!existing || (record.timestamp && record.timestamp > existing)) {
+          latestPerDate.set(record.date, record.timestamp || '');
+        }
+      } catch {
+        // skip malformed lines
+      }
+    }
+
+    // Second pass: load data only from the latest dump per date
+    const seenHeatmap = new Set<string>();
+    const cutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
+
+    for (const line of lines) {
+      try {
+        const record = JSON.parse(line) as {
+          date: string;
+          timestamp?: string;
+          entries?: ModelStatsEntry[];
+          modelStats?: ModelStatsEntry[];
+          heatmapEvents?: TokenHeatmapEvent[];
+        };
+        if (!last7Days.has(record.date)) continue;
+        const latestTs = latestPerDate.get(record.date);
+        if (record.timestamp !== latestTs) continue; // not the latest dump for this date, skip
+
+        // Load model stats (support both old 'entries' and new 'modelStats' field)
+        // Note: modelStats is NOT loaded — it must start fresh at 0 so the token limit
+        // check in index.ts doesn't incorrectly count tokens from previous days.
+        // dailyTokenStats is still loaded for daily dump aggregation.
+        const modelEntries = record.modelStats ?? record.entries ?? [];
+        for (const entry of modelEntries) {
+          dailyTokenStats.set(entry.model, entry);
+        }
+
+        // Load heatmap events (only from latest dump per date)
+        const events = record.heatmapEvents;
+        if (Array.isArray(events)) {
+          for (const event of events) {
+            if (event.timestamp < cutoff) continue;
+            const key = `${event.timestamp}:${event.values}:${event.model ?? ''}`;
+            if (seenHeatmap.has(key)) continue;
+            seenHeatmap.add(key);
+            tokenHeatmapEvents.push(event);
+          }
+        }
+      } catch {
+        // skip malformed lines
+      }
+    }
+
+    // Re-apply window pruning on heatmap after merge
+    const pruneCutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
+    while (tokenHeatmapEvents.length > 0 && tokenHeatmapEvents[0].timestamp < pruneCutoff) {
+      tokenHeatmapEvents.shift();
+    }
+
+    currentDaySlot = getTodayDateStr();
+    scheduleNextDayDump();
+  } catch {
+    // file read error, start fresh
+  }
+}
 
 function toSafeNumber(value: unknown): number {
   if (typeof value !== 'number' || Number.isNaN(value)) {
@@ -449,6 +647,7 @@ export function recordModelFailedRequest(model: string | undefined): void {
   const current = getOrCreateModelStat(normalizedModel);
   current.failed_requests += 1;
   modelStats.set(normalizedModel, current);
+  recordDailyToken(normalizedModel, undefined, true);
 }
 
 export function recordModelStat(model: string | undefined, usage?: UsageStats): void {
@@ -465,14 +664,15 @@ export function recordModelStat(model: string | undefined, usage?: UsageStats): 
   current.output_tokens += toSafeNumber(usage?.output_tokens);
   current.total_tokens += toSafeNumber(usage?.total_tokens);
   modelStats.set(normalizedModel, current);
+  recordDailyToken(normalizedModel, usage);
 }
 
-function recordTokenHeatmapEvent(values: number, timestamp = Date.now()): void {
+function recordTokenHeatmapEvent(values: number, timestamp = Date.now(), model?: string): void {
   if (!Number.isFinite(values) || values <= 0) {
     return;
   }
 
-  tokenHeatmapEvents.push({ timestamp, values });
+  tokenHeatmapEvents.push({ timestamp, values, model });
   const cutoff = timestamp - TOKEN_HEATMAP_WINDOW_MS;
   while (tokenHeatmapEvents.length > 0 && tokenHeatmapEvents[0].timestamp < cutoff) {
     tokenHeatmapEvents.shift();
@@ -492,7 +692,8 @@ export function recordModelUsage(model: string | undefined, usage?: UsageStats):
   current.output_tokens += toSafeNumber(usage.output_tokens);
   current.total_tokens += toSafeNumber(usage.total_tokens);
   modelStats.set(normalizedModel, current);
-  recordTokenHeatmapEvent(toSafeNumber(usage.total_tokens));
+  recordTokenHeatmapEvent(toSafeNumber(usage.total_tokens), Date.now(), normalizedModel);
+  recordDailyToken(normalizedModel, usage);
 }
 
 export function recordAgentStat(userAgentPrefix: string, toolNames: string[]): void {
@@ -952,4 +1153,12 @@ export function createResponseToolTrackingTransformStream(
       }
     },
   });
+}
+
+// Load today's token stats from log on module startup (Node.js runtime).
+// In Workers runtime this silently fails since fs is unavailable.
+try {
+  loadTokenStatsFromLog();
+} catch {
+  // noop in Workers
 }

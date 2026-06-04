@@ -124,7 +124,7 @@ upstream_mode = "openai-completions"
 ```
 
 Composite behavior:
-- `total_token_limit`: shared token cap for the alias. The proxy tracks accumulated input+output tokens in memory across all targets under the alias. Once the accumulated total reaches the `limit`, subsequent requests return **HTTP 413** and are not forwarded upstream. `Usage` resets to `0` on proxy restart; the value of `limit (known as credits of tokens)` is persisted in the config file.
+- `total_token_limit`: shared token cap for the alias. The proxy tracks accumulated input+output tokens in memory across all targets under the alias. Once the accumulated total reaches the `limit`, subsequent requests return **HTTP 413** and are not forwarded upstream. Usage resets to `0` on proxy restart (the limit value itself is persisted in the config file).
 - `primary: true`: always try this target first, then fail over to others (ignores `share`).
 - `fallback: N`: lower number = higher retry priority when primary is absent (ignores `share`). Use `0` to disable fallback for that target; the UI shows this as `no FB`.
 - `share`: when no `primary`/`fallback` is set, each request picks a target via **weighted random selection**. Total weight = sum of all targets' `share` (defaults to 1 if unset). Each request independently rolls the dice — e.g. `{"a": {"share": 70}, "b": {"share": 30}}` routes ~70% of requests to a and ~30% to b. Set `share: 0` to exclude a target from random selection.
@@ -225,9 +225,33 @@ Keyboard shortcuts:
 - `d` delete the selected alias/target
 - `r` reload config
 - `T` (shift) open test model picker
+- `Ctrl+O` dump today's tokens data to log file
 - `Ctrl+C` quit the TUI
 
 **Test custom model**: Press `T` to open the model picker. Each model shows its **category**, **upstream mode** (postfix only, e.g. `completions`/`messages`), and **base URL** (without `https://` prefix). Select a model and press Enter to send a test request — the result displays the response's `message`/`content`/`error` fields (IDs excluded).
+
+### 3.2 Token Log Persistence
+
+The proxy persists token stats and heatmap data to `/tmp/model_proxy_tokens.log` (JSONL format) for recovery after restart.
+
+**Log file format** (one JSON object per line):
+```json
+{"date":"2026-06-04","timestamp":"2026-06-04T23:59:59.000Z","modelStats":[{"model":"claude-opus-4-6","requests":42,"failed_requests":1,"input_tokens":8400,"cached_tokens":2100,"cache_written_tokens":0,"output_tokens":1260,"total_tokens":9660}],"heatmapEvents":[{"timestamp":1750000000000,"values":1200,"model":"claude-opus-4-6"}]}
+```
+
+**Dump triggers:**
+- **Ctrl+O** — manual dump (press at any time in TUI)
+- **Day transition** — when a new day begins (first request after midnight), the previous day's data is dumped before clearing
+- **Midnight timer** — at 23:59:59, the day's data is dumped as a safety net (resets automatically)
+
+**Startup restore:**
+- On proxy startup, `loadTokenStatsFromLog()` reads the last 7 days from the log
+- **First pass**: finds the latest dump per date by comparing `timestamp` — only the newest entry for each date is used
+- **heatmapEvents**: restored into the heatmap (for Tokens Panel aggregation) — deduplicated by `timestamp:values:model`
+- **dailyTokenStats**: restored into the daily stats map (for aggregation purposes) — later dumps for the same date overwrite earlier ones
+- **modelStats** (live counter): NOT restored — starts fresh at zero to ensure `total_token_limit` on composite aliases is not incorrectly triggered from previous-day tokens
+
+**Note on composite alias limits**: The `total_token_limit` enforcement uses only the live in-session `modelStats` counter. Tokens accumulated across proxy restarts are **not** counted toward the limit. The counter resets to 0 when the proxy restarts, and the comment in the dashboard shows "(reset after proxy restarted.)" for this reason.
 
 ### 4. Deploy
 
