@@ -224,7 +224,10 @@ Keyboard shortcuts:
 - `e` edit the selected target
 - `d` delete the selected alias/target
 - `r` reload config
+- `T` (shift) open test model picker
 - `Ctrl+C` quit the TUI
+
+**Test custom model**: Press `T` to open the model picker. Each model shows its **category**, **upstream mode** (postfix only, e.g. `completions`/`messages`), and **base URL** (without `https://` prefix). Select a model and press Enter to send a test request — the result displays the response's `message`/`content`/`error` fields (IDs excluded).
 
 ### 4. Deploy
 

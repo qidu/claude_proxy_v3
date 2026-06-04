@@ -118,6 +118,11 @@ export interface Env {
     PROXY_CONFIG_URL?: string;
 
     /**
+     * Node server port used for local TUI test requests.
+     */
+    PORT?: string;
+
+    /**
      * Cache TTL in seconds for the /v1/models endpoint.
      * Default: 300 (5 minutes)
      * Set to 0 to disable caching.

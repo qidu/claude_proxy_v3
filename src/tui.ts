@@ -24,6 +24,204 @@ import { buildHeatmap, renderHeatmapPanel } from './heatmap.js';
 import type { Env } from './types/shared.js';
 import type { ProxyConfig } from './utils/config-loader.js';
 
+const TEST_ENDPOINT = '/v1/messages';
+const TEST_TOOL_NAME = 'test_tool';
+const TEST_TOOL_DESCRIPTION = 'test tool';
+const TEST_TOOL_PROMPT = 'Use the test_tool and say hi.';
+const TEST_TOOL_SCHEMA = {
+  type: 'object',
+  properties: {
+    message: { type: 'string' },
+  },
+  required: ['message'],
+  additionalProperties: false,
+};
+
+function filterAndStringify(body: unknown): string {
+  if (Array.isArray(body)) return `[${body.map(filterAndStringify).join(',')}]`;
+  if (body && typeof body === 'object') {
+    const filtered = Object.fromEntries(
+      Object.entries(body as Record<string, unknown>)
+        .filter(([key]) => key !== 'id' && key !== 'session_id' && key !== 'request_id')
+        .map(([k, v]) => [k, filterAndStringify(v)]),
+    );
+    return JSON.stringify(filtered);
+  }
+  return JSON.stringify(body);
+}
+
+function formatTestResultDetail(responseBody: unknown): string {
+  if (!responseBody || typeof responseBody !== 'object') {
+    return String(responseBody);
+  }
+
+  const record = responseBody as Record<string, unknown>;
+  const errorDetails = extractErrorDetails(record);
+  const messageDetails = extractMessageDetails(record);
+  const toolDetails = extractToolDetails(record);
+  const lines: string[] = [];
+
+  if (errorDetails.length > 0) {
+    lines.push(`error: ${errorDetails.join(' | ')}`);
+  }
+
+  if (messageDetails.length > 0) {
+    lines.push(`message: ${messageDetails.join(' | ')}`);
+  }
+
+  if (toolDetails.length > 0) {
+    lines.push(`content: ${toolDetails.join(' | ')}`);
+  }
+
+  return lines.length > 0 ? lines.join('\n') : filterAndStringify(responseBody);
+}
+
+function extractToolDetails(record: Record<string, unknown>): string[] {
+  const details: string[] = [];
+
+  const content = record.content;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (!block || typeof block !== 'object') continue;
+      const typedBlock = block as Record<string, unknown>;
+      if (typedBlock.type === 'tool_use') {
+        const name = typeof typedBlock.name === 'string' ? typedBlock.name : 'tool';
+        const input = typedBlock.input !== undefined ? stringifyCompact(typedBlock.input) : '';
+        details.push(input ? `${name} ${input}` : name);
+      }
+    }
+  }
+
+  const toolCalls = record.tool_calls;
+  if (Array.isArray(toolCalls)) {
+    for (const call of toolCalls) {
+      if (!call || typeof call !== 'object') continue;
+      const typedCall = call as Record<string, unknown>;
+      const functionCall = typedCall.function;
+      if (functionCall && typeof functionCall === 'object') {
+        const fn = functionCall as Record<string, unknown>;
+        const name = typeof fn.name === 'string' ? fn.name : 'tool';
+        const args = fn.arguments !== undefined ? stringifyCompact(fn.arguments) : '';
+        details.push(args ? `${name} ${args}` : name);
+      } else {
+        const name = typeof typedCall.name === 'string' ? typedCall.name : 'tool';
+        const args = typedCall.arguments !== undefined ? stringifyCompact(typedCall.arguments) : '';
+        details.push(args ? `${name} ${args}` : name);
+      }
+    }
+  }
+
+  const outputs = record.outputs;
+  if (Array.isArray(outputs)) {
+    for (const output of outputs) {
+      if (!output || typeof output !== 'object') continue;
+      const typedOutput = output as Record<string, unknown>;
+      if (typedOutput.type === 'function_call') {
+        const name = typeof typedOutput.name === 'string' ? typedOutput.name : 'tool';
+        const args = typedOutput.arguments !== undefined ? stringifyCompact(typedOutput.arguments) : '';
+        details.push(args ? `${name} ${args}` : name);
+      }
+    }
+  }
+
+  return details;
+}
+
+function extractErrorDetails(record: Record<string, unknown>): string[] {
+  const details: string[] = [];
+
+  const error = record.error;
+  if (error) {
+    if (typeof error === 'string') {
+      details.push(error.trim());
+    } else if (typeof error === 'object') {
+      const errObj = error as Record<string, unknown>;
+      const message = errObj.message;
+      const type = errObj.type;
+      if (typeof message === 'string' && message.trim()) {
+        details.push(message.trim());
+      } else if (typeof type === 'string' && type.trim()) {
+        details.push(type.trim());
+      }
+    }
+  }
+
+  return details;
+}
+
+function extractMessageDetails(record: Record<string, unknown>): string[] {
+  const details: string[] = [];
+  const content = record.content;
+  if (Array.isArray(content)) {
+    const texts: string[] = [];
+    for (const block of content) {
+      if (!block || typeof block !== 'object') continue;
+      const typedBlock = block as Record<string, unknown>;
+      if (typedBlock.type === 'text' && typeof typedBlock.text === 'string' && typedBlock.text.trim()) {
+        texts.push(typedBlock.text.trim());
+      }
+    }
+    if (texts.length > 0) {
+      details.push(texts.join(' '));
+    }
+  }
+
+  if (typeof record.output_text === 'string' && record.output_text.trim()) {
+    details.push(record.output_text.trim());
+  }
+
+  if (details.length === 0) {
+    const fallback = record.message;
+    if (typeof fallback === 'string' && fallback.trim()) {
+      details.push(fallback.trim());
+    }
+  }
+
+  return details;
+}
+
+function stringifyCompact(value: unknown): string {
+  try {
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    return text.length > 180 ? `${text.slice(0, 180)}…` : text;
+  } catch {
+    return String(value);
+  }
+}
+
+function buildClaudeToolRequest(): Record<string, unknown> {
+  return {
+    messages: [{ role: 'user', content: TEST_TOOL_PROMPT }],
+    max_tokens: 16,
+    tools: [{ name: TEST_TOOL_NAME, description: TEST_TOOL_DESCRIPTION, input_schema: TEST_TOOL_SCHEMA }],
+    tool_choice: { type: 'tool', name: TEST_TOOL_NAME },
+  };
+}
+
+function buildOpenAIToolRequest(): Record<string, unknown> {
+  return {
+    messages: [{ role: 'user', content: TEST_TOOL_PROMPT }],
+    max_tokens: 16,
+    tools: [{
+      type: 'function',
+      function: {
+        name: TEST_TOOL_NAME,
+        description: TEST_TOOL_DESCRIPTION,
+        parameters: TEST_TOOL_SCHEMA,
+      },
+    }],
+    tool_choice: { type: 'function', function: { name: TEST_TOOL_NAME } },
+  };
+}
+
+function buildTestToolRequest(upstreamMode: string): Record<string, unknown> {
+  if (upstreamMode === 'openai-completions') {
+    return buildOpenAIToolRequest();
+  }
+
+  return buildClaudeToolRequest();
+}
+
 export type DashboardSource = {
   env: Env;
   loadConfig: () => Promise<ProxyConfig>;
@@ -33,12 +231,21 @@ export type DashboardSource = {
 type Selection =
   | { kind: 'alias'; alias: string }
   | { kind: 'target'; alias: string; target: string }
+  | { kind: 'model'; category: string; modelId: string }
   | null;
 
 
 type ModelChoice = SelectItem & {
   category: string;
   modelId: string;
+};
+
+type TestResult = {
+  success: boolean;
+  modelId: string;
+  status?: number;
+  error?: string;
+  responseBody?: string;
 };
 
 function fg(code: number, text: string): string {
@@ -77,6 +284,12 @@ function fmt(n: number): string {
 }
 function fmtSeconds(ms: number): string {
   return (ms / 1000).toFixed(2);
+}
+function stripCompletions(s: string): string {
+  return s.replace(/^.*-(completions|messages|generatecontent|interactions|responses)$/, '$1');
+}
+function stripHttps(s: string): string {
+  return s.replace(/^https?:\/\//, '');
 }
 
 function frame(title: string, body: string[], width: number): string[] {
@@ -176,6 +389,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
   focused = false;
   private snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
   private message = 'Ready';
+  private messageUntil = 0;
   private selectionIndex = 0;
 
   constructor(private readonly app: DashboardApp) {}
@@ -188,8 +402,9 @@ class CompositeAliasesOverlay implements Component, Focusable {
     }
   }
 
-  setMessage(message: string): void {
+  setMessage(message: string, holdMs = 0): void {
     this.message = message;
+    this.messageUntil = holdMs > 0 ? Date.now() + holdMs : 0;
   }
 
   focusAlias(alias: string): void {
@@ -333,6 +548,8 @@ class CompositeAliasesOverlay implements Component, Focusable {
 class DashboardView implements Component {
   private snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
   private message = 'Ready';
+  private messageUntil = 0;
+  private lastTime = '';
 
   constructor(private readonly app: DashboardApp) {}
 
@@ -340,8 +557,13 @@ class DashboardView implements Component {
     this.snapshot = snapshot;
   }
 
-  setMessage(message: string): void {
+  setMessage(message: string, holdMs = 0): void {
     this.message = message;
+    this.messageUntil = holdMs > 0 ? Date.now() + holdMs : 0;
+  }
+
+  shouldPreserveMessage(): boolean {
+    return this.messageUntil > Date.now();
   }
 
   invalidate(): void {}
@@ -355,6 +577,10 @@ class DashboardView implements Component {
       void this.app.refresh();
       return;
     }
+    if (matchesKey(data, 't') || matchesKey(data, 'shift+t')) {
+      void this.app.openTestModelPicker();
+      return;
+    }
     if (matchesKey(data, 'shift+c') || matchesKey(data, 'c')) {
       this.app.openCompositeAliasesOverlay();
       return;
@@ -363,8 +589,12 @@ class DashboardView implements Component {
 
   render(width: number): string[] {
     const snap = this.snapshot;
+    const now = new Date().toLocaleTimeString();
+    if (now !== this.lastTime) {
+      this.lastTime = now;
+    }
     const lines: string[] = [];
-    lines.push(bold('Proxy TUI') + dim(`  ${new Date().toLocaleTimeString()}`));
+    lines.push(bold('Proxy TUI') + dim(`  ${this.lastTime}`));
     lines.push(dim('─'.repeat(Math.max(0, width))));
 
     if (!snap) {
@@ -415,7 +645,7 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(`C ${dim('composite aliases')}  R ${dim('reload')}  Ctrl+C ${dim('quit')}  q ${dim('quit')}`);
+    lines.push(`C ${dim('composite aliases')}  T ${dim('test model')}  R ${dim('reload')}  Ctrl+C ${dim('quit')}  q ${dim('quit')}`);
     lines.push(this.message ? yellow(this.message) : dim('Ready'));
 
     return lines.map((line) => clip(line, width));
@@ -479,7 +709,9 @@ class DashboardApp {
       const snapshot = getDashboardSnapshot(proxyConfig, this.source.env);
       this.view.setSnapshot(snapshot);
       this.compositeOverlay?.setSnapshot(snapshot);
-      this.view.setMessage('Ready');
+      if (!this.view.shouldPreserveMessage()) {
+        this.view.setMessage('Ready');
+      }
       this.tui.requestRender();
     } catch (error) {
       this.view.setMessage((error as Error).message);
@@ -616,6 +848,73 @@ class DashboardApp {
     );
     this.overlay = this.tui.showOverlay(overlay, { width: '70%', maxHeight: '50%', anchor: 'center' });
     this.overlay.focus();
+  }
+
+  openTestModelPicker(): void {
+    const choices = this.modelChoices();
+    if (choices.length === 0) {
+      this.view.setMessage('No custom models available');
+      this.requestRender();
+      return;
+    }
+
+    this.hideOverlay();
+    const overlay = new ListOverlay(
+      'Test custom model',
+      `↑/↓ ${dim('move')}  Enter ${dim('test')}  Esc ${dim('cancel')}`,
+      choices,
+      (item) => {
+        this.hideOverlay();
+        void this.runModelTest(item.value as string);
+      },
+      () => {
+        this.hideOverlay();
+        this.view.setMessage('test cancelled');
+        this.requestRender();
+      },
+    );
+    this.overlay = this.tui.showOverlay(overlay, { width: '70%', maxHeight: '50%', anchor: 'center' });
+    this.overlay.focus();
+  }
+
+  async runModelTest(modelId: string): Promise<void> {
+    const port = this.source.env.PORT || '8788';
+    const endpoint = `http://127.0.0.1:${port}${TEST_ENDPOINT}`;
+    const snapshot = this.viewSnapshot();
+    const modelConfig = snapshot ? resolveModelTestConfig(snapshot.config, modelId) : undefined;
+    const upstreamMode = modelConfig?.upstreamMode || 'openai-completions';
+    const requestBody = buildTestToolRequest(upstreamMode);
+
+    this.view.setMessage(`testing ${modelId}...`);
+    this.requestRender();
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...requestBody, model: modelId }),
+      });
+
+      const contentType = response.headers.get('content-type') || '';
+      const responseBody = contentType.includes('application/json') ? await response.json() : await response.text();
+      const usage = typeof responseBody === 'object' && responseBody !== null && 'usage' in responseBody
+        ? JSON.stringify((responseBody as Record<string, unknown>).usage ?? {})
+        : 'n/a';
+      const detailText = formatTestResultDetail(responseBody);
+
+      if (!response.ok) {
+        this.view.setMessage(`test failed ${modelId} (${response.status})\n${detailText}`, 10000);
+        this.requestRender();
+        return;
+      }
+
+      const statusLine = `${green(`test ok ${modelId}`)} ${green(`(${response.status})`)} ${green(`usage=${usage}`)}`;
+      this.view.setMessage(`${statusLine}\n${green(detailText)}`, 10000);
+      this.requestRender();
+    } catch (error) {
+      this.view.setMessage(`test failed ${modelId}\n${(error as Error).message}`, 10000);
+      this.requestRender();
+    }
   }
 
   openEditTargetPrompt(alias: string, target: string): void {
@@ -779,7 +1078,7 @@ class DashboardApp {
           modelId: key,
           value: key,
           label: key,
-          description: titleCase(category),
+          description: `${titleCase(category)} · ${stripCompletions(categoryConfig.upstream_mode || 'openai-completions')} · ${stripHttps(categoryConfig.base_url || '-')}`,
         });
       }
     }
@@ -790,6 +1089,26 @@ class DashboardApp {
   private viewSnapshot(): Awaited<ReturnType<typeof getDashboardSnapshot>> | null {
     return (this.view as unknown as { snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null }).snapshot;
   }
+}
+
+function resolveModelTestConfig(
+  config: ProxyConfig,
+  modelId: string,
+): { upstreamMode: string; targetUrl: string; apiKey?: string } | undefined {
+  for (const categoryConfig of Object.values(config.models || {})) {
+    if (Array.isArray(categoryConfig)) continue;
+    for (const [key, value] of Object.entries(categoryConfig || {})) {
+      if (key === 'upstream_mode' || key === 'base_url' || key === 'api_key') continue;
+      if (value === undefined) continue;
+      if (key !== modelId) continue;
+      return {
+        upstreamMode: categoryConfig.upstream_mode || config.upstream?.upstream_mode || 'openai-completions',
+        targetUrl: categoryConfig.base_url || config.upstream?.default_base_url || 'https://api.qnaigc.com',
+        apiKey: categoryConfig.api_key || config.upstream?.default_api_key,
+      };
+    }
+  }
+  return undefined;
 }
 
 export function startTUI(source: DashboardSource): () => void {
