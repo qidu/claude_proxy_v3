@@ -627,7 +627,9 @@ class DashboardView implements Component {
       lines.push(dim('  none'));
     } else {
       for (const row of customModels) {
-        lines.push(`  ${dim(row.modelId)} ${dim(`(${titleCase(row.category)})`)}`);
+        const tag = row.category === 'composite' ? bold('[C]') : dim(titleCase(row.category));
+        const extra = row.description ? ` ${dim(row.description)}` : '';
+        lines.push(`  ${dim(row.modelId)} ${tag}${extra}`);
       }
     }
     lines.push(`${bold('Top Models')} (${fmt(snap.modelStats.length)})`);
@@ -663,11 +665,11 @@ class DashboardView implements Component {
     return lines.map((line) => clip(line, width));
   }
 
-  private customModels(): Array<{ category: string; modelId: string }> {
+  private customModels(): Array<{ category: string; modelId: string; description?: string }> {
     const snap = this.snapshot;
     if (!snap) return [];
     const seen = new Set<string>();
-    const models: Array<{ category: string; modelId: string }> = [];
+    const models: Array<{ category: string; modelId: string; description?: string }> = [];
 
     for (const [category, categoryConfig] of Object.entries(snap.config.models)) {
       for (const [key, value] of Object.entries(categoryConfig || {})) {
@@ -678,7 +680,18 @@ class DashboardView implements Component {
       }
     }
 
-    return models.sort((a, b) => a.category.localeCompare(b.category) && a.modelId.localeCompare(b.modelId));
+    // Add composite aliases — skip if same name already exists as a model
+    if (snap.compositeResolved) {
+      for (const alias of snap.compositeResolved) {
+        if (seen.has(alias.alias)) continue; // model with same name already added
+        seen.add(alias.alias);
+        const targets = alias.targets.map((t) => t.model || t.routeModel || '?').join(', ');
+        models.push({ category: 'composite', modelId: alias.alias, description: targets });
+      }
+    }
+
+    // Sort by modelId so composites interleave, not float to the end
+    return models.sort((a, b) => a.modelId.localeCompare(b.modelId));
   }
 }
 
@@ -910,21 +923,23 @@ class DashboardApp {
   }
 
   async runModelTest(modelId: string): Promise<void> {
+    // Strip [C] suffix if this is a duplicate composite
+    const actualModelId = modelId.endsWith(' [C]') ? modelId.slice(0, -3).trim() : modelId;
     const port = this.source.env.PORT || '8788';
     const endpoint = `http://127.0.0.1:${port}${TEST_ENDPOINT}`;
     const snapshot = this.viewSnapshot();
-    const modelConfig = snapshot ? resolveModelTestConfig(snapshot.config, modelId) : undefined;
+    const modelConfig = snapshot ? resolveModelTestConfig(snapshot.config, actualModelId, snapshot.compositeResolved) : undefined;
     const upstreamMode = modelConfig?.upstreamMode || 'openai-completions';
     const requestBody = buildTestToolRequest(upstreamMode);
 
-    this.view.setMessage(`testing ${modelId}...`, 30000);
+    this.view.setMessage(`testing ${actualModelId}...`, 30000);
     this.requestRender();
 
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...requestBody, model: modelId }),
+        body: JSON.stringify({ ...requestBody, model: actualModelId }),
       });
 
       const contentType = response.headers.get('content-type') || '';
@@ -935,16 +950,16 @@ class DashboardApp {
       const detailText = formatTestResultDetail(responseBody).split('\n').map((l) => l.length > 60 ? `${l.slice(0, 60)}…` : l).join(' | ');
 
       if (!response.ok) {
-        this.view.setMessage(`test failed ${modelId} (${response.status}) ${detailText}`, 10000);
+        this.view.setMessage(`test failed ${actualModelId} (${response.status}) ${detailText}`, 10000);
         this.requestRender();
         return;
       }
 
-      const statusLine = `${green(`OK ${modelId}`)} ${green(`(${response.status})`)} ${green(`usage=${usage}`)}`;
+      const statusLine = `${green(`OK ${actualModelId}`)} ${green(`(${response.status})`)} ${green(`usage=${usage}`)}`;
       this.view.setMessage(`${statusLine} ${green(detailText)}`, 10000);
       this.requestRender();
     } catch (error) {
-      this.view.setMessage(`test failed ${modelId} ${(error as Error).message}`, 10000);
+      this.view.setMessage(`test failed ${actualModelId} ${(error as Error).message}`, 10000);
       this.requestRender();
     }
   }
@@ -1097,14 +1112,14 @@ class DashboardApp {
   private modelChoices(): ModelChoice[] {
     const snapshot = this.viewSnapshot();
     if (!snapshot) return [];
-    const seen = new Set<string>();
+    const seenNames = new Set<string>();
     const choices: ModelChoice[] = [];
 
     for (const [category, categoryConfig] of Object.entries(snapshot.config.models)) {
       for (const [key, value] of Object.entries(categoryConfig || {})) {
         if (key === 'upstream_mode' || key === 'base_url' || key === 'api_key') continue;
-        if (value === undefined || seen.has(key)) continue;
-        seen.add(key);
+        if (value === undefined || seenNames.has(key)) continue;
+        seenNames.add(key);
         choices.push({
           category,
           modelId: key,
@@ -1115,7 +1130,38 @@ class DashboardApp {
       }
     }
 
-    return choices.sort((a, b) => a.modelId.localeCompare(b.modelId));
+    // Add composite aliases — if same name as a model, add with "[C]" label to differentiate
+    if (snapshot.compositeResolved) {
+      for (const alias of snapshot.compositeResolved) {
+        const isDuplicate = seenNames.has(alias.alias);
+        if (isDuplicate) {
+          // Same name already added as a model — add composite with [C] suffix
+          choices.push({
+            category: 'composite',
+            modelId: alias.alias,
+            value: `${alias.alias} [C]`,
+            label: `${alias.alias} [C]`,
+            description: `→ ${alias.targets.map((t) => t.model || t.routeModel || '?').join(', ')}`,
+          });
+        } else {
+          seenNames.add(alias.alias);
+          const targets = alias.targets.map((t) => t.model || t.routeModel || '?').join(', ');
+          choices.push({
+            category: 'composite',
+            modelId: alias.alias,
+            value: alias.alias,
+            label: alias.alias,
+            description: `→ ${targets}`,
+          });
+        }
+      }
+    }
+
+    // Sort by modelId so composites interleave with models, not float to the end
+    return choices.sort((a, b) => {
+      const cmp = a.modelId.localeCompare(b.modelId);
+      return cmp !== 0 ? cmp : a.category.localeCompare(b.category);
+    });
   }
 
   private viewSnapshot(): Awaited<ReturnType<typeof getDashboardSnapshot>> | null {
@@ -1126,7 +1172,18 @@ class DashboardApp {
 function resolveModelTestConfig(
   config: ProxyConfig,
   modelId: string,
+  compositeResolved?: Array<{ alias: string; targets: Array<{ model: string; routeModel?: string; upstreamMode: string; targetUrl: string }> }>,
 ): { upstreamMode: string; targetUrl: string; apiKey?: string } | undefined {
+  // Check composite aliases first
+  if (compositeResolved) {
+    const alias = compositeResolved.find((a) => a.alias === modelId);
+    if (alias && alias.targets.length > 0) {
+      const first = alias.targets[0];
+      return { upstreamMode: first.upstreamMode, targetUrl: first.targetUrl };
+    }
+  }
+
+  // Check model configs
   for (const categoryConfig of Object.values(config.models || {})) {
     if (Array.isArray(categoryConfig)) continue;
     for (const [key, value] of Object.entries(categoryConfig || {})) {

@@ -230,6 +230,8 @@ Keyboard shortcuts:
 
 **Test custom model**: Press `T` to open the model picker. Each model shows its **category**, **upstream mode** (postfix only, e.g. `completions`/`messages`), and **base URL** (without `https://` prefix). Select a model and press Enter to send a test request — the result displays the response's `message`/`content`/`error` fields (IDs excluded).
 
+**Test composite aliases**: Composite aliases are also listed in the picker (shown with `→ target1, target2, ...` as description). If a composite alias shares the same name as a model (e.g. `code-small`), the composite appears as `code-small [C]` so both can be selected for testing independently.
+
 ### 3.2 Token Log Persistence
 
 The proxy persists token stats and heatmap data to `/tmp/model_proxy_tokens.log` (JSONL format) for recovery after restart.

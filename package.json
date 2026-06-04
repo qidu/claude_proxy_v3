@@ -1,7 +1,7 @@
 {
   "name": "model-proxy-v3",
-  "version": "3.1.0",
-  "description": "Model API Proxy v3.1 - Claude and Gemini API Proxy for all models",
+  "version": "3.2.0",
+  "description": "Model API Proxy v3.2 - Claude,Gemini,GPT Compatibale API Proxy",
   "main": "src/index.ts",
   "imports": [
     {
