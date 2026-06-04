@@ -551,22 +551,26 @@ class DashboardView implements Component {
   private messageUntil = 0;
   private lastTime = '';
 
-  constructor(private readonly app: DashboardApp) {}
+  constructor(private readonly app: DashboardApp, private readonly onInvalidate: () => void) {}
 
   setSnapshot(snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null): void {
     this.snapshot = snapshot;
+    this.invalidate();
   }
 
   setMessage(message: string, holdMs = 0): void {
     this.message = message;
     this.messageUntil = holdMs > 0 ? Date.now() + holdMs : 0;
+    this.invalidate();
   }
 
   shouldPreserveMessage(): boolean {
     return this.messageUntil > Date.now();
   }
 
-  invalidate(): void {}
+  invalidate(): void {
+    this.onInvalidate();
+  }
 
   handleInput(data: string): void {
     if (matchesKey(data, 'ctrl+c') || matchesKey(data, 'q')) {
@@ -673,11 +677,14 @@ class DashboardView implements Component {
 class DashboardApp {
   private readonly terminal = new ProcessTerminal();
   private readonly tui = new TUI(this.terminal);
-  private readonly view = new DashboardView(this);
+  private readonly view = new DashboardView(this, () => this.scheduleRender());
   private overlay: OverlayHandle | null = null;
   private compositeOverlay: CompositeAliasesOverlay | null = null;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
+  private refreshing = false;
+  private renderPending = false;
+  private renderTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly source: DashboardSource) {}
 
@@ -700,10 +707,22 @@ class DashboardApp {
   }
 
   requestRender(): void {
-    this.tui.requestRender();
+    this.scheduleRender();
+  }
+
+  private scheduleRender(): void {
+    if (this.renderPending) return;
+    this.renderPending = true;
+    if (this.renderTimer) clearTimeout(this.renderTimer);
+    this.renderTimer = setTimeout(() => {
+      this.renderPending = false;
+      this.tui.requestRender();
+    }, 100);
   }
 
   async refresh(): Promise<void> {
+    if (this.refreshing) return;
+    this.refreshing = true;
     try {
       const proxyConfig = await this.source.loadConfig();
       const snapshot = getDashboardSnapshot(proxyConfig, this.source.env);
@@ -712,10 +731,10 @@ class DashboardApp {
       if (!this.view.shouldPreserveMessage()) {
         this.view.setMessage('Ready');
       }
-      this.tui.requestRender();
     } catch (error) {
       this.view.setMessage((error as Error).message);
-      this.tui.requestRender();
+    } finally {
+      this.refreshing = false;
     }
   }
 
@@ -885,7 +904,7 @@ class DashboardApp {
     const upstreamMode = modelConfig?.upstreamMode || 'openai-completions';
     const requestBody = buildTestToolRequest(upstreamMode);
 
-    this.view.setMessage(`testing ${modelId}...`);
+    this.view.setMessage(`testing ${modelId}...`, 30000);
     this.requestRender();
 
     try {
@@ -900,7 +919,7 @@ class DashboardApp {
       const usage = typeof responseBody === 'object' && responseBody !== null && 'usage' in responseBody
         ? JSON.stringify((responseBody as Record<string, unknown>).usage ?? {})
         : 'n/a';
-      const detailText = formatTestResultDetail(responseBody);
+      const detailText = formatTestResultDetail(responseBody).split('\n').map((l) => l.length > 60 ? `${l.slice(0, 60)}…` : l).join('\n');
 
       if (!response.ok) {
         this.view.setMessage(`test failed ${modelId} (${response.status})\n${detailText}`, 10000);
@@ -908,11 +927,11 @@ class DashboardApp {
         return;
       }
 
-      const statusLine = `${green(`test ok ${modelId}`)} ${green(`(${response.status})`)} ${green(`usage=${usage}`)}`;
-      this.view.setMessage(`${statusLine}\n${green(detailText)}`, 10000);
+      const statusLine = `${green(`OK ${modelId}`)} ${green(`(${response.status})`)} ${green(`usage=${usage}`)}`;
+      this.view.setMessage(`${statusLine} ${green(detailText)}`, 10000);
       this.requestRender();
     } catch (error) {
-      this.view.setMessage(`test failed ${modelId}\n${(error as Error).message}`, 10000);
+      this.view.setMessage(`test failed ${modelId} ${(error as Error).message}`, 10000);
       this.requestRender();
     }
   }
