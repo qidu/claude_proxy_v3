@@ -923,16 +923,27 @@ class DashboardApp {
   }
 
   async runModelTest(modelId: string): Promise<void> {
-    // Strip [C] suffix if this is a duplicate composite
-    const actualModelId = modelId.endsWith(' [C]') ? modelId.slice(0, -3).trim() : modelId;
+    // Strip [C] suffix if present
+    const actualModelId = modelId.endsWith(' [C]') ? modelId.slice(0, -4).trim() : modelId;
     const port = this.source.env.PORT || '8788';
     const endpoint = `http://127.0.0.1:${port}${TEST_ENDPOINT}`;
     const snapshot = this.viewSnapshot();
-    const modelConfig = snapshot ? resolveModelTestConfig(snapshot.config, actualModelId, snapshot.compositeResolved) : undefined;
+
+    // If [C] suffix: test as composite alias (resolve from compositeResolved)
+    // If no suffix: test as model (resolve from models.*)
+    const modelConfig = snapshot
+      ? modelId.endsWith(' [C]')
+        ? resolveModelTestConfig(snapshot.config, actualModelId, snapshot.compositeResolved)
+        : resolveModelTestConfig(snapshot.config, actualModelId)
+      : undefined;
+
     const upstreamMode = modelConfig?.upstreamMode || 'openai-completions';
     const requestBody = buildTestToolRequest(upstreamMode);
+    const testLabel = modelId.endsWith(' [C]')
+      ? `${actualModelId} → ${modelConfig?.targetUrl ? stripHttps(modelConfig.targetUrl) : '?'}`
+      : actualModelId;
 
-    this.view.setMessage(`testing ${actualModelId}...`, 30000);
+    this.view.setMessage(`testing ${testLabel}...`, 30000);
     this.requestRender();
 
     try {
@@ -1130,12 +1141,12 @@ class DashboardApp {
       }
     }
 
-    // Add composite aliases — if same name as a model, add with "[C]" label to differentiate
+    // Add composite aliases — if same name as a model, add with "[C]" suffix to differentiate
     if (snapshot.compositeResolved) {
       for (const alias of snapshot.compositeResolved) {
         const isDuplicate = seenNames.has(alias.alias);
         if (isDuplicate) {
-          // Same name already added as a model — add composite with [C] suffix
+          // Same name already added as a model — add composite with [C] suffix to make value unique
           choices.push({
             category: 'composite',
             modelId: alias.alias,
@@ -1157,10 +1168,10 @@ class DashboardApp {
       }
     }
 
-    // Sort by modelId so composites interleave with models, not float to the end
+    // Sort by value (which is now unique) — "code-small" < "code-small [C]" since ' ' < '['
     return choices.sort((a, b) => {
-      const cmp = a.modelId.localeCompare(b.modelId);
-      return cmp !== 0 ? cmp : a.category.localeCompare(b.category);
+      const cmp = a.value.localeCompare(b.value);
+      return cmp !== 0 ? cmp : a.label.localeCompare(b.label);
     });
   }
 
