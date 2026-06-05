@@ -862,6 +862,30 @@ export default {
         const attemptForceStreaming = attempt.forceStreaming;
         const attemptAuthHeaders = attempt.authHeaders;
 
+        // Debug log routing info for test model requests (LOG_LEVEL=debug)
+        if (path === '/v1/messages' && env.LOG_LEVEL === 'debug') {
+          try {
+            const clonedBody = attemptRequest.clone();
+            const bodyText = await clonedBody.text();
+            const { writeFileSync } = await import('fs');
+            writeFileSync('/tmp/test_model.log',
+              `[${new Date().toISOString()}] proxy routing\n` +
+              `path: ${path}\n` +
+              `targetUrl: ${attemptTargetUrl}\n` +
+              `upstreamMode: ${attemptUpstreamMode}\n` +
+              `modelId: ${attemptModelId}\n` +
+              `handlerType: ${attemptHandlerType}\n` +
+              `authHeaders: ${JSON.stringify(Object.keys(attemptAuthHeaders))}\n` +
+              `request body:\n${JSON.stringify(JSON.parse(bodyText), null, 2)}\n`,
+            );
+          } catch (_e) {
+            try {
+              const { writeFileSync } = await import('fs');
+              writeFileSync('/tmp/test_model.log', `[${new Date().toISOString()}] proxy routing - failed to log request body: ${(_e as Error).message}\n`);
+            } catch {}
+          }
+        }
+
         // Route to appropriate handler
         let response: Response;
         switch (attemptHandlerType) {

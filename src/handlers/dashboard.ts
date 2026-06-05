@@ -975,7 +975,7 @@ const TEST_TOOL_SCHEMA = {
 function buildTestToolRequest(upstreamMode: string): Record<string, unknown> {
   const openaiToolBody = {
     messages: [{ role: 'user', content: TEST_TOOL_PROMPT }],
-    max_tokens: 16,
+    max_tokens: 128,
     tools: [{
       type: 'function',
       function: {
@@ -996,7 +996,7 @@ function buildTestToolRequest(upstreamMode: string): Record<string, unknown> {
 
   return {
     messages: [{ role: 'user', content: TEST_TOOL_PROMPT }],
-    max_tokens: 16,
+    max_tokens: 128,
     tools: [{ name: TEST_TOOL_NAME, description: TEST_TOOL_DESCRIPTION, input_schema: TEST_TOOL_SCHEMA }],
     tool_choice: { type: 'tool', name: TEST_TOOL_NAME },
   };
@@ -1119,20 +1119,48 @@ export async function handleDashboardTestModel(
     }
 
     const requestBody = buildTestToolRequest(upstreamMode);
+    const fullRequestBody = { ...requestBody, model: modelId };
 
     const port = env.PORT || '8788';
     const endpoint = `http://127.0.0.1:${port}${TEST_MODEL_ENDPOINT}`;
 
+    // Debug log test request/response to /tmp/test_model.log (LOG_LEVEL=debug)
+    if (env.LOG_LEVEL === 'debug') {
+      try {
+        const fs = await import('fs');
+        fs.writeFileSync('/tmp/test_model.log',
+          `[${new Date().toISOString()}] test model request\n` +
+          `target: ${endpoint}\n` +
+          `upstreamMode: ${upstreamMode}\n` +
+          `modelId: ${modelId}\n` +
+          `request body:\n${JSON.stringify(fullRequestBody, null, 2)}\n`,
+        );
+      } catch (_e) { /* ignore */ }
+    }
+
     const testResponse = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...requestBody, model: modelId }),
+      body: JSON.stringify(fullRequestBody),
     });
 
     const contentType = testResponse.headers.get('content-type') || '';
     const responseBody = contentType.includes('application/json')
       ? await testResponse.json()
       : await testResponse.text();
+
+    // Append response to debug log (LOG_LEVEL=debug)
+    if (env.LOG_LEVEL === 'debug') {
+      try {
+        const fs = await import('fs');
+        const responseText = typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody, null, 2);
+        fs.appendFileSync('/tmp/test_model.log',
+          `response status: ${testResponse.status}\n` +
+          `response body:\n${responseText}\n` +
+          `---\n`,
+        );
+      } catch (_e) { /* ignore */ }
+    }
 
     const usage = typeof responseBody === 'object' && responseBody !== null && 'usage' in responseBody
       ? JSON.stringify((responseBody as Record<string, unknown>).usage ?? {})

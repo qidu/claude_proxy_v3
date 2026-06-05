@@ -194,7 +194,7 @@ function stringifyCompact(value: unknown): string {
 function buildClaudeToolRequest(): Record<string, unknown> {
   return {
     messages: [{ role: 'user', content: TEST_TOOL_PROMPT }],
-    max_tokens: 16,
+    max_tokens: 128,
     tools: [{ name: TEST_TOOL_NAME, description: TEST_TOOL_DESCRIPTION, input_schema: TEST_TOOL_SCHEMA }],
     tool_choice: { type: 'tool', name: TEST_TOOL_NAME },
   };
@@ -203,7 +203,7 @@ function buildClaudeToolRequest(): Record<string, unknown> {
 function buildOpenAIToolRequest(): Record<string, unknown> {
   return {
     messages: [{ role: 'user', content: TEST_TOOL_PROMPT }],
-    max_tokens: 16,
+    max_tokens: 128,
     tools: [{
       type: 'function',
       function: {
@@ -212,7 +212,7 @@ function buildOpenAIToolRequest(): Record<string, unknown> {
         parameters: TEST_TOOL_SCHEMA,
       },
     }],
-    tool_choice: { type: 'function', function: { name: TEST_TOOL_NAME } },
+    tool_choice: 'auto',
   };
 }
 
@@ -955,15 +955,44 @@ class DashboardApp {
     this.view.setMessage(`testing ${testLabel}...`, 30000);
     this.requestRender();
 
+    const fullRequestBody = { ...requestBody, model: actualModelId };
+
+    // Debug log test request/response to /tmp/test_model.log (LOG_LEVEL=debug)
+    if (process.env.LOG_LEVEL === 'debug') {
+      try {
+        const fs = await import('fs');
+        fs.writeFileSync('/tmp/test_model.log',
+          `[${new Date().toISOString()}] test model request (tui)\n` +
+          `target: ${endpoint}\n` +
+          `upstreamMode: ${upstreamMode}\n` +
+          `modelId: ${actualModelId}\n` +
+          `request body:\n${JSON.stringify(fullRequestBody, null, 2)}\n`,
+        );
+      } catch (_e) { /* ignore */ }
+    }
+
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...requestBody, model: actualModelId }),
+        body: JSON.stringify(fullRequestBody),
       });
 
       const contentType = response.headers.get('content-type') || '';
       const responseBody = contentType.includes('application/json') ? await response.json() : await response.text();
+
+      // Append response to debug log (LOG_LEVEL=debug)
+      if (process.env.LOG_LEVEL === 'debug') {
+        try {
+          const fs = await import('fs');
+          const responseText = typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody, null, 2);
+          fs.appendFileSync('/tmp/test_model.log',
+            `response status: ${response.status}\n` +
+            `response body:\n${responseText}\n` +
+            `---\n`,
+          );
+        } catch (_e) { /* ignore */ }
+      }
       const usage = typeof responseBody === 'object' && responseBody !== null && 'usage' in responseBody
         ? JSON.stringify((responseBody as Record<string, unknown>).usage ?? {})
         : 'n/a';
@@ -1140,12 +1169,15 @@ class DashboardApp {
         if (key === 'upstream_mode' || key === 'base_url' || key === 'api_key') continue;
         if (value === undefined || seenNames.has(key)) continue;
         seenNames.add(key);
+        const modelUrl = Array.isArray(value) && value.length >= 2 && value[1]
+          ? value[1]
+          : (categoryConfig.base_url || '-');
         choices.push({
           category,
           modelId: key,
           value: key,
           label: key,
-          description: `${titleCase(category)} · ${stripCompletions(categoryConfig.upstream_mode || 'openai-completions')} · ${stripHttps(categoryConfig.base_url || '-')}`,
+          description: `${titleCase(category)} · ${stripCompletions(categoryConfig.upstream_mode || 'openai-completions')} · ${stripHttps(modelUrl)}`,
         });
       }
     }
@@ -1210,6 +1242,16 @@ function resolveModelTestConfig(
       if (key === 'upstream_mode' || key === 'base_url' || key === 'api_key') continue;
       if (value === undefined) continue;
       if (key !== modelId) continue;
+      // Check for per-model URL override in tuple [target, baseUrl, apiKey]
+      // (dashboard sanitizer strips 3rd element, so accept >= 2)
+      if (Array.isArray(value) && value.length >= 2) {
+        const modelBaseUrl = value[1] as string | undefined;
+        return {
+          upstreamMode: categoryConfig.upstream_mode || config.upstream?.upstream_mode || 'openai-completions',
+          targetUrl: modelBaseUrl || categoryConfig.base_url || config.upstream?.default_base_url || 'https://api.qnaigc.com',
+          apiKey: categoryConfig.api_key || config.upstream?.default_api_key,
+        };
+      }
       return {
         upstreamMode: categoryConfig.upstream_mode || config.upstream?.upstream_mode || 'openai-completions',
         targetUrl: categoryConfig.base_url || config.upstream?.default_base_url || 'https://api.qnaigc.com',

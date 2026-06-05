@@ -167,6 +167,25 @@ export async function handleMessagesRequest(
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 
+    // Debug log upstream response for test model requests (openai-passthrough, LOG_LEVEL=debug)
+    if (env?.LOG_LEVEL === 'debug') {
+      try {
+        const bodyText = typeof requestBody === 'string' ? requestBody : JSON.stringify(requestBody);
+        if (bodyText.includes('test_tool')) {
+          const respClone = response.clone();
+          const respBody = await respClone.text();
+          const { appendFileSync } = await import('fs');
+          appendFileSync('/tmp/test_model.log',
+            `[${new Date().toISOString()}] upstream response (openai-passthrough)\n` +
+            `upstream url: ${targetUrl}\n` +
+            `upstream status: ${response.status}\n` +
+            `upstream response body:\n${respBody.slice(0, 2000)}\n` +
+            `---\n`,
+          );
+        }
+      } catch (_e) { /* ignore */ }
+    }
+
     recordResponseStatusCodeFromUpstream(response.status);
     recordUpstreamResponseToolCount('openai-completions', 0);
 
@@ -288,6 +307,24 @@ export async function handleMessagesRequest(
     body: JSON.stringify(openaiRequest),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
+
+  // Debug log upstream response for test model requests (claude->openai, LOG_LEVEL=debug)
+  if (env?.LOG_LEVEL === 'debug') {
+    try {
+      if (upstreamRequest.includes('test_tool')) {
+        const respClone = response.clone();
+        const respBody = await respClone.text();
+        const { appendFileSync } = await import('fs');
+        appendFileSync('/tmp/test_model.log',
+          `[${new Date().toISOString()}] upstream response (claude->openai)\n` +
+          `upstream url: ${targetUrl}\n` +
+          `upstream status: ${response.status}\n` +
+          `upstream response body:\n${respBody.slice(0, 2000)}\n` +
+          `---\n`,
+        );
+      }
+    } catch (_e) { /* ignore */ }
+  }
 
   recordResponseStatusCodeFromUpstream(response.status);
   recordUpstreamResponseToolCount('openai-completions', 0);
