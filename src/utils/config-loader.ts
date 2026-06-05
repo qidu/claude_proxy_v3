@@ -472,7 +472,7 @@ function parseCompositeTargetConfig(value: string): CompositeTargetConfig {
   const fields = cleaned.split(',');
 
   for (const field of fields) {
-    const trimmed = field.trim();
+    const trimmed = field.trim().replace(/^,/, '').replace(/,$/, '');
     if (!trimmed) {
       continue;
     }
@@ -485,16 +485,35 @@ function parseCompositeTargetConfig(value: string): CompositeTargetConfig {
     const key = match[1].trim().replace(/^"|"$/g, '');
     const rawValue = match[2].trim().replace(/,$/, '');
 
-    if (key === 'share' || key === 'fallback') {
+    if (key === 'share') {
       const numeric = Number(rawValue);
-      if (!Number.isNaN(numeric)) {
-        config[key] = numeric;
+      if (!Number.isNaN(numeric) && numeric >= 0) {
+        (config as any).share = numeric;
+      } else if (rawValue !== '') {
+        (config as any)._invalidShare = true;
+      }
+      continue;
+    }
+
+    if (key === 'fallback') {
+      const numeric = Number(rawValue);
+      if (!Number.isNaN(numeric) && numeric >= 0) {
+        (config as any).fallback = numeric;
+      } else if (rawValue !== '') {
+        (config as any)._invalidFallback = true;
       }
       continue;
     }
 
     if (key === 'primary') {
-      config.primary = rawValue === 'true';
+      if (rawValue === 'true') {
+        config.primary = true;
+      } else if (rawValue === 'false') {
+        config.primary = false;
+      } else {
+        (config as any)._invalidPrimary = true;
+      }
+      continue;
     }
   }
 
@@ -553,8 +572,10 @@ function parseCompositeModelConfig(rawValue: string): CompositeModelConfig {
     const limitMatch = entry.match(/^"?(total_token_limit)"?\s*:\s*(.+)$/);
     if (limitMatch) {
       const numeric = Number(limitMatch[2].trim().replace(/,$/, ''));
-      if (!Number.isNaN(numeric)) {
-        config.total_token_limit = numeric;
+      if (!Number.isNaN(numeric) && numeric >= 0) {
+        (config as any).total_token_limit = numeric;
+      } else {
+        (config as any)._invalidLimit = true;
       }
     }
   }
@@ -610,6 +631,108 @@ function serializeCompositeModelConfig(config: CompositeModelConfig): string {
     entries.push(`${JSON.stringify(modelName)}: ${serializedTarget}`);
   }
   return `{${entries.join(', ')}}`;
+}
+
+/**
+ * Config validation
+ */
+export interface ConfigValidationError {
+  path: string;
+  message: string;
+}
+
+export interface ValidationResult {
+  errors: ConfigValidationError[];
+  valid: boolean;
+}
+
+export function validateProxyConfig(config: ProxyConfig): ValidationResult {
+  const errors: ConfigValidationError[] = [];
+  const reservedKeys = new Set(['upstream_mode', 'base_url', 'api_key']);
+
+  if (config.models) {
+    for (const [categoryName, categoryConfig] of Object.entries(config.models)) {
+      if (categoryName === 'list' || Array.isArray(categoryConfig)) {
+        continue;
+      }
+      const typedCategory = categoryConfig as Record<string, unknown>;
+      const categoryBaseUrl = typeof typedCategory.base_url === 'string' ? typedCategory.base_url : undefined;
+      const categoryApiKey = typeof typedCategory.api_key === 'string' ? typedCategory.api_key : undefined;
+
+      for (const [key, value] of Object.entries(categoryConfig)) {
+        if (reservedKeys.has(key)) continue;
+        if (value === undefined) continue;
+
+        if (!Array.isArray(value)) {
+          errors.push({ path: `models.${categoryName}.${key}`, message: `must be [target, base_url, api_key]` });
+          continue;
+        }
+        if (value.length === 1) {
+          // 1 element = target only (base_url/api_key from category)
+          const target = value[0] as unknown;
+          if (typeof target !== 'string' || target.trim() === '') {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `target cannot be empty` });
+          }
+          if (!categoryBaseUrl && !categoryApiKey) {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `base_url and api_key must be set in category when target is the only element` });
+          }
+        } else if (value.length === 3) {
+          // 3 elements = target + optional overrides (empty = use category fallback)
+          const target = value[0] as unknown;
+          const baseUrl = value[1] as unknown;
+          const apiKey = value[2] as unknown;
+
+          if (typeof target !== 'string' || target.trim() === '') {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `target cannot be empty` });
+          }
+          if (typeof baseUrl !== 'string') {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `base_url must be a string` });
+          } else if (baseUrl.trim() === '' && !categoryBaseUrl) {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `base_url is empty and not set in category` });
+          }
+          if (typeof apiKey !== 'string') {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `api_key must be a string` });
+          } else if (apiKey.trim() === '' && !categoryApiKey) {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `api_key is empty and not set in category` });
+          }
+        } else {
+          errors.push({ path: `models.${categoryName}.${key}`, message: `must be [target] or [target, base_url, api_key] (got ${value.length} elements)` });
+        }
+      }
+    }
+  }
+
+  if (config.composite) {
+    for (const [alias, targets] of Object.entries(config.composite)) {
+      if (!targets || typeof targets !== 'object') {
+        errors.push({ path: `composite.${alias}`, message: `invalid composite config` });
+        continue;
+      }
+      if ('_invalidLimit' in (targets as Record<string, unknown>)) {
+        errors.push({ path: `composite.${alias}.total_token_limit`, message: `total_token_limit must be a number` });
+      }
+      for (const [targetModel, targetValue] of Object.entries(targets)) {
+        if (targetModel.startsWith('_')) continue; // skip internal markers
+        if (targetModel === 'total_token_limit') continue; // validated separately above
+        if (!targetValue || typeof targetValue !== 'object' || Array.isArray(targetValue)) {
+          errors.push({ path: `composite.${alias}.${targetModel}`, message: `invalid target config` });
+          continue;
+        }
+        const typedTarget = targetValue as Record<string, unknown>;
+        if ('_invalidShare' in typedTarget) {
+          errors.push({ path: `composite.${alias}.${targetModel}`, message: `share must be a number` });
+        }
+        if ('_invalidPrimary' in typedTarget) {
+          errors.push({ path: `composite.${alias}.${targetModel}`, message: `primary must be boolean` });
+        }
+        if ('_invalidFallback' in typedTarget) {
+          errors.push({ path: `composite.${alias}.${targetModel}`, message: `fallback must be a number` });
+        }
+      }
+    }
+  }
+
+  return { errors, valid: errors.length === 0 };
 }
 
 export function serializeProxyConfigToml(config: ProxyConfig): string {
@@ -724,6 +847,11 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
         throw new Error(`Invalid Consul KV response from ${configUrl}`);
       }
       config = parseConsulConfig(kvEntries);
+      const validation = validateProxyConfig(config);
+      for (const err of validation.errors) {
+        console.error(`[ERROR] ${err.path}: ${err.message}`);
+      }
+      (config as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors = validation.errors;
     } else if (configPath) {
       // Load from file - handle both Node.js and Cloudflare Workers environments
       let configContent: string;
@@ -852,18 +980,13 @@ export function parseSimpleToml(content: string): ProxyConfig {
           current += char;
         }
       }
-      if (current.trim()) {
-        elements.push(current.trim().replace(/^"|"$/g, ''));
-      }
-
-      // Ensure we have exactly 3 elements
-      while (elements.length < 3) {
-        elements.push('');
-      }
+      // Always push the last element (even if empty string like "")
+      elements.push(current.trim().replace(/^"|"$/g, ''));
 
       if (currentSection === 'models' && currentCategory && config.models) {
         const category = config.models[currentCategory] as ModelCategoryConfig;
-        category[cleanKey] = [elements[0], elements[1], elements[2]];
+        // Store raw array (1-3 elements), no padding
+        category[cleanKey] = elements as [string, string, string];
       }
       continue;
     }
@@ -888,6 +1011,13 @@ export function parseSimpleToml(content: string): ProxyConfig {
       continue;
     }
   }
+
+  // Validate config and log errors
+  const validation = validateProxyConfig(config);
+  for (const err of validation.errors) {
+    console.error(`[ERROR] ${err.path}: ${err.message}`);
+  }
+  (config as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors = validation.errors;
 
   return config;
 }
@@ -926,6 +1056,7 @@ export interface DashboardModelCategoryConfig {
 export interface DashboardConfigPayload {
   models: Record<string, DashboardModelCategoryConfig>;
   composite: Record<string, CompositeModelConfig>;
+  config_errors: ConfigValidationError[];
 }
 
 function sanitizeDashboardCategoryConfig(categoryConfig: ModelCategoryConfig): DashboardModelCategoryConfig {
@@ -963,6 +1094,9 @@ function sanitizeCompositeConfig(composite: ProxyConfig['composite']): Record<st
       if (targetModel === 'total_token_limit') {
         continue;
       }
+      if (targetModel.startsWith('_')) {
+        continue; // skip internal validation markers
+      }
 
       const safeTarget: CompositeTargetConfig = {};
       if (typeof config === 'object' && config !== null && !Array.isArray(config)) {
@@ -998,14 +1132,16 @@ export function toDashboardConfigPayload(config: ProxyConfig): DashboardConfigPa
   return {
     models,
     composite: sanitizeCompositeConfig(config.composite),
+    config_errors: (config as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors ?? [],
   };
 }
 
 function isSafeModelArray(value: unknown): value is DashboardModelArrayConfig {
-  if (!Array.isArray(value) || value.length < 2) {
+  // Accept 1-3 element arrays where first element is a non-empty string (alias)
+  if (!Array.isArray(value) || value.length < 1) {
     return false;
   }
-  return typeof value[0] === 'string' && typeof value[1] === 'string';
+  return typeof value[0] === 'string' && value[0].trim() !== '';
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -1098,7 +1234,9 @@ function validateAndNormalizeDashboardModels(payload: unknown): Record<string, D
       }
 
       if (isSafeModelArray(value)) {
-        category[key] = [value[0], value[1]];
+        // Pass through raw array (1-3 elements) so it gets re-validated
+        // but trimmed to 2 for display since api_key is hidden
+        category[key] = value.slice(0, 2) as DashboardModelArrayConfig;
         continue;
       }
 
@@ -1186,6 +1324,9 @@ function cloneCompositeConfig(composite: ProxyConfig['composite']): Record<strin
       for (const [targetModel, config] of Object.entries(targets as Record<string, unknown>)) {
         if (targetModel === 'total_token_limit') {
           continue;
+        }
+        if (targetModel.startsWith('_')) {
+          continue; // skip internal validation markers
         }
         if (config && typeof config === 'object' && !Array.isArray(config)) {
           nextTargets[targetModel] = { ...(config as Record<string, unknown>) } as CompositeTargetConfig;

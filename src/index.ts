@@ -25,6 +25,7 @@ import {
   handleDashboardPage,
   handleDashboardPutConfig,
   handleDashboardRequestStats,
+  handleDashboardTestModel,
 } from './handlers/dashboard.js';
 import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, ModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
 import {
@@ -461,6 +462,11 @@ export default {
         return applyCorsHeaders(handleDashboardRequestStats(), request, env);
       }
 
+      if (path === '/dashboard/api/test-model' && request.method === 'POST') {
+        const response = await handleDashboardTestModel(request, env, proxyConfig);
+        return applyCorsHeaders(response, request, env);
+      }
+
       // Skip favicon requests
       if (path === '/favicon.ico') {
         return new Response(null, { status: 204 });
@@ -552,6 +558,7 @@ export default {
         authHeaders: Record<string, string>;
       };
       let compositeAttempts: RouteAttempt[] | undefined;
+      let compositeAliasName: string | undefined;
 
       // Extract authentication headers early
       const authHeaders = extractAuthHeaders(request);
@@ -604,6 +611,7 @@ export default {
             // passthrough disabled: don't set routing vars — falls through to outer fixed-routing block
           } else if (modelName && proxyConfig.models) {
             const compositeCandidates = getCompositeRouteCandidates(modelName, proxyConfig);
+            compositeAliasName = compositeCandidates.length > 0 ? modelName : undefined;
 
             // Token-limit enforcement: check accumulated total_tokens across all
             // alias targets against the alias-level total_token_limit.
@@ -631,7 +639,7 @@ export default {
             const clientPort = request.headers.get('x-client-port') || 'unknown';
 
             compositeAttempts = routeCandidates.map(({ modelName: candidateName, route }) => {
-              logger.info(requestId, `${url.pathname} for ${modelName} (${candidateName}) to ${route.targetUrl} (${route.upstreamMode}) from ${clientAddress}:${clientPort}`);
+              logger.debug(requestId, `Composite candidate ${modelName} -> ${candidateName} via ${route.targetUrl} (${route.upstreamMode}) [client ${clientAddress}:${clientPort}]`);
 
               const upstreamModelName = route.modelAlias || candidateName;
               const forwardedBodyText = JSON.stringify({
@@ -978,6 +986,7 @@ export default {
         for (let i = 0; i < compositeAttempts.length; i++) {
           const attempt = compositeAttempts[i];
           try {
+            logger.info(requestId, `${new URL(attempt.request.url).pathname} for ${compositeAliasName ?? attempt.modelId} to ${attempt.targetUrl} (${attempt.upstreamMode})`);
             const response = await runAttempt(attempt);
             recordRequestTiming(path, Date.now() - requestStartTime);
             return applyCorsHeaders(response, attempt.request, env);

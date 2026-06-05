@@ -63,6 +63,12 @@ export function getAnsiColor(value: number, maxValue: number): string {
   return VALUE_COLORS[3];
 }
 
+function fg(code: number, text: string): string {
+  return `\u001b[${code}m${text}\u001b[0m`;
+}
+function bold(text: string): string { return fg(1, text); }
+function dim(text: string): string { return fg(2, text); }
+
 export function buildHeatmap(records: HeatmapRecord[]): HeatmapData {
   const cells: HeatmapCell[][] = Array.from({ length: 7 }, () =>
     Array.from({ length: 24 }, () => ({ values: 0 })),
@@ -95,13 +101,24 @@ export function renderHeatmapPanel(heatmap: HeatmapData, options: TuiOptions = {
   const title = options.title ?? 'Values';
   const total = getMetricValue(heatmap);
   const maxValue = getMetricMax(heatmap);
-
+  const currentHour = new Date().getHours();
+  const headerLabels = heatmap.columns.map((col, index) =>
+    index === currentHour ? bold(col) : dim(col),
+  );
+  // If current hour is odd, append ↓ to the preceding even-hour label
+  if (currentHour % 2 !== 0) {
+    const prevIndex = currentHour - 1;
+    const prevLabel = heatmap.columns[prevIndex];
+    // headerLabels[prevIndex] += bold('↓');
+  }
   const lines: string[] = [];
   lines.push(`  ${title} (${total} total)`);
-  lines.push(`      ${heatmap.columns.filter((_, index) => index % 2 === 0).join('  ')}`);
+  lines.push(`      ${headerLabels.filter((_, index) => index % 2 === 0).join('  ')}`);
 
   for (let rowIndex = 0; rowIndex < heatmap.rows.length; rowIndex += 1) {
     const label = heatmap.rows[rowIndex].padEnd(3, ' ');
+    const today = ROW_LABELS[new Date().getDay()];
+    const labelDay = label.trim() === today ? bold(label) : dim(label);
     const cells: string[] = [];
 
     for (let columnIndex = 0; columnIndex < heatmap.columns.length; columnIndex += 1) {
@@ -109,7 +126,7 @@ export function renderHeatmapPanel(heatmap: HeatmapData, options: TuiOptions = {
       cells.push(`${getAnsiColor(value, maxValue)}${CELL}${RESET}`);
     }
 
-    lines.push(`  ${label} ${cells.join(' ')}`);
+    lines.push(`  ${labelDay} ${cells.join(' ')}`);
   }
 
   return lines.join('\n');

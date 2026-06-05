@@ -102,6 +102,11 @@ server.listen(port, '0.0.0.0', async () => {
       loadConfig: async () => loadProxyConfig(env),
       readOnly: !!env.PROXY_CONFIG_URL,
     });
+  } else {
+    // Non-TUI mode: eagerly load config to validate and show errors in console
+    loadProxyConfig(env).catch((err) => {
+      console.error('Failed to load config at startup:', (err as Error).message);
+    });
   }
 });
 

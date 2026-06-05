@@ -127,7 +127,7 @@ export async function handleMessagesRequest(
     const model = (openaiRequestBody.model as string) || modelId || 'unknown';
 
     // Log request info
-    activeLogger.info(requestId, `Upstream target url (stream=${isStreaming}): ${targetUrl}`);
+    activeLogger.info(requestId, `Upstream (stream=${isStreaming}): /v1/chat/completions → ${model}`);
 
     // Check if this is an SDK URL
     if (isSdkUrl(targetUrl)) {
@@ -221,7 +221,7 @@ export async function handleMessagesRequest(
   const isStreaming = claudeRequest.stream === true;
 
   // Log request info
-  activeLogger.info(requestId, `Upstream target url (stream =${isStreaming}) : ${targetUrl}`);
+  activeLogger.info(requestId, `Upstream (stream=${isStreaming}): /v1/chat/completions → ${targetModelId}`);
   activeLogger.debug(requestId, `Has auth headers: ${!!authHeaders['Authorization'] || !!authHeaders['x-api-key']}`);
   activeLogger.debug(requestId, `Is for SDK Model: ${isSdkUrl(targetUrl)} with upstreamMode: ${upstreamMode}`);
 

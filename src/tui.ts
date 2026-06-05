@@ -23,6 +23,7 @@ import {
 import { buildHeatmap, renderHeatmapPanel } from './heatmap.js';
 import { dumpTodayTokens, TOKEN_LOG_FILE } from './utils/dashboard-stats.js';
 import type { Env } from './types/shared.js';
+import type { ConfigValidationError } from './utils/config-loader.js';
 import type { ProxyConfig } from './utils/config-loader.js';
 
 const TEST_ENDPOINT = '/v1/messages';
@@ -216,7 +217,10 @@ function buildOpenAIToolRequest(): Record<string, unknown> {
 }
 
 function buildTestToolRequest(upstreamMode: string): Record<string, unknown> {
-  if (upstreamMode === 'openai-completions') {
+  if (upstreamMode === 'openai-completions' ||
+      upstreamMode === 'openai-responses' ||
+      upstreamMode === 'gemini-generatecontent' ||
+      upstreamMode === 'gemini-interactions') {
     return buildOpenAIToolRequest();
   }
 
@@ -256,6 +260,7 @@ function bold(text: string): string { return fg(1, text); }
 function dim(text: string): string { return fg(2, text); }
 function green(text: string): string { return fg(32, text); }
 function yellow(text: string): string { return fg(33, text); }
+function red(text: string): string { return fg(31, text); }
 function cyan(text: string): string { return fg(36, text); }
 function clip(text: string, width: number): string {
   return width <= 0 ? '' : truncateToWidth(text, width, '');
@@ -615,7 +620,7 @@ class DashboardView implements Component {
     }
 
     const toolStats = snap.toolStats || [];
-    lines.push(`${dim('Config:')} ${dim(snap.config.config_path ?? 'memory')} ${snap.config.read_only ? yellow('(read-only)') : green('(writable)')}`);
+    lines.push(`${dim('Config:')} ${dim(snap.config.config_path ?? 'memory')} ${snap.config.read_only ? yellow('(read-only)') : green('(writable)')}${((snap.config as unknown as { config_errors?: unknown[] }).config_errors?.length ?? 0) > 0 ? red(` (${(snap.config as unknown as { config_errors: unknown[] }).config_errors.length} errors)`) : ''}`);
     const tokenHeatmap = buildHeatmap(snap.tokenHeatmap);
     const tokenHeatmapLines = renderHeatmapPanel(tokenHeatmap, { title: 'Tokens Panel' }).split('\n');
     tokenHeatmapLines[0] = `${bold('Tokens Panel')} (${fmt(tokenHeatmap.totalValues)})`;
@@ -685,8 +690,8 @@ class DashboardView implements Component {
       for (const alias of snap.compositeResolved) {
         if (seen.has(alias.alias)) continue; // model with same name already added
         seen.add(alias.alias);
-        const targets = alias.targets.map((t) => t.model || t.routeModel || '?').join(', ');
-        models.push({ category: 'composite', modelId: alias.alias, description: targets });
+        const targets = alias.targets.map((t) => t.model || t.routeModel || '?').join(' · ');
+        models.push({ category: 'composite', modelId: alias.alias, description: `(${targets})` });
       }
     }
 
@@ -751,10 +756,14 @@ class DashboardApp {
     this.refreshing = true;
     try {
       const proxyConfig = await this.source.loadConfig();
+      const validationErrors = (proxyConfig as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors;
       const snapshot = getDashboardSnapshot(proxyConfig, this.source.env);
       this.view.setSnapshot(snapshot);
       this.compositeOverlay?.setSnapshot(snapshot);
-      if (!this.view.shouldPreserveMessage()) {
+      if (validationErrors && validationErrors.length > 0) {
+        const first = validationErrors[0];
+        this.view.setMessage(`Config error: ${first.path} — ${first.message}`, 15000);
+      } else if (!this.view.shouldPreserveMessage()) {
         this.view.setMessage('Ready');
       }
     } catch (error) {
@@ -940,7 +949,7 @@ class DashboardApp {
     const upstreamMode = modelConfig?.upstreamMode || 'openai-completions';
     const requestBody = buildTestToolRequest(upstreamMode);
     const testLabel = modelId.endsWith(' [C]')
-      ? `${actualModelId} → ${modelConfig?.targetUrl ? stripHttps(modelConfig.targetUrl) : '?'}`
+      ? `${actualModelId} ${modelConfig?.targetUrl ? stripHttps(modelConfig.targetUrl) : '?'}`
       : actualModelId;
 
     this.view.setMessage(`testing ${testLabel}...`, 30000);
@@ -1152,17 +1161,17 @@ class DashboardApp {
             modelId: alias.alias,
             value: `${alias.alias} [C]`,
             label: `${alias.alias} [C]`,
-            description: `→ ${alias.targets.map((t) => t.model || t.routeModel || '?').join(', ')}`,
+            description: `${alias.targets.map((t) => t.model || t.routeModel || '?').join('· ')}`,
           });
         } else {
           seenNames.add(alias.alias);
-          const targets = alias.targets.map((t) => t.model || t.routeModel || '?').join(', ');
+          const targets = alias.targets.map((t) => t.model || t.routeModel || '?').join('· ');
           choices.push({
             category: 'composite',
             modelId: alias.alias,
             value: alias.alias,
             label: alias.alias,
-            description: `→ ${targets}`,
+            description: `${targets}`,
           });
         }
       }

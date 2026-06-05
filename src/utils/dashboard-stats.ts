@@ -86,7 +86,7 @@ const upstreamResponseToolStats = new Map<string, UpstreamResponseToolStatsEntry
 const requestEndpointTimingStats = new Map<string, RequestEndpointTimingStatsEntry>();
 const tokenHeatmapEvents: TokenHeatmapEvent[] = [];
 
-export const TOKEN_LOG_FILE = '/tmp/model_proxy_tokens.log';
+export const TOKEN_LOG_FILE = './model_proxy_tokens.log';
 
 const dailyTokenStats = new Map<string, ModelStatsEntry>();
 

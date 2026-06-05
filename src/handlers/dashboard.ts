@@ -218,6 +218,11 @@ export function handleDashboardPage(): Response {
       .config-row .wide { grid-column: 2 / span 2; }
       .row-actions { display: flex; gap: 8px; align-items: center; }
       .mini-btn { padding: 4px 8px; font-size: 12px; }
+      .test-btn { padding: 4px 8px; font-size: 12px; background: #e8f5e9; border: 1px solid #a5d6a7; color: #2e7d32; }
+      .test-btn:hover { background: #c8e6c9; }
+      .test-btn.testing { background: #fff9c4; border-color: #fff176; color: #f57f17; }
+      .test-btn.error-result { background: #ffebee; border-color: #ef9a9a; color: #c62828; }
+      .test-btn.success-result { background: #e8f5e9; border-color: #a5d6a7; color: #2e7d32; }
       .danger { background: #fff1f1; border: 1px solid #ffcccc; }
       .section-actions { margin-top: 8px; }
       .config-divider { margin: 14px 0; border-top: 3px solid #fff; }
@@ -251,6 +256,18 @@ export function handleDashboardPage(): Response {
         display: inline-flex;
         align-items: center;
       }
+      #configStatus.error {
+        background: #ffebee;
+        border: 1px solid #ef9a9a;
+        color: #c62828;
+      }
+      #testResultPanel .result-model { font-weight: 600; }
+      #testResultPanel.success { background: #e8f5e9; border: 1px solid #a5d6a7; color: #1b5e20; }
+      #testResultPanel.error { background: #ffebee; border: 1px solid #ef9a9a; color: #b71c1c; }
+      #testResultPanel.testing { background: #fff9c4; border: 1px solid #fff176; color: #e65100; }
+      .result-usage { font-size: 12px; opacity: 0.8; }
+      .result-clear { float: right; background: none; border: none; cursor: pointer; font-size: 13px; padding: 0; color: inherit; opacity: 0.7; }
+      .result-clear:hover { opacity: 1; }
     </style>
   </head>
   <body>
@@ -274,6 +291,8 @@ export function handleDashboardPage(): Response {
         <span id="configStatus"></span>
       </div>
     </section>
+
+    <div id="testResultPanel" style="display:none; position:fixed; top:50%; left:0; transform:translateY(-50%); width:240px; border-radius:0 8px 8px 0; padding:14px 16px; z-index:999; font-size:13px; line-height:1.5; word-break:break-all; box-shadow:2px 2px 12px rgba(0,0,0,0.12);"></div>
 
     <section class="card" id="section-model">
       <h2>Model Statistic <button id="exportModelStatsCsv" class="mini-btn" style="font-size:12px;">Export CSV</button></h2>
@@ -384,6 +403,7 @@ export function handleDashboardPage(): Response {
           + '<input type="text" data-kind="model-alias" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '" value="' + escapeHtml(alias) + '" placeholder="model alias"' + disabledAttr + ' />'
           + '<div class="row-actions">'
             + '<input type="text" data-kind="model-base" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '" value="' + escapeHtml(base) + '" placeholder="base_url override"' + disabledAttr + ' />'
+            + '<button type="button" class="test-btn mini-btn" data-action="test-model" data-model="' + escapeHtml(modelKey) + '">t</button>'
             + '<button type="button" class="mini-btn danger" data-action="remove-model" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
           + '</div>'
           + '</div>';
@@ -442,7 +462,8 @@ export function handleDashboardPage(): Response {
 
         const compositeBlocks = Object.entries(config.composite || {}).map(([aliasName, targets]) => {
           const rows = compositeEntryRows(aliasName, targets)
-            + '<div class="section-actions"><button type="button" class="mini-btn" data-action="add-composite-target" data-alias="' + escapeHtml(aliasName) + '"' + (isReadOnly ? ' disabled' : '') + '>Add target</button>'
+            + '<div class="section-actions"><button type="button" class="test-btn mini-btn" data-action="test-composite" data-alias="' + escapeHtml(aliasName) + '">test</button>'
+            + ' <button type="button" class="mini-btn" data-action="add-composite-target" data-alias="' + escapeHtml(aliasName) + '"' + (isReadOnly ? ' disabled' : '') + '>Add target</button>'
             + ' <button type="button" class="mini-btn danger" data-action="remove-composite-alias" data-alias="' + escapeHtml(aliasName) + '"' + (isReadOnly ? ' disabled' : '') + '>Remove alias</button></div>';
           return '<div class="config-block"><h3>composite.' + escapeHtml(aliasName) + '</h3>' + rows + '</div>';
         }).join('');
@@ -523,13 +544,85 @@ export function handleDashboardPage(): Response {
         });
       }
 
+      let testResultClearTimer = null;
+
+      function showTestResult(success, modelId, status, detail, usage) {
+        const panel = document.getElementById('testResultPanel');
+        if (testResultClearTimer) clearTimeout(testResultClearTimer);
+        if (success) {
+          panel.className = 'success';
+          panel.innerHTML = '<button class="result-clear" onclick="clearTestResult()">✗</button>'
+            + '<span class="result-model">✓ ' + escapeHtml(modelId) + '</span> '
+            + '<span style="opacity:0.7">(' + status + ')</span>'
+            + (usage ? ' <span class="result-usage">usage=' + escapeHtml(usage) + '</span>' : '')
+            + (detail ? ' <span style="opacity:0.8">' + escapeHtml(detail) + '</span>' : '');
+        } else {
+          panel.className = 'error';
+          panel.innerHTML = '<button class="result-clear" onclick="clearTestResult()">✗</button>'
+            + '<span class="result-model">✗ ' + escapeHtml(modelId) + '</span> '
+            + '<span style="opacity:0.7">(' + (status || '?') + ')</span>'
+            + (detail ? ' — ' + escapeHtml(detail) : '');
+        }
+        panel.style.display = 'block';
+        // Auto-clear after 20s
+        testResultClearTimer = setTimeout(clearTestResult, 20000);
+      }
+
+      function clearTestResult() {
+        const panel = document.getElementById('testResultPanel');
+        panel.style.display = 'none';
+        if (testResultClearTimer) { clearTimeout(testResultClearTimer); testResultClearTimer = null; }
+      }
+
+      async function testModel(modelId) {
+        const isCompositeBtn = document.querySelector('[data-action="test-composite"][data-alias="' + modelId + '"]') !== null;
+        const btn = document.querySelector('[data-action="test-model"][data-model="' + modelId + '"]')
+          || document.querySelector('[data-action="test-composite"][data-alias="' + modelId + '"]');
+        if (btn) {
+          btn.disabled = true;
+          btn.className = 'test-btn mini-btn testing';
+          btn.textContent = '…';
+        }
+        const panel = document.getElementById('testResultPanel');
+        if (testResultClearTimer) clearTimeout(testResultClearTimer);
+        panel.className = 'testing';
+        panel.textContent = 'Testing ' + modelId + '…';
+        panel.style.display = 'block';
+        try {
+          const res = await fetch('/dashboard/api/test-model', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ modelId }),
+          });
+          const result = await res.json();
+          showTestResult(result.success, result.modelId, result.status, result.detail, result.usage);
+        } catch (err) {
+          showTestResult(false, modelId, null, err.message, null);
+        } finally {
+          if (btn) {
+            btn.disabled = false;
+            btn.className = 'test-btn mini-btn';
+            btn.textContent = isCompositeBtn ? 'test' : 't';
+          }
+        }
+      }
+
       function handleConfigAction(event) {
-        if (isReadOnly) {
+        const target = event.target;
+        if (!target || !target.dataset) return;
+
+        if (target.dataset.action === 'test-model') {
+          void testModel(target.dataset.model);
+          return;
+        }
+        if (target.dataset.action === 'test-composite') {
+          void testModel(target.dataset.alias);
           return;
         }
 
-        const target = event.target;
-        if (!target || !target.dataset) return;
+        if (isReadOnly) {
+          return;
+        }
 
         if (target.dataset.kind === 'comp-primary' && target.checked) {
           ensureSinglePrimary(target.dataset.alias, target.dataset.target);
@@ -651,10 +744,19 @@ export function handleDashboardPage(): Response {
         renderConfigForm(currentConfig);
         saveButton.disabled = isReadOnly;
         configPathHint = json.config.config_path ? ' (' + json.config.config_path + ')' : '';
-        if (isReadOnly) {
+
+        // Display config validation errors
+        const configErrors = json.config.config_errors || [];
+        if (configErrors.length > 0) {
+          const errorList = configErrors.map((e) => e.path + ': ' + e.message).join('; ');
+          configStatus.innerHTML = '<span style="color:#c62828;">Config errors: ' + escapeHtml(errorList) + '</span>';
+          configStatus.className = 'error';
+        } else if (isReadOnly) {
           configStatus.textContent = 'Loaded (read-only: remote)' + configPathHint;
+          configStatus.className = '';
         } else {
           configStatus.textContent = 'Loaded' + configPathHint;
+          configStatus.className = '';
         }
       }
 
@@ -854,4 +956,205 @@ export function handleDashboardRequestStats(): Response {
     status_codes_to_endpoints: getRequestStatusCodeToEndpointStatsDesc(),
     endpoint_timings: getRequestEndpointTimingStatsDesc(),
   });
+}
+
+// Test model constants (mirrored from tui.ts)
+const TEST_MODEL_ENDPOINT = '/v1/messages';
+const TEST_TOOL_NAME = 'test_tool';
+const TEST_TOOL_DESCRIPTION = 'test tool';
+const TEST_TOOL_PROMPT = 'Use the test_tool and say hi.';
+const TEST_TOOL_SCHEMA = {
+  type: 'object',
+  properties: { message: { type: 'string' } },
+  required: ['message'],
+  additionalProperties: false,
+};
+
+function buildTestToolRequest(upstreamMode: string): Record<string, unknown> {
+  const openaiToolBody = {
+    messages: [{ role: 'user', content: TEST_TOOL_PROMPT }],
+    max_tokens: 16,
+    tools: [{
+      type: 'function',
+      function: {
+        name: TEST_TOOL_NAME,
+        description: TEST_TOOL_DESCRIPTION,
+        parameters: TEST_TOOL_SCHEMA,
+      },
+    }],
+    tool_choice: { type: 'function', function: { name: TEST_TOOL_NAME } },
+  };
+
+  if (upstreamMode === 'openai-completions' ||
+      upstreamMode === 'openai-responses' ||
+      upstreamMode === 'gemini-generatecontent' ||
+      upstreamMode === 'gemini-interactions') {
+    return openaiToolBody;
+  }
+
+  return {
+    messages: [{ role: 'user', content: TEST_TOOL_PROMPT }],
+    max_tokens: 16,
+    tools: [{ name: TEST_TOOL_NAME, description: TEST_TOOL_DESCRIPTION, input_schema: TEST_TOOL_SCHEMA }],
+    tool_choice: { type: 'tool', name: TEST_TOOL_NAME },
+  };
+}
+
+function extractTestResultDetail(responseBody: unknown): string {
+  if (!responseBody || typeof responseBody !== 'object') return String(responseBody);
+  const record = responseBody as Record<string, unknown>;
+  const lines: string[] = [];
+
+  // Extract error
+  const error = record.error;
+  if (error) {
+    if (typeof error === 'string') lines.push(`error: ${error.trim()}`);
+    else if (typeof error === 'object') {
+      const e = error as Record<string, unknown>;
+      if (typeof e.message === 'string' && e.message.trim()) lines.push(`error: ${e.message.trim()}`);
+      else if (typeof e.type === 'string' && e.type.trim()) lines.push(`error: ${e.type.trim()}`);
+    }
+  }
+
+  // Extract text content
+  const content = record.content;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block && typeof block === 'object') {
+        const b = block as Record<string, unknown>;
+        if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+          lines.push(`msg: ${b.text.trim().slice(0, 120)}`);
+        }
+        if (b.type === 'tool_use' && typeof b.name === 'string') {
+          const input = b.input !== undefined ? compact(b.input) : '';
+          lines.push(`tool: ${b.name} ${input}`);
+        }
+      }
+    }
+  }
+
+  // OpenAI tool_calls format
+  const toolCalls = record.tool_calls;
+  if (Array.isArray(toolCalls)) {
+    for (const call of toolCalls) {
+      if (call && typeof call === 'object') {
+        const c = call as Record<string, unknown>;
+        const fn = c.function as Record<string, unknown> | undefined;
+        const name = fn && typeof fn.name === 'string' ? fn.name : (typeof c.name === 'string' ? c.name : 'tool');
+        const args = fn && fn.arguments !== undefined ? compact(fn.arguments) : (c.arguments !== undefined ? compact(c.arguments) : '');
+        lines.push(`tool: ${name} ${args}`);
+      }
+    }
+  }
+
+  // OpenAI outputs format
+  const outputs = record.outputs;
+  if (Array.isArray(outputs)) {
+    for (const output of outputs) {
+      if (output && typeof output === 'object') {
+        const o = output as Record<string, unknown>;
+        if (o.type === 'function_call') {
+          const name = typeof o.name === 'string' ? o.name : 'tool';
+          const args = o.arguments !== undefined ? compact(o.arguments) : '';
+          lines.push(`tool: ${name} ${args}`);
+        }
+      }
+    }
+  }
+
+  if (lines.length === 0) {
+    // Fallback: output_text
+    if (typeof record.output_text === 'string' && record.output_text.trim()) {
+      lines.push(`msg: ${record.output_text.trim().slice(0, 120)}`);
+    }
+  }
+
+  return lines.length > 0 ? lines.join(' | ') : JSON.stringify(responseBody).slice(0, 120);
+}
+
+function compact(value: unknown): string {
+  try {
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+  } catch {
+    return String(value);
+  }
+}
+
+export async function handleDashboardTestModel(
+  request: Request,
+  env: Env,
+  proxyConfig: ProxyConfig,
+): Promise<Response> {
+  try {
+    const { modelId } = await request.json() as { modelId: string };
+
+    if (!modelId) {
+      return jsonResponse({ error: 'modelId is required' }, 400);
+    }
+
+    const snapshot = getDashboardSnapshot(proxyConfig, env);
+
+    // Resolve config for this model
+    let upstreamMode = 'openai-completions';
+
+    // Check composite aliases first
+    const alias = snapshot.compositeResolved.find((a) => a.alias === modelId);
+    if (alias && alias.targets.length > 0) {
+      upstreamMode = alias.targets[0].upstreamMode;
+    } else {
+      // Check model configs
+      for (const categoryConfig of Object.values(snapshot.config.models)) {
+        if (Array.isArray(categoryConfig)) continue;
+        for (const [key, value] of Object.entries(categoryConfig || {})) {
+          if (key === 'upstream_mode' || key === 'base_url' || key === 'api_key') continue;
+          if (value === undefined) continue;
+          if (key !== modelId) continue;
+          upstreamMode = categoryConfig.upstream_mode || 'openai-completions';
+          break;
+        }
+      }
+    }
+
+    const requestBody = buildTestToolRequest(upstreamMode);
+
+    const port = env.PORT || '8788';
+    const endpoint = `http://127.0.0.1:${port}${TEST_MODEL_ENDPOINT}`;
+
+    const testResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...requestBody, model: modelId }),
+    });
+
+    const contentType = testResponse.headers.get('content-type') || '';
+    const responseBody = contentType.includes('application/json')
+      ? await testResponse.json()
+      : await testResponse.text();
+
+    const usage = typeof responseBody === 'object' && responseBody !== null && 'usage' in responseBody
+      ? JSON.stringify((responseBody as Record<string, unknown>).usage ?? {})
+      : null;
+    const detail = extractTestResultDetail(responseBody);
+
+    if (!testResponse.ok) {
+      return jsonResponse({
+        success: false,
+        modelId,
+        status: testResponse.status,
+        detail,
+        usage,
+      });
+    }
+
+    return jsonResponse({
+      success: true,
+      modelId,
+      status: testResponse.status,
+      detail,
+      usage,
+    });
+  } catch (err) {
+    return jsonResponse({ success: false, modelId: '?', error: (err as Error).message }, 500);
+  }
 }

@@ -956,7 +956,59 @@ The proxy supports two config sources:
 1. **Local File**: `PROXY_CONFIG_PATH=./proxy_config.toml`
 2. **Remote URL**: `PROXY_CONFIG_URL=http://eureka-server/config/proxy_config.toml`
 
-Config is loaded on startup and cached for performance.
+Config is loaded on startup and validated against the schema. Errors are printed to console (`[ERROR]`) and surfaced in the TUI status bar and dashboard status indicator.
+
+#### Config Schema Validation
+
+##### Custom Model Entries (`[models.<category>.<model-id>]`)
+
+Must be either **1 element** or **exactly 3 elements**:
+
+| Form | Example | base_url source | api_key source |
+|:-----|:--------|:----------------|:---------------|
+| 1 element | `gpt-5.4-mini = ["gpt-5.4-mini"]` | category `base_url` | category `api_key` |
+| 3 elements | `gpt-5.4-mini = ["gpt-5.4-mini", "https://...", "sk-..."]` | per-model `base_url` | per-model `api_key` |
+
+**Validation rules:**
+- `target` (element 1) cannot be empty
+- If 1 element: **both** `base_url` **and** `api_key` must be set in the category (otherwise error)
+- If 3 elements: empty `base_url`/`api_key` falls back to category values
+- 2-element arrays are **not allowed** (error: `must be [target] or [target, base_url, api_key]`)
+- 4+ elements are **not allowed** (error: `must be [target] or [target, base_url, api_key] (got N elements)`)
+- Empty array `[]` is not allowed (error: `target cannot be empty`)
+
+##### Composite Alias Entries (`[composite.<alias>.<target-model>]`)
+
+Each target model config must be an object with optional numeric/boolean fields:
+
+| Field | Type | Description |
+|:------|:-----|:------------|
+| `share` | `number` ≥ 0 | Weight for random selection |
+| `primary` | `boolean` | Always try first |
+| `fallback` | `number` ≥ 0 | Retry priority (lower = higher priority) |
+| `total_token_limit` | `number` ≥ 0 | Shared token cap across all targets |
+
+**Validation rules:**
+- `share` must be a finite number (e.g., `10`, `0`) — strings or non-numbers error
+- `primary` must be `true` or `false` — other values error
+- `fallback` must be a finite number (e.g., `1`, `0`) — strings or non-numbers error
+- `total_token_limit` must be a finite number — strings or non-numbers error
+- Empty target `{}` is valid (all fields optional)
+- Non-object values error: `invalid target config`
+
+##### Error Display
+
+Errors appear in three places:
+
+1. **Console** — on startup (non-TUI mode) and on config reload:
+   ```
+   [ERROR] models.free.code-small-pi: must be [target] or [target, base_url, api_key] (got 4 elements)
+   [ERROR] composite.bad-alias.model1: share must be a number
+   ```
+
+2. **TUI status bar** — shows the first error with path and message in yellow
+
+3. **Dashboard `#configStatus`** — shows all errors in red with path and message
 
 ### Authentication
 
