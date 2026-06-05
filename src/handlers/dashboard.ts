@@ -305,14 +305,7 @@ export function handleDashboardPage(): Response {
     <section class="card" id="section-request">
       <h2>Request Statistic</h2>
 
-      <div class="request-submodule">
-        <h3>Requests Numbers</h3>
-        <table id="requestEndpointStats">
-          <thead><tr><th>Endpoint</th><th class="num">Requests</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-
+      
       <div class="request-submodule">
         <h3>Status Count</h3>
         <table id="requestUpstreamStats">
@@ -336,18 +329,18 @@ export function handleDashboardPage(): Response {
       </div>
 
       <div class="request-submodule">
-        <h3>Timing</h3>
+        <h3>Requests Timing</h3>
         <table id="requestEndpointTimingStats">
-          <thead><tr><th>Endpoint</th><th class="num">Min (ms)</th><th class="num">Avg (ms)</th><th class="num">Max (ms)</th></tr></thead>
+          <thead><tr><th>endpoint</th><th class="num">req</th><th class="num">min(s)</th><th class="num">avg(s)</th><th class="num">max(s)</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
     </section>
 
     <section class="card" id="section-agent">
-      <h2>Tool Usage <button id="toggleToolStats" class="mini-btn" style="font-size:12px;">Show all</button></h2>
+      <h2>Tools Used <button id="toggleToolStats" class="mini-btn" style="font-size:12px;">Show all</button></h2>
       <table id="toolStats">
-        <thead><tr><th>Tool</th><th class="num">In requests</th><th class="num">In responses</th><th class="num">Total len</th></tr></thead>
+        <thead><tr><th>Tool</th><th class="num">in req</th><th class="num">in resp</th><th class="num">total len</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
@@ -402,8 +395,8 @@ export function handleDashboardPage(): Response {
           + '<label>' + escapeHtml(modelKey) + '</label>'
           + '<input type="text" data-kind="model-alias" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '" value="' + escapeHtml(alias) + '" placeholder="model alias"' + disabledAttr + ' />'
           + '<div class="row-actions">'
-            + '<input type="text" data-kind="model-base" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '" value="' + escapeHtml(base) + '" placeholder="base_url override"' + disabledAttr + ' />'
             + '<button type="button" class="test-btn mini-btn" data-action="test-model" data-model="' + escapeHtml(modelKey) + '">t</button>'
+            + '<input type="text" data-kind="model-base" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '" value="' + escapeHtml(base) + '" placeholder="base_url override"' + disabledAttr + ' />'
             + '<button type="button" class="mini-btn danger" data-action="remove-model" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
           + '</div>'
           + '</div>';
@@ -435,6 +428,7 @@ export function handleDashboardPage(): Response {
             + '<label>' + escapeHtml(targetName) + '</label>'
             + '<input type="number" data-kind="comp-share" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(share) + '" placeholder="share"' + disabledAttr + ' />'
             + '<div class="row-actions">'
+            + '<button type="button" class="test-btn mini-btn" data-action="test-model" data-model="' + escapeHtml(targetName) + '">t</button>'
               + '<label class="primary-label"><input type="checkbox" data-kind="comp-primary" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" ' + primary + disabledAttr + ' /> primary</label>'
               + '<input type="number" data-kind="comp-fallback" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(fallback) + '" placeholder="fallback" style="width: 120px;"' + disabledAttr + ' />'
               + '<button type="button" class="mini-btn danger" data-action="remove-composite-target" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
@@ -462,7 +456,7 @@ export function handleDashboardPage(): Response {
 
         const compositeBlocks = Object.entries(config.composite || {}).map(([aliasName, targets]) => {
           const rows = compositeEntryRows(aliasName, targets)
-            + '<div class="section-actions"><button type="button" class="test-btn mini-btn" data-action="test-composite" data-alias="' + escapeHtml(aliasName) + '">test</button>'
+            + '<div class="section-actions"><button type="button" class="test-btn mini-btn" data-action="test-composite" data-alias="' + escapeHtml(aliasName) + '">test model</button>'
             + ' <button type="button" class="mini-btn" data-action="add-composite-target" data-alias="' + escapeHtml(aliasName) + '"' + (isReadOnly ? ' disabled' : '') + '>Add target</button>'
             + ' <button type="button" class="mini-btn danger" data-action="remove-composite-alias" data-alias="' + escapeHtml(aliasName) + '"' + (isReadOnly ? ' disabled' : '') + '>Remove alias</button></div>';
           return '<div class="config-block"><h3>composite.' + escapeHtml(aliasName) + '</h3>' + rows + '</div>';
@@ -586,8 +580,9 @@ export function handleDashboardPage(): Response {
         const panel = document.getElementById('testResultPanel');
         if (testResultClearTimer) clearTimeout(testResultClearTimer);
         panel.className = 'testing';
-        panel.textContent = 'Testing ' + modelId + '…';
+        panel.innerHTML = '<button class="result-clear" onclick="clearTestResult()">✗</button> Testing ' + escapeHtml(modelId) + '…';
         panel.style.display = 'block';
+
         try {
           const res = await fetch('/dashboard/api/test-model', {
             method: 'POST',
@@ -794,17 +789,24 @@ export function handleDashboardPage(): Response {
         const res = await fetch('/dashboard/api/stats/models');
         const json = await res.json();
         renderRows('#modelStats', json.data || [], (row) =>
-          '<tr><td>' + (row.model.split('/').pop() || row.model) + '</td><td class="num">' + row.requests + '</td><td class="num">' + (row.failed_requests || 0) + '</td><td class="num">' + row.input_tokens + '</td><td class="num">' + row.cached_tokens + '</td><td class="num">' + row.cache_written_tokens + '</td><td class="num">' + row.output_tokens + '</td><td class="num">' + row.total_tokens + '</td></tr>'
+          '<tr><td>' + (row.model.split('/').pop() || row.model) + '</td><td class="num">' + fmtStat(row.requests) + '</td><td class="num">' + fmtStat(row.failed_requests || 0) + '</td><td class="num">' + fmtStat(row.input_tokens) + '</td><td class="num">' + fmtStat(row.cached_tokens) + '</td><td class="num">' + fmtStat(row.cache_written_tokens) + '</td><td class="num">' + fmtStat(row.output_tokens) + '</td><td class="num">' + fmtStat(row.total_tokens) + '</td></tr>'
         );
       }
 
       let toolStatsExpanded = false;
 
+      function fmtStat(n) {
+        if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + 'B';
+        if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+        if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k';
+        return String(n);
+      }
+
       function renderToolRows(data) {
         const tbody = document.querySelector('#toolStats tbody');
         const rows = toolStatsExpanded ? data : data.slice(0, 10);
         tbody.innerHTML = rows.map((row) =>
-          '<tr><td>' + row.tool_name + '</td><td class="num">' + row.in_requests + '</td><td class="num">' + row.in_responses + '</td><td class="num">' + (row.in_request_chars || 0) + '</td></tr>'
+          '<tr><td>' + row.tool_name + '</td><td class="num">' + fmtStat(row.in_requests) + '</td><td class="num">' + fmtStat(row.in_responses) + '</td><td class="num">' + fmtStat(row.in_request_chars || 0) + '</td></tr>'
         ).join('');
         const btn = document.getElementById('toggleToolStats');
         if (data.length > 10) {
@@ -852,10 +854,6 @@ export function handleDashboardPage(): Response {
         const res = await fetch('/dashboard/api/stats/requests');
         const json = await res.json();
 
-        renderRows('#requestEndpointStats', json.endpoints || [], (row) =>
-          '<tr><td>' + row.endpoint + '</td><td class="num">' + row.requests + '</td></tr>'
-        );
-
         renderRows('#requestUpstreamStats', json.upstreams || [], (row) =>
           '<tr><td>' + row.upstream_base_url + '</td><td class="num">' + row.responses + '</td></tr>'
         );
@@ -868,8 +866,12 @@ export function handleDashboardPage(): Response {
           '<tr><td>' + row.status_code + '</td><td class="num">' + row.responses + '</td></tr>'
         );
 
+        const endpointReqs = {};
+        for (const ep of json.endpoints || []) {
+          endpointReqs[ep.endpoint] = ep.requests;
+        }
         renderRows('#requestEndpointTimingStats', json.endpoint_timings || [], (row) =>
-          '<tr><td>' + row.endpoint + '</td><td class="num">' + row.min_time_ms + '</td><td class="num">' + row.avg_time_ms + '</td><td class="num">' + row.max_time_ms + '</td></tr>'
+          '<tr><td>' + row.endpoint + '</td><td class="num">' + fmtStat(endpointReqs[row.endpoint] || 0) + '</td><td class="num">' + ((row.min_time_ms || 0) / 1000).toFixed(1) + '</td><td class="num">' + ((row.avg_time_ms || 0) / 1000).toFixed(1) + '</td><td class="num">' + ((row.max_time_ms || 0) / 1000).toFixed(1) + '</td></tr>'
         );
       }
 
@@ -878,14 +880,14 @@ export function handleDashboardPage(): Response {
       configForm.addEventListener('click', handleConfigAction);
 
       async function refreshAll() {
-        await Promise.all([loadConfig(), loadModelStats(), loadAgentStats(), loadRequestStats()]);
+        await Promise.all([loadConfig(), loadModelStats(), loadRequestStats(), loadToolStats()]);
       }
 
       refreshAll();
       setInterval(() => {
         loadModelStats();
-        loadAgentStats();
         loadRequestStats();
+        loadToolStats();
       }, 5000);
 
       setInterval(() => {

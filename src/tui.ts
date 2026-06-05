@@ -632,7 +632,7 @@ class DashboardView implements Component {
       lines.push(dim('  none'));
     } else {
       for (const row of customModels) {
-        const tag = row.category === 'composite' ? bold('[C]') : dim(titleCase(row.category));
+        const tag = row.category === 'composite' ? '[C]' : dim(titleCase(row.category));
         const extra = row.description ? ` ${dim(row.description)}` : '';
         lines.push(`  ${dim(row.modelId)} ${tag}${extra}`);
       }
