@@ -56,7 +56,7 @@ const server = createServer(async (req, res) => {
     // Get client connection info from Node.js socket
     const clientAddress = req.socket.remoteAddress || 'unknown';
     const clientPort = req.socket.remotePort?.toString() || 'unknown';
-    
+
     // Create headers with client info
     const headers = { ...req.headers } as Record<string, string>;
     headers['x-client-address'] = clientAddress;
@@ -74,12 +74,18 @@ const server = createServer(async (req, res) => {
 
     const response = await handler.fetch(request, env);
 
+    // Read response body first, then write headers to avoid "headers already sent" error
+    // if response.text() throws (e.g., stream already consumed)
+    const responseBody = await response.text();
     res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
-    res.end(await response.text());
+    res.end(responseBody);
   } catch (error) {
     console.error('Server error:', error);
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Internal server error' }));
+    // Only write headers if they haven't been sent yet
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Internal server error' }));
+    }
   }
 });
 
