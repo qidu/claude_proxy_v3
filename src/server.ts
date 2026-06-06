@@ -74,9 +74,38 @@ const server = createServer(async (req, res) => {
 
     const response = await handler.fetch(request, env);
 
-    // Read response body first, then write headers to avoid "headers already sent" error
-    // if response.text() throws (e.g., stream already consumed)
-    const responseBody = await response.text();
+    // Handle streaming vs non-streaming responses differently.
+    // For streaming, tee the stream so we can pipe one branch to the client
+    // while leaving the other available for reading (e.g. .text()).
+    // For non-streaming, read the full body and write all at once.
+    const contentType = response.headers.get('content-type') || '';
+    const isStreaming = contentType.includes('text/event-stream');
+
+    if (isStreaming && response.body) {
+      // For streaming responses (text/event-stream), pipe directly to the Node.js
+      // response without consuming the body via .text(), which avoids the
+      // "headers already sent" error when the stream body was already locked.
+      res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
+      const { PassThrough } = await import('stream');
+      const passthrough = new PassThrough();
+      passthrough.pipe(res);
+      response.body.pipeTo(new WritableStream({
+        write(chunk) {
+          passthrough.write(chunk);
+        },
+        close() {
+          passthrough.end();
+        },
+        abort(err) {
+          passthrough.end();
+        },
+      })).catch(() => {
+        passthrough.end();
+      });
+      return;
+    }
+
+    const responseBody = await response.clone().text();
     res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
     res.end(responseBody);
   } catch (error) {
