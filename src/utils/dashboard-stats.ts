@@ -86,13 +86,11 @@ const upstreamResponseToolStats = new Map<string, UpstreamResponseToolStatsEntry
 const requestEndpointTimingStats = new Map<string, RequestEndpointTimingStatsEntry>();
 const tokenHeatmapEvents: TokenHeatmapEvent[] = [];
 
-export const TOKEN_LOG_FILE = './model_proxy_tokens.log';
+export const TOKEN_LOG_FILE = './model_proxy_tokens.jsonl';
 
 const dailyTokenStats = new Map<string, ModelStatsEntry>();
 
 let currentDaySlot = getTodayDateStr();
-
-let dailyDumpTimeoutId: ReturnType<typeof setTimeout> | undefined;
 
 function getTodayDateStr(): string {
   const now = new Date();
@@ -120,26 +118,6 @@ function dumpDailyTokens(dateStr: string): void {
   writeFileSync(TOKEN_LOG_FILE, logLine, { flag: 'a' });
 }
 
-function scheduleNextDayDump(): void {
-  if (dailyDumpTimeoutId !== undefined) {
-    clearTimeout(dailyDumpTimeoutId);
-  }
-
-  const now = new Date();
-  const tomorrow = new Date(now);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  tomorrow.setHours(0, 0, 0, 0);
-  const msUntilMidnight = tomorrow.getTime() - now.getTime();
-
-  dailyDumpTimeoutId = setTimeout(() => {
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
-    dumpDailyTokens(yesterdayStr);
-    scheduleNextDayDump();
-  }, msUntilMidnight);
-}
-
 function getOrCreateDailyModelStat(model: string): ModelStatsEntry {
   return dailyTokenStats.get(model) || {
     model,
@@ -159,7 +137,6 @@ function advanceDaySlotIfNeeded(): void {
     dumpDailyTokens(currentDaySlot);
     dailyTokenStats.clear();
     currentDaySlot = today;
-    scheduleNextDayDump();
   }
 }
 
@@ -178,6 +155,14 @@ function recordDailyToken(model: string, usage?: UsageStats, failed = false): vo
 
 export function dumpTodayTokens(): void {
   const today = getTodayDateStr();
+
+  // Handle day rollover — persist the old day's data and reset for the new day
+  if (today !== currentDaySlot) {
+    dumpDailyTokens(currentDaySlot);
+    dailyTokenStats.clear();
+    currentDaySlot = today;
+  }
+
   ensureTokenLogDir(TOKEN_LOG_FILE);
   const timestamp = new Date().toISOString();
 
@@ -274,7 +259,6 @@ export function loadTokenStatsFromLog(): void {
     }
 
     currentDaySlot = getTodayDateStr();
-    scheduleNextDayDump();
   } catch {
     // file read error, start fresh
   }

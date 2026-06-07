@@ -157,10 +157,23 @@ function getOrderedCompositeTargets(
     return { orderedTargets: [], skippedTargets };
   }
 
-  const primaryCandidate = resolvedTargets.find(candidate => candidate.targetConfig.primary);
+  // Filter out targets with share === 0 (they should not be visited via composite)
+  const eligible = resolvedTargets.filter((c) => {
+    if (c.targetConfig.share === 0) {
+      skippedTargets.push(c.targetModelName);
+      return false;
+    }
+    return true;
+  });
+
+  if (eligible.length === 0) {
+    return { orderedTargets: [], skippedTargets };
+  }
+
+  const primaryCandidate = eligible.find((candidate) => candidate.targetConfig.primary);
   const orderedTargets = primaryCandidate
-    ? [primaryCandidate, ...resolvedTargets.filter(candidate => candidate !== primaryCandidate)]
-    : resolvedTargets
+    ? [primaryCandidate, ...eligible.filter((candidate) => candidate !== primaryCandidate)]
+    : eligible
         .slice()
         .sort((left, right) => {
           const leftFallback = left.targetConfig.fallback;
