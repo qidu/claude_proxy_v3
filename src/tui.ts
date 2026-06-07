@@ -273,6 +273,9 @@ type TestResult = {
 function fg(code: number, text: string): string {
   return `\u001b[${code}m${text}\u001b[0m`;
 }
+function rgbFg(r: number, g: number, b: number, text: string): string {
+  return `\u001b[38;2;${r};${g};${b}m${text}\u001b[0m`;
+}
 function bold(text: string): string { return fg(1, text); }
 function dim(text: string): string { return fg(2, text); }
 function green(text: string): string { return fg(32, text); }
@@ -280,6 +283,8 @@ function yellow(text: string): string { return fg(33, text); }
 function red(text: string): string { return fg(31, text); }
 function cyan(text: string): string { return fg(36, text); }
 function lightWhite(text: string): string { return fg(97, text); }
+function lightBlue(text: string): string { return rgbFg(144, 202, 249, text); }  // #90caf9
+function mediumBlue(text: string): string { return rgbFg(66, 165, 245, text); }   // #42a5f5
 function grey(text: string): string { return fg(90, text); }
 function clip(text: string, width: number): string {
   return width <= 0 ? '' : truncateToWidth(text, width, '');
@@ -591,8 +596,22 @@ class DashboardView implements Component {
   private message = 'Ready';
   private messageUntil = 0;
   private lastTime = '';
+  private configStatus: 'normal' | 'changed' | 'saved' = 'normal';
+  private configStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly app: DashboardApp, private readonly onInvalidate: () => void) {}
+
+  setConfigStatus(status: 'changed' | 'saved'): void {
+    this.configStatus = status;
+    if (this.configStatusTimer) clearTimeout(this.configStatusTimer);
+    // Revert to 'normal' after 3 seconds for 'saved', 5 seconds for 'changed'
+    const ms = status === 'saved' ? 3000 : 5000;
+    this.configStatusTimer = setTimeout(() => {
+      this.configStatus = 'normal';
+      this.invalidate();
+    }, ms);
+    this.invalidate();
+  }
 
   setSnapshot(snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null): void {
     this.snapshot = snapshot;
@@ -640,10 +659,12 @@ class DashboardView implements Component {
       this.lastTime = now;
     }
     const sec = date.getSeconds();
-    const secColor = sec % 2 === 0 ? yellow: lightWhite;
-    const coloredTime = this.lastTime.slice(0, -3) + secColor(this.lastTime.slice(-3));
+    const secColors = [lightWhite, lightBlue, mediumBlue];
+    const secColor = secColors[sec % 3];
+    const hourminTime = this.lastTime.slice(0, -3);
+    const secondsTime = secColor(this.lastTime.slice(-3));
     const lines: string[] = [];
-    lines.push(bold('Proxy TUI') + dim(`  ${coloredTime}`));
+    lines.push(bold('Proxy TUI') + dim(`  ${hourminTime}`) + `${secondsTime}`);
     lines.push(dim('─'.repeat(Math.max(0, width))));
 
     if (!snap) {
@@ -652,9 +673,21 @@ class DashboardView implements Component {
     }
 
     const toolStats = snap.toolStats || [];
-    lines.push(`${dim('Config:')} ${dim(snap.config.config_path ?? 'memory')} ${snap.config.read_only ? yellow('(read-only)') : green('(writable)')}${((snap.config as unknown as { config_errors?: unknown[] }).config_errors?.length ?? 0) > 0 ? red(` (${(snap.config as unknown as { config_errors: unknown[] }).config_errors.length} errors)`) : ''}`);
+    const fixedContentLines = 37; // header(2) + config(1) + heatmap(4) + blank(1) + customModelsHeader(1) + topModels(7) + tools(7) + endpoints(7) + footer(2) + message(1) + blanks(3)
+    const termRows = (this.app as unknown as { getTerminalRows: () => number }).getTerminalRows();
+    const maxCustomModelRows = Math.max(3, termRows - fixedContentLines);
+    let configIndicator: string;
+    if (this.configStatus === 'changed') {
+      configIndicator = red('(changed)');
+    } else if (this.configStatus === 'saved') {
+      configIndicator = lightBlue('(saved)');
+    } else {
+      configIndicator = snap.config.read_only ? yellow('(read-only)') : green('(writable)');
+    }
+    lines.push(`${dim('Config:')} ${dim(snap.config.config_path ?? 'memory')} ${configIndicator}${((snap.config as unknown as { config_errors?: unknown[] }).config_errors?.length ?? 0) > 0 ? red(` (${(snap.config as unknown as { config_errors: unknown[] }).config_errors.length} errors)`) : ''}`);
     const tokenHeatmap = buildHeatmap(snap.tokenHeatmap);
-    const tokenHeatmapLines = renderHeatmapPanel(tokenHeatmap, { title: 'Tokens Panel' }).split('\n');
+    const heatmapRowFilter = termRows < 40 ? [1, 3, 5] : undefined; // show Mon/Wed/Fri in small terminals
+    const tokenHeatmapLines = renderHeatmapPanel(tokenHeatmap, { title: 'Tokens Panel', rowFilter: heatmapRowFilter }).split('\n');
     tokenHeatmapLines[0] = `${bold('Tokens Panel')} (${fmt(tokenHeatmap.totalValues)})`;
     lines.push(...tokenHeatmapLines);
     lines.push('');
@@ -664,12 +697,17 @@ class DashboardView implements Component {
     if (!customModels.length) {
       lines.push(dim('  none'));
     } else {
-      for (const row of customModels) {
+      const shownModels = customModels.slice(0, maxCustomModelRows);
+      const hiddenCount = customModels.length - shownModels.length;
+      for (const row of shownModels) {
         const tag = row.category === 'composite' ? '[C]' : dim(titleCase(row.category));
         const extra = row.description ? ` ${dim(row.description)}` : '';
         const timing = modelTimingMap.get(row.routeModel ?? row.modelId);
         const timingStr = timing ? ` ${dim('[')}${dim(fmtSeconds(timing.min_time_ms))}${dim('/')}${dim(fmtSeconds(timing.avg_time_ms))}${dim('/')}${dim(fmtSeconds(timing.max_time_ms))}${dim('s]')}` : '';
         lines.push(`  ${dim(row.modelId)} ${tag}${extra}${timingStr}`);
+      }
+      if (hiddenCount > 0) {
+        lines.push(dim(`  ... +${hiddenCount} more`));
       }
     }
     lines.push(`${bold('Top Models')} (${fmt(snap.modelStats.length)})`);
@@ -808,8 +846,9 @@ class DashboardApp {
     }, 100);
   }
 
-  async refresh(): Promise<void> {
+  async refresh(fromMutation = false): Promise<void> {
     if (this.refreshing) return;
+    if (fromMutation) this.view.setConfigStatus('changed');
     this.refreshing = true;
     try {
       const proxyConfig = await this.source.loadConfig();
@@ -818,6 +857,7 @@ class DashboardApp {
       this.lastRefreshTotalTokens = snapshot.modelStats.reduce((sum, m) => sum + m.total_tokens, 0);
       this.view.setSnapshot(snapshot);
       this.compositeOverlay?.setSnapshot(snapshot);
+      if (fromMutation) this.view.setConfigStatus('saved');
       if (validationErrors && validationErrors.length > 0) {
         const first = validationErrors[0];
         this.view.setMessage(`Config error: ${first.path} — ${first.message}`, 15000);
@@ -831,12 +871,16 @@ class DashboardApp {
     }
   }
 
+  getTerminalRows(): number {
+    return this.tui.terminal.rows;
+  }
+
   openAddAliasPrompt(): void {
     this.openPrompt('Add alias', 'Alias name:', '', async (value) => {
       const trimmed = value.trim();
       if (!trimmed) return;
       addCompositeAliasFromDashboard(this.source.env, trimmed);
-      await this.refresh();
+      await this.refresh(true);
       this.compositeOverlay?.focusAlias(trimmed);
       this.openTargetPicker(trimmed);
     });
@@ -880,7 +924,7 @@ class DashboardApp {
           return;
         }
         upsertCompositeAliasLimitFromDashboard(this.source.env, alias, trimmed.length > 0 ? Number(trimmed) : null);
-        await this.refresh();
+        await this.refresh(true);
         this.compositeOverlay?.focusAlias(alias);
         this.view.setMessage(`updated ${alias} total token limit`);
         this.requestRender();
@@ -946,7 +990,7 @@ class DashboardApp {
             primary: parsedPrimary === undefined ? undefined : parsedPrimary,
             fallback,
           });
-          await this.refresh();
+          await this.refresh(true);
           this.compositeOverlay?.focusAlias(alias);
           this.view.setMessage(`added ${item.value} to ${alias}`);
           this.requestRender();
@@ -1062,7 +1106,7 @@ class DashboardApp {
         return;
       }
 
-      const statusLine = `${green(`OK ${actualModelId}`)} ${green(`(${response.status})`)} ${green(`usage=${usage}`)}`;
+      const statusLine = `${green(`${actualModelId} OK`)} ${green(`(${response.status})`)} ${green(`usage=${usage}`)}`;
       this.view.setMessage(`${statusLine} ${green(detailText)}`, 10000);
       this.requestRender();
     } catch (error) {
@@ -1108,7 +1152,7 @@ class DashboardApp {
         fallback,
       });
       this.view.setMessage(`updated ${alias}.${target}`);
-      await this.refresh();
+      await this.refresh(true);
     });
   }
 
@@ -1126,10 +1170,11 @@ class DashboardApp {
         if (item.value === 'yes') {
           removeCompositeTargetFromDashboard(this.source.env, alias, target);
           this.view.setMessage(`deleted ${alias}.${target}`);
+          void this.refresh(true);
         } else {
           this.view.setMessage('delete cancelled');
+          void this.refresh();
         }
-        void this.refresh();
       },
       () => {
         this.closeOverlay();
