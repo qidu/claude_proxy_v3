@@ -78,6 +78,23 @@ function formatTestResultDetail(responseBody: unknown): string {
   return lines.length > 0 ? lines.join(' | ') : filterAndStringify(responseBody);
 }
 
+type CompositeTargetConfig = { share?: number; primary?: boolean; fallback?: number };
+
+function sortCompositeTargets([aKey, aCfg]: [string, unknown], [bKey, bCfg]: [string, unknown]): number {
+  const a = aCfg as CompositeTargetConfig;
+  const b = bCfg as CompositeTargetConfig;
+  if (a.primary && !b.primary) return -1;
+  if (!a.primary && b.primary) return 1;
+  const shareA = a.share ?? 1;
+  const shareB = b.share ?? 1;
+  if (shareA !== shareB) return shareB - shareA;
+  if (shareA === 0) {
+    return (a.fallback ?? 0) - (b.fallback ?? 0);
+  }
+  return aKey.localeCompare(bKey);
+}
+
+
 function extractToolDetails(record: Record<string, unknown>): string[] {
   const details: string[] = [];
 
@@ -443,9 +460,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
       return;
     }
     if (matchesKey(data, 'ctrl+o')) {
-      dumpTodayTokens();
-      this.setMessage(`dumped tokens -> ${TOKEN_LOG_FILE}`);
-      this.app.requestRender();
+      this.app.dumpTokens();
       return;
     }
     if (matchesKey(data, 'r')) {
@@ -526,7 +541,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
       lines.push(`  ${prefix} ${bold(alias)}${aliasSummary}`);
       const entries = Object.entries(targets || {}).filter(([target]) => target !== 'total_token_limit');
       if (!entries.length) lines.push(`    ${dim('(empty)')}`);
-      for (const [target, cfg] of entries.sort(([a], [b]) => a.localeCompare(b))) {
+      for (const [target, cfg] of entries.sort(sortCompositeTargets)) {
         const selectedTarget = selected?.kind === 'target' && selected.alias === alias && selected.target === target;
         const mark = selectedTarget ? green('>') : dim('·');
         const typedCfg = cfg as { share?: number; primary?: boolean; fallback?: number } | undefined;
@@ -546,7 +561,8 @@ class CompositeAliasesOverlay implements Component, Focusable {
     const out: Selection[] = [];
     for (const alias of Object.keys(snap.config.composite).sort()) {
       out.push({ kind: 'alias', alias });
-      for (const target of Object.keys(snap.config.composite?.[alias] || {}).sort()) {
+      const targetEntries = Object.entries(snap.config.composite?.[alias] || {});
+      for (const [target] of targetEntries.sort(sortCompositeTargets)) {
         out.push({ kind: 'target', alias, target });
       }
     }
@@ -664,7 +680,7 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(`C ${dim('config composite aliases')}  T ${dim('test models')}  R ${dim('reload config')}  Ctrl+O ${dim('dump data')}  Ctrl+C ${dim('quit')}`);
+    lines.push(`C ${dim('config composite aliases')}  T ${dim('test models')}  R ${dim('reload config')}  Ctrl+O ${dim('dump now')}  Ctrl+C ${dim('quit')}`);
     lines.push(this.message ? yellow(this.message) : dim('Ready'));
 
     return lines.map((line) => clip(line, width));
@@ -707,6 +723,10 @@ class DashboardApp {
   private overlay: OverlayHandle | null = null;
   private compositeOverlay: CompositeAliasesOverlay | null = null;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
+  private hourlyDumpTimer: ReturnType<typeof setInterval> | null = null;
+  private lastDumpedTotalTokens = -1;
+  private lastRefreshTotalTokens = -1;
+  private lastDumpedDate = '';
   private stopped = false;
   private refreshing = false;
   private renderPending = false;
@@ -723,8 +743,7 @@ class DashboardApp {
         return { consume: true };
       }
       if (matchesKey(data, 'ctrl+o')) {
-        dumpTodayTokens();
-        this.view.setMessage(`dumped tokens -> ${TOKEN_LOG_FILE}`);
+        this.dumpTokens();
         return { consume: true };
       }
       return undefined;
@@ -733,8 +752,26 @@ class DashboardApp {
     await this.refresh();
     this.refreshTimer = setInterval(() => {
       void this.refresh();
-    }, 1500);
+    }, 500);
+    this.hourlyDumpTimer = setInterval(() => {
+      const today = new Date().toISOString().slice(0, 10);
+      const dayChanged = today !== this.lastDumpedDate;
+      if (!dayChanged && this.lastRefreshTotalTokens === this.lastDumpedTotalTokens) return;
+      this.lastDumpedTotalTokens = this.lastRefreshTotalTokens;
+      this.lastDumpedDate = today;
+      dumpTodayTokens();
+      this.view.setMessage(`auto-dumped tokens -> ${TOKEN_LOG_FILE}`);
+    }, 60 * 60 * 1000);
     return () => this.stop();
+  }
+
+  dumpTokens(): void {
+    if (this.lastRefreshTotalTokens === this.lastDumpedTotalTokens) return;
+    this.lastDumpedTotalTokens = this.lastRefreshTotalTokens;
+    this.lastDumpedDate = new Date().toISOString().slice(0, 10);
+    dumpTodayTokens();
+    this.view.setMessage(`dumped tokens -> ${TOKEN_LOG_FILE}`);
+    this.requestRender();
   }
 
   requestRender(): void {
@@ -758,6 +795,7 @@ class DashboardApp {
       const proxyConfig = await this.source.loadConfig();
       const validationErrors = (proxyConfig as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors;
       const snapshot = getDashboardSnapshot(proxyConfig, this.source.env);
+      this.lastRefreshTotalTokens = snapshot.modelStats.reduce((sum, m) => sum + m.total_tokens, 0);
       this.view.setSnapshot(snapshot);
       this.compositeOverlay?.setSnapshot(snapshot);
       if (validationErrors && validationErrors.length > 0) {
@@ -1089,6 +1127,8 @@ class DashboardApp {
     this.stopped = true;
     if (this.refreshTimer) clearInterval(this.refreshTimer);
     this.refreshTimer = null;
+    if (this.hourlyDumpTimer) clearInterval(this.hourlyDumpTimer);
+    this.hourlyDumpTimer = null;
     this.closeOverlay();
     this.tui.stop();
   }
