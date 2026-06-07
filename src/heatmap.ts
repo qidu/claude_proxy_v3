@@ -10,6 +10,7 @@ type HeatmapData = {
 
 export interface TuiOptions {
   title?: string;
+  rowFilter?: number[]; // indices of rows to show (0=Sun, 1=Mon, ..., 6=Sat)
 }
 
 const ROW_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
@@ -132,15 +133,21 @@ export function renderHeatmapPanel(heatmap: HeatmapData, options: TuiOptions = {
   );
   const evenLabels = headerLabels.filter((_, index) => index % 2 === 0);
   const evenJoinStr = '  ';
-  let headerStr = evenLabels.join(evenJoinStr);
+  let headerStr = evenLabels.join(evenJoinStr) + '  ';
 
-  // Replace the space before the next even label with '_' for odd hours.
+  // Replace the second space of the separator before the next even label with '·'
+  // to indicate current hour position when current hour is odd.
   if (currentHour % 2 !== 0) {
-    const nextEven = currentHour >= 23 ? 0 : currentHour + 1;
-    // Each even label is 2 chars; each separator is 2 spaces. Separator before col n occupies
-    // visual positions 2n-2 and 2n-1. Replace the second space (2n-1) with '_'.
-    const visPos = 2 * nextEven - 1;
-    headerStr = replaceVisualChar(headerStr, visPos, '·');
+    if (currentHour >= 22) {
+      // Past the last even label (hour 23) — append marker at the end
+      headerStr = headerStr.trimEnd() + '· ';
+    } else {
+      const nextEven = currentHour + 1;
+      // Each even label is 2 chars; each separator is 2 spaces. Separator before col n
+      // occupies visual positions 2n-2 and 2n-1. Replace the second space (2n-1) with '·'.
+      const visPos = 2 * nextEven - 1;
+      headerStr = replaceVisualChar(headerStr, visPos, '·');
+    }
   }
   const lines: string[] = [];
   lines.push(`  ${title} (${total} total)`);
