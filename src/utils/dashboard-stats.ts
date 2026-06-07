@@ -84,6 +84,7 @@ const requestStatusCodeToEndpointStats = new Map<number, RequestStatusCodeStatsE
 const requestStatusCodeFromUpstreamStats = new Map<number, RequestStatusCodeStatsEntry>();
 const upstreamResponseToolStats = new Map<string, UpstreamResponseToolStatsEntry>();
 const requestEndpointTimingStats = new Map<string, RequestEndpointTimingStatsEntry>();
+const requestModelTimingStats = new Map<string, RequestEndpointTimingStatsEntry>();
 const tokenHeatmapEvents: TokenHeatmapEvent[] = [];
 
 export const TOKEN_LOG_FILE = './model_proxy_tokens.jsonl';
@@ -842,6 +843,36 @@ export function recordRequestTiming(endpoint: string, elapsedMs: number): void {
 
 export function getRequestEndpointTimingStatsDesc(): (RequestEndpointTimingStatsEntry & { avg_time_ms: number })[] {
   return [...requestEndpointTimingStats.values()].sort((a, b) => {
+    if (b.max_time_ms !== a.max_time_ms) {
+      return b.max_time_ms - a.max_time_ms;
+    }
+    return a.endpoint.localeCompare(b.endpoint);
+  }).map((entry) => ({
+    ...entry,
+    avg_time_ms: entry.count > 0 ? Math.round(entry.total_time_ms / entry.count) : 0,
+  }));
+}
+
+export function recordModelTiming(model: string | undefined, elapsedMs: number): void {
+  if (!model || typeof elapsedMs !== 'number' || elapsedMs < 0) {
+    return;
+  }
+
+  const normalizedModel = normalizeModelStatKey(model);
+  const current: RequestEndpointTimingStatsEntry = requestModelTimingStats.get(normalizedModel) || { endpoint: normalizedModel, max_time_ms: 0, min_time_ms: Infinity, total_time_ms: 0, count: 0 };
+  if (elapsedMs > current.max_time_ms) {
+    current.max_time_ms = elapsedMs;
+  }
+  if (elapsedMs < current.min_time_ms) {
+    current.min_time_ms = elapsedMs;
+  }
+  current.total_time_ms += elapsedMs;
+  current.count += 1;
+  requestModelTimingStats.set(normalizedModel, current);
+}
+
+export function getRequestModelTimingStatsDesc(): (RequestEndpointTimingStatsEntry & { avg_time_ms: number })[] {
+  return [...requestModelTimingStats.values()].sort((a, b) => {
     if (b.max_time_ms !== a.max_time_ms) {
       return b.max_time_ms - a.max_time_ms;
     }

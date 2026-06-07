@@ -97,6 +97,31 @@ export function buildHeatmap(records: HeatmapRecord[]): HeatmapData {
   };
 }
 
+function stripAnsi(str: string): string {
+  return str.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+function replaceVisualChar(str: string, visPos: number, newChar: string): string {
+  let vis = 0;
+  let i = 0;
+  while (i < str.length) {
+    if (str[i] === '\x1b') {
+      const end = str.indexOf('m', i);
+      i = end + 1;
+      continue;
+    }
+    if (vis === visPos) {
+      return str.slice(0, i - 1) + newChar + str.slice(i);
+    }
+    vis++;
+    i++;
+  }
+  if (vis === visPos) {
+    return str + newChar;
+  }
+  return str;
+}
+
 export function renderHeatmapPanel(heatmap: HeatmapData, options: TuiOptions = {}): string {
   const title = options.title ?? 'Values';
   const total = getMetricValue(heatmap);
@@ -105,15 +130,21 @@ export function renderHeatmapPanel(heatmap: HeatmapData, options: TuiOptions = {
   const headerLabels = heatmap.columns.map((col, index) =>
     index === currentHour ? bold(col) : dim(col),
   );
-  // If current hour is odd, append ↓ to the preceding even-hour label
+  const evenLabels = headerLabels.filter((_, index) => index % 2 === 0);
+  const evenJoinStr = '  ';
+  let headerStr = evenLabels.join(evenJoinStr);
+
+  // Replace the space before the next even label with '_' for odd hours.
   if (currentHour % 2 !== 0) {
-    const prevIndex = currentHour - 1;
-    const prevLabel = heatmap.columns[prevIndex];
-    // headerLabels[prevIndex] += bold('↓');
+    const nextEven = currentHour >= 23 ? 0 : currentHour + 1;
+    // Each even label is 2 chars; each separator is 2 spaces. Separator before col n occupies
+    // visual positions 2n-2 and 2n-1. Replace the second space (2n-1) with '_'.
+    const visPos = 2 * nextEven - 1;
+    headerStr = replaceVisualChar(headerStr, visPos, '·');
   }
   const lines: string[] = [];
   lines.push(`  ${title} (${total} total)`);
-  lines.push(`      ${headerLabels.filter((_, index) => index % 2 === 0).join('  ')}`);
+  lines.push(`      ${headerStr}`);
 
   for (let rowIndex = 0; rowIndex < heatmap.rows.length; rowIndex += 1) {
     const label = heatmap.rows[rowIndex].padEnd(3, ' ');

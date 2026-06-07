@@ -23,7 +23,9 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
   - `GET /dashboard/api/stats/models` - Model request + token stats
   - Dashboard "Export CSV" button reads table data from the DOM and triggers a download; it does **not** change the in-memory stats data.
   - `GET /dashboard/api/stats/agents` - Combined tool usage stats by tool (`in requests` is aggregated across UA prefixes; `in responses` is by tool)
-  - `GET /dashboard/api/stats/requests` - Request/response stats by endpoint, upstream, and status code
+  - `GET /dashboard/api/stats/requests` - Request/response stats by endpoint, upstream, and status code, plus **model timing** (min/avg/max ms per model)
+  - **model_timings** field: tracks per-model response time (`min_time_ms`, `avg_time_ms`, `max_time_ms`, `count`) — keyed by the resolved upstream model name (e.g., `moonshotai/kimi-k2.6` for config key `kimi-k2.6`)
+  - **endpoint_timings** field: tracks per-endpoint response time (existing)
   - `TUI=true npm run server` - Terminal dashboard for live stats and composite alias editing
 
 - **Multiple Model Providers**: Support for 6+ providers:
@@ -211,9 +213,10 @@ TUI=true PROXY_CONFIG_PATH=./proxy_config.toml npx tsx dist/server.js
 ```
 
 The TUI shows live:
+- **Custom Models**: configured models with live response time (min/avg/max in seconds) shown as `[min/avg/maxs]` after each model, keyed by resolved route model name
 - model token stats
 - combined tool usage stats by tool (`req` aggregates across UA prefixes; `resp` is by tool)
-- composite alias summaries with live token usage (`used / limit (TL)` for aliases with `total_token_limit`)
+- composite alias summaries with live token usage (`used / limit (TL)` for aliases with `total_token_limit`) and per-target response time
 - `T` set/clear the alias-level token limit
 - `Top Models` shows just the model id suffix, not the full routed upstream string
 
@@ -797,6 +800,8 @@ The proxy includes a built-in web dashboard for config editing and runtime stats
   - Response status codes split into:
     - from upstreams
     - to endpoints
+  - **endpoint_timings**: per-endpoint min/avg/max response time (ms), request count
+  - **model_timings**: per-model min/avg/max response time (ms), request count. Key = resolved upstream model name (e.g. `moonshotai/kimi-k2.6`). Timing is recorded for all requests (success and error). Config key resolution: for `[models.*]` entries, the config key `row.modelId` is matched against `routeModel` (the upstream model name in the config array); for composite targets, `routeModel` from `compositeResolved` is used.
 
 ### Token Stats (Normalized Mapping)
 
@@ -1497,6 +1502,15 @@ MIT
 
 ### Latest Changes (Current)
 
+**Model Response Time Tracking**: The proxy now tracks per-model response time (min/avg/max in ms) alongside existing per-endpoint timing.
+
+- **Recording**: `recordModelTiming(modelId, elapsedMs)` is called inside `runAttempt()` after each request completes (both success and error), using the config key (`attemptModelId`) as the timing key — same key used by `recordModelStat`/`recordModelUsage`
+- **Storage**: `requestModelTimingStats` map (same shape as `requestEndpointTimingStats`: `min_time_ms`, `max_time_ms`, `total_time_ms`, `count`)
+- **Snapshot**: `getDashboardSnapshot()` and `handleDashboardRequestStats()` expose `model_timings` in `requestStats`
+- **TUI Custom Models**: each configured model shows `[min/avg/maxs]` after its description, resolved by matching `routeModel` (upstream name) from the config array
+- **TUI Composite Aliases**: each target shows `[min/avg/maxs]` after its properties, resolved by matching `routeModel` from `compositeResolved`
+- **Dashboard HTML**: Model Statistic table has 3 new columns (min(s), avg(s), max(s)) joined from `model_timings` keyed by the resolved upstream model name
+
 **Composite Fallback to Default Upstream**: Composite aliases now support unresolved target models by falling back to the default upstream route (`getDefaultModelRoute`) while preserving the target model as `modelAlias`. This allows aliases such as `code-small` to route even when the target is not explicitly declared in `models.*`.
 
 **Messages Format Detection Fix (Claude blocks vs OpenAI passthrough)**: `/v1/messages` request detection now treats block-style Claude content (`content: [{type:"text"|"tool_use"|"tool_result"|"thinking", ...}]`) as Claude format, forcing Claude→OpenAI conversion for `openai-completions` upstreams. This prevents malformed passthrough payloads to `/v1/chat/completions`.
@@ -1587,6 +1601,10 @@ or
 - **Non-Streaming Compatibility**: Includes signature in thinking block metadata for non-streaming responses
 
 **Files Modified**:
+- `src/utils/dashboard-stats.ts` — added `requestModelTimingStats` map, `recordModelTiming()`, `getRequestModelTimingStatsDesc()`
+- `src/index.ts` — `recordModelTiming(attemptModelId, elapsedMs)` called inside `runAttempt()` for all requests
+- `src/handlers/dashboard.ts` — `model_timings` in snapshot/API, 3 new columns (min/avg/max) in HTML model stats table and CSV export
+- `src/tui.ts` — timing display (`[min/avg/maxs]`) in Custom Models section and Composite Aliases overlay
 - `src/types/claude.ts` - Added `"signature_delta"` to stream event types
 - `src/converters/streaming.ts` - Added signature accumulation and emission logic
 - `src/converters/openai-to-claude.ts` - Enhanced signature extraction from response metadata

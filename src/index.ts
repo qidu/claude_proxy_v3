@@ -44,6 +44,7 @@ import {
   getModelTotalTokens,
   recordRequestEndpoint,
   recordRequestTiming,
+  recordModelTiming,
   recordResponseStatusCodeFromUpstream,
   recordResponseStatusCodeToEndpoint,
   recordResponseUpstream,
@@ -973,6 +974,7 @@ export default {
           } else {
             recordModelStat(attemptModelId);
           }
+          recordModelTiming(attemptModelId, Date.now() - requestStartTime);
         }
         recordResponseUpstream(attemptTargetUrl);
         recordResponseStatusCodeToEndpoint(response.status);
@@ -1051,6 +1053,7 @@ export default {
       }
       logger.error(requestId, `Error: ${(error as Error).message}`);
       recordRequestTiming(path, Date.now() - requestStartTime);
+      recordModelTiming(failedModelId, Date.now() - requestStartTime);
       return createErrorResponse(error as Error, requestId);
     }
   },

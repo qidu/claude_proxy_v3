@@ -279,6 +279,8 @@ function green(text: string): string { return fg(32, text); }
 function yellow(text: string): string { return fg(33, text); }
 function red(text: string): string { return fg(31, text); }
 function cyan(text: string): string { return fg(36, text); }
+function lightWhite(text: string): string { return fg(97, text); }
+function grey(text: string): string { return fg(90, text); }
 function clip(text: string, width: number): string {
   return width <= 0 ? '' : truncateToWidth(text, width, '');
 }
@@ -523,6 +525,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
     const selections = this.selections();
     const selected = selections[this.selectionIndex] ?? null;
     const composites = Object.entries(snap.config.composite).sort(([a], [b]) => a.localeCompare(b));
+    const modelTimingMap = new Map((snap.requestStats.model_timings || []).map((t) => [t.endpoint, t]));
     if (!composites.length) lines.push(dim('  none'));
     for (const [alias, targets] of composites) {
       const selectedAlias = selected?.kind === 'alias' && selected.alias === alias;
@@ -541,12 +544,21 @@ class CompositeAliasesOverlay implements Component, Focusable {
       lines.push(`  ${prefix} ${bold(alias)}${aliasSummary}`);
       const entries = Object.entries(targets || {}).filter(([target]) => target !== 'total_token_limit');
       if (!entries.length) lines.push(`    ${dim('(empty)')}`);
+      const targetRouteModel = new Map<string, string | undefined>();
+      if (resolvedAlias) {
+        for (const t of resolvedAlias.targets) {
+          targetRouteModel.set(t.model, t.routeModel);
+        }
+      }
       for (const [target, cfg] of entries.sort(sortCompositeTargets)) {
         const selectedTarget = selected?.kind === 'target' && selected.alias === alias && selected.target === target;
         const mark = selectedTarget ? green('>') : dim('·');
         const typedCfg = cfg as { share?: number; primary?: boolean; fallback?: number } | undefined;
         const summary = `${typedCfg?.share ?? '-'}${typedCfg?.primary ? ' P' : ''}${typedCfg?.fallback === 0 ? ' non-FB' : typedCfg?.fallback !== undefined ? ` FB${typedCfg.fallback}` : ''}`;
-        lines.push(`  ${dim('│')} ${mark} ${clip(target, 22)} ${dim(summary)}`);
+        const timingKey = targetRouteModel.get(target) ?? target;
+        const timing = modelTimingMap.get(timingKey);
+        const timingStr = timing ? ` ${dim('[')}${dim(fmtSeconds(timing.min_time_ms))}${dim('/')}${dim(fmtSeconds(timing.avg_time_ms))}${dim('/')}${dim(fmtSeconds(timing.max_time_ms))}${dim('s]')}` : '';
+        lines.push(`  ${dim('│')} ${mark} ${clip(target, 22)} ${dim(summary)}${timingStr}`);
       }
     }
 
@@ -622,12 +634,16 @@ class DashboardView implements Component {
 
   render(width: number): string[] {
     const snap = this.snapshot;
-    const now = new Date().toLocaleTimeString();
+    const date = new Date();
+    const now = date.toLocaleTimeString();
     if (now !== this.lastTime) {
       this.lastTime = now;
     }
+    const sec = date.getSeconds();
+    const secColor = sec % 2 === 0 ? yellow: lightWhite;
+    const coloredTime = this.lastTime.slice(0, -3) + secColor(this.lastTime.slice(-3));
     const lines: string[] = [];
-    lines.push(bold('Proxy TUI') + dim(`  ${this.lastTime}`));
+    lines.push(bold('Proxy TUI') + dim(`  ${coloredTime}`));
     lines.push(dim('─'.repeat(Math.max(0, width))));
 
     if (!snap) {
@@ -642,15 +658,18 @@ class DashboardView implements Component {
     tokenHeatmapLines[0] = `${bold('Tokens Panel')} (${fmt(tokenHeatmap.totalValues)})`;
     lines.push(...tokenHeatmapLines);
     lines.push('');
-    lines.push(bold('Custom Models'));
     const customModels = this.customModels();
+    lines.push(`${bold('Custom Models')} (${fmt(customModels.length)})`);
+    const modelTimingMap = new Map((snap.requestStats.model_timings || []).map((t) => [t.endpoint, t]));
     if (!customModels.length) {
       lines.push(dim('  none'));
     } else {
       for (const row of customModels) {
         const tag = row.category === 'composite' ? '[C]' : dim(titleCase(row.category));
         const extra = row.description ? ` ${dim(row.description)}` : '';
-        lines.push(`  ${dim(row.modelId)} ${tag}${extra}`);
+        const timing = modelTimingMap.get(row.routeModel ?? row.modelId);
+        const timingStr = timing ? ` ${dim('[')}${dim(fmtSeconds(timing.min_time_ms))}${dim('/')}${dim(fmtSeconds(timing.avg_time_ms))}${dim('/')}${dim(fmtSeconds(timing.max_time_ms))}${dim('s]')}` : '';
+        lines.push(`  ${dim(row.modelId)} ${tag}${extra}${timingStr}`);
       }
     }
     lines.push(`${bold('Top Models')} (${fmt(snap.modelStats.length)})`);
@@ -686,18 +705,19 @@ class DashboardView implements Component {
     return lines.map((line) => clip(line, width));
   }
 
-  private customModels(): Array<{ category: string; modelId: string; description?: string }> {
+  private customModels(): Array<{ category: string; modelId: string; description?: string; routeModel?: string }> {
     const snap = this.snapshot;
     if (!snap) return [];
     const seen = new Set<string>();
-    const models: Array<{ category: string; modelId: string; description?: string }> = [];
+    const models: Array<{ category: string; modelId: string; description?: string; routeModel?: string }> = [];
 
     for (const [category, categoryConfig] of Object.entries(snap.config.models)) {
       for (const [key, value] of Object.entries(categoryConfig || {})) {
         if (key === 'upstream_mode' || key === 'base_url' || key === 'api_key') continue;
         if (value === undefined || seen.has(key)) continue;
         seen.add(key);
-        models.push({ category, modelId: key });
+        const routeModel = Array.isArray(value) && value.length >= 1 && typeof value[0] === 'string' ? value[0] : undefined;
+        models.push({ category, modelId: key, routeModel });
       }
     }
 

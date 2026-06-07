@@ -21,6 +21,7 @@ import {
   getModelStatsDesc,
   getRequestEndpointStatsDesc,
   getRequestEndpointTimingStatsDesc,
+  getRequestModelTimingStatsDesc,
   getRequestStatusCodeFromUpstreamStatsDesc,
   getRequestStatusCodeToEndpointStatsDesc,
   getRequestUpstreamStatsDesc,
@@ -66,6 +67,7 @@ export interface DashboardSnapshot {
     status_codes_from_upstreams: ReturnType<typeof getRequestStatusCodeFromUpstreamStatsDesc>;
     status_codes_to_endpoints: ReturnType<typeof getRequestStatusCodeToEndpointStatsDesc>;
     endpoint_timings: ReturnType<typeof getRequestEndpointTimingStatsDesc>;
+    model_timings: ReturnType<typeof getRequestModelTimingStatsDesc>;
   };
   tokenHeatmap: ReturnType<typeof getTokenHeatmapStatsDesc>;
   compositeResolved: Array<{
@@ -109,6 +111,7 @@ export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): Dashbo
       status_codes_from_upstreams: getRequestStatusCodeFromUpstreamStatsDesc(),
       status_codes_to_endpoints: getRequestStatusCodeToEndpointStatsDesc(),
       endpoint_timings: getRequestEndpointTimingStatsDesc(),
+      model_timings: getRequestModelTimingStatsDesc(),
     },
     tokenHeatmap: getTokenHeatmapStatsDesc(),
     compositeResolved,
@@ -297,7 +300,7 @@ export function handleDashboardPage(): Response {
     <section class="card" id="section-model">
       <h2>Model Statistic <button id="exportModelStatsCsv" class="mini-btn" style="font-size:12px;">Export CSV</button></h2>
       <table id="modelStats">
-        <thead><tr><th>Model ID</th><th class="num">Requests</th><th class="num">Failed</th><th class="num">Input Tokens</th><th class="num">Cached Tokens</th><th class="num">Cache Written Tokens</th><th class="num">Output Tokens</th><th class="num">Total Tokens</th></tr></thead>
+        <thead><tr><th>Model ID</th><th class="num">Requests</th><th class="num">Failed</th><th class="num">Input Tokens</th><th class="num">Cached Tokens</th><th class="num">Cache Written Tokens</th><th class="num">Output Tokens</th><th class="num">Total Tokens</th><th class="num">min(s)</th><th class="num">avg(s)</th><th class="num">max(s)</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
@@ -786,11 +789,23 @@ export function handleDashboardPage(): Response {
       }
 
       async function loadModelStats() {
-        const res = await fetch('/dashboard/api/stats/models');
-        const json = await res.json();
-        renderRows('#modelStats', json.data || [], (row) =>
-          '<tr><td>' + (row.model.split('/').pop() || row.model) + '</td><td class="num">' + fmtStat(row.requests) + '</td><td class="num">' + fmtStat(row.failed_requests || 0) + '</td><td class="num">' + fmtStat(row.input_tokens) + '</td><td class="num">' + fmtStat(row.cached_tokens) + '</td><td class="num">' + fmtStat(row.cache_written_tokens) + '</td><td class="num">' + fmtStat(row.output_tokens) + '</td><td class="num">' + fmtStat(row.total_tokens) + '</td></tr>'
-        );
+        const [modelsRes, reqRes] = await Promise.all([
+          fetch('/dashboard/api/stats/models'),
+          fetch('/dashboard/api/stats/requests'),
+        ]);
+        const modelsJson = await modelsRes.json();
+        const reqJson = await reqRes.json();
+        const timingMap = {};
+        for (const t of (reqJson.model_timings || [])) {
+          timingMap[t.endpoint] = t;
+        }
+        renderRows('#modelStats', modelsJson.data || [], (row) => {
+          const timing = timingMap[row.model];
+          const minS = timing ? (timing.min_time_ms / 1000).toFixed(2) : '-';
+          const avgS = timing ? (timing.avg_time_ms / 1000).toFixed(2) : '-';
+          const maxS = timing ? (timing.max_time_ms / 1000).toFixed(2) : '-';
+          return '<tr><td>' + (row.model.split('/').pop() || row.model) + '</td><td class="num">' + fmtStat(row.requests) + '</td><td class="num">' + fmtStat(row.failed_requests || 0) + '</td><td class="num">' + fmtStat(row.input_tokens) + '</td><td class="num">' + fmtStat(row.cached_tokens) + '</td><td class="num">' + fmtStat(row.cache_written_tokens) + '</td><td class="num">' + fmtStat(row.output_tokens) + '</td><td class="num">' + fmtStat(row.total_tokens) + '</td><td class="num">' + minS + '</td><td class="num">' + avgS + '</td><td class="num">' + maxS + '</td></tr>';
+        });
       }
 
       let toolStatsExpanded = false;
@@ -830,7 +845,7 @@ export function handleDashboardPage(): Response {
 
       document.getElementById('exportModelStatsCsv').addEventListener('click', () => {
         const rows = [
-          ['Model', 'Requests', 'Failed', 'Input Tokens', 'Cached Tokens', 'Cache Written Tokens', 'Output Tokens', 'Total Tokens']
+          ['Model', 'Requests', 'Failed', 'Input Tokens', 'Cached Tokens', 'Cache Written', 'Output Tokens', 'Total Tokens', 'min(s)', 'avg(s)', 'max(s)']
         ];
         document.querySelectorAll('#modelStats tbody tr').forEach((tr) => {
           const cols = [];
@@ -871,7 +886,7 @@ export function handleDashboardPage(): Response {
           endpointReqs[ep.endpoint] = ep.requests;
         }
         renderRows('#requestEndpointTimingStats', json.endpoint_timings || [], (row) =>
-          '<tr><td>' + row.endpoint + '</td><td class="num">' + fmtStat(endpointReqs[row.endpoint] || 0) + '</td><td class="num">' + ((row.min_time_ms || 0) / 1000).toFixed(1) + '</td><td class="num">' + ((row.avg_time_ms || 0) / 1000).toFixed(1) + '</td><td class="num">' + ((row.max_time_ms || 0) / 1000).toFixed(1) + '</td></tr>'
+          '<tr><td>' + row.endpoint + '</td><td class="num">' + fmtStat(endpointReqs[row.endpoint] || 0) + '</td><td class="num">' + ((row.min_time_ms || 0) / 1000).toFixed(2) + '</td><td class="num">' + ((row.avg_time_ms || 0) / 1000).toFixed(2) + '</td><td class="num">' + ((row.max_time_ms || 0) / 1000).toFixed(2) + '</td></tr>'
         );
       }
 
@@ -957,6 +972,7 @@ export function handleDashboardRequestStats(): Response {
     status_codes_from_upstreams: getRequestStatusCodeFromUpstreamStatsDesc(),
     status_codes_to_endpoints: getRequestStatusCodeToEndpointStatsDesc(),
     endpoint_timings: getRequestEndpointTimingStatsDesc(),
+    model_timings: getRequestModelTimingStatsDesc(),
   });
 }
 
