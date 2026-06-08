@@ -22,7 +22,6 @@ RUN npm ci --no-audit --no-fund
 # Copy source and build
 COPY tsconfig.json ./
 COPY tsconfig.server.json ./
-COPY wrangler.toml ./
 COPY src/ ./src/
 COPY submodules/ ./submodules/
 
@@ -37,7 +36,6 @@ WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/submodules ./submodules
 COPY --from=builder /app/dist ./dist
-COPY wrangler.toml ./
 
 ENV VERSION=$VERSION
 ENV LOCAL_TIKTOKEN=true

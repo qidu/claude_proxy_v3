@@ -831,46 +831,112 @@ Fallback rules:
 
 ### Environment Variables
 
-Vars defined in `wrangler.toml` `[vars]` are automatically injected by Cloudflare Workers at runtime. When running via the Node.js server (`npm run server` / `dist/server.js`), you must set them via `process.env` — `wrangler.toml` is **not** read by `server.ts`.
-
-For local Node.js runs, either pass inline:
-```bash
-VERSION=my-version LOG_LEVEL=debug node dist/server.js
-```
-or export them:
-```bash
-export VERSION="my-version"
-export LOG_LEVEL="debug"
-node dist/server.js
-```
+All configuration is driven through `wrangler.toml` `[vars]`. When running via the Node.js server (`npm run server` / `dist/server.js`), set the same vars as `process.env` — `wrangler.toml` is **not** read by `server.ts`.
 
 ```toml
 # wrangler.toml
+# This file serves as a reference for all available environment variables.
+# When using wrangler (npm run dev / npm run deploy), vars are injected automatically.
+# When using Node.js server, set them as process.env instead.
+
 [vars]
-# OpenAI-compatible upstream
+# ─── Required ───────────────────────────────────────────────────────────────────
 
-# Config file path or URL
+# Config file path OR Consul server address (pick one)
+# File mode:
 PROXY_CONFIG_PATH = "./proxy_config.toml"
-# PROXY_CONFIG_URL = "http://eureka-server/config/proxy_config.toml"
+# Consul mode (comment out PROXY_CONFIG_PATH):
+# PROXY_CONFIG_URL = "http://localhost:8500"
 
-# Optional settings
-LOCAL_TIKTOKEN = "false"
-ALLOWED_HOSTS = "127.0.0.1,localhost,api.qnaigc.com"
-LOG_LEVEL = "debug"
+# ─── Optional ───────────────────────────────────────────────────────────────────
 
-# Default max_tokens for requests that don't include it (anthropic-messages mode)
-# Some upstreams (e.g. DeepSeek) require max_tokens in every request
-# DEFAULT_MAX_TOKENS = "8192"
+# Enable local tiktoken-based token counting (no API call needed)
+# Set to "true" for faster, offline token counting
+LOCAL_TIKTOKEN = "true"
+TIKTOKEN_MODEL = "o200k_base"
 
-# Stringify method for JSON serialization in format converters
-# Options: "json" (default, built-in JSON.stringify), "safe-stable" (safe-stable-stringify), "fast-safe" (fast-safe-stringify)
-# JSON_STRINGIFY_METHOD = "json"
+# JSON serialization method for format converters
+# "json"         - built-in JSON.stringify (fastest, default)
+# "safe-stable"  - safe-stable-stringify (handles circular refs)
+# "fast-safe"    - fast-safe-stringify (balanced)
+JSON_STRINGIFY_METHOD = "json"
+
+# Models list cache TTL in seconds (default: 300 = 5 minutes)
+# Set to "0" to disable caching
+MODELS_CACHE_TTL = "300"
+
+# Upstream body fetch timeout in milliseconds (default: 600000 = 10 minutes)
+UPSTREAM_BODY_TIMEOUT_MS = "600000"
+
+# Allowed target hosts for SSRF protection (comma-separated)
+ALLOWED_HOSTS = "127.0.0.1,localhost,api.qnaigc.com,api.example1.com,api.example2-ai.com,api.yoosheen.com,api.wenwen-ai.com"
+
+# Development mode - allows all CORS origins
+DEV_MODE = "true"
+
+# Allowed CORS origins (comma-separated, or "*" for all)
+ALLOWED_ORIGINS = "*"
+
+# Max size for image block base64 data in bytes (default: 10485760 = 10MB)
+IMAGE_BLOCK_DATA_MAX_SIZE = "10485760"
+
+# Log level: "debug" | "info" | "warn" | "error"
+LOG_LEVEL = "info"
 
 # Passthrough mode for /v1/chat/completions (OpenAI-compatible clients)
-# When true, /v1/chat/completions forwards requests as-is to the default upstream
+# When "true", /v1/chat/completions forwards requests as-is to the default upstream
 # without format conversion. Dashboard stats are still recorded.
-DEV_PASS_THROUGH = "false" # default value is `false`
+# DEV_PASS_THROUGH = "false"
+
+# Default max_tokens for requests that don't include it (default: 8192)
+# Some upstreams (e.g. DeepSeek Anthropic-compatible API) require max_tokens
+# DEFAULT_MAX_TOKENS = "8192"
+
+# Stateful conversation caching for /v1/responses (experimental)
+# When "true", stores each response in memory and auto-prepends history
+# for requests with previous_response_id. TTL: 3600s. In-memory only.
+# CONVERSATION = "false"
 ```
+
+For local Node.js runs, either pass inline or export them:
+
+```bash
+# Inline (all vars)
+LOCAL_TIKTOKEN=true LOG_LEVEL=debug PROXY_CONFIG_PATH=./proxy_config.toml node dist/server.js
+
+# Or export first
+export LOCAL_TIKTOKEN="true"
+export LOG_LEVEL="debug"
+export PROXY_CONFIG_PATH="./proxy_config.toml"
+node dist/server.js
+```
+
+**Env var to `Env` field mapping** (`src/types/shared.ts` → `src/server.ts`):
+
+| Env field | wrangler.toml var | Default |
+|---|---|---|
+| `LOCAL_TIKTOKEN` | `LOCAL_TIKTOKEN` | `"false"` |
+| `ALLOWED_ORIGINS` | `ALLOWED_ORIGINS` | `"*"` |
+| `DEV_MODE` | `DEV_MODE` | unset |
+| `ALLOWED_HOSTS` | `ALLOWED_HOSTS` | `"127.0.0.1,localhost"` |
+| `IMAGE_BLOCK_DATA_MAX_SIZE` | `IMAGE_BLOCK_DATA_MAX_SIZE` | `"10485760"` |
+| `LOG_LEVEL` | `LOG_LEVEL` | `"info"` |
+| `GEMINI_BASE_URL` | — (hardcoded) | `"https://generativelanguage.googleapis.com"` |
+| `GEMINI_API_VERSION` | — (hardcoded) | `"v1beta"` |
+| `CLAUDE_BASE_URL` | — (hardcoded) | `"https://api.anthropic.com"` |
+| `MESSAGES_UPSTREAM_MODE` | — (hardcoded) | `"openai-completions"` |
+| `INTERACTIONS_UPSTREAM_MODE` | — (hardcoded) | `"native"` |
+| `GENERATE_CONTENT_UPSTREAM_MODE` | — (hardcoded) | `"native"` |
+| `PROXY_CONFIG_PATH` | `PROXY_CONFIG_PATH` | `"./proxy_config.toml"` |
+| `PROXY_CONFIG_URL` | `PROXY_CONFIG_URL` | unset |
+| `PORT` | — (Node.js only) | `"8788"` |
+| `DEV_PASS_THROUGH` | `DEV_PASS_THROUGH` | `"false"` |
+| `DEFAULT_MAX_TOKENS` | `DEFAULT_MAX_TOKENS` | unset |
+| `CONVERSATION` | `CONVERSATION` | unset |
+| `UPSTREAM_BODY_TIMEOUT_MS` | `UPSTREAM_BODY_TIMEOUT_MS` | unset |
+| `MODELS_CACHE_TTL` | `MODELS_CACHE_TTL` | unset |
+| `JSON_STRINGIFY_METHOD` | `JSON_STRINGIFY_METHOD` | unset |
+| `TIKTOKEN_MODEL` | `TIKTOKEN_MODEL` | unset |
 
 ### Performance Benchmark
 
