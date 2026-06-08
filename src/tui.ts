@@ -654,15 +654,15 @@ class DashboardView implements Component {
   render(width: number): string[] {
     const snap = this.snapshot;
     const date = new Date();
-    const now = date.toLocaleTimeString();
+    const now = date.toLocaleTimeString('en-US', { hour12: false });
     if (now !== this.lastTime) {
       this.lastTime = now;
     }
     const sec = date.getSeconds();
     const secColors = [lightWhite, lightBlue, mediumBlue];
     const secColor = secColors[sec % 3];
-    const hourminTime = this.lastTime.slice(0, -3);
-    const secondsTime = secColor(this.lastTime.slice(-3));
+    const hourminTime = this.lastTime.slice(0, -2);
+    const secondsTime = secColor(this.lastTime.slice(-2));
     const lines: string[] = [];
     lines.push(bold('Proxy TUI') + dim(`  ${hourminTime}`) + `${secondsTime}`);
     lines.push(dim('─'.repeat(Math.max(0, width))));
@@ -682,7 +682,7 @@ class DashboardView implements Component {
     } else if (this.configStatus === 'saved') {
       configIndicator = lightBlue('(saved)');
     } else {
-      configIndicator = snap.config.read_only ? yellow('(read-only)') : green('(writable)');
+      configIndicator = snap.config.read_only ? yellow('(read-only)') : cyan('(writable)');
     }
     lines.push(`${dim('Config:')} ${dim(snap.config.config_path ?? 'memory')} ${configIndicator}${((snap.config as unknown as { config_errors?: unknown[] }).config_errors?.length ?? 0) > 0 ? red(` (${(snap.config as unknown as { config_errors: unknown[] }).config_errors.length} errors)`) : ''}`);
     const tokenHeatmap = buildHeatmap(snap.tokenHeatmap);
@@ -707,7 +707,7 @@ class DashboardView implements Component {
         lines.push(`  ${dim(row.modelId)} ${tag}${extra}${timingStr}`);
       }
       if (hiddenCount > 0) {
-        lines.push(dim(`  ... +${hiddenCount} more`));
+        lines.push(dim(`  ... +${hiddenCount} more. press`) + ' C' + dim(' expand composite'));
       }
     }
     lines.push(`${bold('Top Models')} (${fmt(snap.modelStats.length)})`);
@@ -737,7 +737,7 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(`C ${dim('config composite aliases')}  T ${dim('test models')}  R ${dim('reload config')}  Ctrl+O ${dim('dump now')}  Ctrl+C ${dim('quit')}`);
+    lines.push(`C ${dim('edit composite')}  T ${dim('test models')}  R ${dim('reload config')}  Ctrl+O ${dim('dump usage')}  Ctrl+C ${dim('quit')}`);
     lines.push(this.message ? yellow(this.message) : dim('Ready'));
 
     return lines.map((line) => clip(line, width));
