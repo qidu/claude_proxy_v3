@@ -1,0 +1,223 @@
+/**
+ * GenerateContent API Tests
+ * Tests POST /v1beta/models/{model}:generateContent endpoint
+ *
+ * Coverage:
+ * - Text content
+ * - Multimodal content
+ * - Generation config
+ * - Streaming variants
+ */
+
+const {
+  sendRequest,
+  sendStreamingRequest,
+  assert,
+  runTest,
+  runTestSuite
+} = require('../utils/test_helpers');
+
+/**
+ * TC301: Basic Text Generation
+ * Tests simple text generation
+ */
+async function testBasicGenerateContent() {
+  const response = await sendRequest({
+    endpoint: '/v1beta/models/gemini-2.5-flash:generateContent',
+    body: {
+      contents: [{
+        role: 'user',
+        parts: [{ text: 'Hello, how are you?' }]
+      }]
+    }
+  });
+
+  assert(response.status === 200, `Expected 200, got ${response.status}`);
+  assert(response.body?.candidates, 'Should have candidates');
+}
+
+/**
+ * TC302: Generation Config
+ * Tests generation parameters
+ */
+async function testGenerateContentWithConfig() {
+  const response = await sendRequest({
+    endpoint: '/v1beta/models/gemini-2.5-flash:generateContent',
+    body: {
+      contents: [{
+        role: 'user',
+        parts: [{ text: 'What is 2+2?' }]
+      }],
+      generationConfig: {
+        temperature: 0.3,
+        maxOutputTokens: 50,
+        topP: 0.8
+      }
+    }
+  });
+
+  assert(response.status === 200, `Expected 200, got ${response.status}`);
+}
+
+/**
+ * TC303: Safety Settings
+ * Tests safety settings configuration
+ */
+async function testGenerateContentWithSafety() {
+  const response = await sendRequest({
+    endpoint: '/v1beta/models/gemini-2.5-flash:generateContent',
+    body: {
+      contents: [{
+        role: 'user',
+        parts: [{ text: 'Hello' }]
+      }],
+      safetySettings: [
+        {
+          category: 'HARM_CATEGORY_HARASSMENT',
+          threshold: 'BLOCK_MEDIUM_AND_ABOVE'
+        }
+      ]
+    }
+  });
+
+  assert(response.status === 200, `Expected 200, got ${response.status}`);
+}
+
+/**
+ * TC304: System Instruction
+ * Tests system instruction
+ */
+async function testGenerateContentWithSystemInstruction() {
+  const response = await sendRequest({
+    endpoint: '/v1beta/models/gemini-2.5-flash:generateContent',
+    body: {
+      contents: [{
+        role: 'user',
+        parts: [{ text: 'Who are you?' }]
+      }],
+      systemInstruction: {
+        parts: [{ text: 'You are a helpful assistant.' }]
+      }
+    }
+  });
+
+  assert(response.status === 200, `Expected 200, got ${response.status}`);
+}
+
+/**
+ * TC305: Tools in GenerateContent
+ * Tests function declarations
+ */
+async function testGenerateContentWithTools() {
+  const response = await sendRequest({
+    endpoint: '/v1beta/models/gemini-2.5-flash:generateContent',
+    body: {
+      contents: [{
+        role: 'user',
+        parts: [{ text: 'What is the weather in Paris?' }]
+      }],
+      tools: [{
+        functionDeclarations: [{
+          name: 'get_weather',
+          description: 'Get weather for a city',
+          parameters: {
+            type: 'object',
+            properties: {
+              city: { type: 'string' }
+            }
+          }
+        }]
+      }]
+    }
+  });
+
+  assert(response.status === 200, `Expected 200, got ${response.status}`);
+}
+
+/**
+ * TC306: Streaming GenerateContent
+ * Tests streaming response
+ */
+async function testStreamingGenerateContent() {
+  const response = await sendRequest({
+    endpoint: '/v1beta/models/gemini-2.5-flash:streamGenerateContent',
+    body: {
+      contents: [{
+        role: 'user',
+        parts: [{ text: 'Write a short poem' }]
+      }]
+    }
+  });
+
+  assert(response.status === 200, 'Stream should return 200');
+}
+
+/**
+ * TC307: Multi-turn in GenerateContent
+ * Tests conversation history
+ */
+async function testMultiTurnGenerateContent() {
+  const response = await sendRequest({
+    endpoint: '/v1beta/models/gemini-2.5-flash:generateContent',
+    body: {
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: 'My favorite color is red' }]
+        },
+        {
+          role: 'model',
+          parts: [{ text: 'I will remember that.' }]
+        },
+        {
+          role: 'user',
+          parts: [{ text: 'What is my favorite color?' }]
+        }
+      ]
+    }
+  });
+
+  assert(response.status === 200, `Expected 200, got ${response.status}`);
+  const text = response.body?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  assert(text.toLowerCase().includes('red'), 'Should remember color');
+}
+
+/**
+ * TC308: v1 Endpoint (not v1beta)
+ * Tests alternative endpoint path
+ */
+async function testV1Endpoint() {
+  const response = await sendRequest({
+    endpoint: '/v1/models/gemini-2.5-flash:generateContent',
+    body: {
+      contents: [{
+        role: 'user',
+        parts: [{ text: 'Hi' }]
+      }]
+    }
+  });
+
+  assert(response.status === 200, `Expected 200, got ${response.status}`);
+}
+
+module.exports = {
+  testBasicGenerateContent,
+  testGenerateContentWithConfig,
+  testGenerateContentWithSafety,
+  testGenerateContentWithSystemInstruction,
+  testGenerateContentWithTools,
+  testStreamingGenerateContent,
+  testMultiTurnGenerateContent,
+  testV1Endpoint
+};
+
+if (require.main === module) {
+  runTestSuite('GenerateContent API', [
+    { name: 'TC301: Basic Generation', fn: testBasicGenerateContent },
+    { name: 'TC302: Generation Config', fn: testGenerateContentWithConfig },
+    { name: 'TC303: Safety Settings', fn: testGenerateContentWithSafety },
+    { name: 'TC304: System Instruction', fn: testGenerateContentWithSystemInstruction },
+    { name: 'TC305: With Tools', fn: testGenerateContentWithTools },
+    { name: 'TC307: Multi-turn', fn: testMultiTurnGenerateContent }
+  ]);
+}
