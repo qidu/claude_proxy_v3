@@ -378,6 +378,7 @@ class PromptOverlay implements Component, Focusable {
 
 class ListOverlay implements Component {
   private readonly list: SelectList;
+  private readonly onExtraKey: ((data: string) => boolean) | undefined;
 
   constructor(
     title: string,
@@ -386,6 +387,7 @@ class ListOverlay implements Component {
     onSelect: (item: SelectItem) => void,
     onCancel: () => void,
     maxVisible = 8,
+    onExtraKey?: (data: string) => boolean,
   ) {
     this.list = new SelectList(items, maxVisible, SELECT_LIST_THEME, {
       truncatePrimary: ({ text, maxWidth }) => clip(text, maxWidth),
@@ -394,12 +396,19 @@ class ListOverlay implements Component {
     this.list.onCancel = onCancel;
     this.title = title;
     this.subtitle = subtitle;
+    this.onExtraKey = onExtraKey;
   }
 
   private readonly title: string;
-  private readonly subtitle: string;
+  private subtitle: string;
+
+  setSubtitle(subtitle: string): void {
+    this.subtitle = subtitle;
+    this.invalidate();
+  }
 
   handleInput(data: string): void {
+    if (this.onExtraKey && this.onExtraKey(data)) return;
     this.list.handleInput(data);
   }
 
@@ -515,6 +524,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
     if (matchesKey(data, 'enter') || matchesKey(data, 'return')) {
       this.setMessage(selected ? `${selected.kind} selected` : '');
       this.app.requestRender();
+      return;
     }
   }
 
@@ -782,6 +792,9 @@ class DashboardApp {
   private compositeOverlay: CompositeAliasesOverlay | null = null;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
   private hourlyDumpTimer: ReturnType<typeof setInterval> | null = null;
+  private modelTestTimer: ReturnType<typeof setInterval> | null = null;
+  private modelTestTimerActive = false;
+  private modelTestInProgress = false;
   private lastDumpedTotalTokens = -1;
   private lastRefreshTotalTokens = -1;
   private lastDumpedDate = '';
@@ -824,7 +837,11 @@ class DashboardApp {
   }
 
   dumpTokens(): void {
-    if (this.lastRefreshTotalTokens === this.lastDumpedTotalTokens) return;
+    if (this.lastRefreshTotalTokens === this.lastDumpedTotalTokens) {
+      this.view.setMessage('no new tokens to dump');
+      this.requestRender();
+      return;
+    }
     this.lastDumpedTotalTokens = this.lastRefreshTotalTokens;
     this.lastDumpedDate = new Date().toISOString().slice(0, 10);
     dumpTodayTokens();
@@ -1014,10 +1031,11 @@ class DashboardApp {
       return;
     }
 
+    const subtitle = this.testPickerSubtitle();
     this.hideOverlay();
     const overlay = new ListOverlay(
       'Test custom model',
-      `↑/↓ ${dim('move')}  Enter ${dim('test')}  Esc ${dim('cancel')}`,
+      subtitle,
       choices,
       (item) => {
         this.hideOverlay();
@@ -1028,12 +1046,47 @@ class DashboardApp {
         this.view.setMessage('test cancelled');
         this.requestRender();
       },
+      8,
+      (data) => {
+        if (matchesKey(data, 'p')) {
+          this.togglePeriodicModelTest();
+          this.hideOverlay();
+          return true;
+        }
+        return false;
+      },
     );
     this.overlay = this.tui.showOverlay(overlay, { width: '70%', maxHeight: '50%', anchor: 'center' });
     this.overlay.focus();
   }
 
+  private testPickerSubtitle(): string {
+    const pHint = this.modelTestTimerActive
+      ? `P ${dim('stop test timer')}`
+      : `P ${dim('test all (30m)')}`;
+    return `↑/↓ ${dim('move')}  Enter ${dim('test')}  ${pHint}  Esc ${dim('cancel')}`;
+  }
+
   async runModelTest(modelId: string): Promise<void> {
+    const result = await this.executeModelTest(modelId);
+    if (!result) return;
+    if (!result.ok) {
+      this.view.setMessage(`test failed ${result.modelId} (${result.status ?? '?'}) ${result.detail}`, 10000);
+    } else {
+      this.view.setMessage(`${green(`${result.modelId} OK`)} ${green(`(${result.status})`)} ${green(`usage=${result.usage}`)} ${green(result.detail)}`, 10000);
+    }
+    this.requestRender();
+  }
+
+  // Lower-level test runner. Returns the outcome without touching the message line,
+  // so a batch run can compose its own progress display.
+  private async executeModelTest(modelId: string): Promise<{
+    ok: boolean;
+    modelId: string;
+    status?: number;
+    usage: string;
+    detail: string;
+  } | null> {
     // Strip [C] suffix if present
     const actualModelId = modelId.endsWith(' [C]') ? modelId.slice(0, -4).trim() : modelId;
     const port = this.source.env.PORT || '8788';
@@ -1053,9 +1106,6 @@ class DashboardApp {
     const testLabel = modelId.endsWith(' [C]')
       ? `${actualModelId} ${modelConfig?.targetUrl ? stripHttps(modelConfig.targetUrl) : '?'}`
       : actualModelId;
-
-    this.view.setMessage(`testing ${testLabel}...`, 30000);
-    this.requestRender();
 
     const fullRequestBody = { ...requestBody, model: actualModelId };
 
@@ -1100,19 +1150,77 @@ class DashboardApp {
         : 'n/a';
       const detailText = formatTestResultDetail(responseBody).split('\n').map((l) => l.length > 60 ? `${l.slice(0, 60)}…` : l).join(' | ');
 
-      if (!response.ok) {
-        this.view.setMessage(`test failed ${actualModelId} (${response.status}) ${detailText}`, 10000);
-        this.requestRender();
-        return;
-      }
-
-      const statusLine = `${green(`${actualModelId} OK`)} ${green(`(${response.status})`)} ${green(`usage=${usage}`)}`;
-      this.view.setMessage(`${statusLine} ${green(detailText)}`, 10000);
-      this.requestRender();
+      return {
+        ok: response.ok,
+        modelId: testLabel,
+        status: response.status,
+        usage,
+        detail: detailText,
+      };
     } catch (error) {
-      this.view.setMessage(`test failed ${actualModelId} ${(error as Error).message}`, 10000);
+      return {
+        ok: false,
+        modelId: testLabel,
+        usage: 'n/a',
+        detail: (error as Error).message,
+      };
+    }
+  }
+
+  // Run a test against every custom model in sequence. Composes a single
+  // progress line (`testing 3/12 — code-small...`) that updates per model.
+  async runAllCustomModelTests(opts: { announce?: boolean } = {}): Promise<void> {
+    if (this.modelTestInProgress) {
+      this.view.setMessage('test-all already in progress');
+      this.requestRender();
+      return;
+    }
+    const choices = this.modelChoices();
+    if (choices.length === 0) {
+      this.view.setMessage('No custom models available');
+      this.requestRender();
+      return;
+    }
+    this.modelTestInProgress = true;
+    if (opts.announce) {
+      this.view.setMessage(`test-all: starting ${choices.length} models...`);
       this.requestRender();
     }
+    let passed = 0;
+    let failed = 0;
+    for (let i = 0; i < choices.length; i++) {
+      const choice = choices[i];
+      this.view.setMessage(`test-all: ${i + 1}/${choices.length} — ${choice.value}...`);
+      this.requestRender();
+      const result = await this.executeModelTest(choice.value);
+      if (result?.ok) passed++;
+      else failed++;
+    }
+    const summary = `test-all: ${passed} ok / ${failed} failed / ${choices.length} total`;
+    this.view.setMessage(this.modelTestTimerActive ? `${green(summary)} (next in 30m)` : summary, 15000);
+    this.requestRender();
+    this.modelTestInProgress = false;
+  }
+
+  // Toggle a 30-minute recurring test-all loop. `P` flips it on; the first
+  // run starts immediately so the user gets feedback right away.
+  togglePeriodicModelTest(): void {
+    if (this.modelTestTimerActive) {
+      if (this.modelTestTimer) clearInterval(this.modelTestTimer);
+      this.modelTestTimer = null;
+      this.modelTestTimerActive = false;
+      this.view.setMessage('test-all: periodic timer stopped');
+      this.requestRender();
+      return;
+    }
+    this.modelTestTimerActive = true;
+    this.view.setMessage('test-all: starting (will repeat every 30m)');
+    this.requestRender();
+    void this.runAllCustomModelTests();
+    this.modelTestTimer = setInterval(() => {
+      if (this.stopped) return;
+      void this.runAllCustomModelTests();
+    }, 30 * 60 * 1000);
   }
 
   openEditTargetPrompt(alias: string, target: string): void {
@@ -1194,6 +1302,9 @@ class DashboardApp {
     this.refreshTimer = null;
     if (this.hourlyDumpTimer) clearInterval(this.hourlyDumpTimer);
     this.hourlyDumpTimer = null;
+    if (this.modelTestTimer) clearInterval(this.modelTestTimer);
+    this.modelTestTimer = null;
+    this.modelTestTimerActive = false;
     this.closeOverlay();
     this.tui.stop();
   }
