@@ -6,6 +6,7 @@ import {
   addCompositeAlias,
   getCompositeRouteCandidates,
   getConfiguredModelIds,
+  getModelRouteConfig,
   loadProxyConfigFromPath,
   persistProxyConfigToPath,
   removeCompositeAlias,
@@ -92,12 +93,17 @@ export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): Dashbo
     .sort((a, b) => a.localeCompare(b))
     .map((alias) => ({
       alias,
-      targets: getCompositeRouteCandidates(alias, proxyConfig).map((candidate) => ({
-        model: candidate.modelName,
-        routeModel: candidate.route.modelAlias,
-        upstreamMode: candidate.route.upstreamMode,
-        targetUrl: candidate.route.targetUrl,
-      })),
+      targets: Object.entries(proxyConfig.composite?.[alias] || {})
+        .filter(([key]) => key !== 'total_token_limit' && !key.startsWith('_'))
+        .map(([modelName]) => {
+          const route = getModelRouteConfig(modelName, proxyConfig);
+          return {
+            model: modelName,
+            routeModel: route.modelAlias,
+            upstreamMode: route.upstreamMode,
+            targetUrl: route.targetUrl,
+          };
+        }),
     }));
 
   return {
