@@ -16,6 +16,7 @@ RUN sed -i 's/"dev": "wrangler dev",\r$//' package.json && \
     sed -i 's/"wrangler": "^4.60.0"\r$//' package.json
 
 # Install dependencies
+RUN npm install
 RUN npm ci --no-audit --no-fund
 
 # Copy source and build
