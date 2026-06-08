@@ -235,6 +235,8 @@ Keyboard shortcuts:
 
 **Test composite aliases**: Composite aliases are also listed in the picker (shown with `→ target1, target2, ...` as description). If a composite alias shares the same name as a model (e.g. `code-small`), the composite appears as `code-small [C]` so both can be selected for testing independently.
 
+> **Important**: When a model name has **both** a `[models.*]` config entry and a `[composite]` alias with the same name, selecting the model **without** `[C]` does **not** use the model entry's specific `base_url` or `api_key` — it routes through the composite alias instead. The composite routing resolves each target model independently, and the model entry's URL/key is only used for the picker display label. The `[C]` suffix is the actual way to test the composite alias routing; selecting the base name effectively bypasses the model's own config. To test a model entry's own base URL and API key in isolation, either remove the conflicting composite alias or test a model that doesn't share a name with a composite alias.
+
 ### 3.2 Token Log Persistence
 
 The proxy persists token stats and heatmap data to `/tmp/model_proxy_tokens.log` (JSONL format) for recovery after restart.
