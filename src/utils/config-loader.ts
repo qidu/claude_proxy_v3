@@ -705,7 +705,7 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
           }
           if (typeof apiKey !== 'string') {
             errors.push({ path: `models.${categoryName}.${key}`, message: `api_key must be a string` });
-          } else if (apiKey.trim() === '' && !categoryApiKey) {
+          } else if (apiKey.trim() === '' && !categoryApiKey && categoryName !== 'default') {
             errors.push({ path: `models.${categoryName}.${key}`, message: `api_key is empty and not set in category` });
           }
         } else {
@@ -1482,6 +1482,7 @@ export function upsertCompositeTarget(
       delete config.primary;
     }
     nextTarget.primary = true;
+    nextTarget.fallback = 0;
   } else if (patch.primary === false) {
     delete nextTarget.primary;
   }
