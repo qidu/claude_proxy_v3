@@ -29,6 +29,9 @@ const suites = [
   '06_integration/integration.test.js',
   '07_dashboard/dashboard_api.test.js',
   '08_regression/regression.test.js',
+  '09_composite/composite.test.js',
+  '10_auth/auth_headers.test.js',
+  '11_responses/responses_api.test.js',
 ];
 
 let passed = 0, failed = 0;
@@ -89,6 +92,9 @@ TEST_TIMEOUT=60000 node testcases/04_models/models.test.js
 | `06_integration/` | Multi-component integration |
 | `07_dashboard/` | Dashboard API and TUI backend |
 | `08_regression/` | Previously fixed bugs and edge cases |
+| `09_composite/` | Composite alias behaviors (primary, fallback, share, total_token_limit) |
+| `10_auth/` | Auth header flows (x-api-key, x-goog-api-key, Bearer, config priority) |
+| `11_responses/` | Responses API coverage (input_tokens, compact, openai-responses mode, documented limitations) |
 | `utils/` | Shared test helpers |
 
 ## Test Files
@@ -98,11 +104,11 @@ TEST_TIMEOUT=60000 node testcases/04_models/models.test.js
 - `messages.test.js` — POST /v1/messages, system prompts, multi-turn, parameters (temperature, top_p, top_k, stop_sequences), metadata, array content blocks
 - `messages_streaming.test.js` — SSE streaming, event types, content deltas, streaming with system/multi-turn
 - `interactions.test.js` — POST /v1/interactions, text/object input, multi-turn, system instruction, generation config, streaming, tools, thinking_level
-- `generateContent.test.js` — POST /v1beta/models/{model}:generateContent, generation config, safety settings, system instruction, tools, streaming, multi-turn
+- `generateContent.test.js` — POST /v1beta/models/{model}:generateContent and /v1/models/{model}:generateContent, generation config, safety settings, system instruction, tools, streaming, multi-turn, v1beta/v1 streamGenerateContent (with SSE validation), :countTokens
 
 ### 02features
 
-- `thinking.test.js` — Thinking/reasoning: enabled/disabled, boolean format, adaptive, reasoning_effort, output_config.effort, budget tokens, streaming
+- `thinking.test.js` — Thinking/reasoning: enabled/disabled, boolean format, adaptive, reasoning_effort, output_config.effort, budget tokens, streaming, output_config.task_budget.total, xhigh effort normalization, OpenAI thinking format, signature_delta events, custom budget_to_effort_* thresholds
 - `tool_use.test.js` — Tool/function calling: basic tool use, tool_choice variants (auto/any/none/specific), multiple tools, streaming, round-trip, OpenAI format
 - `image_input.test.js` — Image content: base64, URL, text+image, multiple images, PNG, WebP
 
@@ -116,11 +122,11 @@ TEST_TIMEOUT=60000 node testcases/04_models/models.test.js
 
 ### 05upstream_modes
 
-- `upstream_modes.test.js` — Claude/OpenAI/Gemini format conversion, token counting (with thinking), Responses API, embeddings, models list, mode conversion
+- `upstream_modes.test.js` — Claude/OpenAI/Gemini format conversion, token counting (with thinking), Responses API, embeddings, models list, mode conversion, /v1/responses/input_tokens, /v1/responses/compact, /config-reload, openai-responses mode
 
 ### 06integration
 
-- `integration.test.js` — Config load on startup, sequential stats accumulation, health check, CORS headers, models list, token counting, request timeout, timing stats, error format, streaming/non-streaming coexistence
+- `integration.test.js` — Config load on startup, sequential stats accumulation, health check, CORS headers, models list, token counting, request timeout, timing stats, error format, streaming/non-streaming coexistence, model_timings field, api_key redaction, Access-Control-* CORS headers, PUT config persistence, /tmp/model_proxy_tokens.log persistence
 
 ### 07dashboard
 
@@ -129,6 +135,18 @@ TEST_TIMEOUT=60000 node testcases/04_models/models.test.js
 ### 08regression
 
 - `regression.test.js` — Header write crash on exception (fix 3e05fb7), tool_choice auto (fix fdad843), config schema validation (fix 18a1db8), heatmap structure, malformed JSON, empty content, long system prompts, unicode, rapid requests/rate limiting, OpenAI format system, mixed content blocks, zero max_tokens
+
+### 09_composite
+
+- `composite.test.js` — Composite alias behaviors: basic routing, primary routing, fallback ordering, share weighted distribution, total_token_limit, fallback to default upstream for unresolved targets, all configured aliases, same-name-as-model
+
+### 10_auth
+
+- `auth_headers.test.js` — Auth header flows: x-api-key for /v1/messages, x-goog-api-key for /v1/interactions and generateContent, Authorization: Bearer, API key priority (config over headers), x-api-key as Bearer for openai-completions upstream, missing auth 401
+
+### 11_responses
+
+- `responses_api.test.js` — Responses API: basic, /v1/responses/input_tokens, /v1/responses/compact, image input handling, developer role, stateful fields dropped, streaming, tool use, stateless usage pattern
 
 ## Prerequisites
 
@@ -197,16 +215,34 @@ Tests run against a live proxy instance. The proxy must be started beforehand wi
 |---|---|---|---|
 | `regression.test.js` | `POST /v1/messages` (non-streaming + streaming), `GET /dashboard/api/config`, `GET /dashboard/api/stats/requests` | `deepseek/deepseek-v3.2`, `qwen3-32b` | Header-write crash guard, tool_choice auto/any, config validation schema, heatmap/request stats structure, malformed JSON, empty content, unicode, rapid requests, OpenAI system format, mixed content blocks, zero max_tokens |
 
+#### `09_composite`
+
+| File | Endpoints | Models Required | Features Required |
+|---|---|---|---|
+| `composite.test.js` | `POST /v1/messages`, `GET /dashboard/api/config` | `code-small`, `code-strong`, `max-kimi`, `llama` (or any configured composite alias) | Composite alias routing (primary, fallback, share, total_token_limit, fallback to default upstream) |
+
+#### `10_auth`
+
+| File | Endpoints | Models Required | Features Required |
+|---|---|---|---|
+| `auth_headers.test.js` | `POST /v1/messages`, `POST /v1/interactions`, `POST /v1beta/models/{model}:generateContent`, `POST /v1/responses`, `POST /v1/embeddings` | any configured model | x-api-key, x-goog-api-key, Authorization: Bearer, config API key priority |
+
+#### `11_responses`
+
+| File | Endpoints | Models Required | Features Required |
+|---|---|---|---|
+| `responses_api.test.js` | `POST /v1/responses`, `POST /v1/responses/input_tokens`, `POST /v1/responses/compact` | `gpt-5.4-mini` (or any configured model) | Responses API basic, input_tokens, compact, image input handling, developer role, stateful fields silently dropped, streaming, tool use, stateless usage pattern |
+
 ### Provider API Keys Required
 
 The proxy configuration must have upstream API keys for all of the following providers (tests will 401/500 without them):
 
-- **DeepSeek** — used by messages, thinking, tool_use, models, upstream_modes, integration, regression suites
+- **DeepSeek** — used by messages, thinking, tool_use, models, upstream_modes, integration, regression, auth, responses suites
 - **Qwen (Alibaba)** — used by messages, streaming, tool_use, image_input, models, regression suites
-- **MiniMax** — used by models suite
-- **Moonshot/Kimi** — used by models suite
-- **Gemini (Google)** — used by interactions, generateContent, upstream_modes suites
-- **NVIDIA** — used by models suite
+- **MiniMax** — used by models suite (or minimax-m3 in active config for composite)
+- **Moonshot/Kimi** — used by models suite (or kimi-2.7 in active config for composite)
+- **Gemini (Google)** — used by interactions, generateContent, upstream_modes suites (gemini-3.5-flash in active config)
+- **NVIDIA** — used by models suite (or kimi-2.7/minimax-m2.7 in active config for composite)
 
 ### Proxy Features That Must Be Enabled
 

@@ -200,6 +200,91 @@ async function testV1Endpoint() {
   assert(response.status === 200, `Expected 200, got ${response.status}`);
 }
 
+/**
+ * TC309: v1beta streamGenerateContent with SSE validation
+ * Tests that /v1beta/models/{model}:streamGenerateContent actually streams SSE events
+ * (regression for TC306 which only used sendRequest, never validated the stream)
+ */
+async function testV1BetaStreamGenerateContentStreaming() {
+  const response = await sendStreamingRequest({
+    endpoint: '/v1beta/models/gemini-2.5-flash:streamGenerateContent',
+    body: {
+      contents: [{
+        role: 'user',
+        parts: [{ text: 'Write a short poem' }]
+      }]
+    }
+  });
+
+  assert(response.status === 200, 'streamGenerateContent should return 200');
+  assert(response.eventCount > 0, 'Should produce SSE events');
+  // Each event should be a Gemini-style candidates chunk
+  const firstEvent = response.events[0];
+  assert(
+    firstEvent?.candidates || firstEvent?.type,
+    'SSE events should be Gemini candidates chunks or typed events'
+  );
+}
+
+/**
+ * TC310: v1 streamGenerateContent with SSE validation
+ * Tests the alternative /v1/models/{model}:streamGenerateContent endpoint
+ */
+async function testV1StreamGenerateContentStreaming() {
+  const response = await sendStreamingRequest({
+    endpoint: '/v1/models/gemini-2.5-flash:streamGenerateContent',
+    body: {
+      contents: [{
+        role: 'user',
+        parts: [{ text: 'Say hello' }]
+      }]
+    }
+  });
+
+  assert(response.status === 200, 'v1 streamGenerateContent should return 200');
+  assert(response.eventCount > 0, 'Should produce SSE events');
+}
+
+/**
+ * TC311: Gemini :countTokens endpoint
+ * Tests POST /v1beta/models/{model}:countTokens and /v1/models/{model}:countTokens
+ */
+async function testV1BetaCountTokens() {
+  const response = await sendRequest({
+    endpoint: '/v1beta/models/gemini-2.5-flash:countTokens',
+    body: {
+      contents: [{
+        role: 'user',
+        parts: [{ text: 'Hello world, how are you?' }]
+      }]
+    }
+  });
+
+  assert(response.status === 200, `Expected 200, got ${response.status}`);
+  assert(
+    typeof response.body?.totalTokens === 'number' ||
+    typeof response.body?.total_tokens === 'number',
+    'Should return token count'
+  );
+}
+
+/**
+ * TC312: Gemini v1 :countTokens endpoint
+ */
+async function testV1CountTokens() {
+  const response = await sendRequest({
+    endpoint: '/v1/models/gemini-2.5-flash:countTokens',
+    body: {
+      contents: [{
+        role: 'user',
+        parts: [{ text: 'Hello' }]
+      }]
+    }
+  });
+
+  assert(response.status === 200, `Expected 200, got ${response.status}`);
+}
+
 module.exports = {
   testBasicGenerateContent,
   testGenerateContentWithConfig,
@@ -208,7 +293,11 @@ module.exports = {
   testGenerateContentWithTools,
   testStreamingGenerateContent,
   testMultiTurnGenerateContent,
-  testV1Endpoint
+  testV1Endpoint,
+  testV1BetaStreamGenerateContentStreaming,
+  testV1StreamGenerateContentStreaming,
+  testV1BetaCountTokens,
+  testV1CountTokens
 };
 
 if (require.main === module) {
@@ -218,6 +307,10 @@ if (require.main === module) {
     { name: 'TC303: Safety Settings', fn: testGenerateContentWithSafety },
     { name: 'TC304: System Instruction', fn: testGenerateContentWithSystemInstruction },
     { name: 'TC305: With Tools', fn: testGenerateContentWithTools },
-    { name: 'TC307: Multi-turn', fn: testMultiTurnGenerateContent }
+    { name: 'TC307: Multi-turn', fn: testMultiTurnGenerateContent },
+    { name: 'TC308: v1 Endpoint', fn: testV1Endpoint },
+    { name: 'TC309: v1beta streamGenerateContent (SSE)', fn: testV1BetaStreamGenerateContentStreaming },
+    { name: 'TC310: v1 streamGenerateContent (SSE)', fn: testV1StreamGenerateContentStreaming },
+    { name: 'TC311: :countTokens', fn: testV1BetaCountTokens }
   ]);
 }
