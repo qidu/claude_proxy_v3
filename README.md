@@ -264,7 +264,8 @@ The proxy persists token stats and heatmap data to `/tmp/model_proxy_tokens.log`
 
 #### Docker
 ```bash
-docker build -t model-proxy-v3 .
+# export VERSION=$(git log -n 1 --pretty=format:"%h")
+docker build --build-arg VERSION=$(git log -n 1 --pretty=format:"%h") -t model-proxy-v3 .
 docker run -p 8788:8788 -v $(pwd)/proxy_config.toml:/app/proxy_config.toml model-proxy-v3
 ```
 

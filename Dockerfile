@@ -6,7 +6,6 @@ WORKDIR /app
 # Install build tools (no python needed - sharp/esbuild have prebuilt binaries)
 RUN apk add --no-cache make g++
 
-ARG VERSION
 # Copy package files first for better caching
 COPY package*.json ./
 
@@ -25,6 +24,10 @@ COPY tsconfig.server.json ./
 COPY src/ ./src/
 COPY submodules/ ./submodules/
 
+ARG VERSION
+ENV VERSION=$VERSION
+RUN echo "Building with version: ${VERSION}"
+
 RUN npm run build
 
 # Production image - much smaller
@@ -37,7 +40,6 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/submodules ./submodules
 COPY --from=builder /app/dist ./dist
 
-ENV VERSION=$VERSION
 ENV LOCAL_TIKTOKEN=true
 ENV TIKTOKEN_MODEL="o200k_base"
 
