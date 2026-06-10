@@ -12,7 +12,7 @@ import {
   matchesKey,
   truncateToWidth,
   visibleWidth,
-} from '@mariozechner/pi-tui';
+} from '@earendil-works/pi-tui';
 import {
   addCompositeAliasFromDashboard,
   getDashboardSnapshot,
@@ -481,7 +481,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
       this.app.stopAndExit();
       return;
     }
-    if (matchesKey(data, 'ctrl+o')) {
+    if (matchesKey(data, 'ctrl+u')) {
       this.app.dumpTokens();
       return;
     }
@@ -753,7 +753,7 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(`C ${dim('edit composite')}  T ${dim('test models')}  R ${dim('reload config')}  Ctrl+O ${dim('dump usage')}  Ctrl+C ${dim('quit')}`);
+    lines.push(`C ${dim('edit composite')}  T ${dim('test models')}  R ${dim('reload config')}  Ctrl+U ${dim('dump usage')}  Ctrl+C ${dim('quit')}`);
     lines.push(this.message ? yellow(this.message) : dim('Ready'));
 
     return lines.map((line) => clip(line, width));
@@ -819,7 +819,7 @@ class DashboardApp {
         this.stopAndExit();
         return { consume: true };
       }
-      if (matchesKey(data, 'ctrl+o')) {
+      if (matchesKey(data, 'ctrl+u')) {
         this.dumpTokens();
         return { consume: true };
       }
