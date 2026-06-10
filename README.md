@@ -444,6 +444,76 @@ POST /v1/messages
 }
 ```
 
+#### Tool Use / Tool Result Pairing
+
+When a conversation involves tool calling, the `messages` array must keep each `tool_result`
+paired with the `tool_use` that produced it. The Anthropic Messages API enforces this rule:
+
+> Each `tool_result` block must have a corresponding `tool_use` block in the previous message.
+
+Concretely, a `user` message that contains a `tool_result` block **must** be immediately
+preceded by an `assistant` message that contains a `tool_use` block whose `id` equals the
+`tool_result.tool_use_id`:
+
+```json
+{
+  "model": "claude-3-5-sonnet",
+  "max_tokens": 1024,
+  "messages": [
+    { "role": "user", "content": "What's the weather in Paris?" },
+    {
+      "role": "assistant",
+      "content": [
+        { "type": "tool_use", "id": "toolu_01ABC", "name": "get_weather", "input": { "city": "Paris" } }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        { "type": "tool_result", "tool_use_id": "toolu_01ABC", "content": "18°C, clear" }
+      ]
+    }
+  ]
+}
+```
+
+For the `anthropic-messages` upstream mode the request body is forwarded to the upstream as-is
+(the `messages` array is never rewritten by the proxy), so any pairing problem in the client's
+request is passed straight through to the upstream.
+
+**Common error**
+
+```
+unexpected `tool_use_id` found in `tool_result` blocks: toolu_01PhkfNN2JKwWFR8D4amDHi4.
+Each `tool_result` block must have a corresponding `tool_use` block in the previous message.
+```
+
+This is returned by the upstream (HTTP 400) when a `tool_result` references a `tool_use_id`
+that has no matching `tool_use` in the preceding `assistant` message.
+
+**Notice**: the tool use error is first observed when using `claude-fable-5` with `v2.1.89 (Claude Code)` on linux.
+But when using `claude-opus-4-8` on same tool and OS (enven same upstreaming proxy) for excuting same task, there is 
+no tool use errors occur.
+
+**Typical causes**
+
+- The client sent a follow-up request containing only the `tool_result` and dropped the prior
+  `assistant` `tool_use` turn (e.g. client-side history truncation or context compression).
+- The preceding message is not an `assistant` message, or is an `assistant` message without a
+  `tool_use` block.
+- The `tool_use_id` was altered between turns so it no longer matches the original `tool_use.id`.
+
+**How to fix**
+
+- Always include the full conversation history, keeping the `assistant` `tool_use` turn directly
+  before the `user` `tool_result` turn that answers it. This is the standard Anthropic Messages
+  API contract and the most reliable fix.
+- Verify the `tool_use_id` in each `tool_result` exactly matches the `id` of a `tool_use` block
+  in the immediately preceding `assistant` message.
+- If you suspect the client is dropping turns, enable debug logging and inspect the outgoing
+  request body to confirm the last two messages form a valid `tool_use` → `tool_result` pair
+  before it reaches the upstream.
+
 ---
 
 ## 🧠 Thinking and Reasoning
@@ -650,7 +720,7 @@ OpenAI Responses API support with format conversion to/from Chat Completions.
 
 4. **Stateful conversation not supported (`previous_response_id`, `conversation`, `store`)**: The proxy is stateless by design — it does not store or cache responses between requests, and it will not implement a conversation store. `previous_response_id` is silently dropped; the upstream receives only the current `input` with no prior history. The result is a context-free response that ignores all previous turns. This applies to both `openai-completions` and `openai-responses` modes (in the latter, the field is forwarded to the upstream, but non-OpenAI upstreams such as LiteLLM also have no conversation store and will silently ignore it).
 
-Notice: set `CONVERSATION=true` in environment to enable stateful conversation experimental feature, it just cache conversion inner a proxy process instance.
+**Notice**: set `CONVERSATION=true` in environment to enable stateful conversation experimental feature, it just cache conversion inner a proxy process instance.
 
    **Required client-side fix**: set `store: false` and pass the full conversation history in `input` on every request. This is the correct stateless usage pattern per the Responses API spec:
    ```json
