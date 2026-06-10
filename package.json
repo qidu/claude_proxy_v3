@@ -25,7 +25,7 @@
   "dependencies": {
     "@anthropic-ai/claude-code": "^2.1.27",
     "@cloudflare/workers-types": "^4.20241106.0",
-    "@mariozechner/pi-tui": "^0.73.1",
+    "@earendil-works/pi-tui": "^0.76.0",
     "fast-safe-stringify": "^2.1.1",
     "js-tiktoken": "^1.0.21",
     "safe-stable-stringify": "^2.5.0",
