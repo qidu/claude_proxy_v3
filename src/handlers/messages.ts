@@ -194,16 +194,12 @@ export async function handleMessagesRequest(
       const bodyPreview = typeof requestBody === 'string'
         ? requestBody
         : JSON.stringify(requestBody);
-      if (response.status === 400) {
-        const upstreamResponseBody = await response.text();
-        const upstreamBodyPreview = upstreamResponseBody.length > 500
-          ? `${upstreamResponseBody.substring(0, 500)}...`
-          : upstreamResponseBody;
-        activeLogger.error(requestId, `Messages API error from upstream (openai-passthrough): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}, upstream response body: ${upstreamBodyPreview}`);
-      } else {
-        activeLogger.error(requestId, `Messages API error from upstream (openai-passthrough): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}`);
-      }
-      handleTargetApiError(response, 'Messages API', { url: targetUrl, body: bodyPreview });
+      const upstreamResponseBody = await response.text();
+      const upstreamBodyPreview = upstreamResponseBody.length > 500
+        ? `${upstreamResponseBody.substring(0, 500)}...`
+        : upstreamResponseBody;
+      activeLogger.error(requestId, `Messages API error from upstream (openai-passthrough): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}, upstream response body: ${upstreamBodyPreview}`);
+      handleTargetApiError(response, 'Messages API', { url: targetUrl, body: bodyPreview, upstreamBody: upstreamResponseBody });
     }
 
     // Get local token counting config
@@ -334,16 +330,12 @@ export async function handleMessagesRequest(
     const bodyPreview = typeof openaiRequest === 'string'
       ? openaiRequest
       : JSON.stringify(openaiRequest);
-    if (response.status === 400) {
-      const upstreamResponseBody = await response.text();
-      const upstreamBodyPreview = upstreamResponseBody.length > 500
-        ? `${upstreamResponseBody.substring(0, 500)}...`
-        : upstreamResponseBody;
-      activeLogger.error(requestId, `Messages API error from upstream (claude->openai): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}, upstream response body: ${upstreamBodyPreview}`);
-    } else {
-      activeLogger.error(requestId, `Messages API error from upstream (claude->openai): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}`);
-    }
-    handleTargetApiError(response, 'Messages API', { url: targetUrl, body: bodyPreview });
+    const upstreamResponseBody = await response.text();
+    const upstreamBodyPreview = upstreamResponseBody.length > 500
+      ? `${upstreamResponseBody.substring(0, 500)}...`
+      : upstreamResponseBody;
+    activeLogger.error(requestId, `Messages API error from upstream (claude->openai): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}, upstream response body: ${upstreamBodyPreview}`);
+    handleTargetApiError(response, 'Messages API', { url: targetUrl, body: bodyPreview, upstreamBody: upstreamResponseBody });
   }
 
   // Get local token counting config

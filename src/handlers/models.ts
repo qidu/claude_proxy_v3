@@ -199,7 +199,8 @@ export async function handleModelsRequest(
 
   // Handle target API errors
   if (!response.ok) {
-    handleTargetApiError(response, 'Models API', { url: targetApiUrl.toString() });
+    const upstreamErrorBody = await response.text();
+    handleTargetApiError(response, 'Models API', { url: targetApiUrl.toString(), upstreamBody: upstreamErrorBody });
   }
 
   // Parse target API response

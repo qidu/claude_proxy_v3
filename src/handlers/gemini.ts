@@ -216,7 +216,7 @@ async function handleGeminiInteractionsRequest(
         const errorText = await response.text();
         activeLogger.error(requestId, `Gemini API error: ${errorText}`);
         const bodyPreview = JSON.stringify(geminiRequest).substring(0, 1000);
-        handleTargetApiError(response, 'Gemini API', { url: targetUrl, body: bodyPreview });
+        handleTargetApiError(response, 'Gemini API', { url: targetUrl, body: bodyPreview, upstreamBody: errorText });
     }
     
     // Handle streaming response
@@ -328,8 +328,9 @@ async function handleGeminiToOpenAIMode(
     recordResponseStatusCodeFromUpstream(response.status);
 
     if (!response.ok) {
+        const upstreamErrorBody = await response.text();
         const bodyPreview = JSON.stringify(openaiRequest).substring(0, 1000);
-        handleTargetApiError(response, 'OpenAI API', { url: targetUrl, body: bodyPreview });
+        handleTargetApiError(response, 'OpenAI API', { url: targetUrl, body: bodyPreview, upstreamBody: upstreamErrorBody });
     }
 
     // Convert OpenAI response back to Claude format
@@ -509,8 +510,9 @@ async function handleGeminiToGeminiMode(
 
         // Handle target API errors
         if (!response.ok) {
+            const upstreamErrorBody = await response.text();
             const bodyPreview = JSON.stringify(geminiRequest).substring(0, 1000);
-            handleTargetApiError(response, 'Gemini API', { url: fullTargetUrl, body: bodyPreview });
+            handleTargetApiError(response, 'Gemini API', { url: fullTargetUrl, body: bodyPreview, upstreamBody: upstreamErrorBody });
         }
 
         // Handle streaming response
@@ -610,8 +612,9 @@ async function handleGeminiGenerateContentRequest(
 
         // Handle target API errors
         if (!response.ok) {
+            const upstreamErrorBody = await response.text();
             const bodyPreview = JSON.stringify(geminiRequest).substring(0, 1000);
-            handleTargetApiError(response, 'Gemini API', { url: fullTargetUrl, body: bodyPreview });
+            handleTargetApiError(response, 'Gemini API', { url: fullTargetUrl, body: bodyPreview, upstreamBody: upstreamErrorBody });
         }
 
         // Handle streaming response

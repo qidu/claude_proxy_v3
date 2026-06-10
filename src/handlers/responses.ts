@@ -106,8 +106,9 @@ async function handleAsCompletions(
 
   if (!response.ok) {
     const bodyPreview = JSON.stringify(completionsRequest);
+    const upstreamErrorBody = await response.text();
     logger.error(requestId, `Responses->Completions API error: ${response.status}, URL: ${targetUrl}`);
-    handleTargetApiError(response, 'Responses API (via Completions)', { url: targetUrl, body: bodyPreview });
+    handleTargetApiError(response, 'Responses API (via Completions)', { url: targetUrl, body: bodyPreview, upstreamBody: upstreamErrorBody });
   }
 
   if (isStreaming) {
@@ -517,8 +518,9 @@ export async function handleResponsesInputTokensRequest(
   recordUpstreamResponseToolCount('openai-completions', 0);
 
   if (!response.ok) {
+      const upstreamErrorBody = await response.text();
       activeLogger.error(requestId, `Responses input_tokens error: ${response.status}, URL: ${targetUrl}`);
-      handleTargetApiError(response, 'Responses input_tokens (via Completions)', { url: targetUrl });
+      handleTargetApiError(response, 'Responses input_tokens (via Completions)', { url: targetUrl, upstreamBody: upstreamErrorBody });
     }
 
     const responseText = await response.text();
@@ -549,8 +551,9 @@ export async function handleResponsesInputTokensRequest(
   recordUpstreamResponseToolCount('openai-completions', 0);
 
   if (!response.ok) {
+    const upstreamErrorBody = await response.text();
     activeLogger.error(requestId, `Responses input_tokens passthrough error: ${response.status}, URL: ${targetUrl}`);
-    handleTargetApiError(response, 'Responses input_tokens', { url: targetUrl });
+    handleTargetApiError(response, 'Responses input_tokens', { url: targetUrl, upstreamBody: upstreamErrorBody });
   }
 
   return new Response(response.body, {
@@ -605,8 +608,9 @@ export async function handleResponsesCompactRequest(
   recordUpstreamResponseToolCount('openai-completions', 0);
 
   if (!response.ok) {
+      const upstreamErrorBody = await response.text();
       activeLogger.error(requestId, `Responses compact error: ${response.status}, URL: ${targetUrl}`);
-      handleTargetApiError(response, 'Responses compact (via Completions)', { url: targetUrl });
+      handleTargetApiError(response, 'Responses compact (via Completions)', { url: targetUrl, upstreamBody: upstreamErrorBody });
     }
 
     const responseText = await response.text();
@@ -637,8 +641,9 @@ export async function handleResponsesCompactRequest(
   recordUpstreamResponseToolCount('openai-completions', 0);
 
   if (!response.ok) {
+    const upstreamErrorBody = await response.text();
     activeLogger.error(requestId, `Responses compact passthrough error: ${response.status}, URL: ${targetUrl}`);
-    handleTargetApiError(response, 'Responses compact', { url: targetUrl });
+    handleTargetApiError(response, 'Responses compact', { url: targetUrl, upstreamBody: upstreamErrorBody });
   }
 
   return new Response(response.body, {
@@ -678,8 +683,9 @@ async function handleAsPassthrough(
 
   if (!response.ok) {
     const bodyPreview = JSON.stringify(requestBody);
+    const upstreamErrorBody = await response.text();
     logger.error(requestId, `Responses API error: ${response.status}, URL: ${targetUrl}`);
-    handleTargetApiError(response, 'Responses API', { url: targetUrl, body: bodyPreview });
+    handleTargetApiError(response, 'Responses API', { url: targetUrl, body: bodyPreview, upstreamBody: upstreamErrorBody });
   }
 
   if (isStreaming) {

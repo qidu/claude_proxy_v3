@@ -107,56 +107,89 @@ export function createErrorResponse(
 }
 
 /**
+ * Extract the user-facing message from an upstream error response body.
+ * Checks `error.message` (Anthropic/OpenAI format) then top-level `message`.
+ * Returns undefined if no parseable message is found.
+ */
+function extractUpstreamMessage(rawBody: string | undefined): string | undefined {
+  if (!rawBody) return undefined;
+  try {
+    const parsed = JSON.parse(rawBody);
+    if (parsed && typeof parsed === 'object') {
+      if (parsed.error && typeof parsed.error === 'object' && typeof parsed.error.message === 'string' && parsed.error.message.trim()) {
+        return parsed.error.message;
+      }
+      if (typeof parsed.message === 'string' && parsed.message.trim()) {
+        return parsed.message;
+      }
+    }
+  } catch {
+    // not JSON or unparseable
+  }
+  return undefined;
+}
+
+/**
  * Handle errors from target API responses
  */
 export function handleTargetApiError(
   response: Response,
   targetApiName: string,
-  requestInfo?: { url: string; body?: string }
+  requestInfo?: { url: string; body?: string; upstreamBody?: string }
 ): never {
   const status = response.status;
+  const upstreamMessage = extractUpstreamMessage(requestInfo?.upstreamBody);
 
-  let errorMessage = `Target API (${targetApiName}) returned error: ${status}`;
+  let errorMessage = upstreamMessage ?? `Target API (${targetApiName}) returned error: ${status}`;
   let errorType = 'processing_error';
 
   switch (status) {
     case 400:
       errorType = 'invalid_request_error';
-      errorMessage = `Invalid request to ${targetApiName}`;
-      // Include request details in error message for debugging
-      if (requestInfo) {
-        errorMessage += ` [URL: ${requestInfo.url}]`;
-        if (requestInfo.body) {
-          // Truncate body if too long
-          const bodyPreview = requestInfo.body.length > 500
-            ? requestInfo.body.substring(0, 500) + '...'
-            : requestInfo.body;
-          errorMessage += ` [Body: ${bodyPreview}]`;
+      if (!upstreamMessage) {
+        errorMessage = `Invalid request to ${targetApiName}`;
+        // Include request details in error message for debugging
+        if (requestInfo) {
+          errorMessage += ` [URL: ${requestInfo.url}]`;
+          if (requestInfo.body) {
+            // Truncate body if too long
+            const bodyPreview = requestInfo.body.length > 500
+              ? requestInfo.body.substring(0, 500) + '...'
+              : requestInfo.body;
+            errorMessage += ` [Body: ${bodyPreview}]`;
+          }
         }
       }
       break;
     case 401:
       errorType = 'authentication_error';
-      errorMessage = `Authentication failed for ${targetApiName}`;
+      errorMessage = upstreamMessage ?? `Authentication failed for ${targetApiName}`;
       break;
     case 403:
       errorType = 'permission_error';
-      errorMessage = `Insufficient permissions for ${targetApiName}`;
+      errorMessage = upstreamMessage ?? `Insufficient permissions for ${targetApiName}`;
       break;
     case 429:
       errorType = 'rate_limit_error';
-      errorMessage = `Rate limit exceeded for ${targetApiName}`;
+      errorMessage = upstreamMessage ?? `Rate limit exceeded for ${targetApiName}`;
       break;
     case 413:
       errorType = 'over_limit_error';
-      errorMessage = `Request exceeds limits for ${targetApiName}`;
+      errorMessage = upstreamMessage ?? `Request exceeds limits for ${targetApiName}`;
       break;
     case 500:
     case 502:
     case 503:
     case 504:
       errorType = 'processing_error';
-      errorMessage = `Service error from ${targetApiName}`;
+      errorMessage = upstreamMessage ?? `Service error from ${targetApiName}`;
+      break;
+    default:
+      // Unknown status — preserve upstream message if we have it; otherwise generic
+      errorType = 'processing_error';
+      if (!upstreamMessage) {
+        errorMessage = `Target API (${targetApiName}) returned error: ${status}`;
+      }
       break;
   }
 
