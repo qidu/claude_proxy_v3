@@ -872,6 +872,13 @@ MODELS_CACHE_TTL = "300"
 UPSTREAM_BODY_TIMEOUT_MS = "600000"
 
 # Allowed target hosts for SSRF protection (comma-separated)
+# ⚠️ NOT YET WIRED: `isHostAllowed()` and `getAllowedHosts()` in src/utils/routing.ts
+# are defined and exported, but no code path currently calls them. The value of
+# `ALLOWED_HOSTS` is stored in `Env` (src/types/shared.ts) and parsed at module
+# load (src/server.ts), however the dynamic-routing pipeline builds the upstream
+# URL and dispatches the request without ever invoking `isHostAllowed()`. As a
+# result, this allowlist has no effect on routing or SSRF protection today —
+# adding entries here does not restrict or permit any host.
 ALLOWED_HOSTS = "127.0.0.1,localhost,api.qnaigc.com,api.example1.com,api.example2-ai.com,api.yoosheen.com,api.wenwen-ai.com"
 
 # Development mode - allows all CORS origins
