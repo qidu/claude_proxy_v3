@@ -241,7 +241,13 @@ function buildTestToolRequest(upstreamMode: string): Record<string, unknown> {
     return buildOpenAIToolRequest();
   }
 
-  return buildClaudeToolRequest();
+  const request = buildClaudeToolRequest();
+  // For anthropic-messages models, default to adaptive thinking so the TUI
+  // test exercises the same thinking path real Anthropic traffic uses.
+  if (upstreamMode === 'anthropic-messages') {
+    request.thinking = { type: 'adaptive' };
+  }
+  return request;
 }
 
 export type DashboardSource = {
