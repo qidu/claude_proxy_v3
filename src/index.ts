@@ -443,7 +443,12 @@ export default {
       }
 
       if (path === '/dashboard/api/config' && request.method === 'GET') {
-        return applyCorsHeaders(handleDashboardGetConfig(proxyConfig, env), request, env);
+        let configForDashboard = proxyConfig;
+        if (url.searchParams.get('reload') === '1') {
+          clearProxyConfigCache();
+          configForDashboard = await loadProxyConfig(env);
+        }
+        return applyCorsHeaders(handleDashboardGetConfig(configForDashboard, env), request, env);
       }
 
       if (path === '/dashboard/api/config' && request.method === 'PUT') {

@@ -252,7 +252,7 @@ function buildTestToolRequest(upstreamMode: string): Record<string, unknown> {
 
 export type DashboardSource = {
   env: Env;
-  loadConfig: () => Promise<ProxyConfig>;
+  loadConfig: (forceReload?: boolean) => Promise<ProxyConfig>;
   readOnly: boolean;
 };
 
@@ -486,7 +486,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
       return;
     }
     if (matchesKey(data, 'r')) {
-      void this.app.refresh();
+      void this.app.refresh(false, true);
       return;
     }
     if (matchesKey(data, 'down') || matchesKey(data, 'j')) {
@@ -654,7 +654,7 @@ class DashboardView implements Component {
       return;
     }
     if (matchesKey(data, 'r')) {
-      void this.app.refresh();
+      void this.app.refresh(false, true);
       return;
     }
     if (matchesKey(data, 't') || matchesKey(data, 'shift+t')) {
@@ -869,12 +869,12 @@ class DashboardApp {
     }, 100);
   }
 
-  async refresh(fromMutation = false): Promise<void> {
+  async refresh(fromMutation = false, forceReload = false): Promise<void> {
     if (this.refreshing) return;
     if (fromMutation) this.view.setConfigStatus('changed');
     this.refreshing = true;
     try {
-      const proxyConfig = await this.source.loadConfig();
+      const proxyConfig = await this.source.loadConfig(forceReload);
       const validationErrors = (proxyConfig as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors;
       const snapshot = getDashboardSnapshot(proxyConfig, this.source.env);
       this.lastRefreshTotalTokens = snapshot.modelStats.reduce((sum, m) => sum + m.total_tokens, 0);

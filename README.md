@@ -18,7 +18,7 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
   - `POST /v1/messages/count_tokens` - Count tokens in messages
   - `POST /v1/embeddings` - Generate embeddings (proxied to upstream OpenAI-compatible API)
   - `GET /dashboard` - Web dashboard for config and runtime statistics
-  - `GET /dashboard/api/config` - Read sanitized editable config (`models.*`, `composite`; hides `api_key`)
+  - `GET /dashboard/api/config` - Read sanitized editable config (`models.*`, `composite`; hides `api_key`). Add `?reload=1` to clear the in-memory config cache and re-read the config file first (used by the dashboard "Reload" button and the TUI `r` key, so externally edited config — e.g. new models — shows up without restarting)
   - `PUT /dashboard/api/config` - Save dashboard config edits, persist them, and reload the updated config back into `/dashboard` and the TUI (file mode only; read-only when `PROXY_CONFIG_URL` is set)
   - `GET /dashboard/api/stats/models` - Model request + token stats
   - Dashboard "Export CSV" button reads table data from the DOM and triggers a download; it does **not** change the in-memory stats data.
@@ -46,6 +46,11 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
   - **Signature Verification**: Full signature_delta streaming events for thinking block verification
   - **Streaming Support**: Proper thinking_delta and signature_delta events in SSE streams
   - **Token Counting**: Accurate token counting for thinking content with budget validation
+
+- **Token Usage Accounting** (TUI `Top Models` / dashboard stats), per upstream mode:
+  - `openai-completions`: the proxy adds `stream_options: { include_usage: true }` to converted streaming requests and prefers the upstream-reported `usage` (`prompt_tokens` / `completion_tokens`, plus OpenAI `prompt_tokens_details.cached_tokens` and DeepSeek `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` cache fields) over local tiktoken estimates; local counting is the fallback when the upstream omits usage
+  - `anthropic-messages` (pass-through): the upstream SSE stream is teed and the usage-tracking branch parses `message_start.message.usage` and `message_delta.usage` (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`); non-streaming JSON responses are parsed for the `usage` object and any tool names used in the response. The client always receives the upstream bytes unmodified
+  - **Note**: pass-through accounting can only record what the upstream puts on the wire — if an Anthropic-compatible upstream hardcodes `input_tokens: 0` in `message_start` and omits input/cache fields from `message_delta.usage`, the `token in` column stays 0 until the upstream is fixed to emit them
 
 - **Flexible Configuration**:
   - File-based config: `proxy_config.toml`
@@ -226,7 +231,7 @@ Keyboard shortcuts:
 - `t` add a target to the selected alias
 - `e` edit the selected target
 - `d` delete the selected alias/target
-- `r` reload config
+- `r` reload config (clears the in-memory config cache and re-reads the config file, so external edits are picked up)
 - `T` (shift) open test model picker
 - `Ctrl+O` dump today's tokens data to log file
 - `Ctrl+C` quit the TUI
@@ -899,6 +904,21 @@ Dashboard/API token stats can be normalized to a single shape:
 Fallback rules:
 - Missing fields are treated as `0`.
 - Prefer provider-returned `total_tokens`; otherwise derive from normalized fields.
+
+**Anthropic usage semantics (disjoint input fields):** for Claude `/v1/messages`, the three input-side fields never overlap:
+
+- `input_tokens` — only the **uncached** part of the prompt
+- `cache_read_input_tokens` (`cached`) — prompt tokens served from the prompt cache
+- `cache_creation_input_tokens` (`wrote`) — prompt tokens written to the cache
+
+Real prompt size = `in + cached + wrote`. With prompt caching active (e.g. Claude Code clients), `input_tokens` is typically tiny while `cached`/`wrote` carry almost the whole prompt — a small `token in` next to large `wrote`/`cached` values in the TUI/dashboard is normal, not a bug. For streaming responses, `cached`/`wrote` are captured from the `message_start`/`message_delta` SSE usage frames.
+
+**Streaming usage for converted (Claude→OpenAI) upstreams:** when the proxy converts a streaming `/v1/messages` request to an OpenAI-compatible upstream, it sends `stream_options: { include_usage: true }` so the upstream reports usage in its final SSE chunk. The Claude SSE emitted back has:
+
+- `message_start.usage.input_tokens` — local tiktoken estimate of the request (available immediately)
+- final `message_delta.usage` — upstream-reported `prompt_tokens`/`completion_tokens` (preferred over local estimates when present), plus `cache_read_input_tokens` (from `prompt_tokens_details.cached_tokens` or DeepSeek `prompt_cache_hit_tokens`) and `cache_creation_input_tokens` (from DeepSeek `prompt_cache_miss_tokens`)
+
+The TUI/dashboard stats tracker reads the final `message_delta` values, so streamed requests get real `token in`/`cached`/`wrote` numbers instead of `0`.
 
 ## 🔧 Configuration
 

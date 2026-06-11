@@ -734,9 +734,9 @@ export function handleDashboardPage(): Response {
         }
       }
 
-      async function loadConfig() {
+      async function loadConfig(forceReload) {
         configStatus.textContent = 'Loading...';
-        const res = await fetch('/dashboard/api/config');
+        const res = await fetch(forceReload === true ? '/dashboard/api/config?reload=1' : '/dashboard/api/config');
         const json = await res.json();
         isReadOnly = json.config.read_only === true;
         currentConfig = {
@@ -896,7 +896,7 @@ export function handleDashboardPage(): Response {
         );
       }
 
-      document.getElementById('reloadConfig').addEventListener('click', loadConfig);
+      document.getElementById('reloadConfig').addEventListener('click', () => loadConfig(true));
       document.getElementById('saveConfig').addEventListener('click', saveConfig);
       configForm.addEventListener('click', handleConfigAction);
 

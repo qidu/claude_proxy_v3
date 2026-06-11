@@ -5,7 +5,7 @@
 
 import { createServer } from 'http';
 import type { Env } from './types/shared.js';
-import { loadProxyConfig } from './utils/config-loader.js';
+import { loadProxyConfig, clearProxyConfigCache } from './utils/config-loader.js';
 import { startTUI } from './tui.js';
 
 const port = parseInt(process.env.PORT || '8788', 10);
@@ -134,7 +134,10 @@ server.listen(port, '0.0.0.0', async () => {
 
     stopTui = startTUI({
       env,
-      loadConfig: async () => loadProxyConfig(env),
+      loadConfig: async (forceReload?: boolean) => {
+        if (forceReload) clearProxyConfigCache();
+        return loadProxyConfig(env);
+      },
       readOnly: !!env.PROXY_CONFIG_URL,
     });
   } else {
