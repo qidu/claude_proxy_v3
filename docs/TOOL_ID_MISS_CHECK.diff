@@ -1,0 +1,141 @@
+# **NOTICE**: this diff is applied and tested, BUT it DOES NOT show the `tool_result` with missing `tool_use_id` errors coming from Anthropic Office API
+# for these models fable-5 even opus-4-x is really fixed. So add this as doc just for laoter reference.
+#
+diff --git a/src/handlers/claude.ts b/src/handlers/claude.ts
+index 429aa77..879efd9 100644
+--- a/src/handlers/claude.ts
++++ b/src/handlers/claude.ts
+@@ -83,6 +83,14 @@ export async function handleClaudeRequest(
+         }
+     }
+ 
++    // Strip orphan tool_result blocks whose tool_use_id has no matching tool_use
++    // block in the same request body. The Anthropic Messages API rejects such
++    // requests with: "unexpected `tool_use_id` found in `tool_result` blocks".
++    // Gated behind TOOL_ID_MISS_CHECK (default disabled).
++    if ((env?.TOOL_ID_MISS_CHECK === '1' || env?.TOOL_ID_MISS_CHECK === 'true') && Array.isArray(requestBody.messages)) {
++        stripOrphanToolResults(requestBody.messages as any[], requestId, activeLogger);
++    }
++
+     // Check if this is an SDK URL
+     if (isSdkUrl(targetUrl)) {
+         // Extract API key from auth headers
+@@ -143,3 +151,61 @@ export async function handleClaudeRequest(
+         headers: response.headers,
+     });
+ }
++
++/**
++ * Strip `tool_result` blocks whose `tool_use_id` has no matching `tool_use` block
++ * earlier in the same request body. Anthropic's Messages API requires every
++ * `tool_result` to be preceded by the `assistant` `tool_use` that produced it; an
++ * orphan `tool_result` triggers a 400 ("unexpected `tool_use_id` found in
++ * `tool_result` blocks"). This removes those orphan blocks in place.
++ *
++ * The `messages` array is mutated directly. A `user` message left with no content
++ * blocks after stripping is removed so the request stays valid.
++ */
++function stripOrphanToolResults(messages: any[], requestId: string, logger: Logger): void {
++    // Collect every tool_use id that appears in an assistant message.
++    const knownToolUseIds = new Set<string>();
++    for (const msg of messages) {
++        if (msg?.role === 'assistant' && Array.isArray(msg.content)) {
++            for (const block of msg.content) {
++                if (block?.type === 'tool_use' && typeof block.id === 'string') {
++                    knownToolUseIds.add(block.id);
++                }
++            }
++        }
++    }
++
++    const strippedIds: string[] = [];
++    for (let i = messages.length - 1; i >= 0; i--) {
++        const msg = messages[i];
++        if (msg?.role !== 'user' || !Array.isArray(msg.content)) {
++            continue;
++        }
++
++        const kept = msg.content.filter((block: any) => {
++            if (block?.type === 'tool_result' && !knownToolUseIds.has(block?.tool_use_id)) {
++                strippedIds.push(block?.tool_use_id ?? '(missing)');
++                return false;
++            }
++            return true;
++        });
++
++        if (kept.length === msg.content.length) {
++            continue;
++        }
++
++        if (kept.length === 0) {
++            // No content left after stripping — drop the whole message.
++            messages.splice(i, 1);
++        } else {
++            msg.content = kept;
++        }
++    }
++
++    if (strippedIds.length > 0) {
++        logger.warn(
++            requestId,
++            `TOOL_ID_MISS_CHECK: stripped ${strippedIds.length} orphan tool_result block(s) with no matching tool_use: ${strippedIds.join(', ')}`,
++        );
++    }
++}
+diff --git a/src/types/shared.ts b/src/types/shared.ts
+index 1b13601..cb537b9 100644
+--- a/src/types/shared.ts
++++ b/src/types/shared.ts
+@@ -156,6 +156,15 @@ export interface Env {
+      * without format conversion. Set to "true" or "1" to enable.
+      */
+     DEV_PASS_THROUGH?: string;
++
++    /**
++     * When "1" (or "true"), strip `tool_result` blocks from the /v1/messages request
++     * whose `tool_use_id` has no matching `tool_use` block in the same request body
++     * (an earlier `assistant` message). This guards the anthropic-messages passthrough
++     * against the upstream "unexpected `tool_use_id` found in `tool_result` blocks" 400.
++     * Default: false (disabled).
++     */
++    TOOL_ID_MISS_CHECK?: string;
+ }
+ 
+ 
+diff --git a/README.md b/README.md
+index c4a7947..31de0fc 100644
+--- a/README.md
++++ b/README.md
+@@ -513,6 +513,11 @@ no tool use errors occur.
+ - If you suspect the client is dropping turns, enable debug logging and inspect the outgoing
+   request body to confirm the last two messages form a valid `tool_use` → `tool_result` pair
+   before it reaches the upstream.
++- As a server-side safeguard, set `TOOL_ID_MISS_CHECK=1`. With this enabled, the proxy removes
++  any `tool_result` block whose `tool_use_id` has no matching `tool_use` block in the same
++  request body before forwarding to the `anthropic-messages` upstream, so the request no longer
++  triggers the upstream 400. A `user` message left empty after stripping is dropped. This is a
++  mitigation; the correct long-term fix is for the client to send the full conversation history.
+ 
+ ---
+ 
+@@ -976,6 +981,12 @@ LOG_LEVEL = "info"
+ # When "true", stores each response in memory and auto-prepends history
+ # for requests with previous_response_id. TTL: 3600s. In-memory only.
+ # CONVERSATION = "false"
++
++# Strip orphan tool_result blocks on /v1/messages (anthropic-messages upstream)
++# When "1" (or "true"), tool_result blocks whose tool_use_id has no matching
++# tool_use block in the same request body are removed before forwarding upstream,
++# avoiding the upstream 400 "unexpected `tool_use_id` found in `tool_result` blocks".
++# TOOL_ID_MISS_CHECK = "0"
+ ```
+ 
+ For local Node.js runs, either pass inline or export them:
+@@ -1013,6 +1024,7 @@ node dist/server.js
+ | `DEV_PASS_THROUGH` | `DEV_PASS_THROUGH` | `"false"` |
+ | `DEFAULT_MAX_TOKENS` | `DEFAULT_MAX_TOKENS` | unset |
+ | `CONVERSATION` | `CONVERSATION` | unset |
++| `TOOL_ID_MISS_CHECK` | `TOOL_ID_MISS_CHECK` | `"0"` (false) |
+ | `UPSTREAM_BODY_TIMEOUT_MS` | `UPSTREAM_BODY_TIMEOUT_MS` | unset |
+ | `MODELS_CACHE_TTL` | `MODELS_CACHE_TTL` | unset |
+ | `JSON_STRINGIFY_METHOD` | `JSON_STRINGIFY_METHOD` | unset |
