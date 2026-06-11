@@ -9,7 +9,7 @@ import { handleTargetApiError } from '../utils/errors.js';
 import { isSdkUrl, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
 import { addForwardedHeaders } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
-import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
+import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount, createUsageTrackingTransformStream, extractUsageFromResponsePayload, recordModelUsage, extractToolNamesFromResponsePayload, recordUpstreamResponseToolNames } from '../utils/dashboard-stats.js';
 
 /**
  * Handle native Claude API request (pass-through)
@@ -135,6 +135,59 @@ export async function handleClaudeRequest(
         }
         const bodyPreview = JSON.stringify(requestBody).substring(0, 1000);
         handleTargetApiError(response, 'Claude API', { url: targetUrl, body: bodyPreview, upstreamBody: upstreamErrorBody });
+    }
+
+    // Token counting: the upstream is already emitting Anthropic SSE with real
+    // usage in message_start.message.usage and message_delta.usage, but we have
+    // to tap the stream to feed it into recordModelUsage.
+    const contentType = response.headers.get('content-type') || '';
+    const isEventStream = contentType.includes('text/event-stream');
+    const accountingModel = modelId || (typeof requestBody.model === 'string' ? requestBody.model : undefined);
+
+    if (isEventStream && response.body && accountingModel) {
+        // Tee the stream: one branch goes through the usage-tracking transform
+        // (which records tokens on flush), the other is returned to the client
+        // untouched. This keeps the pass-through contract for the client while
+        // restoring token accounting for the TUI / dashboard.
+        const [clientStream, usageStream] = response.body.tee();
+        const trackingTransform = createUsageTrackingTransformStream(accountingModel);
+        // Pipe usageStream through the transform; the bytes are dropped on
+        // the other side, but the transform's flush() will call
+        // recordModelUsage when the upstream closes the stream.
+        usageStream.pipeThrough(trackingTransform).pipeTo(new WritableStream({
+            write() { /* discard */ },
+        })).catch(() => {
+            // Upstream errors or aborts should not break the client response.
+        });
+
+        return new Response(clientStream, {
+            status: response.status,
+            headers: response.headers,
+        });
+    }
+
+    // Non-streaming JSON response: read a clone of the body to extract usage
+    // and tool names; the original response.body is returned to the client.
+    if (response.body && accountingModel) {
+        const cloned = response.clone();
+        try {
+            const text = await cloned.text();
+            try {
+                const payload = JSON.parse(text);
+                const usage = extractUsageFromResponsePayload(payload);
+                if (usage) {
+                    recordModelUsage(accountingModel, usage);
+                }
+                const toolNames = extractToolNamesFromResponsePayload(payload);
+                if (toolNames.length > 0 && !(toolNames.length === 1 && toolNames[0] === 'none')) {
+                    recordUpstreamResponseToolNames(toolNames);
+                }
+            } catch {
+                // body wasn't JSON; nothing to extract
+            }
+        } catch {
+            // failed to read body; nothing to do
+        }
     }
 
     // Return response as-is (pass-through)
