@@ -64,6 +64,7 @@ export interface OpenAIRequest {
     top_p?: number;
     stop?: string | string[];
     stream?: boolean;
+    stream_options?: { include_usage?: boolean };
     response_format?: { type: "text" | "json_object" };
     tools?: Array<{
         type: "function";

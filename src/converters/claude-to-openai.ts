@@ -407,6 +407,11 @@ export function convertClaudeToOpenAIRequest(
         stop: claudeRequest.stop_sequences,
     };
 
+    // Ask upstream to include token usage in the final streaming chunk
+    if (claudeRequest.stream) {
+        openaiRequest.stream_options = { include_usage: true };
+    }
+
     // Handle tools
     const convertedTools = convertClaudeToolsToOpenAI(claudeRequest.tools);
     if (convertedTools) {

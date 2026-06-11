@@ -43,6 +43,36 @@ export function createStreamTransformer(
     let tokenizer: any = null;
     let tokenizerReady = false;
 
+    // Upstream-reported usage (from stream_options.include_usage final chunk,
+    // which may arrive in any transform() call before [DONE])
+    let upstreamPromptTokens = 0;
+    let upstreamCompletionTokens = 0;
+    let upstreamCachedTokens = 0;
+    let upstreamCacheWrittenTokens = 0;
+
+    const captureUpstreamUsage = (usage: any) => {
+        if (!usage || typeof usage !== 'object') return;
+        if (typeof usage.prompt_tokens === 'number' && usage.prompt_tokens > 0) {
+            upstreamPromptTokens = usage.prompt_tokens;
+        }
+        if (typeof usage.completion_tokens === 'number' && usage.completion_tokens > 0) {
+            upstreamCompletionTokens = usage.completion_tokens;
+        }
+        // OpenAI-style cached tokens
+        const detailsCached = usage.prompt_tokens_details?.cached_tokens;
+        // DeepSeek-style cache hit/miss tokens
+        const cacheHit = usage.prompt_cache_hit_tokens;
+        const cacheMiss = usage.prompt_cache_miss_tokens;
+        if (typeof detailsCached === 'number' && detailsCached > 0) {
+            upstreamCachedTokens = detailsCached;
+        } else if (typeof cacheHit === 'number' && cacheHit > 0) {
+            upstreamCachedTokens = cacheHit;
+        }
+        if (typeof cacheMiss === 'number' && cacheMiss > 0) {
+            upstreamCacheWrittenTokens = cacheMiss;
+        }
+    };
+
     // Calculate input tokens and prepare tokenizer for output counting
     const initializeTokenCounting = async () => {
         if (tokenCountingConfig?.enabled && requestBody) {
@@ -91,6 +121,22 @@ export function createStreamTransformer(
         } catch (e) {
             // Ignore counting errors
         }
+    };
+
+    // Build the final usage object, preferring upstream-reported counts over
+    // local tiktoken estimates, and including cache fields when available.
+    const buildFinalUsage = () => {
+        const usage: Record<string, number> = {
+            input_tokens: upstreamPromptTokens > 0 ? upstreamPromptTokens : inputTokens,
+            output_tokens: upstreamCompletionTokens > 0 ? upstreamCompletionTokens : outputTokens,
+        };
+        if (upstreamCachedTokens > 0) {
+            usage.cache_read_input_tokens = upstreamCachedTokens;
+        }
+        if (upstreamCacheWrittenTokens > 0) {
+            usage.cache_creation_input_tokens = upstreamCacheWrittenTokens;
+        }
+        return usage;
     };
 
     const sendEvent = (controller: TransformStreamDefaultController, event: string, data: object) => {
@@ -168,12 +214,11 @@ export function createStreamTransformer(
     };
 
     return {
-        transform(chunk: Uint8Array, controller: TransformStreamDefaultController) {
-            // Decode chunk for processing
-            decoder.decode(chunk, { stream: true });
+        async transform(chunk: Uint8Array, controller: TransformStreamDefaultController) {
             if (!initialized) {
-                // Initialize token counting
-                initializeTokenCounting();
+                // Initialize token counting (must complete before message_start so
+                // input_tokens is populated instead of always reporting 0)
+                await initializeTokenCounting();
 
                 // Send message_start event with input tokens
                 sendEvent(controller, 'message_start', {
@@ -244,9 +289,6 @@ export function createStreamTransformer(
 
                     // Determine final stop reason
                     let finalStopReason = "end_turn";
-                    // Upstream token usage from final chunk (OpenAI format has usage.prompt_tokens / usage.completion_tokens)
-                    let upstreamPromptTokens = 0;
-                    let upstreamCompletionTokens = 0;
                     try {
                         // Find the last data chunk before [DONE]
                         let lastDataChunk: any = null;
@@ -279,17 +321,7 @@ export function createStreamTransformer(
                             else if ((!finishReason || finishReason === 'stop') && hasToolCalls) finalStopReason = 'tool_use';
 
                             // Extract upstream token usage from the final chunk
-                            if (lastDataChunk.usage) {
-                                upstreamPromptTokens = lastDataChunk.usage.prompt_tokens ?? 0;
-                                upstreamCompletionTokens = lastDataChunk.usage.completion_tokens ?? 0;
-                            }
-                            // Use upstream usage if local token counting didn't produce values
-                            if (inputTokens === 0 && upstreamPromptTokens > 0) {
-                                inputTokens = upstreamPromptTokens;
-                            }
-                            if (outputTokens === 0 && upstreamCompletionTokens > 0) {
-                                outputTokens = upstreamCompletionTokens;
-                            }
+                            captureUpstreamUsage(lastDataChunk.usage);
                         } else if (hasToolCalls) {
                             // If we can't find the last chunk but we have tool calls, default to tool_use
                             finalStopReason = 'tool_use';
@@ -300,7 +332,7 @@ export function createStreamTransformer(
                     sendEvent(controller, 'message_delta', {
                         type: 'message_delta',
                         delta: { stop_reason: finalStopReason, stop_sequence: null },
-                        usage: { input_tokens: inputTokens, output_tokens: outputTokens }
+                        usage: buildFinalUsage()
                     });
 
                     // Send message_stop
@@ -314,6 +346,10 @@ export function createStreamTransformer(
 
                 try {
                     const openaiChunk = JSON.parse(data);
+                    // With stream_options.include_usage, the usage arrives in a
+                    // final chunk that has an empty choices array — capture it
+                    // before skipping such chunks.
+                    captureUpstreamUsage(openaiChunk.usage);
                     if (!openaiChunk.choices || !Array.isArray(openaiChunk.choices) || openaiChunk.choices.length === 0) {
                         continue;
                     }
@@ -486,7 +522,7 @@ export function createStreamTransformer(
                 sendEvent(controller, 'message_delta', {
                     type: 'message_delta',
                     delta: { stop_reason: hasToolCalls ? "tool_use" : "end_turn", stop_sequence: null },
-                    usage: { input_tokens: inputTokens, output_tokens: outputTokens }
+                    usage: buildFinalUsage()
                 });
 
                 sendEvent(controller, 'message_stop', {
