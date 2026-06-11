@@ -733,6 +733,8 @@ export function getModelStatsDesc(): ModelStatsEntry[] {
  */
 export function createUsageTrackingTransformStream(model: string): TransformStream<Uint8Array, Uint8Array> {
   let inputTokens = 0;
+  let cachedTokens = 0;
+  let cacheWrittenTokens = 0;
   let outputTokens = 0;
   let totalTokens = 0;
   let foundUsage = false;
@@ -741,33 +743,54 @@ export function createUsageTrackingTransformStream(model: string): TransformStre
 
   return new TransformStream({
     transform(chunk: Uint8Array, controller: TransformStreamDefaultController<Uint8Array>) {
-      const text = remainder + decoder.decode(chunk, { stream: true });
+      // Normalize CRLF -> LF so SSE frames delimited by "\r\n\r\n" (the
+      // spec-compliant form used by many Anthropic-compatible upstreams)
+      // are split correctly. Without this, a trailing "\r" ends up inside
+      // the data line and JSON.parse silently throws in the catch below,
+      // dropping the message_start frame (so input_tokens stays 0 while
+      // message_delta's output_tokens still records).
+      const text = (remainder + decoder.decode(chunk, { stream: true })).replace(/\r\n/g, '\n');
       const parts = text.split('\n\n');
       remainder = parts.pop() || '';
 
       for (const part of parts) {
         // Match Claude SSE event name
         const eventLine = part.match(/^event: (.+)$/m);
-        const dataLine = part.match(/^data: (.+)$/m);
+        const dataLine = part.match(/^data: ?(.+?)\r?$/m);
         if (eventLine && dataLine) {
           const eventType = eventLine[1];
           try {
             const data = JSON.parse(dataLine[1]);
             if (eventType === 'message_start' && data.message?.usage) {
-              const val = data.message.usage.input_tokens;
-              if (typeof val === 'number') {
-                inputTokens = val;
+              const usage = data.message.usage;
+              if (typeof usage.input_tokens === 'number') {
+                inputTokens = usage.input_tokens;
+                foundUsage = true;
+              }
+              if (typeof usage.cache_read_input_tokens === 'number') {
+                cachedTokens = usage.cache_read_input_tokens;
+                foundUsage = true;
+              }
+              if (typeof usage.cache_creation_input_tokens === 'number') {
+                cacheWrittenTokens = usage.cache_creation_input_tokens;
                 foundUsage = true;
               }
             } else if (eventType === 'message_delta' && data.usage) {
-              const val = data.usage.output_tokens;
-              if (typeof val === 'number') {
-                outputTokens = val;
+              const usage = data.usage;
+              if (typeof usage.output_tokens === 'number') {
+                outputTokens = usage.output_tokens;
                 foundUsage = true;
               }
-              const valIn = data.usage.input_tokens;
-              if (typeof valIn === 'number') {
-                inputTokens = valIn;
+              if (typeof usage.input_tokens === 'number') {
+                inputTokens = usage.input_tokens;
+                foundUsage = true;
+              }
+              if (typeof usage.cache_read_input_tokens === 'number') {
+                cachedTokens = usage.cache_read_input_tokens;
+                foundUsage = true;
+              }
+              if (typeof usage.cache_creation_input_tokens === 'number') {
+                cacheWrittenTokens = usage.cache_creation_input_tokens;
                 foundUsage = true;
               }
             }
@@ -804,10 +827,13 @@ export function createUsageTrackingTransformStream(model: string): TransformStre
     },
     flush() {
       if (foundUsage) {
+        const computedTotal = inputTokens + cachedTokens + cacheWrittenTokens + outputTokens;
         recordModelUsage(model, {
           input_tokens: inputTokens > 0 ? inputTokens : undefined,
+          cached_tokens: cachedTokens > 0 ? cachedTokens : undefined,
+          cache_written_tokens: cacheWrittenTokens > 0 ? cacheWrittenTokens : undefined,
           output_tokens: outputTokens > 0 ? outputTokens : undefined,
-          total_tokens: totalTokens > 0 ? totalTokens : (inputTokens > 0 || outputTokens > 0 ? inputTokens + outputTokens : undefined),
+          total_tokens: totalTokens > 0 ? totalTokens : (computedTotal > 0 ? computedTotal : undefined),
         });
       }
     },
