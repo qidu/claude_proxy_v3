@@ -2,7 +2,9 @@
 
 **Scope:** Proxy implementation under `./src/` (entry/routing, upstream/SSRF, dashboard/logging/storage).
 **Method:** Read-only review of source; key findings verified directly against the code (file:line cited).
-**Date:** 2026-06-10
+**Date:** 2026-06-10 (re-verified 2026-06-11)
+
+> **Re-verification note (2026-06-11):** key claims spot-checked against the current tree — `0.0.0.0` bind (`server.ts:123`), unauthenticated `/config-reload` (`index.ts:398`) and `PUT /dashboard/api/config` (`index.ts:449`), dead `isHostAllowed` (exported `routing.ts:16`, never called), unescaped model in upstream URL (`index.ts:686-687, 703`) all still hold. Line numbers in `dashboard-stats.ts` past ~735 have shifted due to an unrelated streaming-usage fix; other citations unaffected.
 
 ---
 
@@ -58,7 +60,7 @@ Severities below are the **as-deployed-today** ratings (server on `0.0.0.0`, no 
 
 ### Medium
 
-- **M1 — Cross-upstream API-key forwarding.** `sdk-handler.ts:228-238` sends the client's provider key to a hardcoded `https://chatjimmy.ai/api` for any `sdk://` route (key confusion / leakage to a fixed third party).
+- **M1 — Cross-upstream API-key forwarding.** `src/utils/sdk-handler.ts:229` **and** `:392` (two call sites) send the client's provider key to a hardcoded `https://chatjimmy.ai/api` for any `sdk://` route (key confusion / leakage to a fixed third party).
 - **M2 — Upstream error bodies returned/echoed verbatim.** `errors.ts:141-161` embeds the upstream URL + up to 500 chars of the request body into client-facing errors; `embeddings.ts:53-64` returns raw upstream `errorText`. Leaks internal URLs, prompt content, and potentially echoed auth headers.
 - **M3 — Partial API keys logged.** `routing.ts:267-281` logs the first 16 chars of the key; `openai.ts:116-118` logs key tails; `index.ts:822-828` logs partial key values.
 - **M4 — CORS reflects arbitrary Origin.** `index.ts:84-98` reflects the request Origin when `ALLOWED_ORIGINS` is unset; `server.ts:24` defaults `ALLOWED_ORIGINS='*'`. Combined with no auth, browsers can read proxied responses cross-origin.
@@ -114,7 +116,7 @@ Ordered for the scoped (localhost-dashboard) deployment, highest impact first:
 1. **Make the localhost assumption real (cheap, removes C1/C2/H3):** bind the listener to `127.0.0.1`, or block `/dashboard*` + `/config-reload` at the network edge. Do not rely on the CORS Origin check for access control.
 2. **H2 — `encodeURIComponent` the model URL segment** (`index.ts:686-687, 703-704, 724`). Not mitigated by scoping; affects every Gemini-native request.
 3. **H1 — actually call `isHostAllowed`** before every upstream `fetch` so config can't point keys at arbitrary/internal hosts.
-4. **H4/M3 — stop writing secrets/prompts to predictable files**; if debug dumps are needed, use restrictive perms and a non-shared path, and never dump full keys.
+4. **H4/M3 — stop writing secrets/prompts to predictable files**; if debug dumps are needed, use restrictive perms and a non-shared path, and never dump full keys. Also add `model_proxy_tokens.jsonl` and `config-dumps/` to `.gitignore` — both are currently untracked in the working tree (the latter contains dumped keys per C2) and could be accidentally committed.
 5. **C3 — add a real authenticated check** on the proxy data path *if* `/v1/*` is exposed beyond localhost (compare against a configured secret with a constant-time comparison, not mere header presence).
 6. **M2 — sanitize upstream error bodies** before returning them to clients.
 7. **M5 — add the abort/timeout signal** to the three Gemini fetches.
