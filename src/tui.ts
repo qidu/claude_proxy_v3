@@ -551,7 +551,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
     if (!composites.length) lines.push(dim('  none'));
     for (const [alias, targets] of composites) {
       const selectedAlias = selected?.kind === 'alias' && selected.alias === alias;
-      const prefix = selectedAlias ? green('>') : dim('│');
+      const prefix = selectedAlias ? green('▶') : dim('│');
       const typedTargets = targets as { token_limit?: { num: number; duration: string } } | undefined;
       const aliasLimit = typedTargets?.token_limit;
       const win = snap.compositeLimitWindows?.[alias];
@@ -572,7 +572,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
       }
       for (const [target, cfg] of entries.sort(sortCompositeTargets)) {
         const selectedTarget = selected?.kind === 'target' && selected.alias === alias && selected.target === target;
-        const mark = selectedTarget ? green('>') : dim('·');
+        const mark = selectedTarget ? green('▶') : dim('·');
         const typedCfg = cfg as { share?: number; primary?: boolean; fallback?: number } | undefined;
         const summary = `${typedCfg?.share ?? '-'}${typedCfg?.primary ? ' P' : ''}${typedCfg?.fallback === 0 ? ' non-FB' : typedCfg?.fallback !== undefined ? ` FB${typedCfg.fallback}` : ''}`;
         const timingKey = targetRouteModel.get(target) ?? target;
@@ -800,6 +800,12 @@ class DashboardApp {
   private modelTestTimer: ReturnType<typeof setInterval> | null = null;
   private modelTestTimerActive = false;
   private modelTestInProgress = false;
+  // Set by togglePeriodicModelTest / stop() to abort an in-flight test-all
+  // batch. The for-loop in runAllCustomModelTests checks it between models;
+  // the AbortController interrupts the current fetch so the loop doesn't
+  // have to wait for it to time out.
+  private modelTestAborted = false;
+  private modelTestAbortController: AbortController | null = null;
   private lastDumpedTotalTokens = -1;
   private lastRefreshTotalTokens = -1;
   private lastDumpedDate = '';
@@ -1146,11 +1152,13 @@ class DashboardApp {
       } catch (_e) { /* ignore */ }
     }
 
+    this.modelTestAbortController = new AbortController();
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(fullRequestBody),
+        signal: this.modelTestAbortController.signal,
       });
 
       const contentType = response.headers.get('content-type') || '';
@@ -1187,6 +1195,8 @@ class DashboardApp {
         usage: 'n/a',
         detail: (error as Error).message,
       };
+    } finally {
+      this.modelTestAbortController = null;
     }
   }
 
@@ -1205,6 +1215,7 @@ class DashboardApp {
       return;
     }
     this.modelTestInProgress = true;
+    this.modelTestAborted = false;
     if (opts.announce) {
       this.view.setMessage(`test-all: starting ${choices.length} models...`);
       this.requestRender();
@@ -1212,26 +1223,36 @@ class DashboardApp {
     let passed = 0;
     let failed = 0;
     for (let i = 0; i < choices.length; i++) {
+      if (this.modelTestAborted) break;
       const choice = choices[i];
       this.view.setMessage(`test-all: ${i + 1}/${choices.length} — ${choice.value}...`);
       this.requestRender();
       const result = await this.executeModelTest(choice.value);
+      // The abort can land mid-fetch; don't count the interrupted model.
+      if (this.modelTestAborted) break;
       if (result?.ok) passed++;
       else failed++;
     }
-    const summary = `test-all: ${passed} ok / ${failed} failed / ${choices.length} total`;
-    this.view.setMessage(this.modelTestTimerActive ? `${green(summary)} (next in 30m)` : summary, 15000);
+    if (this.modelTestAborted) {
+      this.view.setMessage(`test-all: aborted (${passed} ok / ${failed} failed so far)`, 10000);
+    } else {
+      const summary = `test-all: ${passed} ok / ${failed} failed / ${choices.length} total`;
+      this.view.setMessage(this.modelTestTimerActive ? `${green(summary)} (next in 30m)` : summary, 15000);
+    }
     this.requestRender();
     this.modelTestInProgress = false;
   }
 
   // Toggle a 30-minute recurring test-all loop. `P` flips it on; the first
-  // run starts immediately so the user gets feedback right away.
+  // run starts immediately so the user gets feedback right away. Flipping
+  // it off also aborts any in-flight batch via the abort flag + controller.
   togglePeriodicModelTest(): void {
     if (this.modelTestTimerActive) {
       if (this.modelTestTimer) clearInterval(this.modelTestTimer);
       this.modelTestTimer = null;
       this.modelTestTimerActive = false;
+      this.modelTestAborted = true;
+      if (this.modelTestAbortController) this.modelTestAbortController.abort();
       this.view.setMessage('test-all: periodic timer stopped');
       this.requestRender();
       return;
@@ -1328,6 +1349,8 @@ class DashboardApp {
     if (this.modelTestTimer) clearInterval(this.modelTestTimer);
     this.modelTestTimer = null;
     this.modelTestTimerActive = false;
+    this.modelTestAborted = true;
+    if (this.modelTestAbortController) this.modelTestAbortController.abort();
     this.closeOverlay();
     this.tui.stop();
   }
