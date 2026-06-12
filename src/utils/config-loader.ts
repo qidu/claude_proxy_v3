@@ -38,6 +38,47 @@ export interface ModelCategoryConfig {
 
 export type ModelArrayConfig = [string, string, string]; // [model_alias, base_url, api_key]
 
+export type TokenLimitDuration = '1h' | '1d' | '1w' | '1m';
+
+/**
+ * Parse a human-readable token limit string into a number.
+ * Supports raw numbers ("50000"), whole-number suffixes ("100k", "1.5m"),
+ * and suffix-only with multiplier ("k", "m", "b", "t").
+ * Examples: "50k 1d" → {num: 50000, duration: "1d"}, "1.5m 1h" → {num: 1500000, duration: "1h"}
+ */
+export function parseHumanTokenLimit(raw: string): { num: number; duration: TokenLimitDuration } | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/^([\d.]+)\s*([kKmMbBtT]?)\s+(1[hHdDwWmM])$/);
+  if (!match) return null;
+  let num = parseFloat(match[1]);
+  if (!Number.isFinite(num) || num < 0) return null;
+  const suffix = match[2].toLowerCase();
+  if (suffix === 'k') num *= 1_000;
+  else if (suffix === 'm') num *= 1_000_000;
+  else if (suffix === 'b') num *= 1_000_000_000;
+  else if (suffix === 't') num *= 1_000_000_000_000;
+  if (num < 0 || !Number.isFinite(num)) return null;
+  return { num, duration: match[3].toLowerCase() as TokenLimitDuration };
+}
+
+/**
+ * Format a token limit as a human-readable string.
+ * Examples: 50000 → "50k", 1500000 → "1.5m"
+ */
+export function formatTokenLimit(num: number): string {
+  if (num >= 1_000_000_000_000) return (num / 1_000_000_000_000).toFixed(1).replace(/\.0$/, '') + 't';
+  if (num >= 1_000_000_000) return (num / 1_000_000_000).toFixed(1).replace(/\.0$/, '') + 'b';
+  if (num >= 1_000_000) return (num / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'm';
+  if (num >= 1_000) return (num / 1_000).toFixed(1).replace(/\.0$/, '') + 'k';
+  return String(num);
+}
+
+export interface TokenLimitConfig {
+  num: number;
+  duration: TokenLimitDuration;
+}
+
 export interface CompositeTargetConfig {
   share?: number;
   primary?: boolean;
@@ -45,17 +86,22 @@ export interface CompositeTargetConfig {
 }
 
 export interface CompositeModelConfig {
-  total_token_limit?: number;
-  [modelName: string]: CompositeTargetConfig | number | undefined;
+  token_limit?: TokenLimitConfig;
+  [modelName: string]: CompositeTargetConfig | TokenLimitConfig | undefined;
 }
 
 function getCompositeTargetEntries(config: CompositeModelConfig | undefined): Array<[string, CompositeTargetConfig]> {
-  return Object.entries(config || {}).filter(([key]) => key !== 'total_token_limit') as Array<[string, CompositeTargetConfig]>;
+  return Object.entries(config || {}).filter(([key]) => key !== 'token_limit') as Array<[string, CompositeTargetConfig]>;
 }
 
-function getCompositeTotalTokenLimit(config: CompositeModelConfig | undefined): number | undefined {
-  const limit = config?.total_token_limit;
-  return typeof limit === 'number' && Number.isFinite(limit) ? limit : undefined;
+function getCompositeTokenLimit(config: CompositeModelConfig | undefined): TokenLimitConfig | undefined {
+  const limit = config?.token_limit;
+  if (!limit || typeof limit !== 'object' || limit === null) return undefined;
+  const l = limit as unknown as Record<string, unknown>;
+  if (typeof l.num !== 'number' || !Number.isFinite(l.num)) return undefined;
+  if (typeof l.duration !== 'string') return undefined;
+  if (!(['1h', '1d', '1w', '1m'] as string[]).includes(l.duration)) return undefined;
+  return limit as TokenLimitConfig;
 }
 
 export interface ModelRouteConfig {
@@ -578,15 +624,54 @@ function parseCompositeModelConfig(rawValue: string): CompositeModelConfig {
   for (const entry of entries) {
     const match = entry.match(/^"([^"]+)"\s*:\s*(\{.*\})$/);
     if (match) {
-      config[match[1]] = parseCompositeTargetConfig(match[2]);
+      if (match[1] === 'token_limit') {
+        // Parse the nested token_limit object: {num = ..., duration = "..."} or {"num": ..., "duration": "..."}
+        const inner = match[2].trim().slice(1, -1);
+        const fields: string[] = [];
+        let current = '';
+        let depth = 0;
+        let inQuotes = false;
+        // Quote-aware split by comma (handles both JSON-style {"num": 50000} and TOML-style {num = 50000})
+        for (let i = 0; i < inner.length; i++) {
+          const char = inner[i];
+          if (char === '"') { inQuotes = !inQuotes; current += char; continue; }
+          if (!inQuotes) {
+            if (char === '{') { depth += 1; } else if (char === '}') { depth -= 1; } else if (char === ',' && depth === 0) {
+              if (current.trim()) fields.push(current.trim());
+              current = ''; continue;
+            }
+          }
+          current += char;
+        }
+        if (current.trim()) fields.push(current.trim());
+        let num: number | undefined;
+        let duration: string | undefined;
+        for (const field of fields) {
+          // Support both JSON-style "num": 50000 and TOML-style num = 50000
+          const numMatch = field.match(/^"?num"?\s*[=:]\s*([\d.]+)/);
+          if (numMatch) { const n = Number(numMatch[1]); if (Number.isFinite(n) && n >= 0) num = n; }
+          // Support both JSON-style "duration": "1d" and TOML-style duration = "1d"
+          const durMatch = field.match(/^"?duration"?\s*[=:]\s*"([^"]+)"/);
+          if (durMatch) { duration = durMatch[1]; }
+        }
+        if (num !== undefined && duration !== undefined && ['1h', '1d', '1w', '1m'].includes(duration)) {
+          config.token_limit = { num, duration: duration as TokenLimitDuration };
+        } else {
+          (config as any)._invalidLimit = true;
+        }
+      } else {
+        config[match[1]] = parseCompositeTargetConfig(match[2]);
+      }
       continue;
     }
 
+    // Backwards compatibility: parse old "total_token_limit" as number
     const limitMatch = entry.match(/^"?(total_token_limit)"?\s*:\s*(.+)$/);
     if (limitMatch) {
       const numeric = Number(limitMatch[2].trim().replace(/,$/, ''));
       if (!Number.isNaN(numeric) && numeric >= 0) {
-        (config as any).total_token_limit = numeric;
+        // Treat as token_limit with a synthetic duration (stored as-is for migration)
+        (config as any).token_limit = { num: numeric, duration: '1m' as TokenLimitDuration };
       } else {
         (config as any)._invalidLimit = true;
       }
@@ -636,8 +721,8 @@ function serializeCompositeTargetConfig(config: CompositeTargetConfig): string {
 
 function serializeCompositeModelConfig(config: CompositeModelConfig): string {
   const entries: string[] = [];
-  if (typeof config.total_token_limit === 'number' && Number.isFinite(config.total_token_limit)) {
-    entries.push(`"total_token_limit": ${config.total_token_limit}`);
+  if (config.token_limit && typeof config.token_limit === 'object') {
+    entries.push(`"token_limit": {num = ${config.token_limit.num}, duration = ${JSON.stringify(config.token_limit.duration)}}`);
   }
   for (const [modelName, targetConfig] of getCompositeTargetEntries(config)) {
     const serializedTarget = serializeCompositeTargetConfig((targetConfig || {}) as CompositeTargetConfig);
@@ -722,11 +807,11 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
         continue;
       }
       if ('_invalidLimit' in (targets as Record<string, unknown>)) {
-        errors.push({ path: `composite.${alias}.total_token_limit`, message: `total_token_limit must be a number` });
+        errors.push({ path: `composite.${alias}.token_limit`, message: `token_limit must be {num: <number>, duration: "1h"|"1d"|"1w"|"1m"}` });
       }
       for (const [targetModel, targetValue] of Object.entries(targets)) {
         if (targetModel.startsWith('_')) continue; // skip internal markers
-        if (targetModel === 'total_token_limit') continue; // validated separately above
+        if (targetModel === 'token_limit') continue; // validated separately above
         if (!targetValue || typeof targetValue !== 'object' || Array.isArray(targetValue)) {
           errors.push({ path: `composite.${alias}.${targetModel}`, message: `invalid target config` });
           continue;
@@ -1098,30 +1183,38 @@ function sanitizeCompositeConfig(composite: ProxyConfig['composite']): Record<st
   const result: Record<string, CompositeModelConfig> = {};
   for (const [alias, targets] of Object.entries(composite)) {
     const safeTargets: CompositeModelConfig = {};
-    const aliasLimit = getCompositeTotalTokenLimit(targets as CompositeModelConfig);
+    const aliasLimit = getCompositeTokenLimit(targets as CompositeModelConfig);
     if (aliasLimit !== undefined) {
-      safeTargets.total_token_limit = aliasLimit;
+      safeTargets.token_limit = aliasLimit;
     }
 
     for (const [targetModel, config] of Object.entries(targets || {})) {
-      if (targetModel === 'total_token_limit') {
+      if (targetModel === 'token_limit') {
         continue;
       }
       if (targetModel.startsWith('_')) {
         continue; // skip internal validation markers
       }
 
+      // Only process CompositeTargetConfig (skip TokenLimitConfig objects)
+      if (targetModel === 'token_limit' || typeof config !== 'object' || config === null || Array.isArray(config)) {
+        continue;
+      }
+      const targetCfg = config as Record<string, unknown>;
+      if ('num' in targetCfg && 'duration' in targetCfg) {
+        // This is a TokenLimitConfig, not a target model — skip
+        continue;
+      }
+
       const safeTarget: CompositeTargetConfig = {};
-      if (typeof config === 'object' && config !== null && !Array.isArray(config)) {
-        if (typeof config.share === 'number' && Number.isFinite(config.share)) {
-          safeTarget.share = config.share;
-        }
-        if (typeof config.primary === 'boolean') {
-          safeTarget.primary = config.primary;
-        }
-        if (typeof config.fallback === 'number' && Number.isFinite(config.fallback)) {
-          safeTarget.fallback = config.fallback;
-        }
+      if (typeof targetCfg.share === 'number' && Number.isFinite(targetCfg.share)) {
+        safeTarget.share = targetCfg.share;
+      }
+      if (typeof targetCfg.primary === 'boolean') {
+        safeTarget.primary = targetCfg.primary;
+      }
+      if (typeof targetCfg.fallback === 'number' && Number.isFinite(targetCfg.fallback)) {
+        safeTarget.fallback = targetCfg.fallback;
       }
       safeTargets[targetModel] = safeTarget;
     }
@@ -1174,11 +1267,32 @@ function validateAndNormalizeComposite(payload: unknown): Record<string, Composi
 
     const targetConfig: CompositeModelConfig = {};
     for (const [key, rawValue] of Object.entries(targetValue)) {
+      if (key === 'token_limit') {
+        // Support both new format {num, duration} and old format (number)
+        if (typeof rawValue === 'object' && rawValue !== null && !Array.isArray(rawValue)) {
+          const obj = rawValue as Record<string, unknown>;
+          if (typeof obj.num !== 'number' || !Number.isFinite(obj.num)) {
+            throw new Error(`Invalid token_limit.num for alias: ${alias}`);
+          }
+          if (typeof obj.duration !== 'string' || !(['1h', '1d', '1w', '1m'] as string[]).includes(obj.duration)) {
+            throw new Error(`Invalid token_limit.duration for alias: ${alias} — must be 1h, 1d, 1w, or 1m`);
+          }
+          targetConfig.token_limit = { num: obj.num, duration: obj.duration as TokenLimitDuration };
+        } else if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
+          // Backwards compat: old number-only format → treat as 30d
+          targetConfig.token_limit = { num: rawValue, duration: '1m' as TokenLimitDuration };
+        } else {
+          throw new Error(`Invalid token_limit for alias: ${alias}`);
+        }
+        continue;
+      }
       if (key === 'total_token_limit') {
-        if (typeof rawValue !== 'number' || !Number.isFinite(rawValue)) {
+        // Backwards compat: old format → treat as 30d
+        if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
+          targetConfig.token_limit = { num: rawValue, duration: '1m' as TokenLimitDuration };
+        } else {
           throw new Error(`Invalid total_token_limit for alias: ${alias}`);
         }
-        targetConfig.total_token_limit = rawValue;
         continue;
       }
 
@@ -1330,12 +1444,12 @@ function cloneCompositeConfig(composite: ProxyConfig['composite']): Record<strin
   for (const [alias, targets] of Object.entries(composite || {})) {
     const nextTargets: CompositeModelConfig = {};
     if (targets && typeof targets === 'object' && !Array.isArray(targets)) {
-      const aliasLimit = (targets as CompositeModelConfig).total_token_limit;
-      if (typeof aliasLimit === 'number' && Number.isFinite(aliasLimit)) {
-        nextTargets.total_token_limit = aliasLimit;
+      const aliasLimit = getCompositeTokenLimit(targets as CompositeModelConfig);
+      if (aliasLimit !== undefined) {
+        nextTargets.token_limit = aliasLimit;
       }
       for (const [targetModel, config] of Object.entries(targets as Record<string, unknown>)) {
-        if (targetModel === 'total_token_limit') {
+        if (targetModel === 'token_limit') {
           continue;
         }
         if (targetModel.startsWith('_')) {
@@ -1391,7 +1505,11 @@ export function removeCompositeAlias(baseConfig: ProxyConfig, alias: string): Pr
   return nextConfig;
 }
 
-export function upsertCompositeAliasLimit(baseConfig: ProxyConfig, alias: string, totalTokenLimit: number | null): ProxyConfig {
+export function upsertCompositeAliasLimit(
+  baseConfig: ProxyConfig,
+  alias: string,
+  tokenLimit: { num: number; duration: string } | null
+): ProxyConfig {
   const aliasName = assertNonEmptyCompositeName('alias', alias);
   const nextConfig: ProxyConfig = {
     ...baseConfig,
@@ -1403,12 +1521,18 @@ export function upsertCompositeAliasLimit(baseConfig: ProxyConfig, alias: string
     throw new Error(`Composite alias not found: ${aliasName}`);
   }
 
-  if (totalTokenLimit === null) {
-    delete existingTargets.total_token_limit;
-  } else if (!Number.isFinite(totalTokenLimit)) {
-    throw new Error(`Invalid total token limit for ${aliasName}`);
+  if (tokenLimit === null) {
+    delete existingTargets.token_limit;
   } else {
-    existingTargets.total_token_limit = totalTokenLimit;
+    const num = Number(tokenLimit.num);
+    const duration = tokenLimit.duration;
+    if (!Number.isFinite(num)) {
+      throw new Error(`Invalid token limit num for ${aliasName}`);
+    }
+    if (!(['1h', '1d', '1w', '1m'] as string[]).includes(duration)) {
+      throw new Error(`Invalid token limit duration for ${aliasName} — must be 1h, 1d, 1w, or 1m`);
+    }
+    existingTargets.token_limit = { num, duration: duration as TokenLimitDuration };
   }
 
   return nextConfig;
@@ -1436,12 +1560,12 @@ export function upsertCompositeTarget(
   }
 
   const nextTargets: CompositeModelConfig = {};
-  const existingAliasLimit = existingTargets.total_token_limit;
-  if (typeof existingAliasLimit === 'number' && Number.isFinite(existingAliasLimit)) {
-    nextTargets.total_token_limit = existingAliasLimit;
+  const existingLimit = getCompositeTokenLimit(existingTargets);
+  if (existingLimit !== undefined) {
+    nextTargets.token_limit = existingLimit;
   }
   for (const [name, config] of Object.entries(existingTargets)) {
-    if (name === 'total_token_limit') {
+    if (name === 'token_limit') {
       continue;
     }
     if (config && typeof config === 'object' && !Array.isArray(config)) {
@@ -1476,10 +1600,13 @@ export function upsertCompositeTarget(
 
   if (patch.primary === true) {
     for (const [name, config] of Object.entries(nextTargets)) {
-      if (name === 'total_token_limit' || !config || typeof config !== 'object' || Array.isArray(config)) {
+      // Skip token_limit and non-object configs; also skip if it has 'num'/'duration' (TokenLimitConfig)
+      if (name === 'token_limit' || !config || typeof config !== 'object' || Array.isArray(config)) {
         continue;
       }
-      delete config.primary;
+      const cfg = config as Record<string, unknown>;
+      if ('num' in cfg || 'duration' in cfg) continue; // TokenLimitConfig
+      delete cfg.primary;
     }
     nextTarget.primary = true;
     nextTarget.fallback = 0;

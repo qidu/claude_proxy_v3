@@ -16,6 +16,8 @@ import {
   upsertCompositeTarget,
   clearProxyConfigCache,
   loadProxyConfig,
+  parseHumanTokenLimit,
+  formatTokenLimit,
 } from '../utils/config-loader.js';
 import {
   getAgentStatsDesc,
@@ -23,6 +25,7 @@ import {
   getRequestEndpointStatsDesc,
   getRequestEndpointTimingStatsDesc,
   getRequestModelTimingStatsDesc,
+  getCompositeLimitWindowsSnapshot,
   getRequestStatusCodeFromUpstreamStatsDesc,
   getRequestStatusCodeToEndpointStatsDesc,
   getRequestUpstreamStatsDesc,
@@ -71,6 +74,7 @@ export interface DashboardSnapshot {
     model_timings: ReturnType<typeof getRequestModelTimingStatsDesc>;
   };
   tokenHeatmap: ReturnType<typeof getTokenHeatmapStatsDesc>;
+  compositeLimitWindows: ReturnType<typeof getCompositeLimitWindowsSnapshot>;
   compositeResolved: Array<{
     alias: string;
     targets: Array<{
@@ -94,7 +98,7 @@ export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): Dashbo
     .map((alias) => ({
       alias,
       targets: Object.entries(proxyConfig.composite?.[alias] || {})
-        .filter(([key]) => key !== 'total_token_limit' && !key.startsWith('_'))
+        .filter(([key]) => key !== 'token_limit' && !key.startsWith('_'))
         .map(([modelName]) => {
           const route = getModelRouteConfig(modelName, proxyConfig);
           return {
@@ -120,6 +124,7 @@ export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): Dashbo
       model_timings: getRequestModelTimingStatsDesc(),
     },
     tokenHeatmap: getTokenHeatmapStatsDesc(),
+    compositeLimitWindows: getCompositeLimitWindowsSnapshot(),
     compositeResolved,
   };
 }
@@ -155,9 +160,16 @@ export function upsertCompositeTargetFromDashboard(
 export function upsertCompositeAliasLimitFromDashboard(
   env: Env,
   alias: string,
-  totalTokenLimit: number | null,
+  rawInput: string | null,
 ): ReturnType<typeof toDashboardConfigPayload> {
-  return saveConfigMutation(env, (baseConfig) => upsertCompositeAliasLimit(baseConfig, alias, totalTokenLimit));
+  if (rawInput === null || rawInput.trim() === '') {
+    return saveConfigMutation(env, (baseConfig) => upsertCompositeAliasLimit(baseConfig, alias, null));
+  }
+  const parsed = parseHumanTokenLimit(rawInput);
+  if (!parsed) {
+    throw new Error(`Invalid token limit format: "${rawInput}". Use: <num> <1h|1d|1w|1m>  (e.g. 50k 1d, 1.5m 1h, 100000 1w)`);
+  }
+  return saveConfigMutation(env, (baseConfig) => upsertCompositeAliasLimit(baseConfig, alias, parsed));
 }
 
 export function removeCompositeTargetFromDashboard(
@@ -363,6 +375,9 @@ export function handleDashboardPage(): Response {
       let configPathHint = '';
       let compositeResolved = [];
       let modelStats = [];
+      let compositeLimitWindowsSnapshot: Record<string, {
+        limit: number; duration: string; windowStartMs: number; windowMs: number; remainingMs: number; accumulator: number;
+      }> = {};
 
       function getAliasUsed(aliasName) {
         const resolved = compositeResolved.find(r => r.alias === aliasName);
@@ -381,6 +396,26 @@ export function handleDashboardPage(): Response {
           .replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;')
           .replace(/'/g, '&#39;');
+      }
+
+      function formatRemainingMs(ms) {
+        if (ms <= 0) return '0s';
+        const s = Math.floor(ms / 1000);
+        if (s < 60) return s + 's';
+        const m = Math.floor(s / 60);
+        if (m < 60) return m + 'm ' + (s % 60) + 's';
+        const h = Math.floor(m / 60);
+        if (h < 24) return h + 'h ' + (m % 60) + 'm';
+        const d = Math.floor(h / 24);
+        return d + 'd ' + (h % 24) + 'h';
+      }
+
+      function formatTokenLimitNum(num) {
+        if (num >= 1e12) return (num / 1e12).toFixed(1).replace(/\.0$/, '') + 't';
+        if (num >= 1e9) return (num / 1e9).toFixed(1).replace(/\.0$/, '') + 'b';
+        if (num >= 1e6) return (num / 1e6).toFixed(1).replace(/\.0$/, '') + 'm';
+        if (num >= 1e3) return (num / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+        return String(num);
       }
 
       function upstreamModeSelect(categoryName, currentMode) {
@@ -411,16 +446,31 @@ export function handleDashboardPage(): Response {
           + '</div>';
       }
 
-      function compositeEntryRows(aliasName, targets) {
+      function compositeEntryRows(aliasName, targets, limitWindow) {
         const disabledAttr = isReadOnly ? ' disabled' : '';
-        const keys = Object.keys(targets || {}).filter((key) => key !== 'total_token_limit');
-        const totalTokenLimit = targets.total_token_limit ?? '';
-        const aliasUsed = getAliasUsed(aliasName);
-        const usageLabel = '<span style="font-size:13px;color:#666;margin-left:6px;">Used: ' + aliasUsed + ' (reset after proxy restarted.)</span>';
+        const keys = Object.keys(targets || {}).filter((key) => key !== 'token_limit');
+        const tokenLimit = targets.token_limit;
+        const limitNum = tokenLimit?.num ?? '';
+        const limitDuration = tokenLimit?.duration ?? '';
+        const usageLabel = limitWindow
+          ? '<span style="font-size:13px;color:#666;margin-left:6px;">Window: ' + formatTokenLimitNum(limitWindow.accumulator) + ' / ' + formatTokenLimitNum(limitWindow.limit) + ' (' + limitWindow.duration + ') — ' + formatRemainingMs(limitWindow.remainingMs) + ' left</span>'
+          : '<span style="font-size:13px;color:#888;margin-left:6px;">No active window</span>';
+        const durationOptions = [
+          { value: '', label: '(no limit)' },
+          { value: '1h', label: '1 hour' },
+          { value: '1d', label: '1 day' },
+          { value: '1w', label: '1 week' },
+          { value: '1m', label: '1 month' },
+        ];
+        const durationOptionsHtml = durationOptions.map((o) =>
+          '<option value="' + escapeHtml(o.value) + '"' + (limitDuration === o.value ? ' selected' : '') + '>' + o.label + '</option>'
+        ).join('');
+        const displayNum = typeof limitNum === 'number' && limitNum > 0 ? formatTokenLimitNum(limitNum) : '';
         const rows = [
-          '<div class="config-row">'
-            + '<label>' + escapeHtml(aliasName + '.total_token_limit') + '</label>'
-            + '<input type="number" data-kind="comp-total-limit" data-alias="' + escapeHtml(aliasName) + '" value="' + escapeHtml(totalTokenLimit) + '" placeholder="token limit"' + disabledAttr + ' />'
+          '<div class="config-row" style="flex-wrap:wrap;gap:6px;align-items:center;">'
+            + '<label style="min-width:120px;">' + escapeHtml(aliasName + '.token_limit') + '</label>'
+            + '<input type="text" data-kind="comp-limit-num" data-alias="' + escapeHtml(aliasName) + '" value="' + escapeHtml(displayNum) + '" placeholder="e.g. 50k, 1.5m, 100000" style="width:140px;"' + disabledAttr + ' />'
+            + '<select data-kind="comp-limit-duration" data-alias="' + escapeHtml(aliasName) + '"' + disabledAttr + '>' + durationOptionsHtml + '</select>'
             + usageLabel
             + '</div>'
         ];
@@ -464,7 +514,7 @@ export function handleDashboardPage(): Response {
         }).join('');
 
         const compositeBlocks = Object.entries(config.composite || {}).map(([aliasName, targets]) => {
-          const rows = compositeEntryRows(aliasName, targets)
+          const rows = compositeEntryRows(aliasName, targets, compositeLimitWindowsSnapshot[aliasName])
             + '<div class="section-actions"><button type="button" class="test-btn mini-btn" data-action="test-composite" data-alias="' + escapeHtml(aliasName) + '">test model</button>'
             + ' <button type="button" class="mini-btn" data-action="add-composite-target" data-alias="' + escapeHtml(aliasName) + '"' + (isReadOnly ? ' disabled' : '') + '>Add target</button>'
             + ' <button type="button" class="mini-btn danger" data-action="remove-composite-alias" data-alias="' + escapeHtml(aliasName) + '"' + (isReadOnly ? ' disabled' : '') + '>Remove alias</button></div>';
@@ -511,12 +561,20 @@ export function handleDashboardPage(): Response {
 
         Object.entries(currentConfig.composite || {}).forEach(([aliasName, targets]) => {
           payload.composite[aliasName] = {};
-          const totalLimitEl = document.querySelector('[data-kind="comp-total-limit"][data-alias="' + aliasName + '"]');
-          if (totalLimitEl && totalLimitEl.value !== '') {
-            payload.composite[aliasName].total_token_limit = Number(totalLimitEl.value);
+          const limitNumEl = document.querySelector('[data-kind="comp-limit-num"][data-alias="' + aliasName + '"]');
+          const limitDurEl = document.querySelector('[data-kind="comp-limit-duration"][data-alias="' + aliasName + '"]');
+          const numVal = limitNumEl ? limitNumEl.value.trim() : '';
+          const durVal = limitDurEl ? limitDurEl.value.trim() : '';
+          if (numVal !== '' && durVal !== '') {
+            // Parse human-readable format: "50k", "1.5m", "100000" etc.
+            const rawInput = numVal + ' ' + durVal;
+            const parsed = parseHumanTokenLimit(rawInput);
+            if (parsed) {
+              payload.composite[aliasName].token_limit = parsed;
+            }
           }
           Object.keys(targets || {}).forEach((targetName) => {
-            if (targetName === 'total_token_limit') return;
+            if (targetName === 'token_limit') return;
             const shareEl = document.querySelector('[data-kind="comp-share"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
             const fallbackEl = document.querySelector('[data-kind="comp-fallback"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
             const entry = {};
@@ -706,15 +764,24 @@ export function handleDashboardPage(): Response {
           return;
         }
 
-        if (target.dataset.kind === 'comp-total-limit') {
+        if (target.dataset.kind === 'comp-limit-num' || target.dataset.kind === 'comp-limit-duration') {
           const alias = target.dataset.alias;
           if (!alias) return;
-          const value = target.value.trim();
-          if (value !== '' && Number.isNaN(Number(value))) {
-            window.alert('Total token limit must be a number or blank');
-            return;
+          const numEl = document.querySelector('[data-kind="comp-limit-num"][data-alias="' + alias + '"]');
+          const durEl = document.querySelector('[data-kind="comp-limit-duration"][data-alias="' + alias + '"]');
+          const numVal = numEl ? numEl.value.trim() : '';
+          const durVal = durEl ? durEl.value.trim() : '';
+          if (numVal === '' || durVal === '') {
+            delete currentConfig.composite[alias].token_limit;
+          } else {
+            const rawInput = numVal + ' ' + durVal;
+            const parsed = parseHumanTokenLimit(rawInput);
+            if (!parsed) {
+              window.alert('Invalid token limit. Use: <num[k|m|b|t]> <1h|1d|1w|1m>  (e.g. 50k 1d, 1.5m 1h)');
+              return;
+            }
+            currentConfig.composite[alias].token_limit = parsed;
           }
-          currentConfig.composite[alias].total_token_limit = value === '' ? undefined : Number(value);
           renderConfigForm(currentConfig);
           saveConfig();
           return;
@@ -745,6 +812,7 @@ export function handleDashboardPage(): Response {
         };
         compositeResolved = json.compositeResolved || [];
         modelStats = json.modelStats || [];
+        compositeLimitWindowsSnapshot = json.compositeLimitWindows || {};
         renderConfigForm(currentConfig);
         saveButton.disabled = isReadOnly;
         configPathHint = json.config.config_path ? ' (' + json.config.config_path + ')' : '';

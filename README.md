@@ -119,19 +119,19 @@ upstream_mode = "openai-completions"
 - **Model names**: Preserve original names (no normalization) - `"deepseek/deepseek-v3.2"`, `"gemini-2.5-flash"`
 - **Inheritance chain**: Model array → Category defaults → [upstream] defaults
 
-**Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `total_token_limit` across all of its targets.
+**Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `token_limit` across all of its targets.
 
 #### Composite aliases
 
 ```toml
 [composite]
-"gpt-all" = {"total_token_limit": 120000, "gpt-5.4-mini": {"share": 50}, "gpt-5-mini": {"share": 20}, "nvidia/nemotron-3-super-120b-a12b-free": {}}
-"gpt-5" = {"total_token_limit": 80000, "gpt-5.4-mini": {"fallback": 1}, "gpt-5-mini": {"primary": true}, "nvidia/nemotron-3-super-120b-a12b-free": {"fallback": 2}}
-"llama" = {"total_token_limit": 40000, "llama3": {}, "g5-mini": {}}
+"gpt-all" = {"token_limit": {"num": 120000, "duration": "1d"}, "gpt-5.4-mini": {"share": 50}, "gpt-5-mini": {"share": 20}, "nvidia/nemotron-3-super-120b-a12b-free": {}}
+"gpt-5" = {"token_limit": {"num": 80000, "duration": "1h"}, "gpt-5.4-mini": {"fallback": 1}, "gpt-5-mini": {"primary": true}, "nvidia/nemotron-3-super-120b-a12b-free": {"fallback": 2}}
+"llama" = {"token_limit": {"num": 40000, "duration": "1w"}, "llama3": {}, "g5-mini": {}}
 ```
 
 Composite behavior:
-- `total_token_limit`: shared token cap for the alias. The proxy tracks accumulated input+output tokens in memory across all targets under the alias. Once the accumulated total reaches the `limit`, subsequent requests return **HTTP 413** and are not forwarded upstream. Usage resets to `0` on proxy restart (the limit value itself is persisted in the config file).
+- `token_limit`: time-bounded token cap for the alias. Format: `{"num": <number>, "duration": "1h"|"1d"|"1w"|"1m"}`. The proxy tracks accumulated tokens in a sliding window; once the window total reaches `num`, subsequent requests return **HTTP 413** and are not forwarded upstream. The window resets automatically after `duration` expires. Durations: `1h` (1 hour), `1d` (1 day), `1w` (1 week), `1m` (1 month). If `token_limit` is omitted, no limit is enforced. The limit counter and window state are persisted in the token log and restored on proxy restart (if the window hasn't expired). On TUI and dashboard, enter limits as `<num>[k|m|b|t]> <1h|1d|1w|1m>` — e.g. `50k 1d`, `1.5m 1h`, `100000 1w`.
 - `primary: true`: always try this target first, then fail over to others (ignores `share`).
 - `fallback: N`: lower number = higher retry priority when primary is absent (ignores `share`). Use `0` to disable fallback for that target; the UI shows this as `no FB`.
 - `share`: when no `primary`/`fallback` is set, each request picks a target via **weighted random selection**. Total weight = sum of all targets' `share` (defaults to 1 if unset). Each request independently rolls the dice — e.g. `{"a": {"share": 70}, "b": {"share": 30}}` routes ~70% of requests to a and ~30% to b. Set `share: 0` to exclude a target from random selection.
@@ -221,8 +221,8 @@ The TUI shows live:
 - **Custom Models**: configured models with live response time (min/avg/max in seconds) shown as `[min/avg/maxs]` after each model, keyed by resolved route model name
 - model token stats
 - combined tool usage stats by tool (`req` aggregates across UA prefixes; `resp` is by tool)
-- composite alias summaries with live token usage (`used / limit (TL)` for aliases with `total_token_limit`) and per-target response time
-- `T` set/clear the alias-level token limit
+- composite alias summaries with live token usage (`used / limit (duration)` for aliases with `token_limit`) and per-target response time
+- `T` set/clear the alias-level token limit (format: `<num>[k|m|b|t]> <1h|1d|1w|1m>`, e.g. `50k 1d`, `1.5m 1h`, blank clears)
 - `Top Models` shows just the model id suffix, not the full routed upstream string
 
 Keyboard shortcuts:
@@ -244,11 +244,11 @@ Keyboard shortcuts:
 
 ### 3.2 Token Log Persistence
 
-The proxy persists token stats and heatmap data to `/tmp/model_proxy_tokens.log` (JSONL format) for recovery after restart.
+The proxy persists token stats, heatmap data, and composite limit windows to `/tmp/model_proxy_tokens.log` (JSONL format) for recovery after restart.
 
 **Log file format** (one JSON object per line):
 ```json
-{"date":"2026-06-04","timestamp":"2026-06-04T23:59:59.000Z","modelStats":[{"model":"claude-opus-4-6","requests":42,"failed_requests":1,"input_tokens":8400,"cached_tokens":2100,"cache_written_tokens":0,"output_tokens":1260,"total_tokens":9660}],"heatmapEvents":[{"timestamp":1750000000000,"values":1200,"model":"claude-opus-4-6"}]}
+{"date":"2026-06-04","timestamp":"2026-06-04T23:59:59.000Z","modelStats":[{"model":"claude-opus-4-6","requests":42,"failed_requests":1,"input_tokens":8400,"cached_tokens":2100,"cache_written_tokens":0,"output_tokens":1260,"total_tokens":9660}],"heatmapEvents":[{"timestamp":1750000000000,"values":1200,"model":"claude-opus-4-6"}],"compositeLimitWindows":{"gpt-all":{"limit":120000,"duration":"1d","windowStartMs":1750000000000,"accumulator":8400}}}
 ```
 
 **Dump triggers:**
@@ -261,9 +261,10 @@ The proxy persists token stats and heatmap data to `/tmp/model_proxy_tokens.log`
 - **First pass**: finds the latest dump per date by comparing `timestamp` — only the newest entry for each date is used
 - **heatmapEvents**: restored into the heatmap (for Tokens Panel aggregation) — deduplicated by `timestamp:values:model`
 - **dailyTokenStats**: restored into the daily stats map (for aggregation purposes) — later dumps for the same date overwrite earlier ones
-- **modelStats** (live counter): NOT restored — starts fresh at zero to ensure `total_token_limit` on composite aliases is not incorrectly triggered from previous-day tokens
+- **modelStats** (live counter): NOT restored — starts fresh at zero to ensure `token_limit` on composite aliases is not incorrectly triggered from previous-day tokens
+- **compositeLimitWindows**: restored if the window has not expired. If `windowStartMs + durationMs > now`, the accumulator is restored and enforcement continues from where it left off. If the window has expired, the window is NOT restored (fresh window starts).
 
-**Note on composite alias limits**: The `total_token_limit` enforcement uses only the live in-session `modelStats` counter. Tokens accumulated across proxy restarts are **not** counted toward the limit. The counter resets to 0 when the proxy restarts, and the comment in the dashboard shows "(reset after proxy restarted.)" for this reason.
+**Composite alias limit behavior**: Each `token_limit` tracks tokens in a sliding duration window. Tokens accumulated across proxy restarts are counted toward the limit **only if** the window hasn't expired. When the window expires, the accumulator resets to 0 and a fresh window begins.
 
 ### 4. Deploy
 
@@ -1109,15 +1110,15 @@ upstream_mode = "openai-completions"
 - **Model names**: Preserve original names (no normalization) - `"deepseek/deepseek-v3.2"`, `"gemini-2.5-flash"`
 - **Inheritance chain**: Model array → Category defaults → [upstream] defaults
 
-**Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `total_token_limit` across all of its targets.
+**Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `token_limit` across all of its targets.
 
 #### Composite aliases
 
 ```toml
 [composite]
-"gpt-all" = {"total_token_limit": 120000, "gpt-5.4-mini": {"share": 50}, "gpt-5-mini": {"share": 20}, "nvidia/nemotron-3-super-120b-a12b-free": {}}
-"gpt-5" = {"total_token_limit": 80000, "gpt-5.4-mini": {"fallback": 1}, "gpt-5-mini": {"primary": true}, "nvidia/nemotron-3-super-120b-a12b-free": {"fallback": 2}}
-"llama" = {"total_token_limit": 40000, "llama3": {}, "g5-mini": {}}
+"gpt-all" = {"token_limit": {"num": 120000, "duration": "1d"}, "gpt-5.4-mini": {"share": 50}, "gpt-5-mini": {"share": 20}, "nvidia/nemotron-3-super-120b-a12b-free": {}}
+"gpt-5" = {"token_limit": {"num": 80000, "duration": "1h"}, "gpt-5.4-mini": {"fallback": 1}, "gpt-5-mini": {"primary": true}, "nvidia/nemotron-3-super-120b-a12b-free": {"fallback": 2}}
+"llama" = {"token_limit": {"num": 40000, "duration": "1w"}, "llama3": {}, "g5-mini": {}}
 ```
 
 ### Configuration Loading
@@ -1157,13 +1158,13 @@ Each target model config must be an object with optional numeric/boolean fields:
 | `share` | `number` ≥ 0 | Weight for random selection |
 | `primary` | `boolean` | Always try first |
 | `fallback` | `number` ≥ 0 | Retry priority (lower = higher priority) |
-| `total_token_limit` | `number` ≥ 0 | Shared token cap across all targets |
+| `token_limit` | `object` | Time-bounded token cap: `{"num": <number>, "duration": "1h"\|"1d"\|"1w"\|"1m"}` |
 
 **Validation rules:**
 - `share` must be a finite number (e.g., `10`, `0`) — strings or non-numbers error
 - `primary` must be `true` or `false` — other values error
 - `fallback` must be a finite number (e.g., `1`, `0`) — strings or non-numbers error
-- `total_token_limit` must be a finite number — strings or non-numbers error
+- `token_limit` must be an object with `num` (finite number ≥ 0) and `duration` (`"1h"`, `"1d"`, `"1w"`, or `"1m"`) — missing fields or invalid duration error. In TUI/dashboard, input format is `<num>[k|m|b|t]> <1h|1d|1w|1m>` — e.g. `50k 1d`, `1.5m 1h`, `100000 1w`
 - Empty target `{}` is valid (all fields optional)
 - Non-object values error: `invalid target config`
 

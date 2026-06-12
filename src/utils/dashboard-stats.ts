@@ -1,6 +1,7 @@
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
 import { dirname } from 'path';
 import { stringify } from './stringify.js';
+import type { TokenLimitDuration } from './config-loader.js';
 
 type UsageStats = {
   input_tokens?: number;
@@ -87,6 +88,155 @@ const requestEndpointTimingStats = new Map<string, RequestEndpointTimingStatsEnt
 const requestModelTimingStats = new Map<string, RequestEndpointTimingStatsEntry>();
 const tokenHeatmapEvents: TokenHeatmapEvent[] = [];
 
+// ── Composite token limit windows ───────────────────────────────────────────────
+
+export interface CompositeLimitWindow {
+  limit: number;
+  duration: TokenLimitDuration;
+  windowStartMs: number;
+  accumulator: number;
+}
+
+export const compositeLimitWindows = new Map<string, CompositeLimitWindow>();
+
+// Reverse map: target model name → composite alias names that include it
+const modelToCompositeAliases = new Map<string, Set<string>>();
+
+export function getWindowMs(duration: TokenLimitDuration): number {
+  switch (duration) {
+    case '1h': return 60 * 60 * 1000;
+    case '1d': return 24 * 60 * 60 * 1000;
+    case '1w': return 7 * 24 * 60 * 60 * 1000;
+    case '1m': return 30 * 24 * 60 * 60 * 1000;
+  }
+}
+
+/**
+ * Update the reverse model→alias map when composite config changes.
+ * Call this from index.ts after a config reload.
+ */
+export function updateCompositeAliasReverseMap(
+  aliases: Record<string, { token_limit?: { num: number; duration: TokenLimitDuration } }>
+): void {
+  modelToCompositeAliases.clear();
+  for (const [alias, targets] of Object.entries(aliases)) {
+    if (!targets.token_limit) continue;
+    for (const model of Object.keys(targets).filter((k) => k !== 'token_limit')) {
+      if (!modelToCompositeAliases.has(model)) {
+        modelToCompositeAliases.set(model, new Set());
+      }
+      modelToCompositeAliases.get(model)!.add(alias);
+    }
+  }
+}
+
+/**
+ * Set or update the token limit for a composite alias.
+ * Resets the window start and accumulator (fresh window begins now).
+ */
+export function setCompositeLimit(alias: string, limit: number, duration: TokenLimitDuration): void {
+  compositeLimitWindows.set(alias, {
+    limit,
+    duration,
+    windowStartMs: Date.now(),
+    accumulator: 0,
+  });
+}
+
+/**
+ * Clear the token limit for a composite alias.
+ */
+export function clearCompositeLimit(alias: string): void {
+  compositeLimitWindows.delete(alias);
+}
+
+/**
+ * Check if a composite limit window has expired and advance it if so.
+ * Call this at the start of enforcement and before persisting state.
+ */
+function advanceCompositeLimitWindow(alias: string): void {
+  const win = compositeLimitWindows.get(alias);
+  if (!win) return;
+  const windowMs = getWindowMs(win.duration);
+  if (Date.now() - win.windowStartMs >= windowMs) {
+    win.windowStartMs = Date.now();
+    win.accumulator = 0;
+  }
+}
+
+/**
+ * Get the current token usage for a composite alias (tokens in current window).
+ * Falls back to all-time sum of targets if no duration limit is set.
+ */
+export function getCompositeAliasTokenUsage(alias: string, targets: string[]): number {
+  const win = compositeLimitWindows.get(alias);
+  if (!win) {
+    // No duration limit — fall back to all-time sum (backwards compat for
+    // configs that set token_limit without duration, e.g. migrated total_token_limit)
+    return targets.reduce((sum, m) => sum + getModelTotalTokens(m), 0);
+  }
+  advanceCompositeLimitWindow(alias);
+  return compositeLimitWindows.get(alias)!.accumulator;
+}
+
+/**
+ * Record token usage for a composite alias's window.
+ * Also updates windows for all aliases that include the same model.
+ */
+export function recordCompositeTokenUsage(alias: string, _targetModel: string, tokenCount: number): void {
+  if (!compositeLimitWindows.has(alias)) return;
+  advanceCompositeLimitWindow(alias);
+  const win = compositeLimitWindows.get(alias)!;
+  win.accumulator += tokenCount;
+}
+
+/**
+ * Record token usage for a model, updating all composite alias windows that include it.
+ */
+export function recordModelUsageForComposites(modelName: string, tokenCount: number): void {
+  const aliases = modelToCompositeAliases.get(modelName);
+  if (!aliases) return;
+  for (const alias of aliases) {
+    recordCompositeTokenUsage(alias, modelName, tokenCount);
+  }
+}
+
+/**
+ * Returns a snapshot of all composite limit windows as a plain object,
+ * with windowMs and remainingMs computed for each.
+ */
+export function getCompositeLimitWindowsSnapshot(): Record<string, {
+  limit: number;
+  duration: string;
+  windowStartMs: number;
+  windowMs: number;
+  remainingMs: number;
+  accumulator: number;
+}> {
+  const result: Record<string, {
+    limit: number;
+    duration: string;
+    windowStartMs: number;
+    windowMs: number;
+    remainingMs: number;
+    accumulator: number;
+  }> = {};
+  const now = Date.now();
+  for (const [alias, win] of compositeLimitWindows) {
+    const windowMs = getWindowMs(win.duration);
+    const remainingMs = Math.max(0, win.windowStartMs + windowMs - now);
+    result[alias] = {
+      limit: win.limit,
+      duration: win.duration,
+      windowStartMs: win.windowStartMs,
+      windowMs,
+      remainingMs,
+      accumulator: win.accumulator,
+    };
+  }
+  return result;
+}
+
 export const TOKEN_LOG_FILE = './model_proxy_tokens.jsonl';
 
 const dailyTokenStats = new Map<string, ModelStatsEntry>();
@@ -110,11 +260,24 @@ function dumpDailyTokens(dateStr: string): void {
   const timestamp = new Date().toISOString();
   const cutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
   const recentEvents = tokenHeatmapEvents.filter((e) => e.timestamp >= cutoff);
+
+  // Serialize composite limit windows (keyed by alias → plain object)
+  const windowsObj: Record<string, { limit: number; duration: string; windowStartMs: number; accumulator: number }> = {};
+  for (const [alias, win] of compositeLimitWindows) {
+    windowsObj[alias] = {
+      limit: win.limit,
+      duration: win.duration,
+      windowStartMs: win.windowStartMs,
+      accumulator: win.accumulator,
+    };
+  }
+
   const logLine = JSON.stringify({
     date: dateStr,
     timestamp,
     modelStats: [...dailyTokenStats.values()],
     heatmapEvents: recentEvents,
+    compositeLimitWindows: windowsObj,
   }) + '\n';
   writeFileSync(TOKEN_LOG_FILE, logLine, { flag: 'a' });
 }
@@ -182,6 +345,13 @@ export function dumpTodayTokens(): void {
   writeFileSync(TOKEN_LOG_FILE, logLine, { flag: 'a' });
 }
 
+type PersistedLimitWindow = {
+  limit: number;
+  duration: string;
+  windowStartMs: number;
+  accumulator: number;
+};
+
 export function loadTokenStatsFromLog(): void {
   if (!existsSync(TOKEN_LOG_FILE)) return;
   try {
@@ -223,6 +393,7 @@ export function loadTokenStatsFromLog(): void {
           entries?: ModelStatsEntry[];
           modelStats?: ModelStatsEntry[];
           heatmapEvents?: TokenHeatmapEvent[];
+          compositeLimitWindows?: Record<string, PersistedLimitWindow>;
         };
         if (!last7Days.has(record.date)) continue;
         const latestTs = latestPerDate.get(record.date);
@@ -246,6 +417,24 @@ export function loadTokenStatsFromLog(): void {
             if (seenHeatmap.has(key)) continue;
             seenHeatmap.add(key);
             tokenHeatmapEvents.push(event);
+          }
+        }
+
+        // Load composite limit windows from the latest dump per date
+        const windows = record.compositeLimitWindows;
+        if (windows && typeof windows === 'object') {
+          for (const [alias, win] of Object.entries(windows)) {
+            const duration = win.duration as TokenLimitDuration;
+            if (!(['1h', '1d', '1w', '1m'] as string[]).includes(duration)) continue;
+            const windowMs = getWindowMs(duration);
+            // If the saved window has expired (start + duration <= now), don't restore stale accumulator
+            if (win.windowStartMs + windowMs <= Date.now()) continue;
+            compositeLimitWindows.set(alias, {
+              limit: win.limit,
+              duration,
+              windowStartMs: win.windowStartMs,
+              accumulator: win.accumulator,
+            });
           }
         }
       } catch {
@@ -729,9 +918,12 @@ export function getModelStatsDesc(): ModelStatsEntry[] {
  * Create a TransformStream that intercepts SSE streaming data to capture
  * token usage from Claude SSE events (message_start.usage.input_tokens
  * and message_delta.usage.output_tokens). Records usage via recordModelUsage
- * when the stream ends.
+ * when the stream ends. Also records composite alias window tokens if compositeAlias is set.
  */
-export function createUsageTrackingTransformStream(model: string): TransformStream<Uint8Array, Uint8Array> {
+export function createUsageTrackingTransformStream(
+  model: string,
+  compositeAlias?: string,
+): TransformStream<Uint8Array, Uint8Array> {
   let inputTokens = 0;
   let cachedTokens = 0;
   let cacheWrittenTokens = 0;
@@ -828,13 +1020,17 @@ export function createUsageTrackingTransformStream(model: string): TransformStre
     flush() {
       if (foundUsage) {
         const computedTotal = inputTokens + cachedTokens + cacheWrittenTokens + outputTokens;
-        recordModelUsage(model, {
+        const usageObj = {
           input_tokens: inputTokens > 0 ? inputTokens : undefined,
           cached_tokens: cachedTokens > 0 ? cachedTokens : undefined,
           cache_written_tokens: cacheWrittenTokens > 0 ? cacheWrittenTokens : undefined,
           output_tokens: outputTokens > 0 ? outputTokens : undefined,
           total_tokens: totalTokens > 0 ? totalTokens : (computedTotal > 0 ? computedTotal : undefined),
-        });
+        };
+        recordModelUsage(model, usageObj);
+        if (compositeAlias && usageObj.total_tokens) {
+          recordCompositeTokenUsage(compositeAlias, model, usageObj.total_tokens);
+        }
       }
     },
   });

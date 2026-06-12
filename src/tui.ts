@@ -25,6 +25,7 @@ import { dumpTodayTokens, TOKEN_LOG_FILE } from './utils/dashboard-stats.js';
 import type { Env } from './types/shared.js';
 import type { ConfigValidationError } from './utils/config-loader.js';
 import type { ProxyConfig } from './utils/config-loader.js';
+import { parseHumanTokenLimit, formatTokenLimit } from './utils/config-loader.js';
 
 const TEST_ENDPOINT = '/v1/messages';
 const TEST_TOOL_NAME = 'test_tool';
@@ -551,21 +552,19 @@ class CompositeAliasesOverlay implements Component, Focusable {
     for (const [alias, targets] of composites) {
       const selectedAlias = selected?.kind === 'alias' && selected.alias === alias;
       const prefix = selectedAlias ? green('>') : dim('│');
-      const typedTargets = targets as { total_token_limit?: number } | undefined;
-      const aliasLimit = typedTargets?.total_token_limit;
-      const resolvedAlias = snap.compositeResolved.find((r) => r.alias === alias);
-      const totalUsed = resolvedAlias?.targets.reduce((sum, t) => {
-        const statKey = t.routeModel || t.model;
-        const entry = snap.modelStats.find((m) => m.model === statKey);
-        return sum + (entry?.total_tokens ?? 0);
-      }, 0) ?? 0;
-      const aliasSummary = aliasLimit !== undefined
-        ? ` ${dim(fmt(totalUsed))} ${dim('/')} ${dim(fmt(aliasLimit))}${dim(' (Limit)')}`
+      const typedTargets = targets as { token_limit?: { num: number; duration: string } } | undefined;
+      const aliasLimit = typedTargets?.token_limit;
+      const win = snap.compositeLimitWindows?.[alias];
+      const windowUsed = win?.accumulator ?? 0;
+      const windowDuration = win ? win.duration : (aliasLimit?.duration ?? '');
+      const aliasSummary = aliasLimit !== undefined && aliasLimit.num > 0
+        ? ` ${dim(fmt(windowUsed))} ${dim('/')} ${dim(fmt(aliasLimit.num))}${dim(' (' + windowDuration + ')')}`
         : '';
       lines.push(`  ${prefix} ${bold(alias)}${aliasSummary}`);
-      const entries = Object.entries(targets || {}).filter(([target]) => target !== 'total_token_limit');
+      const entries = Object.entries(targets || {}).filter(([target]) => target !== 'token_limit');
       if (!entries.length) lines.push(`    ${dim('(empty)')}`);
       const targetRouteModel = new Map<string, string | undefined>();
+      const resolvedAlias = snap.compositeResolved.find((r) => r.alias === alias);
       if (resolvedAlias) {
         for (const t of resolvedAlias.targets) {
           targetRouteModel.set(t.model, t.routeModel);
@@ -881,7 +880,13 @@ class DashboardApp {
       this.view.setSnapshot(snapshot);
       this.compositeOverlay?.setSnapshot(snapshot);
       if (fromMutation) this.view.setConfigStatus('saved');
-      if (validationErrors && validationErrors.length > 0) {
+      // When this refresh is triggered by a save action, don't override the
+      // success message the save flow sets right after this returns. The
+      // periodic refresh (fromMutation=false) will still surface any real
+      // errors that persist after the save.
+      if (fromMutation) {
+        // skip message update — save flow will set its own
+      } else if (validationErrors && validationErrors.length > 0) {
         const first = validationErrors[0];
         this.view.setMessage(`Config error: ${first.path} — ${first.message}`, 15000);
       } else if (!this.view.shouldPreserveMessage()) {
@@ -932,24 +937,36 @@ class DashboardApp {
 
   openEditAliasLimitPrompt(alias: string): void {
     const snapshot = this.viewSnapshot();
-    const current = snapshot?.config.composite?.[alias]?.total_token_limit;
+    const current = snapshot?.config.composite?.[alias]?.token_limit;
+    const defaultValue = current
+      ? `${formatTokenLimit(current.num)} ${current.duration}`
+      : '';
     this.openPrompt(
-      `Total token limit for ${alias}`,
-      'Blank clears the alias-level token limit',
-      current === undefined ? '' : String(current),
+      `Token limit for ${alias}`,
+      'Format: <num[k|m|b|t]> <1h|1d|1w|1m>  (e.g. 50k 1d, 1.5m 1h, 100000 1w)  blank clears',
+      defaultValue,
       async (value) => {
         const trimmed = value.trim();
-        if (trimmed.length > 0 && Number.isNaN(Number(trimmed))) {
-          this.view.setMessage('Total token limit must be a number or blank');
+        if (trimmed.length === 0) {
+          upsertCompositeAliasLimitFromDashboard(this.source.env, alias, null);
+          await this.refresh(true);
+          this.compositeOverlay?.focusAlias(alias);
+          this.view.setMessage(`cleared ${alias} token limit`);
+          this.requestRender();
+          return;
+        }
+        const parsed = parseHumanTokenLimit(trimmed);
+        if (!parsed) {
+          this.view.setMessage('Invalid. Use: <num> <1h|1d|1w|1m>  e.g. 50k 1d');
           await this.refresh();
           this.compositeOverlay?.focusAlias(alias);
           this.requestRender();
           return;
         }
-        upsertCompositeAliasLimitFromDashboard(this.source.env, alias, trimmed.length > 0 ? Number(trimmed) : null);
+        upsertCompositeAliasLimitFromDashboard(this.source.env, alias, trimmed);
         await this.refresh(true);
         this.compositeOverlay?.focusAlias(alias);
-        this.view.setMessage(`updated ${alias} total token limit`);
+        this.view.setMessage(`updated ${alias} token limit: ${formatTokenLimit(parsed.num)} ${parsed.duration}`);
         this.requestRender();
       },
     );

@@ -41,7 +41,6 @@ import {
   recordUpstreamResponseToolNames,
   recordModelFailedRequest,
   recordModelUsage,
-  getModelTotalTokens,
   recordRequestEndpoint,
   recordRequestTiming,
   recordModelTiming,
@@ -49,6 +48,12 @@ import {
   recordResponseStatusCodeToEndpoint,
   recordResponseUpstream,
   createUsageTrackingTransformStream,
+  getCompositeAliasTokenUsage,
+  recordCompositeTokenUsage,
+  compositeLimitWindows,
+  updateCompositeAliasReverseMap,
+  setCompositeLimit,
+  clearCompositeLimit,
 } from './utils/dashboard-stats.js';
 import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
 
@@ -423,6 +428,24 @@ export default {
 
     const proxyConfig = await loadProxyConfig(env);
     const configuredModelIds = getConfiguredModelIds(proxyConfig);
+
+    // Sync composite limit windows from config: update reverse map and init/clear windows
+    const composite = proxyConfig.composite || {};
+    updateCompositeAliasReverseMap(composite);
+    // Add/reset windows for aliases with limits; remove windows for aliases without limits
+    for (const [alias, targets] of Object.entries(composite)) {
+      if (targets.token_limit && typeof targets.token_limit === 'object') {
+        setCompositeLimit(alias, targets.token_limit.num, targets.token_limit.duration);
+      } else {
+        clearCompositeLimit(alias);
+      }
+    }
+    // Clear windows for aliases that no longer exist in config
+    for (const alias of compositeLimitWindows.keys()) {
+      if (!(alias in composite)) {
+        clearCompositeLimit(alias);
+      }
+    }
     let failedModelId: string | undefined;
     let modelFailureRecorded = false;
     let requestStartTime = 0;
@@ -619,19 +642,16 @@ export default {
             const compositeCandidates = getCompositeRouteCandidates(modelName, proxyConfig);
             compositeAliasName = compositeCandidates.length > 0 ? modelName : undefined;
 
-            // Token-limit enforcement: check accumulated total_tokens across all
-            // alias targets against the alias-level total_token_limit.
-            if (compositeCandidates.length > 0 && proxyConfig.composite?.[modelName]?.total_token_limit !== undefined) {
-              const aliasLimit = proxyConfig.composite[modelName].total_token_limit!;
-              const totalUsed = compositeCandidates.reduce(
-                (sum, c) => sum + getModelTotalTokens(c.route.modelAlias || c.modelName),
-                0,
-              );
-              logger.debug(requestId, `Composite alias ${modelName}: accumulated ${totalUsed} tokens across ${compositeCandidates.length} targets, limit ${aliasLimit}`);
-              if (totalUsed >= aliasLimit) {
-                logger.info(requestId, `Rejecting request for ${modelName}: ${totalUsed} accumulated tokens >= limit ${aliasLimit}`);
+            // Token-limit enforcement: check tokens in the current duration window against the alias-level limit.
+            if (compositeCandidates.length > 0 && proxyConfig.composite?.[modelName]?.token_limit !== undefined) {
+              const limitCfg = proxyConfig.composite[modelName].token_limit!;
+              const targetModels = compositeCandidates.map((c) => c.route.modelAlias || c.modelName);
+              const totalUsed = getCompositeAliasTokenUsage(modelName, targetModels);
+              logger.debug(requestId, `Composite alias ${modelName}: window tokens ${totalUsed} across ${compositeCandidates.length} targets, limit ${limitCfg.num} (${limitCfg.duration})`);
+              if (totalUsed >= limitCfg.num) {
+                logger.info(requestId, `Rejecting request for ${modelName}: ${totalUsed} window tokens >= limit ${limitCfg.num}`);
                 throw new OverLimitError(
-                  `Composite alias '${modelName}' token limit (${aliasLimit}) reached (${totalUsed}). No further requests will be routed through this alias.`
+                  `Composite alias '${modelName}' token limit (${limitCfg.num} ${limitCfg.duration}) reached (${totalUsed}). No further requests will be routed through this alias.`
                 );
               }
             }
@@ -993,6 +1013,9 @@ export default {
               const usage = extractUsageFromResponsePayload(payload);
               if (usage) {
                 recordModelUsage(attemptModelId, usage);
+                if (compositeAliasName && usage.total_tokens) {
+                  recordCompositeTokenUsage(compositeAliasName, attemptModelId, usage.total_tokens);
+                }
               }
               const toolNames = extractToolNamesFromResponsePayload(payload);
               recordUpstreamResponseToolNames(toolNames);
@@ -1003,7 +1026,7 @@ export default {
             // For streaming responses, intercept the SSE stream to capture token usage
             // from Claude SSE events (message_start.usage.input_tokens,
             // message_delta.usage.output_tokens)
-            const usageStream = createUsageTrackingTransformStream(attemptModelId);
+            const usageStream = createUsageTrackingTransformStream(attemptModelId, compositeAliasName);
             const toolStream = createResponseToolTrackingTransformStream(recordUpstreamResponseToolNames);
             response = new Response(response.body!.pipeThrough(usageStream).pipeThrough(toolStream), response);
           }
