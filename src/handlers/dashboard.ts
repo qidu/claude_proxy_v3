@@ -18,6 +18,7 @@ import {
   loadProxyConfig,
   parseHumanTokenLimit,
   formatTokenLimit,
+  validateProxyConfig,
 } from '../utils/config-loader.js';
 import {
   getAgentStatsDesc,
@@ -1019,6 +1020,17 @@ export async function handleDashboardPutConfig(request: Request, env: Env, _prox
 
     const baseConfig = loadProxyConfigFromPath(configPath);
     const nextConfig = applyDashboardConfigUpdate(baseConfig, payload);
+
+    // Reject invalid config before it is persisted — an invalid model entry or
+    // composite target would otherwise be written to disk and silently degrade
+    // the live config on the next reload.
+    const validation = validateProxyConfig(nextConfig);
+    if (!validation.valid) {
+      return jsonResponse({
+        error: 'Invalid config',
+        config_errors: validation.errors,
+      }, 400);
+    }
 
     persistProxyConfigToPath(configPath, nextConfig);
     clearProxyConfigCache();

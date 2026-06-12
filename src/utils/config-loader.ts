@@ -5,7 +5,7 @@
  */
 
 import { Env } from '../types/shared.js';
-import { mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, copyFileSync, existsSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 
@@ -1641,7 +1641,28 @@ export function removeCompositeTarget(baseConfig: ProxyConfig, alias: string, ta
 
 export function persistProxyConfigToPath(configPath: string, config: ProxyConfig): void {
   const serialized = serializeProxyConfigToml(config);
-  writeFileSync(configPath, serialized, 'utf-8');
+
+  // Integrity check: the serialized form must round-trip back to the same
+  // composite/model structure. A lossy serialize would otherwise silently
+  // erase config (e.g. composite aliases) on the next reload.
+  const reparsed = parseSimpleToml(serialized);
+  const expectedComposite = Object.keys(config.composite || {}).sort();
+  const actualComposite = Object.keys(reparsed.composite || {}).sort();
+  if (expectedComposite.length !== actualComposite.length ||
+      expectedComposite.some((k, i) => k !== actualComposite[i])) {
+    throw new Error(
+      `Config serialization integrity check failed: composite aliases changed on round-trip ` +
+      `(expected [${expectedComposite.join(', ')}], got [${actualComposite.join(', ')}])`
+    );
+  }
+
+  // Atomic write: write to a temp file, back up the existing config, then rename.
+  const tempPath = `${configPath}.tmp`;
+  writeFileSync(tempPath, serialized, 'utf-8');
+  if (existsSync(configPath)) {
+    copyFileSync(configPath, `${configPath}.bak`);
+  }
+  renameSync(tempPath, configPath);
 }
 
 export function loadProxyConfigFromPath(configPath: string): ProxyConfig {
