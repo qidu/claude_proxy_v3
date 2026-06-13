@@ -1047,7 +1047,9 @@ export function parseSimpleToml(content: string): ProxyConfig {
     }
 
     // Handle composite inline object values: "alias" = {"m1": {...}, "m2": {...}}
-    const compositeObjectMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*(\{.+\})$/);
+    // Note: allow an empty object {} (newly added alias with no targets yet) by
+    // using .* instead of .+ so the alias is preserved on round-trip.
+    const compositeObjectMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*(\{.*\})$/);
     if (compositeObjectMatch && currentSection === 'composite' && config.composite) {
       const [, key, value] = compositeObjectMatch;
       const cleanKey = key.trim().replace(/^"|"$/g, '');
@@ -1243,8 +1245,8 @@ export function toDashboardConfigPayload(config: ProxyConfig): DashboardConfigPa
 }
 
 function isSafeModelArray(value: unknown): value is DashboardModelArrayConfig {
-  // Accept 1-3 element arrays where first element is a non-empty string (alias)
-  if (!Array.isArray(value) || value.length < 1) {
+  // Only 1 or 3 elements are valid per config format; reject 2, 4, etc.
+  if (!Array.isArray(value) || (value.length !== 1 && value.length !== 3)) {
     return false;
   }
   return typeof value[0] === 'string' && value[0].trim() !== '';

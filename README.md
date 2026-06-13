@@ -136,6 +136,22 @@ Composite behavior:
 - `fallback: N`: lower number = higher retry priority when primary is absent (ignores `share`). Use `0` to disable fallback for that target; the UI shows this as `no FB`.
 - `share`: when no `primary`/`fallback` is set, each request picks a target via **weighted random selection**. Total weight = sum of all targets' `share` (defaults to 1 if unset). Each request independently rolls the dice — e.g. `{"a": {"share": 70}, "b": {"share": 30}}` routes ~70% of requests to a and ~30% to b. Set `share: 0` to exclude a target from random selection.
 - if one upstream fails, the proxy automatically retries the next candidate in the order determined by `primary`/`fallback`, or weighted selection for the first attempt then remaining targets as fallbacks.
+- a composite alias may have **no targets** (`"my-alias" = {}`) — this is the state right after adding an alias in the TUI (press `a`) before any target is chosen. Empty aliases are preserved across config parse/serialize round-trips, so the TUI can add the alias first and then open the target picker.
+
+```bash
+⏺ Update(src/utils/config-loader.ts) (fixed by Opus-4-8)
+  ⎿  Added 3 lines, removed 1 line
+      1047      }
+      1048
+      1049      // Handle composite inline object values: "alias" = {"m1": {...}, "m2": {...}}
+      1050 -    const compositeObjectMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*(\{.+\})$/);
+      1050 +    // Note: allow an empty object {} (newly added alias with no targets yet) by
+      1051 +    // using .* instead of .+ so the alias is preserved on round-trip.
+      1052 +    const compositeObjectMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*(\{.*\})$/);
+      1053      if (compositeObjectMatch && currentSection === 'composite' && config.composite) {
+      1054        const [, key, value] = compositeObjectMatch;
+      1055        const cleanKey = key.trim().replace(/^"|"$/g, '');
+```
 
 #### Consul-backed config
 

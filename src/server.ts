@@ -33,7 +33,7 @@ const env: NodeEnv = {
   MESSAGES_UPSTREAM_MODE: (process.env.MESSAGES_UPSTREAM_MODE as 'native' | 'openai-completions') || 'openai-completions',
   INTERACTIONS_UPSTREAM_MODE: (process.env.INTERACTIONS_UPSTREAM_MODE as 'native' | 'openai-completions') || 'native',
   GENERATE_CONTENT_UPSTREAM_MODE: (process.env.GENERATE_CONTENT_UPSTREAM_MODE as 'native' | 'openai-completions') || 'native',
-  PROXY_CONFIG_PATH: process.env.PROXY_CONFIG_PATH || './proxy_config.toml',
+  PROXY_CONFIG_PATH: process.env.PROXY_CONFIG_PATH || (process.env.TEST_CONFIG ? `./${process.env.TEST_CONFIG}proxy_config.toml` : './proxy_config.toml'),
   PROXY_CONFIG_URL: process.env.PROXY_CONFIG_URL,
   PORT: process.env.PORT || '8788',
   DEV_PASS_THROUGH: process.env.DEV_PASS_THROUGH || 'false',
