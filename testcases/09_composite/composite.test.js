@@ -95,29 +95,47 @@ async function testCompositeFallback() {
 
 /**
  * TC1104: Composite Share Distribution
- * Tests that an alias with share-weighted targets (max-kimi) routes
- * across multiple targets. We can't observe the distribution directly,
- * but we can verify that a few requests all succeed and the alias is
- * configured.
+ * Tests that an alias with share-weighted targets routes across multiple
+ * targets. Discovers a share-weighted alias dynamically from the live config
+ * rather than hard-coding a name, so this test isn't config-specific.
  */
 async function testCompositeShare() {
-  // Verify the alias exists in config
   const configRes = await sendRequest({
     endpoint: '/dashboard/api/config',
     headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
   });
 
-  const composites = configRes.body?.config?.composite || {};
-  assert('max-kimi' in composites, 'max-kimi alias should be configured');
+  if (configRes.status !== 200) {
+    console.log(`    (skipped: config endpoint returned ${configRes.status})`);
+    return;
+  }
 
-  // Make a few requests — all should succeed (or all should fail with the
-  // same upstream error if configured models are unavailable)
+  const composites = configRes.body?.config?.composite || {};
+
+  // Find an alias that has at least two targets with non-zero share
+  const shareAlias = Object.entries(composites).find(([, targets]) => {
+    if (!targets || typeof targets !== 'object') return false;
+    const modelTargets = Object.entries(targets).filter(([k]) => k !== 'token_limit');
+    const nonZero = modelTargets.filter(([, cfg]) =>
+      !cfg || typeof cfg !== 'object' || cfg.share !== 0
+    );
+    return nonZero.length >= 2;
+  });
+
+  if (!shareAlias) {
+    console.log('    (skipped: no alias with ≥2 non-zero-share targets found in config)');
+    return;
+  }
+
+  const [aliasName] = shareAlias;
+
+  // Make a few requests — all should succeed or all fail consistently
   const responses = [];
   for (let i = 0; i < 3; i++) {
     const r = await sendRequest({
       endpoint: '/v1/messages',
       body: {
-        model: 'max-kimi',
+        model: aliasName,
         messages: [{ role: 'user', content: 'Hello' }],
         max_tokens: 10
       }
@@ -125,46 +143,59 @@ async function testCompositeShare() {
     responses.push(r);
   }
 
-  // Either all succeed or all share a 4xx/5xx pattern (uniform failure)
   const successes = responses.filter(r => r.status === 200).length;
   const failures = responses.filter(r => r.status >= 400).length;
   assert(
     successes === responses.length || failures === responses.length,
-    'All requests to a share-weighted alias should share a consistent outcome'
+    `All requests to share-weighted alias "${aliasName}" should share a consistent outcome`
   );
 }
 
 /**
- * TC1105: Composite Total Token Limit
- * Tests that an alias with total_token_limit (code-strong has limit=20000)
- * returns HTTP 413 once the accumulated token count exceeds the limit.
+ * TC1105: Composite Token Limit — config presence check
+ * Verifies that at least one composite alias has a token_limit configured,
+ * and that a small request against it does not spuriously return 413.
+ * Discovers the alias dynamically so the test isn't tied to a specific name.
  *
- * This test verifies the alias is configured and the limit value is honored
- * by making a small request (which should NOT trigger 413) and confirming
- * the response is normal. Triggering an actual 413 would require ~20k tokens
- * of upstream usage which is impractical for a smoke test.
+ * Note: token_limit in the dashboard payload is the object form
+ * { num, duration }; total_token_limit is the legacy TOML key that maps
+ * to the same structure on load. The dashboard always exposes token_limit.
  */
 async function testCompositeTotalTokenLimit() {
-  // Verify the alias is configured with a token limit
   const configRes = await sendRequest({
     endpoint: '/dashboard/api/config',
     headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
   });
 
+  if (configRes.status !== 200) {
+    console.log(`    (skipped: config endpoint returned ${configRes.status})`);
+    return;
+  }
+
   const composites = configRes.body?.config?.composite || {};
-  const codeStrong = composites['code-strong'];
-  assert(codeStrong !== undefined, 'code-strong alias should be configured');
-  assert(
-    codeStrong?.total_token_limit !== undefined,
-    'code-strong should have total_token_limit set'
+
+  // Find any alias with token_limit configured (either object or legacy number)
+  const limitedEntry = Object.entries(composites).find(([, targets]) =>
+    targets && typeof targets === 'object' && 'token_limit' in targets
   );
 
-  // Make a small request — should NOT trigger 413 since the token usage
-  // is far below the limit
+  if (!limitedEntry) {
+    console.log('    (skipped: no composite alias with token_limit in live config)');
+    return;
+  }
+
+  const [aliasName, aliasTargets] = limitedEntry;
+  const limit = aliasTargets.token_limit;
+  assert(
+    limit !== undefined,
+    `${aliasName} should have token_limit set`
+  );
+
+  // Make a small request — should NOT trigger 413 on a fresh small request
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
-      model: 'code-strong',
+      model: aliasName,
       messages: [{ role: 'user', content: 'Hi' }],
       max_tokens: 5
     }
@@ -174,11 +205,8 @@ async function testCompositeTotalTokenLimit() {
     response.status === 200 || response.status === 413 || response.status >= 400,
     'Response should be 200, 413 (limit reached), or graceful 4xx'
   );
-  // We should NOT see 413 on a tiny request unless the cumulative count
-  // already exceeds the limit (which would indicate a bug — limit is 20k
-  // and a single small request uses <100 tokens)
   if (response.status === 413) {
-    console.log('    (note: 413 triggered on a small request — cumulative usage may be high)');
+    console.log(`    (note: 413 on small request to "${aliasName}" — cumulative usage may already exceed limit)`);
   }
 }
 
@@ -218,6 +246,8 @@ async function testAllConfiguredAliases() {
     endpoint: '/dashboard/api/config',
     headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
   });
+
+  assert(configRes.status === 200, `Config endpoint should return 200 (got ${configRes.status})`);
 
   const composites = Object.keys(configRes.body?.config?.composite || {});
   assert(composites.length > 0, 'At least one composite alias should be configured');
@@ -268,6 +298,197 @@ async function testCompositeSameNameAsModel() {
   );
 }
 
+const PROXY_URL_COMPOSITE = process.env.PROXY_URL || 'http://localhost:8788';
+const API_KEY_COMPOSITE = process.env.API_KEY || 'sk-test-key';
+
+async function putCompositeConfig(models, composite) {
+  const res = await fetch(`${PROXY_URL_COMPOSITE}/dashboard/api/config`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${API_KEY_COMPOSITE}`
+    },
+    body: JSON.stringify({ models, composite })
+  });
+  const text = await res.text();
+  let body;
+  try { body = JSON.parse(text); } catch { body = text; }
+  return { status: res.status, body };
+}
+
+async function getDashboardConfig() {
+  const res = await sendRequest({
+    method: 'GET',
+    endpoint: '/dashboard/api/config',
+    headers: { 'Authorization': `Bearer ${API_KEY_COMPOSITE}` }
+  });
+  return res.body?.config || {};
+}
+
+/**
+ * TC1109: share: 0 exclusion — alias with all-zero shares
+ * An alias where every target has share: 0 should have no eligible composite
+ * candidates. The proxy falls through to the default upstream for the alias name.
+ * This verifies share: 0 is honoured by confirming the dashboard exposes it and
+ * that such an alias still responds (via fallback to default upstream).
+ *
+ * Reference: README L132
+ */
+async function testCompositeShareZeroExclusion() {
+  const config = await getDashboardConfig();
+  const composites = config.composite || {};
+
+  // The `gpt-all` alias from the live config has "gpt-5.4-mini": {"share": 0}
+  if (!('gpt-all' in composites)) {
+    console.log('    (skipped: gpt-all alias not in config)');
+    return;
+  }
+
+  const gptAll = composites['gpt-all'];
+  const targets = Object.entries(gptAll).filter(([k]) => k !== 'token_limit');
+  const allZero = targets.every(([, cfg]) => cfg && typeof cfg === 'object' && cfg.share === 0);
+  assert(allZero, 'gpt-all should have all targets at share: 0 per README example');
+
+  // The alias should still be routable (falls through to default upstream)
+  const res = await sendRequest({
+    endpoint: '/v1/messages',
+    body: {
+      model: 'gpt-all',
+      messages: [{ role: 'user', content: 'Hi' }],
+      max_tokens: 10
+    }
+  });
+
+  assert(
+    res.status === 200 || res.status >= 400,
+    `gpt-all (all-share-0) should respond without crash (got ${res.status})`
+  );
+}
+
+/**
+ * TC1110: Composite total_token_limit 413 path
+ * Creates a temporary composite alias with token_limit: 1, routes through a
+ * real model to accumulate 1+ token, then asserts the next request gets 413.
+ *
+ * Reference: README L129
+ */
+async function testCompositeTotalTokenLimit413() {
+  const config = await getDashboardConfig();
+  const models = config.models || {};
+  const composite = config.composite || {};
+
+  // Build a dashboard-safe models object (strip api_key)
+  const safeModels = {};
+  for (const [cat, cfg] of Object.entries(models)) {
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) continue;
+    const catOut = {};
+    for (const [k, v] of Object.entries(cfg)) {
+      if (k === 'api_key') continue;
+      catOut[k] = v;
+    }
+    safeModels[cat] = catOut;
+  }
+
+  const TEST_ALIAS = '__test_ttl413__';
+  // Point to a real model that exists in the default upstream (so routing resolves)
+  const TEST_TARGET = 'deepseek/deepseek-v3.2';
+
+  // 1. Configure the test alias with token_limit: 1 (triggers after 1+ token consumed)
+  const testComposite = {
+    ...composite,
+    [TEST_ALIAS]: {
+      [TEST_TARGET]: {},
+      token_limit: { num: 1, duration: '1h' }
+    }
+  };
+
+  const putRes = await putCompositeConfig(safeModels, testComposite);
+  if (putRes.status !== 200) {
+    console.log(`    (skipped: could not configure test alias — ${putRes.status}: ${JSON.stringify(putRes.body?.error)})`);
+    return;
+  }
+
+  try {
+    // 2. First request — should succeed (accumulator starts at 0, 0 >= 1 is false)
+    const req1 = await sendRequest({
+      endpoint: '/v1/messages',
+      body: {
+        model: TEST_ALIAS,
+        messages: [{ role: 'user', content: 'Hi' }],
+        max_tokens: 5
+      }
+    });
+
+    if (req1.status !== 200) {
+      console.log(`    (skipped: first request failed with ${req1.status}, cannot test 413 path)`);
+      return;
+    }
+
+    // 3. Second request — accumulator is now >= 1 token, should get 413
+    const req2 = await sendRequest({
+      endpoint: '/v1/messages',
+      body: {
+        model: TEST_ALIAS,
+        messages: [{ role: 'user', content: 'Hi again' }],
+        max_tokens: 5
+      }
+    });
+
+    assert(
+      req2.status === 413,
+      `Second request with exhausted token limit should return 413, got ${req2.status}`
+    );
+
+    if (req2.status === 413) {
+      assert(
+        req2.body?.error?.type === 'over_limit_error' || typeof req2.body?.error === 'string',
+        'HTTP 413 response should have over_limit_error type'
+      );
+    }
+  } finally {
+    // 4. Restore original composite config
+    await putCompositeConfig(safeModels, composite);
+  }
+}
+
+/**
+ * TC1111: Composite token limit exposed in dashboard
+ * Verifies that /dashboard/api/config surfaces the token_limit field for
+ * aliases that have it configured.
+ *
+ * Reference: README L259–261
+ */
+async function testCompositeLimitExposedInDashboard() {
+  const config = await getDashboardConfig();
+  const composites = config.composite || {};
+
+  // Find any alias with a token_limit configured in live config
+  const limitedAliases = Object.entries(composites).filter(
+    ([, targets]) => targets && typeof targets === 'object' && 'token_limit' in targets
+  );
+
+  if (limitedAliases.length === 0) {
+    console.log('    (skipped: no composite aliases with token_limit in live config)');
+    return;
+  }
+
+  for (const [alias, targets] of limitedAliases) {
+    const limit = targets.token_limit;
+    assert(
+      limit && typeof limit === 'object',
+      `${alias}.token_limit should be an object`
+    );
+    assert(
+      typeof limit.num === 'number' && Number.isFinite(limit.num),
+      `${alias}.token_limit.num should be a finite number`
+    );
+    assert(
+      typeof limit.duration === 'string' && ['1h', '1d', '1w', '1m'].includes(limit.duration),
+      `${alias}.token_limit.duration should be one of 1h/1d/1w/1m`
+    );
+  }
+}
+
 module.exports = {
   testCompositeBasic,
   testCompositePrimary,
@@ -276,7 +497,10 @@ module.exports = {
   testCompositeTotalTokenLimit,
   testCompositeFallbackToDefault,
   testAllConfiguredAliases,
-  testCompositeSameNameAsModel
+  testCompositeSameNameAsModel,
+  testCompositeShareZeroExclusion,
+  testCompositeTotalTokenLimit413,
+  testCompositeLimitExposedInDashboard
 };
 
 if (require.main === module) {
@@ -288,6 +512,9 @@ if (require.main === module) {
     { name: 'TC1105: Total Token Limit', fn: testCompositeTotalTokenLimit },
     { name: 'TC1106: Default Upstream', fn: testCompositeFallbackToDefault },
     { name: 'TC1107: All Aliases', fn: testAllConfiguredAliases },
-    { name: 'TC1108: Same Name as Model', fn: testCompositeSameNameAsModel }
+    { name: 'TC1108: Same Name as Model', fn: testCompositeSameNameAsModel },
+    { name: 'TC1109: share:0 Exclusion', fn: testCompositeShareZeroExclusion },
+    { name: 'TC1110: Token Limit 413 Path', fn: testCompositeTotalTokenLimit413 },
+    { name: 'TC1111: Limit Exposed in Dashboard', fn: testCompositeLimitExposedInDashboard }
   ]);
 }

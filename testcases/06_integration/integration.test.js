@@ -11,6 +11,7 @@
 
 const {
   sendRequest,
+  sendStreamingRequest,
   assert,
   runTest,
   runTestSuite

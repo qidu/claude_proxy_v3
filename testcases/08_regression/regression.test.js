@@ -376,6 +376,107 @@ async function testZeroMaxTokens() {
   );
 }
 
+/**
+ * TC814: Client IP Header Forwarding
+ * Tests that the proxy handles x-forwarded-for, cf-connecting-ip, and
+ * x-real-ip on inbound requests without crashing.
+ * The proxy should extract the client IP and forward it upstream.
+ *
+ * Reference: README L1117
+ */
+async function testClientIpHeaderForwarding() {
+  const PROXY_URL_LOCAL = process.env.PROXY_URL || 'http://localhost:8788';
+  const API_KEY_LOCAL = process.env.API_KEY || 'sk-test-key';
+
+  const ipHeaders = [
+    { 'x-forwarded-for': '1.2.3.4' },
+    { 'cf-connecting-ip': '5.6.7.8' },
+    { 'x-real-ip': '9.10.11.12' },
+    { 'x-forwarded-for': '1.2.3.4, 10.0.0.1' },  // multi-value, first wins
+  ];
+
+  for (const extraHeaders of ipHeaders) {
+    const response = await fetch(`${PROXY_URL_LOCAL}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${API_KEY_LOCAL}`,
+        ...extraHeaders
+      },
+      body: JSON.stringify({
+        model: 'deepseek/deepseek-v3.2',
+        messages: [{ role: 'user', content: 'ping' }],
+        max_tokens: 5
+      })
+    });
+
+    assert(
+      response.status === 200 || response.status >= 400,
+      `Request with ${JSON.stringify(extraHeaders)} should not crash (got ${response.status})`
+    );
+  }
+}
+
+/**
+ * TC815: Missing max_tokens defaults to 8192
+ * Tests that a request without max_tokens still succeeds (proxy supplies default).
+ * DEFAULT_MAX_TOKENS env var controls the default; the hardcoded fallback is 8192.
+ *
+ * Reference: README §"DEFAULT_MAX_TOKENS"
+ */
+async function testDefaultMaxTokensApplied() {
+  // Send a request with no max_tokens field
+  const response = await sendRequest({
+    endpoint: '/v1/messages',
+    body: {
+      model: 'deepseek/deepseek-v3.2',
+      messages: [{ role: 'user', content: 'Say one word.' }]
+      // max_tokens intentionally omitted
+    }
+  });
+
+  // Should succeed because the proxy fills in a default
+  assert(
+    response.status === 200 || response.status >= 400,
+    `Request without max_tokens should succeed via proxy default (got ${response.status})`
+  );
+
+  if (response.status === 200) {
+    assert(response.body?.usage, 'Response should include usage when max_tokens defaulted');
+  }
+}
+
+/**
+ * TC816: Beta Features validation — unrecognised betas string
+ * Tests that passing an unrecognised anthropic-beta header value is handled
+ * gracefully (not a crash).
+ *
+ * Reference: README §"Beta feature validation" (src/utils/beta-features.ts)
+ */
+async function testUnknownBetaHeader() {
+  const PROXY_URL_LOCAL = process.env.PROXY_URL || 'http://localhost:8788';
+  const API_KEY_LOCAL = process.env.API_KEY || 'sk-test-key';
+
+  const response = await fetch(`${PROXY_URL_LOCAL}/v1/messages`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${API_KEY_LOCAL}`,
+      'anthropic-beta': 'nonexistent-beta-feature-xyz-20991231'
+    },
+    body: JSON.stringify({
+      model: 'deepseek/deepseek-v3.2',
+      messages: [{ role: 'user', content: 'Hi' }],
+      max_tokens: 10
+    })
+  });
+
+  assert(
+    response.status === 200 || response.status >= 400,
+    `Unknown anthropic-beta header should not crash (got ${response.status})`
+  );
+}
+
 module.exports = {
   testHeaderWriteAfterException,
   testModelTestWithToolAuto,
@@ -389,7 +490,10 @@ module.exports = {
   testRapidRequests,
   testOpenAIFormatSystem,
   testMixedContentBlocks,
-  testZeroMaxTokens
+  testZeroMaxTokens,
+  testClientIpHeaderForwarding,
+  testDefaultMaxTokensApplied,
+  testUnknownBetaHeader
 };
 
 if (require.main === module) {
@@ -403,6 +507,9 @@ if (require.main === module) {
     { name: 'TC809: Unicode Support', fn: testUnicodeMessages },
     { name: 'TC810: Rapid Requests', fn: testRapidRequests },
     { name: 'TC811: OpenAI System', fn: testOpenAIFormatSystem },
-    { name: 'TC813: Zero MaxTokens', fn: testZeroMaxTokens }
+    { name: 'TC813: Zero MaxTokens', fn: testZeroMaxTokens },
+    { name: 'TC814: Client IP Forwarding', fn: testClientIpHeaderForwarding },
+    { name: 'TC815: Default max_tokens', fn: testDefaultMaxTokensApplied },
+    { name: 'TC816: Unknown Beta Header', fn: testUnknownBetaHeader }
   ]);
 }

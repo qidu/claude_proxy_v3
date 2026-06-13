@@ -4,64 +4,39 @@ Custom lightweight test runner — no Jest/Mocha. Tests are plain async function
 
 ## Running All Tests
 
-Create a runner script (e.g., `run-tests.js` at project root):
+Two runner scripts live at the project root:
 
-```js
-// run-tests.js
-import { spawn } from 'child_process';
-
-const TEST_DIR = './testcases';
-const PROXY_URL = process.env.PROXY_URL || 'http://localhost:8788';
-const API_KEY = process.env.API_KEY || 'sk-test-key';
-const TEST_TIMEOUT = process.env.TEST_TIMEOUT || '30000';
-
-const suites = [
-  '01_endpoints/messages.test.js',
-  '01_endpoints/messages_streaming.test.js',
-  '01_endpoints/interactions.test.js',
-  '01_endpoints/generateContent.test.js',
-  '02_features/thinking.test.js',
-  '02_features/tool_use.test.js',
-  '02_features/image_input.test.js',
-  '03_errors/validation.test.js',
-  '04_models/models.test.js',
-  '05_upstream_modes/upstream_modes.test.js',
-  '06_integration/integration.test.js',
-  '07_dashboard/dashboard_api.test.js',
-  '08_regression/regression.test.js',
-  '09_composite/composite.test.js',
-  '10_auth/auth_headers.test.js',
-  '11_responses/responses_api.test.js',
-];
-
-let passed = 0, failed = 0;
-
-for (const suite of suites) {
-  const child = spawn('node', [`${TEST_DIR}/${suite}`], {
-    env: { ...process.env, PROXY_URL, API_KEY, TEST_TIMEOUT },
-    stdio: 'inherit',
-  });
-
-  await new Promise((resolve) => child.on('close', (code) => {
-    if (code === 0) passed++;
-    else failed++;
-    resolve();
-  }));
-}
-
-console.log(`\n${'='.repeat(60)}`);
-console.log(`Total: ${passed} passed, ${failed} failed`);
-process.exit(failed > 0 ? 1 : 0);
-```
-
-Or use `tsx` for ESM:
+- **`run-tests.js`** — single pass, prints results to stdout
+- **`run-tests-loop-wrapper.js`** — repeating loop, writes a timestamped Markdown report to `./tests/`
 
 ```bash
-# Run all tests
-node --loader tsx run-tests.js
+# Single pass
+node run-tests.js
 
-# Run with env
-PROXY_URL=http://localhost:8788 API_KEY=sk-test node --loader tsx run-tests.js
+# Loop (repeats until interrupted)
+node run-tests-loop-wrapper.js
+
+# With custom proxy URL and API key
+PROXY_URL=http://localhost:8788 API_KEY=sk-test node run-tests.js
+```
+
+### Config Isolation
+
+The runners automatically isolate the proxy config so tests never modify `proxy_config.toml`:
+
+1. At startup, `proxy_config.toml` is **copied** to `test_proxy_config.toml`.
+2. `TEST_CONFIG=test_` is passed to the proxy and to all child test processes, directing the proxy to load `test_proxy_config.toml`.
+3. Any `PUT /dashboard/api/config` mutations during the run target only the test file.
+4. At exit (including Ctrl-C and crashes), `test_proxy_config.toml` is **deleted**.
+
+The proxy must be started with `TEST_CONFIG=test_` for this to work:
+
+```bash
+# Terminal 1 — proxy pointed at the test config
+TEST_CONFIG=test_ node src/server.ts
+
+# Terminal 2 — run tests (creates/manages test_proxy_config.toml)
+node run-tests.js
 ```
 
 ## Running Tests Individually
@@ -70,10 +45,10 @@ PROXY_URL=http://localhost:8788 API_KEY=sk-test node --loader tsx run-tests.js
 # Run a single test file
 node testcases/01_endpoints/messages.test.js
 
-# Run with custom proxy URL
+# With custom proxy URL
 PROXY_URL=http://localhost:8788 node testcases/01_endpoints/messages.test.js
 
-# Run with custom API key
+# With custom API key
 API_KEY=your-key node testcases/01_endpoints/messages.test.js
 
 # Adjust timeout (default 30s)
@@ -92,9 +67,10 @@ TEST_TIMEOUT=60000 node testcases/04_models/models.test.js
 | `06_integration/` | Multi-component integration |
 | `07_dashboard/` | Dashboard API and TUI backend |
 | `08_regression/` | Previously fixed bugs and edge cases |
-| `09_composite/` | Composite alias behaviors (primary, fallback, share, total_token_limit) |
+| `09_composite/` | Composite alias behaviors (primary, fallback, share, token_limit) |
 | `10_auth/` | Auth header flows (x-api-key, x-goog-api-key, Bearer, config priority) |
 | `11_responses/` | Responses API coverage (input_tokens, compact, openai-responses mode, documented limitations) |
+| `12_config_validation/` | Config schema validation via PUT /dashboard/api/config |
 | `utils/` | Shared test helpers |
 
 ## Test Files
@@ -106,39 +82,39 @@ TEST_TIMEOUT=60000 node testcases/04_models/models.test.js
 - `interactions.test.js` — POST /v1/interactions, text/object input, multi-turn, system instruction, generation config, streaming, tools, thinking_level
 - `generateContent.test.js` — POST /v1beta/models/{model}:generateContent and /v1/models/{model}:generateContent, generation config, safety settings, system instruction, tools, streaming, multi-turn, v1beta/v1 streamGenerateContent (with SSE validation), :countTokens
 
-### 02features
+### 02_features
 
 - `thinking.test.js` — Thinking/reasoning: enabled/disabled, boolean format, adaptive, reasoning_effort, output_config.effort, budget tokens, streaming, output_config.task_budget.total, xhigh effort normalization, OpenAI thinking format, signature_delta events, custom budget_to_effort_* thresholds
 - `tool_use.test.js` — Tool/function calling: basic tool use, tool_choice variants (auto/any/none/specific), multiple tools, streaming, round-trip, OpenAI format
 - `image_input.test.js` — Image content: base64, URL, text+image, multiple images, PNG, WebP
 
-### 03errors
+### 03_errors
 
 - `validation.test.js` — Missing/invalid parameters, authentication, malformed JSON, content-type mismatch, invalid tool definitions, rate limiting, blocked endpoints
 
-### 04models
+### 04_models
 
 - `models.test.js` — DeepSeek, Qwen, MiniMax, Moonshot/Kimi models, thinking models, custom NVIDIA models, composite aliases, multi-endpoint routing, streaming
 
-### 05upstream_modes
+### 05_upstream_modes
 
 - `upstream_modes.test.js` — Claude/OpenAI/Gemini format conversion, token counting (with thinking), Responses API, embeddings, models list, mode conversion, /v1/responses/input_tokens, /v1/responses/compact, /config-reload, openai-responses mode
 
-### 06integration
+### 06_integration
 
 - `integration.test.js` — Config load on startup, sequential stats accumulation, health check, CORS headers, models list, token counting, request timeout, timing stats, error format, streaming/non-streaming coexistence, model_timings field, api_key redaction, Access-Control-* CORS headers, PUT config persistence, /tmp/model_proxy_tokens.log persistence
 
-### 07dashboard
+### 07_dashboard
 
 - `dashboard_api.test.js` — GET/PUT /dashboard/api/config, /stats/models, /stats/agents, /stats/requests, POST /test-model (standard + composite alias), HTML page rendering, auth handling
 
-### 08regression
+### 08_regression
 
 - `regression.test.js` — Header write crash on exception (fix 3e05fb7), tool_choice auto (fix fdad843), config schema validation (fix 18a1db8), heatmap structure, malformed JSON, empty content, long system prompts, unicode, rapid requests/rate limiting, OpenAI format system, mixed content blocks, zero max_tokens
 
 ### 09_composite
 
-- `composite.test.js` — Composite alias behaviors: basic routing, primary routing, fallback ordering, share weighted distribution, total_token_limit, fallback to default upstream for unresolved targets, all configured aliases, same-name-as-model
+- `composite.test.js` — Composite alias behaviors: basic routing, primary routing, fallback ordering, share-weighted distribution (alias discovered dynamically from live config), token_limit config presence, fallback to default upstream for unresolved targets, all configured aliases smoke test, same-name-as-model, share:0 exclusion, token_limit 413 path (creates a temporary alias with limit:1 via PUT then removes it)
 
 ### 10_auth
 
@@ -148,17 +124,22 @@ TEST_TIMEOUT=60000 node testcases/04_models/models.test.js
 
 - `responses_api.test.js` — Responses API: basic, /v1/responses/input_tokens, /v1/responses/compact, image input handling, developer role, stateful fields dropped, streaming, tool use, stateless usage pattern
 
+### 12_config_validation
+
+- `config_validation.test.js` — Config schema validation via PUT /dashboard/api/config: config_errors shape, non-array model value rejected, non-object composite target rejected, 2-element model array rejected, 4-element model array rejected, non-boolean primary rejected, non-finite share/fallback/total_token_limit rejected, non-object composite target value rejected, empty composite target `{}` accepted, non-object models payload rejected, api_key in models payload rejected, empty composite alias `{}` round-trips (survives parse/serialize — the state right after adding an alias via the TUI before targets are chosen)
+
 ## Prerequisites
 
 Tests run against a live proxy instance. The proxy must be started beforehand with all required upstream API keys and features configured.
 
-### Common Environment Variables
+### Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
 | `PROXY_URL` | `http://localhost:8788` | Proxy base URL |
 | `API_KEY` | `sk-test-key` | Bearer token sent in `Authorization` header |
 | `TEST_TIMEOUT` | `30000` | Per-request timeout in milliseconds |
+| `TEST_CONFIG` | _(set by runner)_ | Config file prefix; proxy loads `./${TEST_CONFIG}proxy_config.toml`. Set to `test_` by the runners automatically. |
 
 ### Per-Suite Requirements
 
@@ -219,7 +200,7 @@ Tests run against a live proxy instance. The proxy must be started beforehand wi
 
 | File | Endpoints | Models Required | Features Required |
 |---|---|---|---|
-| `composite.test.js` | `POST /v1/messages`, `GET /dashboard/api/config` | `code-small`, `code-strong`, `max-kimi`, `llama` (or any configured composite alias) | Composite alias routing (primary, fallback, share, total_token_limit, fallback to default upstream) |
+| `composite.test.js` | `POST /v1/messages`, `GET /dashboard/api/config`, `PUT /dashboard/api/config` | Any configured composite aliases (discovered dynamically from live config) | Composite alias routing (primary, fallback, share, token_limit, fallback to default upstream); TC1110 temporarily creates a low-limit alias via PUT and cleans it up |
 
 #### `10_auth`
 
@@ -233,6 +214,12 @@ Tests run against a live proxy instance. The proxy must be started beforehand wi
 |---|---|---|---|
 | `responses_api.test.js` | `POST /v1/responses`, `POST /v1/responses/input_tokens`, `POST /v1/responses/compact` | `gpt-5.4-mini` (or any configured model) | Responses API basic, input_tokens, compact, image input handling, developer role, stateful fields silently dropped, streaming, tool use, stateless usage pattern |
 
+#### `12_config_validation`
+
+| File | Endpoints | Models Required | Features Required |
+|---|---|---|---|
+| `config_validation.test.js` | `GET /dashboard/api/config`, `PUT /dashboard/api/config` | none (validation is purely schema-level, no upstream calls) | Dashboard config read/write, config schema validation (array length, field types, api_key rejection) |
+
 ### Provider API Keys Required
 
 The proxy configuration must have upstream API keys for all of the following providers (tests will 401/500 without them):
@@ -241,8 +228,8 @@ The proxy configuration must have upstream API keys for all of the following pro
 - **Qwen (Alibaba)** — used by messages, streaming, tool_use, image_input, models, regression suites
 - **MiniMax** — used by models suite (or minimax-m3 in active config for composite)
 - **Moonshot/Kimi** — used by models suite (or kimi-2.7 in active config for composite)
-- **Gemini (Google)** — used by interactions, generateContent, upstream_modes suites (gemini-3.5-flash in active config)
-- **NVIDIA** — used by models suite (or kimi-2.7/minimax-m2.7 in active config for composite)
+- **Gemini (Google)** — used by interactions, generateContent, upstream_modes suites
+- **NVIDIA** — used by models suite
 
 ### Proxy Features That Must Be Enabled
 
@@ -273,4 +260,6 @@ The proxy configuration must have upstream API keys for all of the following pro
 - Tests hit `localhost:8788` by default (configurable via `PROXY_URL`)
 - Tests are sequential — no parallelization or test isolation
 - Some tests accept both 200 and >=400 as valid (graceful degradation)
+- Composite tests discover aliases dynamically from the live config; no alias names are hard-coded
+- Config-mutating tests (09_composite TC1110, 12_config_validation) restore original state after each test case
 - TUI interactive features are tested via the dashboard API they call; interactive TTY testing requires manual testing or a terminal automation tool
