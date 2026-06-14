@@ -35,6 +35,18 @@ function convertGeminiInteractionsToOpenAI(geminiRequest: Record<string, unknown
     }
   }
   
+  // Handle input as array-of-turns (TC203: [{role, content}, ...])
+  if (Array.isArray(geminiRequest.input)) {
+    return {
+      model,
+      messages: (geminiRequest.input as any[]).map((turn: any) => ({
+        role: turn.role === 'model' ? 'assistant' : turn.role,
+        content: typeof turn.content === 'string' ? turn.content : String(turn.content),
+      })),
+      stream: geminiRequest.stream || false,
+    };
+  }
+
   // Handle simple input format
   if (typeof geminiRequest.input === 'string') {
     return {
