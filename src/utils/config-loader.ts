@@ -1245,7 +1245,10 @@ export function toDashboardConfigPayload(config: ProxyConfig): DashboardConfigPa
 }
 
 function isSafeModelArray(value: unknown): value is DashboardModelArrayConfig {
-  // Only 1 or 3 elements are valid per config format; reject 2, 4, etc.
+  // Accept 1 or 3 elements only. Dashboard GET returns 2-element arrays (api_key
+  // stripped), but PUT callers must normalize to 1 or 3 elements before sending
+  // (see TC1214 which does this explicitly). Rejecting 2-element arrays here
+  // ensures TC1204 passes and prevents ambiguous round-trips.
   if (!Array.isArray(value) || (value.length !== 1 && value.length !== 3)) {
     return false;
   }
