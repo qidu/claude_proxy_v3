@@ -54,6 +54,7 @@ import {
   updateCompositeAliasReverseMap,
   setCompositeLimit,
   clearCompositeLimit,
+  getWindowMs,
   incrementActiveRequests,
   decrementActiveRequests,
 } from './utils/dashboard-stats.js';
@@ -460,10 +461,21 @@ export default {
     // Sync composite limit windows from config: update reverse map and init/clear windows
     const composite = proxyConfig.composite || {};
     updateCompositeAliasReverseMap(composite);
-    // Add/reset windows for aliases with limits; remove windows for aliases without limits
+    // Add/reset windows for aliases with limits; remove windows for aliases without limits.
+    // If a valid (non-expired) window was restored from the JSONL log, keep its accumulator
+    // instead of resetting to 0 — this preserves token-limit state across restarts.
     for (const [alias, targets] of Object.entries(composite)) {
       if (targets.token_limit && typeof targets.token_limit === 'object') {
-        setCompositeLimit(alias, targets.token_limit.num, targets.token_limit.duration);
+        const cfg = targets.token_limit;
+        const existing = compositeLimitWindows.get(alias);
+        const windowMs = getWindowMs(cfg.duration);
+        if (existing && existing.windowStartMs + windowMs > Date.now()) {
+          // Valid window restored from log — update limit/duration from config, keep accumulator
+          existing.limit = cfg.num;
+          existing.duration = cfg.duration;
+        } else {
+          setCompositeLimit(alias, cfg.num, cfg.duration);
+        }
       } else {
         clearCompositeLimit(alias);
       }

@@ -506,7 +506,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
       this.app.openAddAliasPrompt();
       return;
     }
-    if (matchesKey(data, 't') && selected?.kind === 'alias') {
+    if (matchesKey(data, 'l') && selected?.kind === 'alias') {
       this.app.openEditAliasLimitPrompt(selected.alias);
       return;
     }
@@ -538,7 +538,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
   render(width: number): string[] {
     const snap = this.snapshot;
     const lines: string[] = [];
-    lines.push(`Esc ${dim('hide panel')}  A ${dim('add alias')} T ${dim('token limit')}  M ${dim('add target')}  E ${dim('edit')}  D ${dim('delete')} ↑↓ ${dim('move')} `);
+    lines.push(`Esc ${dim('hide panel')}  A ${dim('add alias')} L ${dim('token limit')}  M ${dim('add target')}  E ${dim('edit')}  D ${dim('delete')} ↑↓ ${dim('move')} `);
 
     if (!snap) {
       return frame('Edit Composite Aliases Config', [...lines, 'Loading…'], width).map((line) => clip(line, width));
@@ -678,7 +678,7 @@ class DashboardView implements Component {
     const secColor = secColors[sec % 3];
     const hourminTime = this.lastTime.slice(0, -2);
     const secondsTime = secColor(this.lastTime.slice(-2));
-    const inflightIndicator = getActiveRequestCount() > 0 ? ` ${green('●')}` : '';
+    const inflightIndicator = getActiveRequestCount() > 0 && Math.floor(sec % 2) == 0 ? ` ${green('●')}` : '';
     const lines: string[] = [];
     lines.push(bold('Proxy TUI') + dim(`  ${hourminTime}`) + `${secondsTime}${inflightIndicator}`);
     lines.push(dim('─'.repeat(Math.max(0, width))));
@@ -871,6 +871,8 @@ class DashboardApp {
     if (this.renderTimer) clearTimeout(this.renderTimer);
     this.renderTimer = setTimeout(() => {
       this.renderPending = false;
+      const inflight = getActiveRequestCount();
+      stdout.write(inflight > 0 ? '\x1b]0;Proxy \u25cf\x07' : '\x1b]0;Proxy\x07');
       this.tui.requestRender();
     }, 100);
   }
@@ -1353,6 +1355,7 @@ class DashboardApp {
     this.modelTestAborted = true;
     if (this.modelTestAbortController) this.modelTestAbortController.abort();
     this.closeOverlay();
+    stdout.write('\x1b]0;\x07'); // clear terminal title on exit
     this.tui.stop();
   }
 
