@@ -13,9 +13,11 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
   - `POST /v1/interactions` -  Process gemini interactions messages
   - `POST /v1beta/models/{model}:generateContent` - Process gemini content messages
   - `POST /v1beta/models/{model}:streamGenerateContent` - Process gemini content messages with SSE
+  - `POST /v1beta/models/{model}:countTokens` - Count tokens via Gemini API (proxied to upstream; returns `totalTokens`)
   - `POST /v1/models/{model}:generateContent` - Alternative Gemini v1 endpoint (added 2026-03-03)
   - `POST /v1/models/{model}:streamGenerateContent` - Alternative Gemini v1 endpoint with SSE (added 2026-03-03)
-  - `POST /v1/messages/count_tokens` - Count tokens in messages
+  - `POST /v1/models/{model}:countTokens` - Alternative Gemini v1 countTokens endpoint
+  - `POST /v1/messages/count_tokens` - Count tokens in messages (Claude/OpenAI format)
   - `POST /v1/embeddings` - Generate embeddings (proxied to upstream OpenAI-compatible API)
   - `GET /dashboard` - Web dashboard for config and runtime statistics
   - `GET /dashboard/api/config` - Read sanitized editable config (`models.*`, `composite`; hides `api_key`). Add `?reload=1` to clear the in-memory config cache and re-read the config file first (used by the dashboard "Reload" button and the TUI `r` key, so externally edited config — e.g. new models — shows up without restarting)
@@ -1812,6 +1814,10 @@ or
 - `src/utils/thinking.ts` - Added normalization utility, updated all thinking functions
 - `src/utils/token-counting.ts` - Updated to handle boolean thinking types
 - `src/utils/validation.ts` - Enhanced validation for boolean thinking values
+
+**Gemini `:countTokens` Endpoint**: Added routing for `POST /v1beta/models/{model}:countTokens` and `POST /v1/models/{model}:countTokens`. The request body is proxied as-is to the upstream Gemini API and the raw JSON response (`totalTokens`) is returned. Previously these paths fell through to an "Unsupported fixed route" error (HTTP 500).
+
+**OpenAI Handler Error Propagation Fix**: `handleOpenAIRequest` previously threw a plain `Error` on upstream non-2xx responses, which the outer error handler converted to HTTP 500 regardless of the actual upstream status. For streaming requests, it silently returned HTTP 200 with the error wrapped in an SSE frame. Both paths now use `handleTargetApiError()`, propagating the correct upstream status code (401, 403, 429, etc.) to the client — matching the behavior of the Claude and Gemini handlers.
 
 ## 🔗 Links
 
