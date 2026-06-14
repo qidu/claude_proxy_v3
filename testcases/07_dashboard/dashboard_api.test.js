@@ -24,6 +24,7 @@ const {
  */
 async function testGetDashboardConfig() {
   const response = await sendRequest({
+    method: 'GET',
     endpoint: '/dashboard/api/config',
     headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
   });
@@ -38,85 +39,20 @@ async function testGetDashboardConfig() {
 }
 
 /**
- * TC702: Get Dashboard Config Auth
- * Tests that dashboard requires auth
+ * TC702: Get Config (no auth) — proxy does not enforce inbound API key auth
+ * The dashboard GET endpoint is openly accessible; auth is handled by upstreams,
+ * not by the proxy itself. This test verifies the endpoint responds without error.
  */
 async function testGetDashboardConfigAuth() {
   const response = await sendRequest({
+    method: 'GET',
     endpoint: '/dashboard/api/config',
     headers: { 'Authorization': 'Bearer invalid-key-xyz' }
   });
 
-  // Should still return 200 even with invalid key for GET
-  // (auth validation is upstream, not here)
   assert(
-    response.status === 200 || response.status === 401,
-    'Should respond with valid status'
-  );
-}
-
-/**
- * TC703: Put Dashboard Config
- * Tests PUT /dashboard/api/config updates config
- */
-async function testPutDashboardConfig() {
-  // First get current config
-  const getRes = await sendRequest({
-    endpoint: '/dashboard/api/config',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
-  });
-
-  if (getRes.body?.config?.read_only) {
-    // Skip if read-only (PROXY_CONFIG_URL set)
-    console.log('  (skipping - read-only config)');
-    return;
-  }
-
-  // Get models from current config
-  const models = getRes.body?.config?.models || {};
-  const firstCategory = Object.keys(models)[0];
-
-  if (!firstCategory) {
-    console.log('  (skipping - no categories to update)');
-    return;
-  }
-
-  // Read current state before modifying
-  const response = await sendRequest({
-    endpoint: '/dashboard/api/config',
-    method: 'PUT',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
-    body: {
-      models: {},
-      composite: {}
-    }
-  });
-
-  // Should succeed or return error if read-only
-  assert(
-    response.status === 200 || response.status >= 400,
-    'Should handle PUT config'
-  );
-}
-
-/**
- * TC704: Dashboard Config Validation
- * Tests invalid config structure returns error
- */
-async function testDashboardConfigValidation() {
-  const response = await sendRequest({
-    endpoint: '/dashboard/api/config',
-    method: 'PUT',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
-    body: {
-      models: null,  // Invalid - should be object
-      composite: {}
-    }
-  });
-
-  assert(
-    response.status === 200 || response.status >= 400,
-    'Should validate config structure'
+    response.status === 200,
+    `Dashboard config GET should return 200 regardless of key — got ${response.status}`
   );
 }
 
@@ -126,6 +62,7 @@ async function testDashboardConfigValidation() {
  */
 async function testGetModelStats() {
   const response = await sendRequest({
+    method: 'GET',
     endpoint: '/dashboard/api/stats/models',
     headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
   });
@@ -140,6 +77,7 @@ async function testGetModelStats() {
  */
 async function testGetAgentStats() {
   const response = await sendRequest({
+    method: 'GET',
     endpoint: '/dashboard/api/stats/agents',
     headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
   });
@@ -154,6 +92,7 @@ async function testGetAgentStats() {
  */
 async function testGetRequestStats() {
   const response = await sendRequest({
+    method: 'GET',
     endpoint: '/dashboard/api/stats/requests',
     headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
   });
@@ -216,6 +155,7 @@ async function testDashboardTestModelMissingId() {
 async function testDashboardTestCompositeModel() {
   // First get config to find a composite alias
   const configRes = await sendRequest({
+    method: 'GET',
     endpoint: '/dashboard/api/config',
     headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
   });
@@ -262,8 +202,6 @@ async function testDashboardHtmlPage() {
 module.exports = {
   testGetDashboardConfig,
   testGetDashboardConfigAuth,
-  testPutDashboardConfig,
-  testDashboardConfigValidation,
   testGetModelStats,
   testGetAgentStats,
   testGetRequestStats,
@@ -276,6 +214,7 @@ module.exports = {
 if (require.main === module) {
   runTestSuite('Dashboard API Tests', [
     { name: 'TC701: Get Config', fn: testGetDashboardConfig },
+    { name: 'TC702: Get Config (no auth)', fn: testGetDashboardConfigAuth },
     { name: 'TC705: Model Stats', fn: testGetModelStats },
     { name: 'TC706: Agent Stats', fn: testGetAgentStats },
     { name: 'TC707: Request Stats', fn: testGetRequestStats },

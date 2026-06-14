@@ -25,8 +25,9 @@ const { COMPOSITE_ALIASES } = require('../utils/model_config');
 
 /**
  * TC1101: Basic Composite Alias Routing
- * Tests that a composite alias (code-small) routes to a configured target
- * and returns 200
+ * Tests that a composite alias (code-small) is recognized by the proxy.
+ * The alias must not return 404 (unknown route) or 500 (internal error).
+ * A 200 proves the alias routed; a 4xx from upstream is acceptable.
  */
 async function testCompositeBasic() {
   const response = await sendRequest({
@@ -39,8 +40,12 @@ async function testCompositeBasic() {
   });
 
   assert(
-    response.status === 200 || response.status >= 400,
-    'Composite alias should respond (200 or graceful 4xx)'
+    response.status !== 404,
+    'Composite alias code-small should be recognized (404 = unknown route)'
+  );
+  assert(
+    response.status < 500,
+    `Composite alias code-small should not cause a proxy internal error (got ${response.status})`
   );
 }
 
@@ -71,11 +76,10 @@ async function testCompositePrimary() {
 }
 
 /**
- * TC1103: Composite Fallback Ordering
- * Tests that an alias with multiple fallback targets (code-strong)
- * works. fallback: 1 means it gets tried second if primary fails.
- * Without a way to force the primary to fail, we can only verify
- * the alias works in the happy path.
+ * TC1103: Composite Fallback Ordering — alias is routable
+ * Tests that an alias with fallback targets (code-strong) is recognized
+ * by the proxy. Without a way to force the primary to fail in a test,
+ * we can only verify the alias is known and does not cause a proxy error.
  */
 async function testCompositeFallback() {
   const response = await sendRequest({
@@ -88,8 +92,12 @@ async function testCompositeFallback() {
   });
 
   assert(
-    response.status === 200 || response.status >= 400,
-    'Composite with fallbacks should respond'
+    response.status !== 404,
+    'Composite alias code-strong should be recognized (404 = unknown route)'
+  );
+  assert(
+    response.status < 500,
+    `Composite alias code-strong should not cause a proxy internal error (got ${response.status})`
   );
 }
 
@@ -101,6 +109,7 @@ async function testCompositeFallback() {
  */
 async function testCompositeShare() {
   const configRes = await sendRequest({
+    method: 'GET',
     endpoint: '/dashboard/api/config',
     headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
   });
@@ -163,6 +172,7 @@ async function testCompositeShare() {
  */
 async function testCompositeTotalTokenLimit() {
   const configRes = await sendRequest({
+    method: 'GET',
     endpoint: '/dashboard/api/config',
     headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
   });
@@ -212,13 +222,13 @@ async function testCompositeTotalTokenLimit() {
 
 /**
  * TC1106: Composite Fallback to Default Upstream
- * Tests that composite aliases can include target models that are not
- * explicitly declared in [models.*] — they fall back to the default
- * upstream route (per README "Composite Fallback to Default Upstream").
+ * Tests that a composite alias whose target model is not in [models.*]
+ * falls back to the default upstream (per README "Composite Fallback to
+ * Default Upstream") rather than crashing.
  *
  * The `llama` alias targets `llama3` which is NOT in the active config.
- * The test verifies the request still routes successfully (via default
- * upstream) or fails gracefully.
+ * The proxy should route via default upstream (200) or return a structured
+ * upstream error (4xx) — but must NOT crash (500) or return 404.
  */
 async function testCompositeFallbackToDefault() {
   const response = await sendRequest({
@@ -231,8 +241,12 @@ async function testCompositeFallbackToDefault() {
   });
 
   assert(
-    response.status === 200 || response.status >= 400,
-    'Composite with unresolved targets should route via default upstream or fail gracefully'
+    response.status !== 404,
+    'Composite alias llama should be recognized (404 = unknown route / alias not registered)'
+  );
+  assert(
+    response.status < 500,
+    `Composite with unresolved target should not cause a proxy internal error (got ${response.status})`
   );
 }
 
@@ -243,6 +257,7 @@ async function testCompositeFallbackToDefault() {
  */
 async function testAllConfiguredAliases() {
   const configRes = await sendRequest({
+    method: 'GET',
     endpoint: '/dashboard/api/config',
     headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
   });
@@ -269,20 +284,12 @@ async function testAllConfiguredAliases() {
 }
 
 /**
- * TC1108: Composite Alias with Same Name as Model
- * Per README "Important" note: when a model name has both a [models.*] entry
- * AND a [composite] alias with the same name, the model name WITHOUT [C]
- * routes through the composite alias (model's own base_url/api_key are not
- * used for routing). The [C] suffix is the way to test the composite.
- *
- * The active config has `gpt-5.4-mini` in both [models.free] (as
- * "gpt-5.4-mini" = ["x"]) and a [composite] alias is not present for
- * gpt-5.4-mini, so this is a documentation-style test that verifies
- * the picker behavior via the dashboard test-model endpoint.
+ * TC1108: Dashboard test-model endpoint works for a composite alias
+ * Tests POST /dashboard/api/test-model with a composite alias name.
+ * The endpoint must return a structured result (200 with success/failure
+ * fields) rather than a proxy error (5xx) or route-not-found (404).
  */
 async function testCompositeSameNameAsModel() {
-  // Use the dashboard's test-model endpoint which surfaces the [C] suffix
-  // distinction in the picker. The endpoint may not exist in all builds.
   const response = await sendRequest({
     endpoint: '/dashboard/api/test-model',
     method: 'POST',
@@ -293,9 +300,20 @@ async function testCompositeSameNameAsModel() {
   });
 
   assert(
-    response.status === 200 || response.status === 400 || response.status >= 400,
-    'test-model endpoint should respond for composite alias'
+    response.status === 200 || response.status === 400,
+    `test-model should return 200 (result) or 400 (bad request), got ${response.status}`
   );
+  if (response.status === 200) {
+    assert(
+      'success' in response.body && 'modelId' in response.body,
+      'test-model 200 response should have success and modelId fields'
+    );
+  } else {
+    assert(
+      response.body?.error,
+      'test-model 400 response should have an error field'
+    );
+  }
 }
 
 const PROXY_URL_COMPOSITE = process.env.PROXY_URL || 'http://localhost:8788';
@@ -377,14 +395,23 @@ async function testCompositeTotalTokenLimit413() {
   const models = config.models || {};
   const composite = config.composite || {};
 
-  // Build a dashboard-safe models object (strip api_key)
+  // Build a dashboard-safe models object (strip api_key, normalize array lengths).
+  // getDashboardConfig() returns 2-element arrays [model, base_url] from the
+  // dashboard GET view; the PUT validator only accepts 1- or 3-element arrays.
+  // Normalize: [model, url] → [model, url, ''] (preserve url); [model, ''] → [model].
   const safeModels = {};
   for (const [cat, cfg] of Object.entries(models)) {
     if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) continue;
     const catOut = {};
     for (const [k, v] of Object.entries(cfg)) {
       if (k === 'api_key') continue;
-      catOut[k] = v;
+      if (!Array.isArray(v)) {
+        catOut[k] = v;
+      } else if (v.length >= 2 && v[1]) {
+        catOut[k] = [v[0], v[1], ''];
+      } else {
+        catOut[k] = [v[0]];
+      }
     }
     safeModels[cat] = catOut;
   }

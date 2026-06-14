@@ -2,7 +2,7 @@
  * Config Schema Validation Tests
  * Tests the documented config validation rules
  *
- * Coverage (§A of gaps doc):
+ * Coverage:
  * - TC1201: config_errors is a well-formed array in GET /dashboard/api/config
  * - TC1202: PUT with non-array target value is rejected
  * - TC1203: PUT with empty composite target array is rejected
@@ -319,10 +319,31 @@ async function testPutCompositeTargetNotObject() {
 /**
  * TC1211: PUT — empty composite target {} is accepted
  * An empty target object {} is valid per README L1070.
+ *
+ * getLiveModels() returns 2-element arrays (api_key stripped) from the GET
+ * response, but the PUT validator only accepts 1- or 3-element arrays.
+ * Normalize here the same way TC1214 does so the models payload is valid
+ * and this test isolates only the composite-target {} behaviour.
  */
 async function testPutEmptyCompositeTargetValid() {
-  const models = await getLiveModels();
+  const rawModels = await getLiveModels();
   const composite = await getLiveComposite();
+
+  // Normalize 2-element arrays to 1 or 3 elements (see TC1214 for rationale)
+  const models = {};
+  for (const [cat, cfg] of Object.entries(rawModels)) {
+    const catOut = {};
+    for (const [k, v] of Object.entries(cfg)) {
+      if (!Array.isArray(v)) {
+        catOut[k] = v;
+      } else if (v.length >= 2 && v[1]) {
+        catOut[k] = [v[0], v[1], ''];
+      } else {
+        catOut[k] = [v[0]];
+      }
+    }
+    models[cat] = catOut;
+  }
 
   // Add a well-formed alias with an empty target config
   const goodComposite = {

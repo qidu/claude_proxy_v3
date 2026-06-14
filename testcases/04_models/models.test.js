@@ -29,7 +29,7 @@ const {
 } = require('../utils/model_config');
 
 /**
- * TC801: Test DeepSeek Models
+ * TC401: Test DeepSeek Models
  * Tests DeepSeek V3 and R1 models
  */
 async function testDeepSeekModels() {
@@ -51,7 +51,7 @@ async function testDeepSeekModels() {
 }
 
 /**
- * TC802: Test Qwen Models
+ * TC402: Test Qwen Models
  * Tests various Qwen model variants
  */
 async function testQwenModels() {
@@ -73,7 +73,7 @@ async function testQwenModels() {
 }
 
 /**
- * TC803: Test MiniMax Models
+ * TC403: Test MiniMax Models
  * Tests MiniMax model variants
  */
 async function testMiniMaxModels() {
@@ -95,7 +95,7 @@ async function testMiniMaxModels() {
 }
 
 /**
- * TC804: Test Moonshot/Kimi Models
+ * TC404: Test Moonshot/Kimi Models
  * Tests Moonshot AI Kimi models
  */
 async function testMoonshotModels() {
@@ -117,7 +117,7 @@ async function testMoonshotModels() {
 }
 
 /**
- * TC805: Test Thinking Models
+ * TC405: Test Thinking Models
  * Tests models with thinking/reasoning support
  */
 async function testThinkingModels() {
@@ -143,8 +143,10 @@ async function testThinkingModels() {
 }
 
 /**
- * TC806: Test Custom Models (NVIDIA)
- * Tests models from proxy_config.toml custom config
+ * TC406: Test Custom Models (NVIDIA)
+ * Tests models from proxy_config.toml custom config.
+ * These models require NVIDIA API keys; the proxy must either route them
+ * successfully (200) or return a structured error (4xx) — not crash (5xx).
  */
 async function testCustomModels() {
   const models = [
@@ -162,18 +164,32 @@ async function testCustomModels() {
       }
     });
 
-    // These may fail due to upstream config, but shouldn't crash
+    // Must not be a proxy-internal crash (5xx from our own code)
     assert(
-      response.status === 200 || response.status >= 400,
-      `Model ${model} should respond with valid status`
+      response.status !== 500,
+      `Model ${model} should not return 500 (proxy crash)`
     );
+    // Should be upstream success or a structured auth/config error (not a proxy 5xx)
+    assert(
+      response.status === 200 || (response.status >= 400 && response.status < 500),
+      `Model ${model} should respond with 200 or 4xx, got ${response.status}`
+    );
+    if (response.status >= 400) {
+      assert(
+        response.body?.error || response.body?.message,
+        `Error response for ${model} should have error or message field`
+      );
+    }
     console.log(`  ✓ ${model}: ${response.status}`);
   }
 }
 
 /**
- * TC807: Test Composite Alias
- * Tests composite alias routing
+ * TC407: Test Composite Alias Routing
+ * Tests that the code-small composite alias resolves and routes to a
+ * configured target — the proxy must not return 404 (unknown route) or
+ * 500 (internal error). A 200 proves the alias routed; a 4xx from upstream
+ * (auth/quota) is also acceptable.
  */
 async function testCompositeAlias() {
   const response = await sendRequest({
@@ -185,16 +201,19 @@ async function testCompositeAlias() {
     }
   });
 
-  // Composite alias should route to a target model
   assert(
-    response.status === 200 || response.status >= 400,
-    'Composite alias should respond'
+    response.status !== 404,
+    'Composite alias code-small should be recognized by the proxy (got 404 = unknown route)'
+  );
+  assert(
+    response.status < 500,
+    `Composite alias code-small should not cause a proxy internal error (got ${response.status})`
   );
   console.log(`  ✓ code-small: ${response.status}`);
 }
 
 /**
- * TC808: Test All Endpoints for Model
+ * TC408: Test All Endpoints for Model
  * Tests a single model across messages, interactions, generateContent
  */
 async function testModelAllEndpoints() {
@@ -207,7 +226,7 @@ async function testModelAllEndpoints() {
 }
 
 /**
- * TC809: Streaming Test for Model
+ * TC409: Streaming Test for Model
  * Tests streaming for specific model
  */
 async function testModelStreaming() {
@@ -227,7 +246,7 @@ async function testModelStreaming() {
 }
 
 /**
- * TC810: Priority Models Quick Test
+ * TC410: Priority Models Quick Test
  * Tests the most important models quickly
  */
 async function testPriorityModels() {
@@ -267,12 +286,12 @@ module.exports = {
 
 if (require.main === module) {
   runTestSuite('Model Tests', [
-    { name: 'TC801: DeepSeek Models', fn: testDeepSeekModels },
-    { name: 'TC802: Qwen Models', fn: testQwenModels },
-    { name: 'TC803: MiniMax Models', fn: testMiniMaxModels },
-    { name: 'TC804: Moonshot Models', fn: testMoonshotModels },
-    { name: 'TC805: Thinking Models', fn: testThinkingModels },
-    { name: 'TC808: All Endpoints', fn: testModelAllEndpoints },
-    { name: 'TC809: Model Streaming', fn: testModelStreaming }
+    { name: 'TC401: DeepSeek Models', fn: testDeepSeekModels },
+    { name: 'TC402: Qwen Models', fn: testQwenModels },
+    { name: 'TC403: MiniMax Models', fn: testMiniMaxModels },
+    { name: 'TC404: Moonshot Models', fn: testMoonshotModels },
+    { name: 'TC405: Thinking Models', fn: testThinkingModels },
+    { name: 'TC408: All Endpoints', fn: testModelAllEndpoints },
+    { name: 'TC409: Model Streaming', fn: testModelStreaming }
   ]);
 }

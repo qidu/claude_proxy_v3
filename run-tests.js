@@ -12,7 +12,7 @@ const TEST_TIMEOUT = process.env.TEST_TIMEOUT || '30000';
 // touch the developer's proxy_config.toml.  The prefix is fixed to 'test_'
 // so the proxy resolves the path as ./test_proxy_config.toml when it sees
 // TEST_CONFIG=test_ in its environment.
-const TEST_CONFIG = 'test_';
+const TEST_CONFIG = process.env.TEST_CONFIG || 'test_';
 const NORMAL_CONFIG_PATH = './proxy_config.toml';
 const CONFIG_PATH = `./${TEST_CONFIG}proxy_config.toml`;
 

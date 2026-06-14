@@ -49,6 +49,13 @@ async function testThinkingEnabled() {
     ['end_turn', 'max_tokens'].includes(response.body.stop_reason),
     'Stop reason should be valid'
   );
+  // Response body must have at least one text content block
+  assert(
+    Array.isArray(response.body.content) && response.body.content.length > 0,
+    'Thinking response should have at least one content block'
+  );
+  const hasText = response.body.content.some(b => b.type === 'text');
+  assert(hasText, 'Thinking response should contain a text content block');
 }
 
 /**
@@ -213,6 +220,27 @@ async function testStreamingWithThinking() {
 
   assert(response.status === 200, 'Streaming should return 200');
   assert(response.eventCount > 0, 'Should have streaming events');
+  // Verify event types are recognized SSE event types (not malformed objects)
+  const validEventTypes = new Set([
+    'message_start', 'content_block_start', 'content_block_delta',
+    'content_block_stop', 'message_delta', 'message_stop', 'ping',
+    'signature_delta'
+  ]);
+  const typedEvents = response.events.filter(e => e.type);
+  assert(
+    typedEvents.length > 0,
+    'Streaming events should have typed events (type field present)'
+  );
+  const unknownTypes = typedEvents
+    .map(e => e.type)
+    .filter(t => !validEventTypes.has(t));
+  if (unknownTypes.length > 0) {
+    console.log(`    (note: unknown event types in stream: ${[...new Set(unknownTypes)].join(', ')})`);
+  }
+  const hasStop = response.events.some(
+    e => e.type === 'message_stop' || e.event === 'message_stop'
+  );
+  assert(hasStop, 'Streaming with thinking should end with message_stop event');
 }
 
 /**
@@ -298,6 +326,9 @@ async function testTaskBudgetTotal() {
 /**
  * TC412: xhigh Effort Normalization
  * Tests that non-standard "xhigh" output_config.effort is normalized to "max"
+ * and does not cause a proxy internal error (500). The proxy should either
+ * accept it (normalize → max, return 200) or reject it with a structured
+ * validation error (4xx), but must not crash.
  */
 async function testXhighEffort() {
   const response = await sendRequest({
@@ -310,11 +341,17 @@ async function testXhighEffort() {
     }
   });
 
-  // xhigh is non-standard; should either pass through or be normalized to max
   assert(
-    response.status === 200 || response.status >= 400,
-    'xhigh should be accepted (normalized) or rejected gracefully'
+    response.status < 500,
+    `xhigh effort should not cause a proxy internal error (got ${response.status})`
   );
+  // If accepted (200), verify a response body came back
+  if (response.status === 200) {
+    assert(
+      response.body?.content || response.body?.choices,
+      'xhigh effort 200 response should have content'
+    );
+  }
 }
 
 /**

@@ -8,7 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEST_DIR = './testcases';
 const TESTS_OUT_DIR = './tests';
 
-const TEST_CONFIG = 'test_';
+const TEST_CONFIG = process.env.TEST_CONFIG || 'test_';
 const NORMAL_CONFIG_PATH = './proxy_config.toml';
 const CONFIG_PATH = `./${TEST_CONFIG}proxy_config.toml`;
 
@@ -90,6 +90,7 @@ function replaceRequire(src, baseName, dstPath) {
 const allOutput = [];
 let suiteResults = [];
 let passed = 0, failed = 0;
+let casesPassed = 0, casesFailed = 0;
 
 const PROXY_URL = process.env.PROXY_URL || 'http://localhost:8788';
 const API_KEY = process.env.API_KEY || 'sk-test-key';
@@ -132,6 +133,14 @@ for (const suite of suites) {
       for (const line of lines) {
         allOutput.push(line);
         console.log(line);
+        // Parse per-case counts from "Results: X passed, Y failed"
+        const m = line.match(/^Results:\s*(\d+)\s+passed,\s*(\d+)\s+failed/);
+        if (m) {
+          suitePassed = parseInt(m[1], 10);
+          suiteFailed = parseInt(m[2], 10);
+          casesPassed += suitePassed;
+          casesFailed += suiteFailed;
+        }
       }
     });
     child.stderr.on('data', (data) => {
@@ -143,12 +152,10 @@ for (const suite of suites) {
     });
     child.on('close', (code) => {
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-      if (code === 0) {
-        suitePassed++;
+      if (suiteFailed === 0 && code === 0) {
         passed++;
         log(`  ✓ PASSED (${duration}s)`);
       } else {
-        suiteFailed++;
         failed++;
         log(`  ✗ FAILED exit code ${code} (${duration}s)`);
       }
@@ -168,6 +175,7 @@ log(`\n${'='.repeat(60)}`);
 log(`Test run completed: ${new Date().toISOString()}`);
 log(`Total suites: ${suites.length}`);
 log(`Passed: ${passed}, Failed: ${failed}`);
+log(`Cases: ${casesPassed} passed, ${casesFailed} failed`);
 log(`${'='.repeat(60)}`);
 
 // Write results file
@@ -180,9 +188,11 @@ const md = `# Test Results — ${now.toISOString()}
 
 ## Summary
 - **Total suites**: ${suites.length}
-- **Passed**: ${passed}
-- **Failed**: ${failed}
-- **Status**: ${failed === 0 ? '✅ ALL PASSING' : '❌ FAILURES DETECTED'}
+- **Suites passed**: ${passed}
+- **Suites failed**: ${failed}
+- **Cases passed**: ${casesPassed}
+- **Cases failed**: ${casesFailed}
+- **Status**: ${casesFailed === 0 ? '✅ ALL PASSING' : '❌ FAILURES DETECTED'}
 
 ## Suite Results
 ${suiteResults.map(s => `- **${s.suite}**: ${s.passed} passed, ${s.failed} failed`).join('\n')}
@@ -196,4 +206,4 @@ ${allOutput.join('\n')}
 fs.writeFileSync(resultFile, md);
 console.log(`\n[loop-wrapper] Results written to: ${resultFile}`);
 
-process.exit(failed > 0 ? 1 : 0);
+process.exit(casesFailed > 0 ? 1 : 0);

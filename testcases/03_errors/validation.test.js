@@ -17,7 +17,7 @@ const {
 } = require('../utils/test_helpers');
 
 /**
- * TC701: Missing Model
+ * TC301: Missing Model
  * Tests 400 response for missing model
  */
 async function testMissingModel() {
@@ -34,7 +34,7 @@ async function testMissingModel() {
 }
 
 /**
- * TC702: Missing Messages
+ * TC302: Missing Messages
  * Tests error for empty messages
  */
 async function testEmptyMessages() {
@@ -51,7 +51,7 @@ async function testEmptyMessages() {
 }
 
 /**
- * TC703: Invalid Model Name
+ * TC303: Invalid Model Name
  * Tests error for non-existent model
  */
 async function testInvalidModel() {
@@ -68,7 +68,7 @@ async function testInvalidModel() {
 }
 
 /**
- * TC704: Negative Max Tokens
+ * TC304: Negative Max Tokens
  * Tests error for negative max_tokens
  */
 async function testNegativeMaxTokens() {
@@ -85,7 +85,7 @@ async function testNegativeMaxTokens() {
 }
 
 /**
- * TC705: Temperature Out of Range
+ * TC305: Temperature Out of Range
  * Tests error for invalid temperature
  */
 async function testTemperatureOutOfRange() {
@@ -107,7 +107,7 @@ async function testTemperatureOutOfRange() {
 }
 
 /**
- * TC706: Missing Authentication
+ * TC306: Missing Authentication
  * Tests error for missing API key
  */
 async function testMissingAuth() {
@@ -126,7 +126,7 @@ async function testMissingAuth() {
 }
 
 /**
- * TC707: Invalid JSON Body
+ * TC307: Invalid JSON Body
  * Tests error for malformed JSON
  */
 async function testInvalidJSON() {
@@ -143,7 +143,7 @@ async function testInvalidJSON() {
 }
 
 /**
- * TC708: Content-Type Mismatch
+ * TC308: Content-Type Mismatch
  * Tests error for wrong content type
  */
 async function testWrongContentType() {
@@ -165,7 +165,7 @@ async function testWrongContentType() {
 }
 
 /**
- * TC709: Invalid Stop Sequence Type
+ * TC309: Invalid Stop Sequence Type
  * Tests error for non-string stop_sequences
  */
 async function testInvalidStopSequences() {
@@ -184,7 +184,7 @@ async function testInvalidStopSequences() {
 }
 
 /**
- * TC710: Invalid Tool Definition
+ * TC310: Invalid Tool Definition
  * Tests error for malformed tool
  */
 async function testInvalidTool() {
@@ -206,7 +206,7 @@ async function testInvalidTool() {
 }
 
 /**
- * TC711: Chat Completions Blocked
+ * TC311: Chat Completions Blocked
  * Tests /v1/chat/completions returns error
  */
 async function testChatCompletionsBlocked() {
@@ -232,7 +232,7 @@ async function testChatCompletionsBlocked() {
 }
 
 /**
- * TC712: Rate Limit Error
+ * TC312: Rate Limit Error
  * Tests 429 response handling
  */
 async function testRateLimitError() {
@@ -274,13 +274,13 @@ module.exports = {
 
 if (require.main === module) {
   runTestSuite('Error Handling', [
-    { name: 'TC701: Missing Model', fn: testMissingModel },
-    { name: 'TC702: Empty Messages', fn: testEmptyMessages },
-    { name: 'TC703: Invalid Model', fn: testInvalidModel },
-    { name: 'TC704: Negative MaxTokens', fn: testNegativeMaxTokens },
-    { name: 'TC705: Temperature Range', fn: testTemperatureOutOfRange },
-    { name: 'TC706: Missing Auth', fn: testMissingAuth },
-    { name: 'TC707: Invalid JSON', fn: testInvalidJSON },
-    { name: 'TC711: Chat Blocked', fn: testChatCompletionsBlocked }
+    { name: 'TC301: Missing Model', fn: testMissingModel },
+    { name: 'TC302: Empty Messages', fn: testEmptyMessages },
+    { name: 'TC303: Invalid Model', fn: testInvalidModel },
+    { name: 'TC304: Negative MaxTokens', fn: testNegativeMaxTokens },
+    { name: 'TC305: Temperature Range', fn: testTemperatureOutOfRange },
+    { name: 'TC306: Missing Auth', fn: testMissingAuth },
+    { name: 'TC307: Invalid JSON', fn: testInvalidJSON },
+    { name: 'TC311: Chat Blocked', fn: testChatCompletionsBlocked }
   ]);
 }

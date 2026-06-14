@@ -37,11 +37,13 @@ async function testClaudeFormat() {
 }
 
 /**
- * TC902: OpenAI Format Request
- * Tests OpenAI chat completions format passthrough
+ * TC902: System-in-messages conversion
+ * Tests that a system message placed as the first element of the messages
+ * array (OpenAI convention) is accepted and converted by the proxy.
+ * The proxy strips or promotes it to the top-level system field before
+ * forwarding to the openai-completions upstream.
  */
 async function testOpenAIFormat() {
-  // OpenAI format has messages instead of content
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
@@ -50,35 +52,16 @@ async function testOpenAIFormat() {
         { role: 'system', content: 'Be concise.' },
         { role: 'user', content: 'Hi' }
       ],
+      max_tokens: 20,
       temperature: 0.5
     }
   });
 
   assertResponse(response);
-}
-
-/**
- * TC903: Native Claude Mode
- * Tests direct passthrough to Claude API
- * (requires anthropic-messages upstream mode)
- */
-async function testAnthropicMessagesMode() {
-  const response = await sendRequest({
-    endpoint: '/v1/messages',
-    headers: {
-      'anthropic-version': '2023-06-01'
-    },
-    body: {
-      model: 'deepseek/deepseek-v3.2',
-      messages: [{ role: 'user', content: 'Hi' }],
-      max_tokens: 20
-    }
-  });
-
-  // May work with default openai-completions mode
+  // Verify the proxy correctly handled the system-in-messages format
   assert(
-    response.status === 200 || response.status >= 400,
-    'Should respond'
+    response.body?.content?.[0]?.type === 'text' || response.body?.choices,
+    'Response should have text content (system-in-messages converted correctly)'
   );
 }
 
@@ -136,7 +119,7 @@ async function testTokenCountingWithThinking() {
       messages: [{ role: 'user', content: 'Explain AI' }],
       thinking: {
         type: 'enabled',
-        budget_tokens: 1000
+        budget_tokens: 1024
       }
     }
   });
@@ -346,7 +329,6 @@ async function testResponsesOpenAIResponsesMode() {
 module.exports = {
   testClaudeFormat,
   testOpenAIFormat,
-  testAnthropicMessagesMode,
   testGeminiFormat,
   testTokenCounting,
   testTokenCountingWithThinking,
@@ -363,7 +345,7 @@ module.exports = {
 if (require.main === module) {
   runTestSuite('Upstream Mode Tests', [
     { name: 'TC901: Claude Format', fn: testClaudeFormat },
-    { name: 'TC902: OpenAI Format', fn: testOpenAIFormat },
+    { name: 'TC902: System-in-messages conversion', fn: testOpenAIFormat },
     { name: 'TC905: Token Counting', fn: testTokenCounting },
     { name: 'TC906: Token Counting + Thinking', fn: testTokenCountingWithThinking },
     { name: 'TC909: Models List', fn: testModelsList },
