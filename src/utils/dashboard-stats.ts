@@ -239,6 +239,25 @@ export function getCompositeLimitWindowsSnapshot(): Record<string, {
 
 export const TOKEN_LOG_FILE = './model_proxy_tokens.jsonl';
 
+// ── In-flight request tracking ─────────────────────────────────────────────────
+// Tracks the number of proxy requests currently being handled (between request
+// received and upstream response/stream returned). Used by the TUI header to
+// show an activity indicator. Incremented in src/index.ts's fetch handler after
+// the dashboard/health preflight checks, and decremented in the finally block.
+let activeRequestCount = 0;
+
+export function incrementActiveRequests(): void {
+  activeRequestCount += 1;
+}
+
+export function decrementActiveRequests(): void {
+  if (activeRequestCount > 0) activeRequestCount -= 1;
+}
+
+export function getActiveRequestCount(): number {
+  return activeRequestCount;
+}
+
 const dailyTokenStats = new Map<string, ModelStatsEntry>();
 
 let currentDaySlot = getTodayDateStr();

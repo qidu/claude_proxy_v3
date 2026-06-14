@@ -94,10 +94,15 @@ export async function handleGeminiRequest(
     // Determine which handler to use based on original request path
     const url = new URL(request.url);
     const path = url.pathname;
-    
+
     if (path === '/v1/interactions' || path.startsWith('/v1/interactions?')) {
         activeLogger.debug(requestId, 'Routing to Gemini Interactions handler');
         return handleGeminiInteractionsRequest(
+            request, targetUrl, authHeaders, requestId, modelId, env, logger
+        );
+    } else if (path.includes(':countTokens')) {
+        activeLogger.debug(requestId, 'Routing to Gemini countTokens handler');
+        return handleGeminiCountTokensRequest(
             request, targetUrl, authHeaders, requestId, modelId, env, logger
         );
     } else {
@@ -106,6 +111,53 @@ export async function handleGeminiRequest(
             request, targetUrl, authHeaders, requestId, modelId, env, logger
         );
     }
+}
+
+/**
+ * Handle Gemini :countTokens request — proxy the body to the upstream countTokens endpoint
+ * and return the raw JSON response (totalTokens).
+ */
+async function handleGeminiCountTokensRequest(
+    request: Request,
+    targetUrl: string,
+    authHeaders: Record<string, string>,
+    requestId: string,
+    modelId?: string,
+    env?: Env,
+    logger?: Logger
+): Promise<Response> {
+    const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
+    activeLogger.debug(requestId, `Gemini countTokens request to: ${targetUrl}`);
+
+    const geminiHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...authHeaders,
+    };
+    addForwardedHeaders(geminiHeaders, request);
+
+    const response = await fetch(targetUrl, {
+        method: 'POST',
+        headers: geminiHeaders,
+        body: request.body,
+        signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
+    });
+
+    recordResponseStatusCodeFromUpstream(response.status);
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        activeLogger.error(requestId, `Gemini countTokens error: ${errorText}`);
+        handleTargetApiError(response, 'Gemini API', { url: targetUrl, upstreamBody: errorText });
+    }
+
+    const responseText = await response.text();
+    return new Response(responseText, {
+        status: 200,
+        headers: {
+            'Content-Type': 'application/json',
+            'x-request-id': requestId,
+        },
+    });
 }
 
 /**

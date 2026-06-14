@@ -8,6 +8,7 @@ import type { Env, Logger } from '../types/shared.js';
 import { addForwardedHeaders } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
+import { handleTargetApiError } from '../utils/errors.js';
 
 /**
  * Check if request is in Gemini Interactions format
@@ -223,26 +224,7 @@ export async function handleOpenAIRequest(
         if (!response.ok) {
             const errorText = await response.text();
             activeLogger.error(requestId, `OpenAI API error: ${response.status} ${errorText}`);
-            
-            // For streaming requests, return error as SSE
-            if (isStreaming) {
-                const errorResponse = {
-                    error: {
-                        code: response.status,
-                        message: `Upstream API error: ${response.status}`,
-                        status: 'ERROR'
-                    }
-                };
-                return new Response(`data: ${JSON.stringify(errorResponse)}\n\n`, {
-                    status: 200,
-                    headers: {
-                        'Content-Type': 'text/event-stream',
-                        'Cache-Control': 'no-cache',
-                    },
-                });
-            }
-            
-            throw new Error(`OpenAI API error: ${response.status} ${errorText}`);
+            handleTargetApiError(response, 'OpenAI API', { url: targetUrl, upstreamBody: errorText });
         }
 
         // Handle streaming response

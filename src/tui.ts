@@ -21,7 +21,7 @@ import {
   upsertCompositeTargetFromDashboard,
 } from './handlers/dashboard.js';
 import { buildHeatmap, renderHeatmapPanel } from './heatmap.js';
-import { dumpTodayTokens, TOKEN_LOG_FILE } from './utils/dashboard-stats.js';
+import { dumpTodayTokens, TOKEN_LOG_FILE, getActiveRequestCount } from './utils/dashboard-stats.js';
 import type { Env } from './types/shared.js';
 import type { ConfigValidationError } from './utils/config-loader.js';
 import type { ProxyConfig } from './utils/config-loader.js';
@@ -678,8 +678,9 @@ class DashboardView implements Component {
     const secColor = secColors[sec % 3];
     const hourminTime = this.lastTime.slice(0, -2);
     const secondsTime = secColor(this.lastTime.slice(-2));
+    const inflightIndicator = getActiveRequestCount() > 0 ? ` ${green('●')}` : '';
     const lines: string[] = [];
-    lines.push(bold('Proxy TUI') + dim(`  ${hourminTime}`) + `${secondsTime}`);
+    lines.push(bold('Proxy TUI') + dim(`  ${hourminTime}`) + `${secondsTime}${inflightIndicator}`);
     lines.push(dim('─'.repeat(Math.max(0, width))));
 
     if (!snap) {

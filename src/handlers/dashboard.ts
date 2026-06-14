@@ -1010,7 +1010,11 @@ export function handleDashboardPage(): Response {
 export function handleDashboardGetConfig(proxyConfig: ProxyConfig, env: Env): Response {
   // Return the full snapshot so the dashboard has modelStats and compositeResolved
   // for computing live token usage alongside config editing.
-  return jsonResponse(getDashboardSnapshot(proxyConfig, env));
+  try {
+    return jsonResponse(getDashboardSnapshot(proxyConfig, env));
+  } catch (error) {
+    return jsonResponse({ error: (error as Error).message }, 500);
+  }
 }
 
 export async function handleDashboardPutConfig(request: Request, env: Env, _proxyConfig: ProxyConfig): Promise<Response> {

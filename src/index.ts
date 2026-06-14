@@ -54,6 +54,8 @@ import {
   updateCompositeAliasReverseMap,
   setCompositeLimit,
   clearCompositeLimit,
+  incrementActiveRequests,
+  decrementActiveRequests,
 } from './utils/dashboard-stats.js';
 import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
 
@@ -240,6 +242,32 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
         targetEndpoint: 'v1/interactions',
         handlerType: 'interactions',
         upstreamMode: 'openai-completions',
+      };
+    }
+  }
+
+  // 3a. /v1beta/models/{model}:countTokens → forward to Gemini upstream
+  if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && path.includes(':countTokens')) {
+    const modelMatch = path.match(/\/(v1beta|v1)\/models\/([^:?]+):countTokens/);
+    const modelId = modelMatch ? decodeURIComponent(modelMatch[2]) : 'gemini-no-id-at-proxy';
+    const apiVersion = env.GEMINI_API_VERSION || 'v1beta';
+    if (defaultMode === 'gemini-generatecontent' || defaultMode === 'gemini-interactions') {
+      return {
+        targetUrl: `${defaultBaseUrl}/${apiVersion}/models/${modelId}:countTokens`,
+        targetEndpoint: 'v1beta/models/countTokens',
+        handlerType: 'generateContent',
+        upstreamMode: defaultMode,
+        modelId,
+      };
+    } else {
+      // countTokens has no OpenAI equivalent — proxy the request upstream as-is and return the raw JSON.
+      // The handler will fall through to handleOpenAIRequest which passes the body through.
+      return {
+        targetUrl: `${defaultBaseUrl}/v1/messages/count_tokens`,
+        targetEndpoint: 'v1beta/models/countTokens',
+        handlerType: 'token-counting',
+        upstreamMode: 'openai-completions',
+        modelId,
       };
     }
   }
@@ -538,6 +566,7 @@ export default {
 
       recordRequestEndpoint(path);
       requestStartTime = Date.now();
+      incrementActiveRequests();
 
       // Request body size limit (10MB)
       const contentLength = request.headers.get('content-length');
@@ -601,15 +630,15 @@ export default {
           path === '/v1/responses/input_tokens' || path.startsWith('/v1/responses/input_tokens?') ||
           ((path === '/v1/chat/completions' || path.startsWith('/v1/chat/completions?')) &&
            (env.DEV_PASS_THROUGH === 'true' || env.DEV_PASS_THROUGH === '1')) ||
-          ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent')))) {
+          ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent') || path.includes(':countTokens')))) {
         try {
           const bodyText = await request.text();
           const body = JSON.parse(bodyText);
           let modelName = body.model;
-          
-          // For generateContent endpoint, extract model from URL if not in body
-          if (!modelName && (path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
-            const modelMatch = path.match(/\/(v1beta|v1)\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
+
+          // For generateContent/countTokens endpoint, extract model from URL if not in body
+          if (!modelName && (path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent') || path.includes(':countTokens'))) {
+            const modelMatch = path.match(/\/(v1beta|v1)\/models\/([^:?]+):(stream)?(?:generateContent|streamGenerateContent|countTokens)/);
             if (modelMatch) {
               modelName = decodeURIComponent(modelMatch[2]);
             }
@@ -734,6 +763,15 @@ export default {
                   }
                 } else {
                   candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                  candidateUpstreamMode = 'openai-completions';
+                }
+              } else if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && path.includes(':countTokens')) {
+                candidateHandlerType = 'generateContent';
+                if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
+                  candidateTargetUrl = `${route.targetUrl}/v1beta/models/${upstreamModelName}:countTokens`;
+                  candidateUpstreamMode = route.upstreamMode;
+                } else {
+                  candidateTargetUrl = `${route.targetUrl}/v1/messages/count_tokens`;
                   candidateUpstreamMode = 'openai-completions';
                 }
               } else if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
@@ -1083,6 +1121,8 @@ export default {
       recordRequestTiming(path, Date.now() - requestStartTime);
       recordModelTiming(failedModelId, Date.now() - requestStartTime);
       return createErrorResponse(error as Error, requestId);
+    } finally {
+      decrementActiveRequests();
     }
   },
 };
