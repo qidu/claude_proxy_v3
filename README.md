@@ -209,14 +209,14 @@ A bad value shows an error and stays on the same step. Blanking every field remo
 When a fusion alias is selected (`fusion_options` is set), the prompt expects:
 
 ```
-role <panel|judge|synth> [fusion <weight>]
+panel|judge|synth [weight]
 ```
 
 Examples:
-- `role panel fusion 1` — add as a panel member with weight 1
-- `role panel` — panel with default weight (equivalent to `fusion: 1`)
-- `role judge` — designate as judge
-- `role synth` — designate as synth (exactly one required)
+- `panel 1` — add as a panel member with weight 1
+- `panel` — panel with default weight (equivalent to `fusion: 1`)
+- `judge` — designate as judge
+- `synth` — designate as synth (exactly one required)
 
 **Full example workflow** — building the `smart-answer` alias from scratch:
 
@@ -228,14 +228,14 @@ Press a → type "smart-answer" → Enter
 Press F → type "min_panel=1 judge_required=false panel_timeout_ms=30000" → Enter
 
 # 3. Add panel members
-Press M → select "opus46"   → "role panel fusion 1" → Enter
-Press M → select "sonnet46" → "role panel fusion 1" → Enter
+Press M → select "opus46"   → "panel 1" → Enter
+Press M → select "sonnet46" → "panel 1" → Enter
 
 # 4. Add judge
-Press M → select "max-m3" → "role judge" → Enter
+Press M → select "max-m3" → "judge" → Enter
 
 # 5. Add synth (required)
-Press M → select "max-m2.7-high" → "role synth" → Enter
+Press M → select "max-m2.7-high" → "synth" → Enter
 ```
 
 The TUI displays fusion targets with `role:weight` instead of the usual `share P FB` summary — e.g. `panel:1`, `judge`, `synth`.
@@ -341,11 +341,13 @@ Keyboard shortcuts:
 - `Ctrl+O` dump today's tokens data to log file
 - `Ctrl+C` quit the TUI
 
-> For fusion aliases (`fusion_options` is set), the `M`/`E` target prompts use `role <panel|judge|synth> [fusion <weight>]` instead of the usual `share [primary] [fallback]`. See [Editing fusion aliases in the TUI](#editing-fusion-aliases-in-the-tui) below.
+> For fusion aliases (`fusion_options` is set), the `M`/`E` target prompts use `panel|judge|synth [weight]` instead of the usual `share [primary] [fallback]`. See [Editing fusion aliases in the TUI](#editing-fusion-aliases-in-the-tui) below.
 
 **Test custom model**: Press `T` to open the model picker. Each model shows its **category**, **upstream mode** (postfix only, e.g. `completions`/`messages`), and **base URL** (without `https://` prefix). Select a model and press Enter to send a test request — the result displays the response's `message`/`content`/`error` fields (IDs excluded).
 
-**Test composite aliases**: Composite aliases are also listed in the picker (shown with `→ target1, target2, ...` as description). If a composite alias shares the same name as a model (e.g. `code-small`), the composite appears as `code-small [C]` so both can be selected for testing independently.
+**Test composite aliases**: Composite aliases are also listed in the picker (shown with `→ target1, target2, ...` as description). If a composite alias shares the same name with a model (e.g. `code-small`), the composite appears as `code-small [C]` so both can be selected for testing independently.
+
+**Test fusion aliases** (`[F]`): the test is sent **directly to one of the panel target models** (a plain text request, no judge/synth stages). This avoids the full fusion pipeline (which would fail the test format check) while still exercising that panel member's route and API key. The chosen panel target is the first one in config order with `role: panel` or `fusion > 0`.
 
 > **Important**: When a model name has **both** a `[models.*]` config entry and a `[composite]` alias with the same name, selecting the model **without** `[C]` does **not** use the model entry's specific `base_url` or `api_key` — it routes through the composite alias instead. The composite routing resolves each target model independently, and the model entry's URL/key is only used for the picker display label. The `[C]` suffix is the actual way to test the composite alias routing; selecting the base name effectively bypasses the model's own config. To test a model entry's own base URL and API key in isolation, either remove the conflicting composite alias or test a model that doesn't share a name with a composite alias.
 

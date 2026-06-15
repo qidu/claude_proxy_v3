@@ -97,27 +97,23 @@ function sortCompositeTargets([aKey, aCfg]: [string, unknown], [bKey, bCfg]: [st
 }
 
 
-// Parse "role <panel|judge|synth> [fusion <weight>]" input for fusion targets.
+// Parse "panel|judge|synth [weight]" input for fusion targets.
 // Returns an error string on failure, or a patch object on success.
 function parseFusionTargetInput(value: string): { role?: FusionRole; fusion?: number } | string {
   const parts = value.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return 'Enter: panel|judge|synth [weight]';
   const patch: { role?: FusionRole; fusion?: number } = {};
-  for (let i = 0; i < parts.length; i += 2) {
-    const k = parts[i];
-    const v = parts[i + 1];
-    if (v === undefined) return `Missing value for: ${k}`;
-    if (k === 'role') {
-      if (v !== 'panel' && v !== 'judge' && v !== 'synth') {
-        return 'Role must be panel, judge, or synth';
-      }
-      patch.role = v as FusionRole;
-    } else if (k === 'fusion') {
-      const n = Number(v);
-      if (!Number.isFinite(n) || n < 0) return 'Fusion weight must be a non-negative number';
-      patch.fusion = n;
-    } else {
-      return `Unknown key: ${k}. Use: role <panel|judge|synth> [fusion <weight>]`;
-    }
+
+  const roleVal = parts[0];
+  if (roleVal !== 'panel' && roleVal !== 'judge' && roleVal !== 'synth') {
+    return 'Role must be: panel, judge, or synth';
+  }
+  patch.role = roleVal as FusionRole;
+
+  if (parts.length >= 2) {
+    const n = Number(parts[1]);
+    if (!Number.isFinite(n) || n < 0) return 'Weight must be a non-negative number';
+    patch.fusion = n;
   }
   return patch;
 }
@@ -257,6 +253,18 @@ function buildOpenAIToolRequest(): Record<string, unknown> {
       },
     }],
     tool_choice: 'auto',
+  };
+}
+
+const TEST_TEXT_PROMPT = 'Reply with one short sentence.';
+
+function buildTestTextRequest(_upstreamMode: string): Record<string, unknown> {
+  // Plain text, non-streaming — safe for fusion (panel responses must be text, not tool-call blobs,
+  // and stream:false ensures the synth response is a buffered JSON body the TUI can parse).
+  return {
+    messages: [{ role: 'user', content: TEST_TEXT_PROMPT }],
+    max_tokens: 32,
+    stream: false,
   };
 }
 
@@ -667,14 +675,17 @@ class DashboardView implements Component {
     this.invalidate();
   }
 
+  // holdMs = 0: normal (cleared by next refresh)
+  // holdMs > 0: timed hold
+  // holdMs = -1: sticky — survives refresh until explicitly cleared or overwritten
   setMessage(message: string, holdMs = 0): void {
     this.message = message;
-    this.messageUntil = holdMs > 0 ? Date.now() + holdMs : 0;
+    this.messageUntil = holdMs === -1 ? -1 : holdMs > 0 ? Date.now() + holdMs : 0;
     this.invalidate();
   }
 
   shouldPreserveMessage(): boolean {
-    return this.messageUntil > Date.now();
+    return this.messageUntil === -1 || this.messageUntil > Date.now();
   }
 
   invalidate(): void {
@@ -1114,7 +1125,7 @@ class DashboardApp {
         const aliasConfig = this.viewSnapshot()?.config.composite?.[alias] as { fusion_options?: FusionOptions } | undefined;
         const aliasFusion = !!aliasConfig?.fusion_options;
         if (aliasFusion) {
-          this.openPrompt(`Add ${item.value} to ${alias} (fusion)`, 'role <panel|judge|synth> [fusion <weight>]', 'role panel fusion 1', async (value) => {
+          this.openPrompt(`Add ${item.value} to ${alias} (fusion)`, 'panel|judge|synth [weight]', 'panel 1', async (value) => {
             const patch = parseFusionTargetInput(value);
             if (typeof patch === 'string') {
               this.view.setMessage(patch);
@@ -1123,7 +1134,7 @@ class DashboardApp {
               this.requestRender();
               return;
             }
-            upsertCompositeTargetFromDashboard(this.source.env, alias, item.value, patch);
+            upsertCompositeTargetFromDashboard(this.source.env, alias, item.value, { ...patch, share: null, fallback: null, primary: false });
             await this.refresh(true);
             this.compositeOverlay?.focusAlias(alias);
             this.view.setMessage(`added ${item.value} to ${alias}`);
@@ -1235,6 +1246,9 @@ class DashboardApp {
   }
 
   async runModelTest(modelId: string): Promise<void> {
+    const displayId = / \[[CF]\]$/.test(modelId) ? modelId.replace(/ \[[CF]\]$/, '').trim() : modelId;
+    this.view.setMessage(`testing ${displayId}…`, -1);
+    this.requestRender();
     const result = await this.executeModelTest(modelId);
     if (!result) return;
     if (!result.ok) {
@@ -1267,13 +1281,16 @@ class DashboardApp {
       : undefined;
 
     const upstreamMode = modelConfig?.upstreamMode || 'openai-completions';
-    const requestBody = buildTestToolRequest(upstreamMode);
+    const isFusionAlias = !!(snapshot?.config.composite?.[actualModelId] as { fusion_options?: unknown } | undefined)?.fusion_options;
+    const requestBody = isFusionAlias ? buildTestTextRequest(upstreamMode) : buildTestToolRequest(upstreamMode);
+    // For fusion aliases, send directly to the resolved panel target model (bypass fusion pipeline)
+    const testModelId = modelConfig?.directModel ?? actualModelId;
     const isComposite = snapshot?.compositeResolved?.some((a) => a.alias === actualModelId) ?? false;
     const testLabel = isComposite
       ? `${actualModelId} ${modelConfig?.targetUrl ? stripHttps(modelConfig.targetUrl) : '?'}`
       : actualModelId;
 
-    const fullRequestBody = { ...requestBody, model: actualModelId };
+    const fullRequestBody = { ...requestBody, model: testModelId };
 
     // Debug log test request/response to /tmp/test_model.log (LOG_LEVEL=debug)
     if (process.env.LOG_LEVEL === 'debug') {
@@ -1410,17 +1427,17 @@ class DashboardApp {
     if (isFusion) {
       const current = this.viewSnapshot()?.config.composite?.[alias]?.[target] as CompositeTargetConfig | undefined;
       const defaultValue = [
-        current?.role ? `role ${current.role}` : 'role panel',
-        current?.fusion !== undefined ? `fusion ${current.fusion}` : '',
+        current?.role ?? 'panel',
+        current?.fusion !== undefined ? String(current.fusion) : '',
       ].filter(Boolean).join(' ');
-      this.openPrompt(`Edit ${alias}.${target} (fusion)`, 'role <panel|judge|synth> [fusion <weight>]', defaultValue, async (value) => {
+      this.openPrompt(`Edit ${alias}.${target} (fusion)`, 'panel|judge|synth [weight]', defaultValue, async (value) => {
         const patch = parseFusionTargetInput(value);
         if (typeof patch === 'string') {
           this.view.setMessage(patch);
           await this.refresh();
           return;
         }
-        upsertCompositeTargetFromDashboard(this.source.env, alias, target, patch);
+        upsertCompositeTargetFromDashboard(this.source.env, alias, target, { ...patch, share: null, fallback: null, primary: false });
         this.view.setMessage(`updated ${alias}.${target}`);
         await this.refresh(true);
       });
@@ -1648,13 +1665,36 @@ function resolveModelTestConfig(
   config: ProxyConfig,
   modelId: string,
   compositeResolved?: Array<{ alias: string; targets: Array<{ model: string; routeModel?: string; upstreamMode: string; targetUrl: string }> }>,
-): { upstreamMode: string; targetUrl: string; apiKey?: string } | undefined {
+): { upstreamMode: string; targetUrl: string; apiKey?: string; directModel?: string } | undefined {
   // Check composite aliases first
   if (compositeResolved) {
     const alias = compositeResolved.find((a) => a.alias === modelId);
     if (alias && alias.targets.length > 0) {
-      const first = alias.targets[0];
-      return { upstreamMode: first.upstreamMode, targetUrl: first.targetUrl };
+      // Pick best target: for fusion aliases use a panel target; for normal composites use primary > share > fallback order
+      const aliasConfig = config.composite?.[modelId];
+      let bestName: string | undefined;
+      let isFusion = false;
+      if (aliasConfig) {
+        isFusion = !!(aliasConfig as { fusion_options?: unknown }).fusion_options;
+        const entries = Object.entries(aliasConfig).filter(
+          ([k]) => k !== 'token_limit' && k !== 'fusion_options' && !k.startsWith('_'),
+        ) as Array<[string, CompositeTargetConfig]>;
+        if (isFusion) {
+          // Prefer panel targets (fusion > 0 or role === 'panel' or role omitted)
+          const panel = entries.filter(([, v]) => v.role === 'panel' || (v.fusion !== undefined && v.fusion > 0) || (v.role === undefined && v.fusion === undefined));
+          bestName = (panel.length > 0 ? panel : entries)[0]?.[0];
+        } else {
+          entries.sort(sortCompositeTargets);
+          bestName = entries[0]?.[0];
+        }
+      }
+      const found = bestName ? alias.targets.find((t) => t.model === bestName) : undefined;
+      const best = found ?? alias.targets[0];
+      // For fusion aliases, send the test directly to the panel target model to avoid
+      // triggering the full fusion pipeline (judge/synth steps would fail the format check).
+      // Use the proxy-side model name (best.model) so the proxy resolves its route + API key,
+      // NOT best.routeModel (which is the upstream model id and lacks proxy routing/key).
+      return { upstreamMode: best.upstreamMode, targetUrl: best.targetUrl, directModel: isFusion ? best.model : undefined };
     }
   }
 

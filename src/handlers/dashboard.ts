@@ -101,7 +101,7 @@ export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): Dashbo
     .map((alias) => ({
       alias,
       targets: Object.entries(proxyConfig.composite?.[alias] || {})
-        .filter(([key]) => key !== 'token_limit' && !key.startsWith('_'))
+        .filter(([key]) => key !== 'token_limit' && key !== 'fusion_options' && !key.startsWith('_'))
         .map(([modelName]) => {
           const route = getModelRouteConfig(modelName, proxyConfig);
           return {
