@@ -148,7 +148,14 @@ server.listen(port, '0.0.0.0', async () => {
   }
 });
 
+let shuttingDown = false;
 process.on('SIGINT', () => {
+  if (shuttingDown) {
+    // Second Ctrl+C: force-quit without waiting for in-flight requests
+    process.exit(130);
+  }
+  shuttingDown = true;
   stopTui?.();
   server.close(() => process.exit(0));
+  server.closeAllConnections();
 });

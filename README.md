@@ -174,6 +174,14 @@ Pipeline:
 2. **Judge** — if configured and `>= min_panel` responses succeeded, the judge receives all panel text plus the original user prompt and returns a structured JSON analysis (consensus, contradictions, unique insights, blind spots). If the judge fails and `judge_required` is `false`, synthesis proceeds on raw panel text.
 3. **Synth** — receives the structured analysis (or raw panel in degraded mode) and the original user prompt. The client's `stream` flag is forwarded, so the synth response is streamed or buffered as requested.
 
+Latency: the three stages run **sequentially**, so total time is the sum of the stages:
+
+```
+T_total ≈ max(T_panel...)  +  T_judge  +  T_synth
+```
+
+Only the panel stage is parallel — all panel models fan out at once, so it takes about as long as the **slowest** panel model (bounded by `panel_timeout_ms`). Judge and synth are then two more back-to-back model round-trips. In practice fusion costs roughly three full round-trips end-to-end (slowest panel → judge → synth); with typical per-call latencies this is on the order of ~1–2 minutes, with a hard ceiling of `panel_timeout_ms` plus the judge and synth durations. `panel_timeout_ms` is only a guard against a hung panel call — the stage returns as soon as all panels settle.
+
 Recursion guard: the proxy injects `x-fusion-depth: 1` on all internal panel/judge/synth calls. Any request arriving at a fusion alias with `x-fusion-depth >= 1` is rejected to prevent recursive fan-out.
 
 `token_limit` works identically to other composite modes and covers all targets under the alias.
