@@ -14,6 +14,8 @@ import {
   toDashboardConfigPayload,
   upsertCompositeAliasLimit,
   upsertCompositeTarget,
+  upsertFusionOptions,
+  FusionOptions,
   clearProxyConfigCache,
   loadProxyConfig,
   parseHumanTokenLimit,
@@ -171,6 +173,14 @@ export function upsertCompositeAliasLimitFromDashboard(
     throw new Error(`Invalid token limit format: "${rawInput}". Use: <num> <1h|1d|1w|1m>  (e.g. 50k 1d, 1.5m 1h, 100000 1w)`);
   }
   return saveConfigMutation(env, (baseConfig) => upsertCompositeAliasLimit(baseConfig, alias, parsed));
+}
+
+export function upsertFusionOptionsFromDashboard(
+  env: Env,
+  alias: string,
+  options: FusionOptions | null,
+): ReturnType<typeof toDashboardConfigPayload> {
+  return saveConfigMutation(env, (baseConfig) => upsertFusionOptions(baseConfig, alias, options));
 }
 
 export function removeCompositeTargetFromDashboard(
@@ -449,7 +459,7 @@ export function handleDashboardPage(): Response {
 
       function compositeEntryRows(aliasName, targets, limitWindow) {
         const disabledAttr = isReadOnly ? ' disabled' : '';
-        const keys = Object.keys(targets || {}).filter((key) => key !== 'token_limit');
+        const keys = Object.keys(targets || {}).filter((key) => key !== 'token_limit' && key !== 'fusion_options');
         const tokenLimit = targets.token_limit;
         const limitNum = tokenLimit?.num ?? '';
         const limitDuration = tokenLimit?.duration ?? '';
@@ -467,6 +477,14 @@ export function handleDashboardPage(): Response {
           '<option value="' + escapeHtml(o.value) + '"' + (limitDuration === o.value ? ' selected' : '') + '>' + o.label + '</option>'
         ).join('');
         const displayNum = typeof limitNum === 'number' && limitNum > 0 ? formatTokenLimitNum(limitNum) : '';
+
+        // Detect fusion alias: has fusion_options or any target with fusion/role field
+        const fusionOpts = targets.fusion_options || {};
+        const isFusion = !!targets.fusion_options || keys.some((k) => {
+          const c = targets[k] || {};
+          return c.fusion !== undefined || c.role !== undefined;
+        });
+
         const rows = [
           '<div class="config-row" style="flex-wrap:wrap;gap:6px;align-items:center;">'
             + '<label style="min-width:120px;">' + escapeHtml(aliasName + '.token_limit') + '</label>'
@@ -475,12 +493,59 @@ export function handleDashboardPage(): Response {
             + usageLabel
             + '</div>'
         ];
+
+        if (isFusion) {
+          // fusion_options row
+          rows.push(
+            '<div class="config-row" style="flex-wrap:wrap;gap:6px;align-items:center;">'
+              + '<label style="min-width:120px;">' + escapeHtml(aliasName + '.fusion_options') + '</label>'
+              + '<span style="font-size:12px;color:#666;margin-right:4px;">min_panel</span>'
+              + '<input type="number" data-kind="comp-fusion-min-panel" data-alias="' + escapeHtml(aliasName) + '" value="' + escapeHtml(fusionOpts.min_panel ?? '') + '" placeholder="1" style="width:60px;"' + disabledAttr + ' />'
+              + '<span style="font-size:12px;color:#666;margin-left:8px;margin-right:4px;">panel_timeout_ms</span>'
+              + '<input type="number" data-kind="comp-fusion-timeout" data-alias="' + escapeHtml(aliasName) + '" value="' + escapeHtml(fusionOpts.panel_timeout_ms ?? '') + '" placeholder="60000" style="width:80px;"' + disabledAttr + ' />'
+              + '<span style="font-size:12px;color:#666;margin-left:8px;margin-right:4px;">judge_required</span>'
+              + '<select data-kind="comp-fusion-judge-req" data-alias="' + escapeHtml(aliasName) + '"' + disabledAttr + '>'
+                + '<option value=""' + (fusionOpts.judge_required === undefined ? ' selected' : '') + '>(default)</option>'
+                + '<option value="true"' + (fusionOpts.judge_required === true ? ' selected' : '') + '>true</option>'
+                + '<option value="false"' + (fusionOpts.judge_required === false ? ' selected' : '') + '>false</option>'
+              + '</select>'
+              + '<span style="font-size:12px;color:#666;margin-left:8px;margin-right:4px;">expose_metadata</span>'
+              + '<select data-kind="comp-fusion-expose-meta" data-alias="' + escapeHtml(aliasName) + '"' + disabledAttr + '>'
+                + '<option value=""' + (fusionOpts.expose_metadata === undefined ? ' selected' : '') + '>(default)</option>'
+                + '<option value="true"' + (fusionOpts.expose_metadata === true ? ' selected' : '') + '>true</option>'
+                + '<option value="false"' + (fusionOpts.expose_metadata === false ? ' selected' : '') + '>false</option>'
+              + '</select>'
+              + '<span style="font-size:12px;color:#666;margin-left:8px;margin-right:4px;">max_concurrent</span>'
+              + '<input type="number" data-kind="comp-fusion-max-conc" data-alias="' + escapeHtml(aliasName) + '" value="' + escapeHtml(fusionOpts.max_concurrent ?? '') + '" placeholder="(all)" style="width:60px;"' + disabledAttr + ' />'
+              + '</div>'
+          );
+        }
+
         if (keys.length === 0) {
           rows.push('<div class="config-row"><label>' + escapeHtml(aliasName) + '</label><div class="wide">(empty)</div></div>');
           return rows.join('');
         }
         return rows.concat(keys.map((targetName) => {
           const cfg = targets[targetName] || {};
+          if (isFusion) {
+            // Fusion target: show fusion weight + role instead of share/primary/fallback
+            const fusionWeight = cfg.fusion ?? '';
+            const roleOptions = ['', 'panel', 'judge', 'synth'];
+            const roleHtml = roleOptions.map((r) =>
+              '<option value="' + r + '"' + (cfg.role === r || (r === '' && cfg.role === undefined) ? ' selected' : '') + '>' + (r || '(default)') + '</option>'
+            ).join('');
+            return '<div class="config-row">'
+              + '<label>' + escapeHtml(targetName) + '</label>'
+              + '<span style="font-size:12px;color:#666;margin-right:4px;">fusion</span>'
+              + '<input type="number" data-kind="comp-fusion" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(fusionWeight) + '" placeholder="1" style="width:60px;"' + disabledAttr + ' />'
+              + '<span style="font-size:12px;color:#666;margin-left:8px;margin-right:4px;">role</span>'
+              + '<select data-kind="comp-role" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + disabledAttr + '>' + roleHtml + '</select>'
+              + '<div class="row-actions">'
+                + '<button type="button" class="test-btn mini-btn" data-action="test-model" data-model="' + escapeHtml(targetName) + '">t</button>'
+                + '<button type="button" class="mini-btn danger" data-action="remove-composite-target" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
+              + '</div>'
+              + '</div>';
+          }
           const share = cfg.share ?? '';
           const fallback = cfg.fallback === 0 ? 'no FB' : cfg.fallback ?? '';
           const primary = cfg.primary === true ? 'checked' : '';
@@ -574,8 +639,38 @@ export function handleDashboardPage(): Response {
               payload.composite[aliasName].token_limit = parsed;
             }
           }
+
+          // Collect fusion_options if present in DOM (fusion alias)
+          const minPanelEl = document.querySelector('[data-kind="comp-fusion-min-panel"][data-alias="' + aliasName + '"]');
+          if (minPanelEl !== null) {
+            const fusionOpts = {};
+            if (minPanelEl.value !== '') fusionOpts.min_panel = Number(minPanelEl.value);
+            const timeoutEl = document.querySelector('[data-kind="comp-fusion-timeout"][data-alias="' + aliasName + '"]');
+            if (timeoutEl && timeoutEl.value !== '') fusionOpts.panel_timeout_ms = Number(timeoutEl.value);
+            const judgeReqEl = document.querySelector('[data-kind="comp-fusion-judge-req"][data-alias="' + aliasName + '"]');
+            if (judgeReqEl && judgeReqEl.value !== '') fusionOpts.judge_required = judgeReqEl.value === 'true';
+            const exposeMetaEl = document.querySelector('[data-kind="comp-fusion-expose-meta"][data-alias="' + aliasName + '"]');
+            if (exposeMetaEl && exposeMetaEl.value !== '') fusionOpts.expose_metadata = exposeMetaEl.value === 'true';
+            const maxConcEl = document.querySelector('[data-kind="comp-fusion-max-conc"][data-alias="' + aliasName + '"]');
+            if (maxConcEl && maxConcEl.value !== '') fusionOpts.max_concurrent = Number(maxConcEl.value);
+            if (Object.keys(fusionOpts).length > 0) {
+              payload.composite[aliasName].fusion_options = fusionOpts;
+            }
+          }
+
           Object.keys(targets || {}).forEach((targetName) => {
-            if (targetName === 'token_limit') return;
+            if (targetName === 'token_limit' || targetName === 'fusion_options') return;
+            // Fusion target fields
+            const fusionEl = document.querySelector('[data-kind="comp-fusion"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
+            if (fusionEl !== null) {
+              const entry = {};
+              if (fusionEl.value !== '') entry.fusion = Number(fusionEl.value);
+              const roleEl = document.querySelector('[data-kind="comp-role"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
+              if (roleEl && roleEl.value !== '') entry.role = roleEl.value;
+              payload.composite[aliasName][targetName] = entry;
+              return;
+            }
+            // Normal composite target fields
             const shareEl = document.querySelector('[data-kind="comp-share"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
             const fallbackEl = document.querySelector('[data-kind="comp-fallback"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
             const entry = {};

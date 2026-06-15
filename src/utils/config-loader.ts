@@ -79,19 +79,42 @@ export interface TokenLimitConfig {
   duration: TokenLimitDuration;
 }
 
+export type FusionRole = 'panel' | 'judge' | 'synth';
+
+export interface FusionOptions {
+  min_panel?: number;        // min successful panel responses to proceed (default 1)
+  panel_timeout_ms?: number; // per-panel-call wall clock ms (default 60000)
+  judge_required?: boolean;  // if false, synth runs on raw panel if judge fails (default false)
+  expose_metadata?: boolean; // attach fusion_metadata to response (default true)
+  max_concurrent?: number;   // max simultaneous panel calls; default = panel size (full fan-out)
+}
+
 export interface CompositeTargetConfig {
   share?: number;
   primary?: boolean;
   fallback?: number;
+  fusion?: number;           // > 0 marks target as panel member (weight reserved for future use)
+  role?: FusionRole;         // explicit stage: 'panel' | 'judge' | 'synth'
 }
 
 export interface CompositeModelConfig {
   token_limit?: TokenLimitConfig;
-  [modelName: string]: CompositeTargetConfig | TokenLimitConfig | undefined;
+  fusion_options?: FusionOptions;
+  [modelName: string]: CompositeTargetConfig | TokenLimitConfig | FusionOptions | undefined;
 }
 
+export interface FusionPlan {
+  alias: string;
+  panel: Array<{ modelName: string; route: ModelRouteConfig }>;
+  judge: { modelName: string; route: ModelRouteConfig } | undefined;
+  synth: { modelName: string; route: ModelRouteConfig };
+  options: Required<FusionOptions>;
+}
+
+const COMPOSITE_META_KEYS = new Set(['token_limit', 'fusion_options']);
+
 function getCompositeTargetEntries(config: CompositeModelConfig | undefined): Array<[string, CompositeTargetConfig]> {
-  return Object.entries(config || {}).filter(([key]) => key !== 'token_limit') as Array<[string, CompositeTargetConfig]>;
+  return Object.entries(config || {}).filter(([key]) => !COMPOSITE_META_KEYS.has(key)) as Array<[string, CompositeTargetConfig]>;
 }
 
 function getCompositeTokenLimit(config: CompositeModelConfig | undefined): TokenLimitConfig | undefined {
@@ -348,6 +371,77 @@ export function getCompositeRouteCandidates(
   }));
 }
 
+export function getCompositeAliasMode(
+  modelName: string,
+  proxyConfig: ProxyConfig
+): 'fusion' | 'fallback' | 'share' | undefined {
+  const compositeConfig = proxyConfig.composite?.[modelName];
+  if (!compositeConfig) return undefined;
+
+  const entries = getCompositeTargetEntries(compositeConfig);
+  const isFusion = entries.some(([, cfg]) =>
+    cfg.role === 'panel' || cfg.role === 'judge' || cfg.role === 'synth' ||
+    (typeof cfg.fusion === 'number' && cfg.fusion > 0)
+  );
+  if (isFusion) return 'fusion';
+
+  const hasPriority = entries.some(([, cfg]) =>
+    cfg.primary === true || (typeof cfg.fallback === 'number' && cfg.fallback > 0)
+  );
+  if (hasPriority) return 'fallback';
+
+  return 'share';
+}
+
+export function resolveFusionPlan(
+  modelName: string,
+  proxyConfig: ProxyConfig
+): FusionPlan | undefined {
+  const compositeConfig = proxyConfig.composite?.[modelName];
+  if (!compositeConfig) return undefined;
+
+  const entries = getCompositeTargetEntries(compositeConfig);
+
+  const panel: Array<{ modelName: string; route: ModelRouteConfig }> = [];
+  let judge: { modelName: string; route: ModelRouteConfig } | undefined;
+  let synth: { modelName: string; route: ModelRouteConfig } | undefined;
+
+  for (const [targetName, cfg] of entries) {
+    const route = resolveModelRouteFromConfig(targetName, proxyConfig) || {
+      ...getDefaultModelRoute(proxyConfig),
+      modelAlias: targetName,
+    };
+    const resolvedRoute = { ...route, modelAlias: route.modelAlias || targetName };
+
+    if (cfg.role === 'judge') {
+      judge = { modelName: targetName, route: resolvedRoute };
+    } else if (cfg.role === 'synth') {
+      synth = { modelName: targetName, route: resolvedRoute };
+    } else {
+      // role === 'panel', or fusion > 0 with no role, or no role/fusion (treated as panel in fusion mode)
+      panel.push({ modelName: targetName, route: resolvedRoute });
+    }
+  }
+
+  if (panel.length === 0) return undefined;
+
+  // Defaults: synth falls back to judge, then first panel
+  if (!synth) {
+    synth = judge ?? panel[0];
+  }
+
+  const rawOpts = compositeConfig.fusion_options as FusionOptions | undefined;
+  const options: Required<FusionOptions> = {
+    min_panel: rawOpts?.min_panel ?? 1,
+    panel_timeout_ms: rawOpts?.panel_timeout_ms ?? 60000,
+    judge_required: rawOpts?.judge_required ?? false,
+    expose_metadata: rawOpts?.expose_metadata ?? true,
+    max_concurrent: rawOpts?.max_concurrent ?? panel.length,
+  };
+
+  return { alias: modelName, panel, judge, synth, options };
+}
+
 export function getModelRouteConfig(
   modelName: string,
   proxyConfig: ProxyConfig
@@ -574,6 +668,26 @@ function parseCompositeTargetConfig(value: string): CompositeTargetConfig {
       }
       continue;
     }
+
+    if (key === 'fusion') {
+      const numeric = Number(rawValue);
+      if (!Number.isNaN(numeric) && numeric >= 0) {
+        (config as any).fusion = numeric;
+      } else if (rawValue !== '') {
+        (config as any)._invalidFusion = true;
+      }
+      continue;
+    }
+
+    if (key === 'role') {
+      const v = rawValue.replace(/^"|"$/g, '');
+      if (v === 'panel' || v === 'judge' || v === 'synth') {
+        (config as any).role = v;
+      } else {
+        (config as any)._invalidRole = true;
+      }
+      continue;
+    }
   }
 
   return config;
@@ -624,7 +738,34 @@ function parseCompositeModelConfig(rawValue: string): CompositeModelConfig {
   for (const entry of entries) {
     const match = entry.match(/^"([^"]+)"\s*:\s*(\{.*\})$/);
     if (match) {
-      if (match[1] === 'token_limit') {
+      if (match[1] === 'fusion_options') {
+        // Parse fusion_options object: {min_panel, panel_timeout_ms, judge_required, expose_metadata, max_concurrent}
+        try {
+          const inner = match[2].trim().slice(1, -1);
+          const opts: FusionOptions = {};
+          const fields: string[] = [];
+          let cur = ''; let d = 0; let iq = false;
+          for (let i = 0; i < inner.length; i++) {
+            const c = inner[i];
+            if (c === '"') { iq = !iq; cur += c; continue; }
+            if (!iq) { if (c === '{') d++; else if (c === '}') d--; else if (c === ',' && d === 0) { if (cur.trim()) fields.push(cur.trim()); cur = ''; continue; } }
+            cur += c;
+          }
+          if (cur.trim()) fields.push(cur.trim());
+          for (const f of fields) {
+            const kv = f.match(/^"?(\w+)"?\s*[=:]\s*(.+)$/);
+            if (!kv) continue;
+            const k = kv[1]; const rv = kv[2].trim().replace(/,$/, '').replace(/^"|"$/g, '');
+            if (k === 'min_panel' || k === 'panel_timeout_ms' || k === 'max_concurrent') {
+              const n = Number(rv); if (Number.isFinite(n) && n >= 0) (opts as any)[k] = n;
+            } else if (k === 'judge_required' || k === 'expose_metadata') {
+              if (rv === 'true') (opts as any)[k] = true;
+              else if (rv === 'false') (opts as any)[k] = false;
+            }
+          }
+          config.fusion_options = opts;
+        } catch { /* ignore malformed fusion_options */ }
+      } else if (match[1] === 'token_limit') {
         // Parse the nested token_limit object: {num = ..., duration = "..."} or {"num": ..., "duration": "..."}
         const inner = match[2].trim().slice(1, -1);
         const fields: string[] = [];
@@ -716,6 +857,22 @@ function serializeCompositeTargetConfig(config: CompositeTargetConfig): string {
   if (config.fallback !== undefined) {
     fields.push(`"fallback": ${config.fallback}`);
   }
+  if (config.fusion !== undefined) {
+    fields.push(`"fusion": ${config.fusion}`);
+  }
+  if (config.role !== undefined) {
+    fields.push(`"role": "${config.role}"`);
+  }
+  return `{${fields.join(', ')}}`;
+}
+
+function serializeFusionOptions(opts: FusionOptions): string {
+  const fields: string[] = [];
+  if (opts.min_panel !== undefined) fields.push(`"min_panel": ${opts.min_panel}`);
+  if (opts.panel_timeout_ms !== undefined) fields.push(`"panel_timeout_ms": ${opts.panel_timeout_ms}`);
+  if (opts.judge_required !== undefined) fields.push(`"judge_required": ${opts.judge_required}`);
+  if (opts.expose_metadata !== undefined) fields.push(`"expose_metadata": ${opts.expose_metadata}`);
+  if (opts.max_concurrent !== undefined) fields.push(`"max_concurrent": ${opts.max_concurrent}`);
   return `{${fields.join(', ')}}`;
 }
 
@@ -723,6 +880,9 @@ function serializeCompositeModelConfig(config: CompositeModelConfig): string {
   const entries: string[] = [];
   if (config.token_limit && typeof config.token_limit === 'object') {
     entries.push(`"token_limit": {num = ${config.token_limit.num}, duration = ${JSON.stringify(config.token_limit.duration)}}`);
+  }
+  if (config.fusion_options && typeof config.fusion_options === 'object') {
+    entries.push(`"fusion_options": ${serializeFusionOptions(config.fusion_options as FusionOptions)}`);
   }
   for (const [modelName, targetConfig] of getCompositeTargetEntries(config)) {
     const serializedTarget = serializeCompositeTargetConfig((targetConfig || {}) as CompositeTargetConfig);
@@ -1190,21 +1350,38 @@ function sanitizeCompositeConfig(composite: ProxyConfig['composite']): Record<st
       safeTargets.token_limit = aliasLimit;
     }
 
+    // Preserve fusion_options
+    const rawFusionOpts = (targets as CompositeModelConfig).fusion_options;
+    if (rawFusionOpts && typeof rawFusionOpts === 'object' && !Array.isArray(rawFusionOpts)) {
+      const fo = rawFusionOpts as Record<string, unknown>;
+      const opts: FusionOptions = {};
+      if (typeof fo.min_panel === 'number') opts.min_panel = fo.min_panel;
+      if (typeof fo.panel_timeout_ms === 'number') opts.panel_timeout_ms = fo.panel_timeout_ms;
+      if (typeof fo.judge_required === 'boolean') opts.judge_required = fo.judge_required;
+      if (typeof fo.expose_metadata === 'boolean') opts.expose_metadata = fo.expose_metadata;
+      if (typeof fo.max_concurrent === 'number') opts.max_concurrent = fo.max_concurrent;
+      safeTargets.fusion_options = opts;
+    }
+
     for (const [targetModel, config] of Object.entries(targets || {})) {
-      if (targetModel === 'token_limit') {
+      if (COMPOSITE_META_KEYS.has(targetModel)) {
         continue;
       }
       if (targetModel.startsWith('_')) {
         continue; // skip internal validation markers
       }
 
-      // Only process CompositeTargetConfig (skip TokenLimitConfig objects)
-      if (targetModel === 'token_limit' || typeof config !== 'object' || config === null || Array.isArray(config)) {
+      // Only process CompositeTargetConfig (skip TokenLimitConfig / FusionOptions objects)
+      if (typeof config !== 'object' || config === null || Array.isArray(config)) {
         continue;
       }
       const targetCfg = config as Record<string, unknown>;
       if ('num' in targetCfg && 'duration' in targetCfg) {
         // This is a TokenLimitConfig, not a target model — skip
+        continue;
+      }
+      if ('min_panel' in targetCfg || 'panel_timeout_ms' in targetCfg) {
+        // This is a FusionOptions block — skip
         continue;
       }
 
@@ -1217,6 +1394,12 @@ function sanitizeCompositeConfig(composite: ProxyConfig['composite']): Record<st
       }
       if (typeof targetCfg.fallback === 'number' && Number.isFinite(targetCfg.fallback)) {
         safeTarget.fallback = targetCfg.fallback;
+      }
+      if (typeof targetCfg.fusion === 'number' && Number.isFinite(targetCfg.fusion)) {
+        safeTarget.fusion = targetCfg.fusion;
+      }
+      if (targetCfg.role === 'panel' || targetCfg.role === 'judge' || targetCfg.role === 'synth') {
+        safeTarget.role = targetCfg.role as FusionRole;
       }
       safeTargets[targetModel] = safeTarget;
     }
@@ -1272,6 +1455,18 @@ function validateAndNormalizeComposite(payload: unknown): Record<string, Composi
 
     const targetConfig: CompositeModelConfig = {};
     for (const [key, rawValue] of Object.entries(targetValue)) {
+      if (key === 'fusion_options') {
+        if (!isPlainObject(rawValue)) throw new Error(`Invalid fusion_options for alias: ${alias}`);
+        const fo = rawValue as Record<string, unknown>;
+        const opts: FusionOptions = {};
+        if ('min_panel' in fo) { if (typeof fo.min_panel !== 'number') throw new Error(`Invalid fusion_options.min_panel for: ${alias}`); opts.min_panel = fo.min_panel; }
+        if ('panel_timeout_ms' in fo) { if (typeof fo.panel_timeout_ms !== 'number') throw new Error(`Invalid fusion_options.panel_timeout_ms for: ${alias}`); opts.panel_timeout_ms = fo.panel_timeout_ms; }
+        if ('judge_required' in fo) { if (typeof fo.judge_required !== 'boolean') throw new Error(`Invalid fusion_options.judge_required for: ${alias}`); opts.judge_required = fo.judge_required; }
+        if ('expose_metadata' in fo) { if (typeof fo.expose_metadata !== 'boolean') throw new Error(`Invalid fusion_options.expose_metadata for: ${alias}`); opts.expose_metadata = fo.expose_metadata; }
+        if ('max_concurrent' in fo) { if (typeof fo.max_concurrent !== 'number' || fo.max_concurrent < 1) throw new Error(`Invalid fusion_options.max_concurrent for: ${alias} — must be >= 1`); opts.max_concurrent = fo.max_concurrent; }
+        targetConfig.fusion_options = opts;
+        continue;
+      }
       if (key === 'token_limit') {
         // Support both new format {num, duration} and old format (number)
         if (typeof rawValue === 'object' && rawValue !== null && !Array.isArray(rawValue)) {
@@ -1323,6 +1518,18 @@ function validateAndNormalizeComposite(payload: unknown): Record<string, Composi
           throw new Error(`Invalid fallback for: ${alias}.${key}`);
         }
         entry.fallback = rawValue.fallback;
+      }
+      if ('fusion' in rawValue) {
+        if (typeof rawValue.fusion !== 'number' || !Number.isFinite(rawValue.fusion)) {
+          throw new Error(`Invalid fusion for: ${alias}.${key}`);
+        }
+        entry.fusion = rawValue.fusion;
+      }
+      if ('role' in rawValue) {
+        if (rawValue.role !== 'panel' && rawValue.role !== 'judge' && rawValue.role !== 'synth') {
+          throw new Error(`Invalid role for: ${alias}.${key} — must be 'panel', 'judge', or 'synth'`);
+        }
+        entry.role = rawValue.role as FusionRole;
       }
 
       targetConfig[key] = entry;
@@ -1441,6 +1648,8 @@ export interface CompositeTargetPatch {
   share?: number | null;
   fallback?: number | null;
   primary?: boolean;
+  fusion?: number | null;
+  role?: FusionRole | null;
 }
 
 function cloneCompositeConfig(composite: ProxyConfig['composite']): Record<string, CompositeModelConfig> {
@@ -1453,8 +1662,12 @@ function cloneCompositeConfig(composite: ProxyConfig['composite']): Record<strin
       if (aliasLimit !== undefined) {
         nextTargets.token_limit = aliasLimit;
       }
+      const fusionOpts = (targets as CompositeModelConfig).fusion_options;
+      if (fusionOpts && typeof fusionOpts === 'object') {
+        nextTargets.fusion_options = { ...(fusionOpts as FusionOptions) };
+      }
       for (const [targetModel, config] of Object.entries(targets as Record<string, unknown>)) {
-        if (targetModel === 'token_limit') {
+        if (COMPOSITE_META_KEYS.has(targetModel)) {
           continue;
         }
         if (targetModel.startsWith('_')) {
@@ -1543,6 +1756,31 @@ export function upsertCompositeAliasLimit(
   return nextConfig;
 }
 
+export function upsertFusionOptions(
+  baseConfig: ProxyConfig,
+  alias: string,
+  options: FusionOptions | null,
+): ProxyConfig {
+  const aliasName = assertNonEmptyCompositeName('alias', alias);
+  const nextConfig: ProxyConfig = {
+    ...baseConfig,
+    composite: cloneCompositeConfig(baseConfig.composite),
+  };
+
+  const existingTargets = nextConfig.composite?.[aliasName];
+  if (!existingTargets) {
+    throw new Error(`Composite alias not found: ${aliasName}`);
+  }
+
+  if (options === null) {
+    delete existingTargets.fusion_options;
+  } else {
+    existingTargets.fusion_options = { ...(existingTargets.fusion_options ?? {}), ...options };
+  }
+
+  return nextConfig;
+}
+
 export function upsertCompositeTarget(
   baseConfig: ProxyConfig,
   alias: string,
@@ -1617,6 +1855,26 @@ export function upsertCompositeTarget(
     nextTarget.fallback = 0;
   } else if (patch.primary === false) {
     delete nextTarget.primary;
+  }
+
+  if (patch.fusion !== undefined) {
+    if (patch.fusion === null || patch.fusion === 0) {
+      delete nextTarget.fusion;
+    } else if (!Number.isFinite(patch.fusion) || patch.fusion < 0) {
+      throw new Error(`Invalid fusion weight for ${aliasName}.${targetName}`);
+    } else {
+      nextTarget.fusion = patch.fusion;
+    }
+  }
+
+  if (patch.role !== undefined) {
+    if (patch.role === null) {
+      delete nextTarget.role;
+    } else if (!(['panel', 'judge', 'synth'] as string[]).includes(patch.role)) {
+      throw new Error(`Invalid role for ${aliasName}.${targetName} — must be panel, judge, or synth`);
+    } else {
+      nextTarget.role = patch.role;
+    }
   }
 
   nextTargets[targetName] = nextTarget;

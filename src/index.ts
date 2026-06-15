@@ -27,7 +27,7 @@ import {
   handleDashboardRequestStats,
   handleDashboardTestModel,
 } from './handlers/dashboard.js';
-import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, ModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
+import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, getCompositeAliasMode, resolveFusionPlan, FusionPlan, ModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
 import {
   extractToolNamesFromBody,
   extractToolRequestCharLengthsFromBody,
@@ -680,6 +680,37 @@ export default {
             }
             // passthrough disabled: don't set routing vars — falls through to outer fixed-routing block
           } else if (modelName && proxyConfig.models) {
+            // ---- Fusion mode: parallel fan-out → judge → synthesis ----
+            if (getCompositeAliasMode(modelName, proxyConfig) === 'fusion') {
+              const fusionPlan = resolveFusionPlan(modelName, proxyConfig);
+              if (fusionPlan) {
+                // token_limit check (covers all panel+judge+synth targets under the alias)
+                if (proxyConfig.composite?.[modelName]?.token_limit !== undefined) {
+                  const limitCfg = proxyConfig.composite[modelName].token_limit!;
+                  const allTargets = [
+                    ...fusionPlan.panel.map(p => p.route.modelAlias || p.modelName),
+                    ...(fusionPlan.judge ? [fusionPlan.judge.route.modelAlias || fusionPlan.judge.modelName] : []),
+                    fusionPlan.synth.route.modelAlias || fusionPlan.synth.modelName,
+                  ];
+                  const totalUsed = getCompositeAliasTokenUsage(modelName, allTargets);
+                  if (totalUsed >= limitCfg.num) {
+                    throw new OverLimitError(
+                      `Composite alias '${modelName}' token limit (${limitCfg.num} ${limitCfg.duration}) reached (${totalUsed}).`
+                    );
+                  }
+                }
+                logger.info(requestId, `Fusion routing: ${modelName} → ${fusionPlan.panel.length} panel(s) + judge(${fusionPlan.judge?.modelName ?? 'none'}) + synth(${fusionPlan.synth.modelName})`);
+                compositeAliasName = modelName;
+                // runFusion is defined lower in this closure; call it after runAttempt is defined.
+                // We set a sentinel so the compositeAttempts path is skipped.
+                (request as any)._fusionPlan = fusionPlan;
+                (request as any)._fusionBody = body;
+                // Fall through with empty compositeAttempts — fusion is handled at dispatch time below
+                compositeAttempts = [];
+              }
+            }
+
+            if (!((request as any)._fusionPlan)) {
             const compositeCandidates = getCompositeRouteCandidates(modelName, proxyConfig);
             compositeAliasName = compositeCandidates.length > 0 ? modelName : undefined;
 
@@ -858,6 +889,7 @@ export default {
             request = firstAttempt.request;
 
             logger.debug(requestId, `Model-specific routing: ${modelName} -> ${targetUrl} (${upstreamMode}) [${handlerType}]`);
+            } // end if (!fusionPlan)
           } else {
             // No model-specific config, use default routing
             const fixedRoute = parseFixedRoute(path, proxyConfig, env);
@@ -928,6 +960,379 @@ export default {
           }
         }
       }
+
+      // Build a RouteAttempt for a given {modelName, route} pair and a body object.
+      // Mirrors the inline logic in the compositeAttempts.map() block above.
+      const buildRouteAttempt = (
+        candidateName: string,
+        route: ModelRouteConfig,
+        bodyObj: Record<string, unknown>,
+        forceStreamOverride?: boolean,
+      ): RouteAttempt => {
+        const upstreamModelName = route.modelAlias || candidateName;
+        const forwardedBodyText = JSON.stringify({ ...bodyObj, model: upstreamModelName });
+        const candidateRequest = new Request(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body: forwardedBodyText,
+        });
+
+        let candidateAuthHeaders = transformAuthHeadersForUpstream(candidateRequest, route.upstreamMode, path, requestId, env as Record<string, unknown>);
+        if (route.upstreamMode === 'openai-completions') {
+          if (route.modelAlias && route.apiKey) {
+            candidateAuthHeaders = { ...candidateAuthHeaders, ...formatApiKeyForUpstream(route.apiKey, route.upstreamMode) };
+          }
+        } else if (route.apiKey) {
+          candidateAuthHeaders = { ...candidateAuthHeaders, ...formatApiKeyForUpstream(route.apiKey, route.upstreamMode) };
+        }
+
+        const isNativeMode = route.upstreamMode === 'anthropic-messages' ||
+                             route.upstreamMode === 'gemini-generatecontent' ||
+                             route.upstreamMode === 'gemini-interactions';
+
+        let candidateTargetUrl = '';
+        let candidateHandlerType: RouteAttempt['handlerType'] = 'messages';
+        let candidateUpstreamMode: string | undefined;
+        let candidateForceStreaming = forceStreamOverride ?? false;
+
+        const bodyStream = (bodyObj.stream === true);
+
+        if (path === '/v1/messages' || path.startsWith('/v1/messages?')) {
+          candidateHandlerType = 'messages';
+          if (isNativeMode) {
+            if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
+              candidateTargetUrl = bodyStream
+                ? `${route.targetUrl}/v1beta/models/${upstreamModelName}:streamGenerateContent?alt=sse`
+                : `${route.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
+            } else {
+              candidateTargetUrl = `${route.targetUrl}/v1/messages`;
+            }
+            candidateUpstreamMode = route.upstreamMode;
+          } else {
+            candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+            candidateUpstreamMode = 'openai-completions';
+          }
+        } else if (path === '/v1/interactions' || path.startsWith('/v1/interactions?')) {
+          candidateHandlerType = 'interactions';
+          if (isNativeMode && (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions')) {
+            candidateTargetUrl = bodyStream
+              ? `${route.targetUrl}/v1beta/models/${upstreamModelName}:streamGenerateContent?alt=sse`
+              : `${route.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
+            candidateUpstreamMode = route.upstreamMode;
+          } else {
+            candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+            candidateUpstreamMode = 'openai-completions';
+          }
+        } else if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && path.includes(':countTokens')) {
+          candidateHandlerType = 'generateContent';
+          if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
+            candidateTargetUrl = `${route.targetUrl}/v1beta/models/${upstreamModelName}:countTokens`;
+            candidateUpstreamMode = route.upstreamMode;
+          } else {
+            candidateTargetUrl = `${route.targetUrl}/v1/messages/count_tokens`;
+            candidateUpstreamMode = 'openai-completions';
+          }
+        } else if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
+          candidateHandlerType = 'generateContent';
+          const isStreamEndpoint = path.includes(':streamGenerateContent');
+          if (isNativeMode && (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions')) {
+            const endpoint = isStreamEndpoint ? 'streamGenerateContent' : 'generateContent';
+            let queryString = path.includes('?') ? path.substring(path.indexOf('?')) : '';
+            if (isStreamEndpoint && !queryString.includes('alt=sse')) { queryString = queryString ? `${queryString}&alt=sse` : '?alt=sse'; }
+            candidateTargetUrl = `${route.targetUrl}/v1beta/models/${upstreamModelName}:${endpoint}${queryString}`;
+            candidateUpstreamMode = route.upstreamMode;
+          } else {
+            candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+            candidateUpstreamMode = 'openai-completions';
+            candidateForceStreaming = forceStreamOverride ?? isStreamEndpoint;
+          }
+        } else if (path === '/v1/responses' || path.startsWith('/v1/responses?')) {
+          candidateHandlerType = 'responses';
+          if (route.upstreamMode === 'openai-responses') {
+            candidateTargetUrl = `${route.targetUrl}/v1/responses`;
+            candidateUpstreamMode = 'openai-responses';
+          } else {
+            candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+            candidateUpstreamMode = 'openai-completions';
+          }
+        } else if (path === '/v1/responses/input_tokens' || path.startsWith('/v1/responses/input_tokens?')) {
+          candidateHandlerType = 'responses-input-tokens';
+          if (route.upstreamMode === 'openai-responses') {
+            candidateTargetUrl = `${route.targetUrl}/v1/responses/input_tokens`;
+            candidateUpstreamMode = 'openai-responses';
+          } else {
+            candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+            candidateUpstreamMode = 'openai-completions';
+          }
+        } else if (path === '/v1/responses/compact' || path.startsWith('/v1/responses/compact?')) {
+          candidateHandlerType = 'responses-compact';
+          if (route.upstreamMode === 'openai-responses') {
+            candidateTargetUrl = `${route.targetUrl}/v1/responses/compact`;
+            candidateUpstreamMode = 'openai-responses';
+          } else {
+            candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+            candidateUpstreamMode = 'openai-completions';
+          }
+        }
+
+        return {
+          request: candidateRequest,
+          targetUrl: candidateTargetUrl,
+          handlerType: candidateHandlerType,
+          modelId: upstreamModelName,
+          upstreamMode: candidateUpstreamMode,
+          forceStreaming: candidateForceStreaming,
+          authHeaders: candidateAuthHeaders,
+        };
+      };
+
+      // Extract the last user-turn text from the inbound body (Anthropic Messages format).
+      // Used by runFusion to build judge/synthesis prompts.
+      const extractUserPrompt = (bodyObj: Record<string, unknown>): string => {
+        const msgs = bodyObj.messages;
+        if (!Array.isArray(msgs) || msgs.length === 0) return '';
+        // Walk backwards to find the last user message
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i] as Record<string, unknown>;
+          if (m.role === 'user') {
+            if (typeof m.content === 'string') return m.content;
+            if (Array.isArray(m.content)) {
+              return (m.content as Array<Record<string, unknown>>)
+                .filter(b => b.type === 'text')
+                .map(b => String(b.text ?? ''))
+                .join('\n');
+            }
+          }
+        }
+        return '';
+      };
+
+      // Attempt to read the full JSON body from a (non-streaming) Response.
+      const readResponseJson = async (resp: Response): Promise<Record<string, unknown> | null> => {
+        try {
+          const ct = resp.headers.get('content-type') || '';
+          if (!ct.includes('application/json')) return null;
+          return await resp.clone().json() as Record<string, unknown>;
+        } catch { return null; }
+      };
+
+      // Extract text content from a Claude-format or OpenAI-format response payload.
+      const extractResponseText = (payload: Record<string, unknown>): string => {
+        // Anthropic Messages format
+        if (Array.isArray(payload.content)) {
+          return (payload.content as Array<Record<string, unknown>>)
+            .filter(b => b.type === 'text')
+            .map(b => String(b.text ?? ''))
+            .join('\n');
+        }
+        // OpenAI completions format
+        const choices = payload.choices as Array<Record<string, unknown>> | undefined;
+        if (Array.isArray(choices) && choices.length > 0) {
+          const msg = choices[0].message as Record<string, unknown> | undefined;
+          if (msg && typeof msg.content === 'string') return msg.content;
+        }
+        return '';
+      };
+
+      // ---- Fusion orchestrator ----
+      const runFusion = async (plan: FusionPlan, bodyObj: Record<string, unknown>): Promise<Response> => {
+        const { options } = plan;
+        const fusionDepth = parseInt(request.headers.get('x-fusion-depth') || '0', 10);
+        if (fusionDepth >= 1) {
+          throw new Error(`fusion_invocation_capped: alias '${plan.alias}' cannot recursively invoke fusion`);
+        }
+
+        const userPrompt = extractUserPrompt(bodyObj);
+        const panelErrors: Array<{ model: string; error: string }> = [];
+        const panelTexts: Array<{ model: string; text: string }> = [];
+
+        // ---- Stage 1: Panel fan-out (parallel, windowed by max_concurrent) ----
+        const panelTargets = plan.panel;
+        const batchSize = Math.max(1, Math.min(options.max_concurrent, panelTargets.length));
+
+        for (let batchStart = 0; batchStart < panelTargets.length; batchStart += batchSize) {
+          const batch = panelTargets.slice(batchStart, batchStart + batchSize);
+          // Panel calls are always non-streaming so bodies can be buffered for aggregation
+          const batchBodies = batch.map(t =>
+            buildRouteAttempt(t.modelName, t.route, { ...bodyObj, stream: false })
+          );
+          // Attach fusion depth header to prevent recursive expansion.
+          // Re-serialize body text (not stream) so Node.js fetch doesn't require duplex: 'half'.
+          const batchTexts = await Promise.all(batchBodies.map(a => a.request.text()));
+          const batchAttempts = batchBodies.map((a, i) => ({
+            ...a,
+            request: new Request(a.request.url, {
+              method: a.request.method,
+              headers: new Headers({ ...Object.fromEntries(a.request.headers.entries()), 'x-fusion-depth': '1' }),
+              body: batchTexts[i],
+            }),
+          }));
+
+          const timeoutMs = options.panel_timeout_ms;
+          const settled = await Promise.allSettled(
+            batchAttempts.map(a =>
+              Promise.race([
+                runAttempt(a),
+                new Promise<never>((_, reject) =>
+                  setTimeout(() => reject(new Error(`panel timeout after ${timeoutMs}ms`)), timeoutMs)
+                ),
+              ])
+            )
+          );
+
+          for (let i = 0; i < batch.length; i++) {
+            const result = settled[i];
+            const modelName = batch[i].modelName;
+            if (result.status === 'fulfilled') {
+              const json = await readResponseJson(result.value);
+              if (json) {
+                const text = extractResponseText(json);
+                if (text) {
+                  panelTexts.push({ model: modelName, text });
+                } else {
+                  panelErrors.push({ model: modelName, error: 'empty response' });
+                }
+              } else {
+                panelErrors.push({ model: modelName, error: 'non-JSON response' });
+              }
+            } else {
+              panelErrors.push({ model: modelName, error: (result.reason as Error).message });
+              logger.warn(requestId, `Fusion panel ${modelName} failed: ${(result.reason as Error).message}`);
+            }
+          }
+        }
+
+        if (panelTexts.length < options.min_panel) {
+          const errorMsg = panelTexts.length === 0
+            ? `all_panels_failed: no panel model returned a usable response (errors: ${panelErrors.map(e => `${e.model}: ${e.error}`).join('; ')})`
+            : `insufficient_panels: only ${panelTexts.length}/${options.min_panel} required panels succeeded`;
+          throw new Error(errorMsg);
+        }
+
+        logger.info(requestId, `Fusion panel complete: ${panelTexts.length} succeeded, ${panelErrors.length} failed`);
+
+        // ---- Stage 2: Judge ----
+        let analysis: Record<string, unknown> | null = null;
+        if (plan.judge) {
+          const panelSection = panelTexts
+            .map(p => `--- MODEL: ${p.model} ---\n${p.text}`)
+            .join('\n\n');
+          const judgePromptText =
+            `You are a meta-analyst comparing responses from multiple expert models.\n\n` +
+            `ORIGINAL PROMPT:\n${userPrompt}\n\n` +
+            `PANEL RESPONSES:\n${panelSection}\n\n` +
+            `Produce ONLY valid JSON with these fields:\n` +
+            `- consensus: string[] — points most/all models agree on\n` +
+            `- contradictions: {topic:string, stances:{model:string,stance:string}[]}[]\n` +
+            `- partial_coverage: {models:string[], point:string}[]\n` +
+            `- unique_insights: {model:string, insight:string}[]\n` +
+            `- blind_spots: string[] — angles no model addressed\n\n` +
+            `Output ONLY the JSON object, no markdown fences.`;
+
+          // Build judge body: replace messages with the judge prompt, always non-streaming
+          const judgeMessages = [
+            ...((bodyObj.messages as unknown[]) || []).slice(0, -1), // prior history minus last user turn
+            { role: 'user', content: judgePromptText },
+          ];
+          const judgeBodyObj = { ...bodyObj, messages: judgeMessages, stream: false };
+
+          const judgeAttempt = buildRouteAttempt(plan.judge.modelName, plan.judge.route, judgeBodyObj);
+          const judgeBodyText = await judgeAttempt.request.text();
+          const judgeAttemptWithDepth = {
+            ...judgeAttempt,
+            request: new Request(judgeAttempt.request.url, {
+              method: judgeAttempt.request.method,
+              headers: new Headers({ ...Object.fromEntries(judgeAttempt.request.headers.entries()), 'x-fusion-depth': '1' }),
+              body: judgeBodyText,
+            }),
+          };
+
+          try {
+            const judgeResp = await runAttempt(judgeAttemptWithDepth);
+            const judgeJson = await readResponseJson(judgeResp);
+            if (judgeJson) {
+              const judgeText = extractResponseText(judgeJson);
+              // Strip optional markdown code fences
+              const stripped = judgeText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+              analysis = JSON.parse(stripped) as Record<string, unknown>;
+              logger.info(requestId, `Fusion judge complete for alias ${plan.alias}`);
+            }
+          } catch (e) {
+            logger.warn(requestId, `Fusion judge failed: ${(e as Error).message}`);
+            if (options.judge_required) {
+              throw new Error(`judge_failed: ${(e as Error).message}`);
+            }
+            // degrade: analysis stays null, synthesis will use raw panel
+          }
+        }
+
+        // ---- Stage 3: Synthesis ----
+        let synthPromptText: string;
+        if (analysis) {
+          synthPromptText =
+            `You are writing the final answer for the user.\n\n` +
+            `ORIGINAL PROMPT: ${userPrompt}\n\n` +
+            `STRUCTURED ANALYSIS FROM EXPERT PANEL:\n${JSON.stringify(analysis, null, 2)}\n\n` +
+            `Instructions: Lead with consensus as the confident baseline. Present contradictions ` +
+            `as nuanced disagreement with attribution. Include partial_coverage points with caveats. ` +
+            `Highlight unique_insights as minority/expert perspectives. Explicitly address blind_spots. ` +
+            `Write naturally — do not list the JSON fields.`;
+        } else {
+          // Degraded: no judge analysis; synthesise from raw panel responses
+          const panelSection = panelTexts
+            .map(p => `--- MODEL: ${p.model} ---\n${p.text}`)
+            .join('\n\n');
+          synthPromptText =
+            `You are writing the final answer for the user.\n\n` +
+            `ORIGINAL PROMPT: ${userPrompt}\n\n` +
+            `PANEL RESPONSES (no structured analysis available):\n${panelSection}\n\n` +
+            `Synthesise the above into a single coherent answer for the user.`;
+        }
+
+        const synthMessages = [
+          ...((bodyObj.messages as unknown[]) || []).slice(0, -1),
+          { role: 'user', content: synthPromptText },
+        ];
+        const synthBodyObj = { ...bodyObj, messages: synthMessages };
+        // stream: pass through from the original request for the synth (client-visible) stage
+        const synthAttempt = buildRouteAttempt(plan.synth.modelName, plan.synth.route, synthBodyObj);
+        const synthBodyText = await synthAttempt.request.text();
+        const synthAttemptWithDepth = {
+          ...synthAttempt,
+          request: new Request(synthAttempt.request.url, {
+            method: synthAttempt.request.method,
+            headers: new Headers({ ...Object.fromEntries(synthAttempt.request.headers.entries()), 'x-fusion-depth': '1' }),
+            body: synthBodyText,
+          }),
+        };
+
+        const synthResp = await runAttempt(synthAttemptWithDepth);
+
+        // Attach fusion_metadata to non-streaming responses when expose_metadata is true
+        if (options.expose_metadata && !bodyObj.stream) {
+          const synthJson = await readResponseJson(synthResp);
+          if (synthJson) {
+            const metadata = {
+              router: 'fusion',
+              fusion_metadata: {
+                alias: plan.alias,
+                panel_models: plan.panel.map(p => p.modelName),
+                judge_model: plan.judge?.modelName ?? null,
+                synth_model: plan.synth.modelName,
+                panel_errors: panelErrors,
+                analysis_present: analysis !== null,
+              },
+            };
+            const enriched = { ...synthJson, ...metadata };
+            return new Response(JSON.stringify(enriched), {
+              status: synthResp.status,
+              headers: synthResp.headers,
+            });
+          }
+        }
+
+        return synthResp;
+      };
 
       const runAttempt = async (attempt: RouteAttempt): Promise<Response> => {
         const attemptRequest = attempt.request;
@@ -1084,6 +1489,15 @@ export default {
 
         return response;
       };
+
+      // ---- Fusion dispatch ----
+      const _fusionPlan = (request as any)._fusionPlan as FusionPlan | undefined;
+      const _fusionBody = (request as any)._fusionBody as Record<string, unknown> | undefined;
+      if (_fusionPlan && _fusionBody) {
+        const fusionResp = await runFusion(_fusionPlan, _fusionBody);
+        recordRequestTiming(path, Date.now() - requestStartTime);
+        return applyCorsHeaders(fusionResp, request, env);
+      }
 
       if (compositeAttempts && compositeAttempts.length > 0) {
         let lastError: unknown;

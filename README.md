@@ -140,20 +140,105 @@ Composite behavior:
 - if one upstream fails, the proxy automatically retries the next candidate in the order determined by `primary`/`fallback`, or weighted selection for the first attempt then remaining targets as fallbacks.
 - a composite alias may have **no targets** (`"my-alias" = {}`) — this is the state right after adding an alias in the TUI (press `a`) before any target is chosen. Empty aliases are preserved across config parse/serialize round-trips, so the TUI can add the alias first and then open the target picker.
 
-```bash
-⏺ Update(src/utils/config-loader.ts) (fixed by Opus-4-8)
-  ⎿  Added 3 lines, removed 1 line
-      1047      }
-      1048
-      1049      // Handle composite inline object values: "alias" = {"m1": {...}, "m2": {...}}
-      1050 -    const compositeObjectMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*(\{.+\})$/);
-      1050 +    // Note: allow an empty object {} (newly added alias with no targets yet) by
-      1051 +    // using .* instead of .+ so the alias is preserved on round-trip.
-      1052 +    const compositeObjectMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*(\{.*\})$/);
-      1053      if (compositeObjectMatch && currentSection === 'composite' && config.composite) {
-      1054        const [, key, value] = compositeObjectMatch;
-      1055        const cleanKey = key.trim().replace(/^"|"$/g, '');
+#### Fusion mode
+
+Fusion is a composite mode that fans a single request out to multiple **panel** models simultaneously, optionally sends a **judge** model to analyze the panel responses, then routes to a **synth** model that writes the final answer to the client.
+
+```toml
+[composite]
+"smart-answer" = {"opus46": {"fusion": 1}, "sonnet46": {"fusion": 1}, "max-m3": {"role": "judge"}, "max-m2.7-high": {"role": "synth"}, "fusion_options": {"min_panel": 1, "judge_required": false, "panel_timeout_ms": 30000}}
 ```
+
+Per-target fields:
+
+| Field | Description |
+|---|---|
+| `fusion: N` | Marks this target as a panel member (`N > 0`). All `fusion`-marked targets are called in parallel. |
+| `role: "judge"` | The judge model. Receives all panel responses and returns a structured JSON analysis. |
+| `role: "synth"` | The synthesis model. Receives the analysis (or raw panel if judge absent/skipped) and streams the final answer to the client. Exactly one synth is required. |
+| `role: "panel"` | Explicit panel membership (equivalent to `fusion: 1`). |
+
+`fusion_options` block (alias-level):
+
+| Field | Default | Description |
+|---|---|---|
+| `min_panel` | `1` | Minimum successful panel responses required to proceed. If fewer succeed, the request fails. |
+| `panel_timeout_ms` | `60000` | Per-panel-call wall-clock timeout in ms. Timed-out panel calls count as failures. |
+| `judge_required` | `false` | If `true`, a judge failure aborts the request. If `false`, synth runs on raw panel responses when the judge is absent or fails. |
+| `expose_metadata` | `true` | Attach a `fusion_metadata` object to non-streaming responses with `panel_models`, `judge_model`, `synth_model`, `panel_errors`, and `analysis_present`. |
+| `max_concurrent` | panel size | Maximum simultaneous panel calls. Full fan-out by default. Note: on CPU-constrained runtimes, synchronous JSON aggregation of large panel responses may cause brief stalls. |
+
+Pipeline:
+
+1. **Panel** — all `fusion`-marked targets called in parallel (windowed by `max_concurrent`), always non-streaming so responses can be aggregated. Calls exceeding `panel_timeout_ms` are treated as failures.
+2. **Judge** — if configured and `>= min_panel` responses succeeded, the judge receives all panel text plus the original user prompt and returns a structured JSON analysis (consensus, contradictions, unique insights, blind spots). If the judge fails and `judge_required` is `false`, synthesis proceeds on raw panel text.
+3. **Synth** — receives the structured analysis (or raw panel in degraded mode) and the original user prompt. The client's `stream` flag is forwarded, so the synth response is streamed or buffered as requested.
+
+Recursion guard: the proxy injects `x-fusion-depth: 1` on all internal panel/judge/synth calls. Any request arriving at a fusion alias with `x-fusion-depth >= 1` is rejected to prevent recursive fan-out.
+
+`token_limit` works identically to other composite modes and covers all targets under the alias.
+
+##### Editing fusion aliases in the TUI
+
+Open the composite panel with `c` (or however your TUI binding shows it), then use these keys on a fusion alias:
+
+| Key | Selection | Action |
+|---|---|---|
+| `F` | alias selected | Edit `fusion_options` — prompts for `key=value` pairs |
+| `M` | alias selected | Add a target — opens model picker, then prompts for `role` and optional `fusion` weight |
+| `E` | target selected | Edit a target's `role` and `fusion` weight |
+| `L` | alias selected | Set/clear the alias-level `token_limit` (same as normal composite) |
+| `D` | target selected | Delete a target |
+
+**Setting `fusion_options` (`F` key)**
+
+Opens 5 sequential prompts, each pre-filled with the current value. Press Enter to keep it unchanged, or type a new value:
+
+```
+[1/5]  min_panel          number ≥ 1       blank → default (1)
+[1b/5] panel_timeout_ms   number ms > 0    blank → default (60000)
+[2/5]  judge_required     true / false     blank → default (false)
+[3/5]  expose_metadata    true / false     blank → default (true)
+[4/5]  max_concurrent     number ≥ 1       blank → default (all)
+```
+
+A bad value shows an error and stays on the same step. Blanking every field removes `fusion_options` from the alias.
+
+**Adding/editing targets (`M` / `E` keys)**
+
+When a fusion alias is selected (`fusion_options` is set), the prompt expects:
+
+```
+role <panel|judge|synth> [fusion <weight>]
+```
+
+Examples:
+- `role panel fusion 1` — add as a panel member with weight 1
+- `role panel` — panel with default weight (equivalent to `fusion: 1`)
+- `role judge` — designate as judge
+- `role synth` — designate as synth (exactly one required)
+
+**Full example workflow** — building the `smart-answer` alias from scratch:
+
+```
+# 1. Add alias
+Press a → type "smart-answer" → Enter
+
+# 2. Set fusion_options (alias must be selected)
+Press F → type "min_panel=1 judge_required=false panel_timeout_ms=30000" → Enter
+
+# 3. Add panel members
+Press M → select "opus46"   → "role panel fusion 1" → Enter
+Press M → select "sonnet46" → "role panel fusion 1" → Enter
+
+# 4. Add judge
+Press M → select "max-m3" → "role judge" → Enter
+
+# 5. Add synth (required)
+Press M → select "max-m2.7-high" → "role synth" → Enter
+```
+
+The TUI displays fusion targets with `role:weight` instead of the usual `share P FB` summary — e.g. `panel:1`, `judge`, `synth`.
 
 #### Consul-backed config
 
@@ -246,13 +331,17 @@ The TUI shows live:
 Keyboard shortcuts:
 - `↑/↓` or `j/k` to move
 - `a` add a composite alias
-- `t` add a target to the selected alias
-- `e` edit the selected target
-- `d` delete the selected alias/target
+- `L` (shift-l) set/clear the alias-level token limit
+- `F` (shift-f) edit fusion_options for the selected alias (fusion aliases only)
+- `M` (shift-m) add a target to the selected alias
+- `E` (shift-e) edit the selected target
+- `D` (shift-d) delete the selected target
 - `r` reload config (clears the in-memory config cache and re-reads the config file, so external edits are picked up)
 - `T` (shift) open test model picker
 - `Ctrl+O` dump today's tokens data to log file
 - `Ctrl+C` quit the TUI
+
+> For fusion aliases (`fusion_options` is set), the `M`/`E` target prompts use `role <panel|judge|synth> [fusion <weight>]` instead of the usual `share [primary] [fallback]`. See [Editing fusion aliases in the TUI](#editing-fusion-aliases-in-the-tui) below.
 
 **Test custom model**: Press `T` to open the model picker. Each model shows its **category**, **upstream mode** (postfix only, e.g. `completions`/`messages`), and **base URL** (without `https://` prefix). Select a model and press Enter to send a test request — the result displays the response's `message`/`content`/`error` fields (IDs excluded).
 

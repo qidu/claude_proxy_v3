@@ -19,12 +19,13 @@ import {
   removeCompositeTargetFromDashboard,
   upsertCompositeAliasLimitFromDashboard,
   upsertCompositeTargetFromDashboard,
+  upsertFusionOptionsFromDashboard,
 } from './handlers/dashboard.js';
 import { buildHeatmap, renderHeatmapPanel } from './heatmap.js';
 import { dumpTodayTokens, TOKEN_LOG_FILE, getActiveRequestCount } from './utils/dashboard-stats.js';
 import type { Env } from './types/shared.js';
 import type { ConfigValidationError } from './utils/config-loader.js';
-import type { ProxyConfig } from './utils/config-loader.js';
+import type { ProxyConfig, FusionRole, FusionOptions } from './utils/config-loader.js';
 import { parseHumanTokenLimit, formatTokenLimit } from './utils/config-loader.js';
 
 const TEST_ENDPOINT = '/v1/messages';
@@ -79,7 +80,7 @@ function formatTestResultDetail(responseBody: unknown): string {
   return lines.length > 0 ? lines.join(' | ') : filterAndStringify(responseBody);
 }
 
-type CompositeTargetConfig = { share?: number; primary?: boolean; fallback?: number };
+type CompositeTargetConfig = { share?: number; primary?: boolean; fallback?: number; fusion?: number; role?: FusionRole };
 
 function sortCompositeTargets([aKey, aCfg]: [string, unknown], [bKey, bCfg]: [string, unknown]): number {
   const a = aCfg as CompositeTargetConfig;
@@ -95,6 +96,31 @@ function sortCompositeTargets([aKey, aCfg]: [string, unknown], [bKey, bCfg]: [st
   return aKey.localeCompare(bKey);
 }
 
+
+// Parse "role <panel|judge|synth> [fusion <weight>]" input for fusion targets.
+// Returns an error string on failure, or a patch object on success.
+function parseFusionTargetInput(value: string): { role?: FusionRole; fusion?: number } | string {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  const patch: { role?: FusionRole; fusion?: number } = {};
+  for (let i = 0; i < parts.length; i += 2) {
+    const k = parts[i];
+    const v = parts[i + 1];
+    if (v === undefined) return `Missing value for: ${k}`;
+    if (k === 'role') {
+      if (v !== 'panel' && v !== 'judge' && v !== 'synth') {
+        return 'Role must be panel, judge, or synth';
+      }
+      patch.role = v as FusionRole;
+    } else if (k === 'fusion') {
+      const n = Number(v);
+      if (!Number.isFinite(n) || n < 0) return 'Fusion weight must be a non-negative number';
+      patch.fusion = n;
+    } else {
+      return `Unknown key: ${k}. Use: role <panel|judge|synth> [fusion <weight>]`;
+    }
+  }
+  return patch;
+}
 
 function extractToolDetails(record: Record<string, unknown>): string[] {
   const details: string[] = [];
@@ -510,6 +536,10 @@ class CompositeAliasesOverlay implements Component, Focusable {
       this.app.openEditAliasLimitPrompt(selected.alias);
       return;
     }
+    if (matchesKey(data, 'f') && selected?.kind === 'alias') {
+      this.app.openEditFusionOptionsPrompt(selected.alias);
+      return;
+    }
     if (matchesKey(data, 'm')) {
       const alias = selected?.kind === 'alias' ? selected.alias : selected?.kind === 'target' ? selected.alias : undefined;
       if (alias) {
@@ -538,7 +568,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
   render(width: number): string[] {
     const snap = this.snapshot;
     const lines: string[] = [];
-    lines.push(`Esc ${dim('hide panel')}  A ${dim('add alias')} L ${dim('token limit')}  M ${dim('add target')}  E ${dim('edit')}  D ${dim('delete')} ↑↓ ${dim('move')} `);
+    lines.push(`Esc ${dim('hide panel')}  A ${dim('add alias')} L ${dim('token limit')}  F ${dim('fusion opts')}  M ${dim('add target')}  E ${dim('edit')}  D ${dim('delete')} ↑↓ ${dim('move')} `);
 
     if (!snap) {
       return frame('Edit Composite Aliases Config', [...lines, 'Loading…'], width).map((line) => clip(line, width));
@@ -552,7 +582,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
     for (const [alias, targets] of composites) {
       const selectedAlias = selected?.kind === 'alias' && selected.alias === alias;
       const prefix = selectedAlias ? green('▶') : dim('│');
-      const typedTargets = targets as { token_limit?: { num: number; duration: string } } | undefined;
+      const typedTargets = targets as { token_limit?: { num: number; duration: string }; fusion_options?: unknown } | undefined;
       const aliasLimit = typedTargets?.token_limit;
       const win = snap.compositeLimitWindows?.[alias];
       const windowUsed = win?.accumulator ?? 0;
@@ -560,8 +590,9 @@ class CompositeAliasesOverlay implements Component, Focusable {
       const aliasSummary = aliasLimit !== undefined && aliasLimit.num > 0
         ? ` ${dim(fmt(windowUsed))} ${dim('/')} ${dim(fmt(aliasLimit.num))}${dim(' (' + windowDuration + ')')}`
         : '';
-      lines.push(`  ${prefix} ${bold(alias)}${aliasSummary}`);
-      const entries = Object.entries(targets || {}).filter(([target]) => target !== 'token_limit');
+      const aliasTag = typedTargets?.fusion_options ? dim(' [F]') : dim(' [C]');
+      lines.push(`  ${prefix} ${bold(alias)}${aliasTag}${aliasSummary}`);
+      const entries = Object.entries(targets || {}).filter(([target]) => target !== 'token_limit' && target !== 'fusion_options');
       if (!entries.length) lines.push(`    ${dim('(empty)')}`);
       const targetRouteModel = new Map<string, string | undefined>();
       const resolvedAlias = snap.compositeResolved.find((r) => r.alias === alias);
@@ -573,8 +604,11 @@ class CompositeAliasesOverlay implements Component, Focusable {
       for (const [target, cfg] of entries.sort(sortCompositeTargets)) {
         const selectedTarget = selected?.kind === 'target' && selected.alias === alias && selected.target === target;
         const mark = selectedTarget ? green('▶') : dim('·');
-        const typedCfg = cfg as { share?: number; primary?: boolean; fallback?: number } | undefined;
-        const summary = `${typedCfg?.share ?? '-'}${typedCfg?.primary ? ' P' : ''}${typedCfg?.fallback === 0 ? ' non-FB' : typedCfg?.fallback !== undefined ? ` FB${typedCfg.fallback}` : ''}`;
+        const typedCfg = cfg as CompositeTargetConfig | undefined;
+        const isFusionTarget = typedCfg?.fusion !== undefined || typedCfg?.role !== undefined;
+        const summary = isFusionTarget
+          ? `${typedCfg?.role ?? 'panel'}${typedCfg?.fusion !== undefined ? `:${typedCfg.fusion}` : ''}`
+          : `${typedCfg?.share ?? '-'}${typedCfg?.primary ? ' P' : ''}${typedCfg?.fallback === 0 ? ' non-FB' : typedCfg?.fallback !== undefined ? ` FB${typedCfg.fallback}` : ''}`;
         const timingKey = targetRouteModel.get(target) ?? target;
         const timing = modelTimingMap.get(timingKey);
         const timingStr = timing ? ` ${dim('[')}${dim(fmtSeconds(timing.min_time_ms))}${dim('/')}${dim(fmtSeconds(timing.avg_time_ms))}${dim('/')}${dim(fmtSeconds(timing.max_time_ms))}${dim('s]')}` : '';
@@ -716,7 +750,7 @@ class DashboardView implements Component {
       const shownModels = customModels.slice(0, maxCustomModelRows);
       const hiddenCount = customModels.length - shownModels.length;
       for (const row of shownModels) {
-        const tag = row.category === 'composite' ? '[C]' : dim(titleCase(row.category));
+        const tag = row.category === 'fusion' ? '[F]' : row.category === 'composite' ? '[C]' : dim(titleCase(row.category));
         const extra = row.description ? ` ${dim(row.description)}` : '';
         const timing = modelTimingMap.get(row.routeModel ?? row.modelId);
         const timingStr = timing ? ` ${dim('[')}${dim(fmtSeconds(timing.min_time_ms))}${dim('/')}${dim(fmtSeconds(timing.avg_time_ms))}${dim('/')}${dim(fmtSeconds(timing.max_time_ms))}${dim('s]')}` : '';
@@ -781,7 +815,8 @@ class DashboardView implements Component {
         if (seen.has(alias.alias)) continue; // model with same name already added
         seen.add(alias.alias);
         const targets = alias.targets.map((t) => t.model || t.routeModel || '?').join(' · ');
-        models.push({ category: 'composite', modelId: alias.alias, description: `(${targets})` });
+        const isFusion = !!(snap.config.composite?.[alias.alias] as { fusion_options?: unknown } | undefined)?.fusion_options;
+        models.push({ category: isFusion ? 'fusion' : 'composite', modelId: alias.alias, description: `(${targets})` });
       }
     }
 
@@ -981,6 +1016,86 @@ class DashboardApp {
     );
   }
 
+  openEditFusionOptionsPrompt(alias: string): void {
+    const snapshot = this.viewSnapshot();
+    const cur = (snapshot?.config.composite?.[alias] as { fusion_options?: FusionOptions } | undefined)?.fusion_options ?? {};
+    const opts: FusionOptions = { ...cur };
+
+    // Step 5 of 5 — save
+    const save = async () => {
+      upsertFusionOptionsFromDashboard(this.source.env, alias, Object.keys(opts).length ? opts : null);
+      await this.refresh(true);
+      this.compositeOverlay?.focusAlias(alias);
+      this.view.setMessage(`updated ${alias} fusion_options`);
+      this.requestRender();
+    };
+
+    // Step 4/5: max_concurrent
+    const stepMaxConcurrent = () => {
+      const def = opts.max_concurrent !== undefined ? String(opts.max_concurrent) : '';
+      this.openPrompt(`[4/5] max_concurrent for ${alias}`, 'max parallel panel calls  (blank = all)', def, async (v) => {
+        const t = v.trim();
+        if (t === '') { delete opts.max_concurrent; } else {
+          const n = Number(t);
+          if (!Number.isFinite(n) || n < 1) { this.view.setMessage('Must be a number ≥ 1'); await this.refresh(); return; }
+          opts.max_concurrent = n;
+        }
+        await save();
+      });
+    };
+
+    // Step 3/5: expose_metadata
+    const stepExposeMetadata = () => {
+      const def = opts.expose_metadata !== undefined ? String(opts.expose_metadata) : '';
+      this.openPrompt(`[3/5] expose_metadata for ${alias}`, 'attach fusion_metadata to response  true / false  (blank = default true)', def, async (v) => {
+        const t = v.trim();
+        if (t === '') { delete opts.expose_metadata; }
+        else if (t === 'true') { opts.expose_metadata = true; }
+        else if (t === 'false') { opts.expose_metadata = false; }
+        else { this.view.setMessage('Must be true or false'); await this.refresh(); return; }
+        stepMaxConcurrent();
+      });
+    };
+
+    // Step 2/5: judge_required
+    const stepJudgeRequired = () => {
+      const def = opts.judge_required !== undefined ? String(opts.judge_required) : '';
+      this.openPrompt(`[2/5] judge_required for ${alias}`, 'abort if judge fails  true / false  (blank = default false)', def, async (v) => {
+        const t = v.trim();
+        if (t === '') { delete opts.judge_required; }
+        else if (t === 'true') { opts.judge_required = true; }
+        else if (t === 'false') { opts.judge_required = false; }
+        else { this.view.setMessage('Must be true or false'); await this.refresh(); return; }
+        stepExposeMetadata();
+      });
+    };
+
+    // Step 1/5: min_panel  (also sets panel_timeout_ms inline as step 1b)
+    const stepPanelTimeout = () => {
+      const def = opts.panel_timeout_ms !== undefined ? String(opts.panel_timeout_ms) : '';
+      this.openPrompt(`[1b/5] panel_timeout_ms for ${alias}`, 'per-panel wall-clock ms  (blank = default 60000)', def, async (v) => {
+        const t = v.trim();
+        if (t === '') { delete opts.panel_timeout_ms; } else {
+          const n = Number(t);
+          if (!Number.isFinite(n) || n <= 0) { this.view.setMessage('Must be a positive number'); await this.refresh(); return; }
+          opts.panel_timeout_ms = n;
+        }
+        stepJudgeRequired();
+      });
+    };
+
+    const def = opts.min_panel !== undefined ? String(opts.min_panel) : '';
+    this.openPrompt(`[1/5] min_panel for ${alias}`, 'min successful panel responses to proceed  (blank = default 1)', def, async (v) => {
+      const t = v.trim();
+      if (t === '') { delete opts.min_panel; } else {
+        const n = Number(t);
+        if (!Number.isFinite(n) || n < 1) { this.view.setMessage('Must be a number ≥ 1'); await this.refresh(); return; }
+        opts.min_panel = n;
+      }
+      stepPanelTimeout();
+    });
+  }
+
   openTargetPicker(alias: string): void {
     const choices = this.modelChoices();
     if (choices.length === 0) {
@@ -996,6 +1111,26 @@ class DashboardApp {
       choices,
       (item) => {
         this.hideOverlay();
+        const aliasConfig = this.viewSnapshot()?.config.composite?.[alias] as { fusion_options?: FusionOptions } | undefined;
+        const aliasFusion = !!aliasConfig?.fusion_options;
+        if (aliasFusion) {
+          this.openPrompt(`Add ${item.value} to ${alias} (fusion)`, 'role <panel|judge|synth> [fusion <weight>]', 'role panel fusion 1', async (value) => {
+            const patch = parseFusionTargetInput(value);
+            if (typeof patch === 'string') {
+              this.view.setMessage(patch);
+              await this.refresh();
+              this.compositeOverlay?.focusAlias(alias);
+              this.requestRender();
+              return;
+            }
+            upsertCompositeTargetFromDashboard(this.source.env, alias, item.value, patch);
+            await this.refresh(true);
+            this.compositeOverlay?.focusAlias(alias);
+            this.view.setMessage(`added ${item.value} to ${alias}`);
+            this.requestRender();
+          });
+          return;
+        }
         this.openPrompt(`Add ${item.value} to ${alias}`, 'input <share> <primary> <fallback>', '', async (value) => {
           const parts = value.trim().split(/\s+/).filter(Boolean);
           if (parts.length < 1 || parts.length > 3) {
@@ -1119,23 +1254,22 @@ class DashboardApp {
     usage: string;
     detail: string;
   } | null> {
-    // Strip [C] suffix if present
-    const actualModelId = modelId.endsWith(' [C]') ? modelId.slice(0, -4).trim() : modelId;
+    // Strip [C]/[F] suffix if present (used only for duplicate disambiguation in the picker)
+    const actualModelId = / \[[CF]\]$/.test(modelId) ? modelId.replace(/ \[[CF]\]$/, '').trim() : modelId;
     const port = this.source.env.PORT || '8788';
     const endpoint = `http://127.0.0.1:${port}${TEST_ENDPOINT}`;
     const snapshot = this.viewSnapshot();
 
-    // If [C] suffix: test as composite alias (resolve from compositeResolved)
-    // If no suffix: test as model (resolve from models.*)
+    // Always pass compositeResolved so composite/fusion aliases resolve correctly
+    // regardless of whether they share a name with a model entry.
     const modelConfig = snapshot
-      ? modelId.endsWith(' [C]')
-        ? resolveModelTestConfig(snapshot.config, actualModelId, snapshot.compositeResolved)
-        : resolveModelTestConfig(snapshot.config, actualModelId)
+      ? resolveModelTestConfig(snapshot.config, actualModelId, snapshot.compositeResolved)
       : undefined;
 
     const upstreamMode = modelConfig?.upstreamMode || 'openai-completions';
     const requestBody = buildTestToolRequest(upstreamMode);
-    const testLabel = modelId.endsWith(' [C]')
+    const isComposite = snapshot?.compositeResolved?.some((a) => a.alias === actualModelId) ?? false;
+    const testLabel = isComposite
       ? `${actualModelId} ${modelConfig?.targetUrl ? stripHttps(modelConfig.targetUrl) : '?'}`
       : actualModelId;
 
@@ -1271,6 +1405,27 @@ class DashboardApp {
   }
 
   openEditTargetPrompt(alias: string, target: string): void {
+    const aliasConfig = this.viewSnapshot()?.config.composite?.[alias] as { fusion_options?: FusionOptions } | undefined;
+    const isFusion = !!aliasConfig?.fusion_options;
+    if (isFusion) {
+      const current = this.viewSnapshot()?.config.composite?.[alias]?.[target] as CompositeTargetConfig | undefined;
+      const defaultValue = [
+        current?.role ? `role ${current.role}` : 'role panel',
+        current?.fusion !== undefined ? `fusion ${current.fusion}` : '',
+      ].filter(Boolean).join(' ');
+      this.openPrompt(`Edit ${alias}.${target} (fusion)`, 'role <panel|judge|synth> [fusion <weight>]', defaultValue, async (value) => {
+        const patch = parseFusionTargetInput(value);
+        if (typeof patch === 'string') {
+          this.view.setMessage(patch);
+          await this.refresh();
+          return;
+        }
+        upsertCompositeTargetFromDashboard(this.source.env, alias, target, patch);
+        this.view.setMessage(`updated ${alias}.${target}`);
+        await this.refresh(true);
+      });
+      return;
+    }
     this.openPrompt(`Edit ${alias}.${target}`, 'input <share> <primary> <fallback>', '', async (value) => {
       const parts = value.trim().split(/\s+/).filter(Boolean);
       if (parts.length < 1 || parts.length > 3) {
@@ -1451,25 +1606,27 @@ class DashboardApp {
     // Add composite aliases — if same name as a model, add with "[C]" suffix to differentiate
     if (snapshot.compositeResolved) {
       for (const alias of snapshot.compositeResolved) {
+        const isFusion = !!(snapshot.config.composite?.[alias.alias] as { fusion_options?: unknown } | undefined)?.fusion_options;
+        const modeTag = isFusion ? '[F]' : '[C]';
         const isDuplicate = seenNames.has(alias.alias);
+        const targets = alias.targets.map((t) => t.model || t.routeModel || '?').join('· ');
         if (isDuplicate) {
           // Same name already added as a model — add composite with [C] suffix to make value unique
           choices.push({
-            category: 'composite',
+            category: isFusion ? 'fusion' : 'composite',
             modelId: alias.alias,
             value: `${alias.alias} [C]`,
-            label: `${alias.alias} [C]`,
-            description: `${alias.targets.map((t) => t.model || t.routeModel || '?').join('· ')}`,
+            label: `${alias.alias} ${modeTag}`,
+            description: targets,
           });
         } else {
           seenNames.add(alias.alias);
-          const targets = alias.targets.map((t) => t.model || t.routeModel || '?').join('· ');
           choices.push({
-            category: 'composite',
+            category: isFusion ? 'fusion' : 'composite',
             modelId: alias.alias,
             value: alias.alias,
-            label: alias.alias,
-            description: `${targets}`,
+            label: `${alias.alias} ${modeTag}`,
+            description: targets,
           });
         }
       }

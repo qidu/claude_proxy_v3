@@ -71,6 +71,7 @@ TEST_TIMEOUT=60000 node testcases/04_models/models.test.js
 | `10_auth/` | Auth header flows (x-api-key, x-goog-api-key, Bearer, config priority) |
 | `11_responses/` | Responses API coverage (input_tokens, compact, openai-responses mode, documented limitations) |
 | `12_config_validation/` | Config schema validation via PUT /dashboard/api/config |
+| `13_fusion/` | Fusion composite alias (parallel fan-out → judge → synthesis) |
 | `utils/` | Shared test helpers |
 
 ## Test Files
@@ -127,6 +128,10 @@ TEST_TIMEOUT=60000 node testcases/04_models/models.test.js
 ### 12_config_validation
 
 - `config_validation.test.js` — Config schema validation via PUT /dashboard/api/config: config_errors shape, non-array model value rejected, non-object composite target rejected, 2-element model array rejected, 4-element model array rejected, non-boolean primary rejected, non-finite share/fallback/total_token_limit rejected, non-object composite target value rejected, empty composite target `{}` accepted, non-object models payload rejected, api_key in models payload rejected, empty composite alias `{}` round-trips (survives parse/serialize — the state right after adding an alias via the TUI before targets are chosen)
+
+### 13_fusion
+
+- `fusion.test.js` — Fusion composite alias: TC1301 alias discovery in dashboard, TC1302 non-streaming response shape (id/content/usage), TC1303 streaming SSE event sequence, TC1304 recursion guard (x-fusion-depth: 1 rejected), TC1305 min_panel enforcement (99 > actual panel size fails), TC1306 config round-trip (fusion_options + role survive PUT/GET), TC1307 no-judge degrade (judge_required: false proceeds to synth), TC1308 expose_metadata field present in non-streaming response
 
 ## Prerequisites
 
@@ -219,6 +224,12 @@ Tests run against a live proxy instance. The proxy must be started beforehand wi
 | File | Endpoints | Models Required | Features Required |
 |---|---|---|---|
 | `config_validation.test.js` | `GET /dashboard/api/config`, `PUT /dashboard/api/config` | none (validation is purely schema-level, no upstream calls) | Dashboard config read/write, config schema validation (array length, field types, api_key rejection) |
+
+#### `13_fusion`
+
+| File | Endpoints | Models Required | Features Required |
+|---|---|---|---|
+| `fusion.test.js` | `POST /v1/messages` (stream + non-stream), `GET /dashboard/api/config`, `PUT /dashboard/api/config` | `max-m3`, `max-m2.7-high` (or any two models available via the default upstream) | Fusion composite alias routing (fan-out, judge, synthesis), `fusion_options` config round-trip, recursion guard, `expose_metadata`, streaming SSE |
 
 ### Provider API Keys Required
 

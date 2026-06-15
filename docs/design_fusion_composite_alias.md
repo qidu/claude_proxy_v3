@@ -1,6 +1,6 @@
 # Design: `fusion` Composite Alias (Multi-Model Deliberation Router)
 
-Status: **Design only — no source modified.**
+Status: **Implemented** (`src/utils/config-loader.ts`, `src/index.ts`)
 Author: design doc
 Date: 2026-06-15
 Scope: Add a third composite alias *mode* (`fusion`) alongside the existing
@@ -155,6 +155,10 @@ export interface FusionOptions {
   panel_timeout_ms?: number; // per-panel-call wall clock (default 60000)
   judge_required?: boolean;  // if false, degrade to synth-without-judge (default false)
   expose_metadata?: boolean; // attach fusion_metadata to response (default true)
+  max_concurrent?: number;   // max simultaneous panel upstream calls per request
+                             // (default = panel size, i.e. full fan-out). Caps the
+                             // Promise.allSettled batch width to protect upstream
+                             // connection pools / rate limits. See §5.5.
 }
 
 export interface CompositeModelConfig {
@@ -166,42 +170,111 @@ export interface CompositeModelConfig {
 
 ### 3.1 TOML examples
 
-**Explicit roles (recommended, unambiguous):**
+All examples below use model aliases that exist in `proxy_config.toml`. Because
+TOML inline tables forbid duplicate keys, when the same physical upstream must
+serve two stages (e.g. judge and synth both on `opus48`) a thin role-alias is
+added to `[models.free]` (see §3.2).
+
+---
+
+**Example 1 — Minimal (2-panel, same upstream for judge+synth)**
 
 ```toml
+[models.free]
+# ...existing entries...
+opus48-judge = ["claude-opus-4-8", "", ""]   # role-alias: same upstream, distinct key
+
 [composite]
-"fusion" = { \
-  "opus48"      = { "role" = "panel" }, \
-  "max-m3"      = { "role" = "panel" }, \
-  "gemini-3.0-flash-preview" = { "role" = "panel" }, \
-  "opus46"      = { "role" = "judge" }, \
-  "opus48"      = { "role" = "synth" }, \
-  "fusion_options" = { "min_panel" = 2, "panel_timeout_ms" = 90000 } \
-}
+"fusion-min" = {"opus46": {"role": "panel"}, "fable5": {"role": "panel"}, "opus48-judge": {"role": "judge"}, "opus48": {"role": "synth"}, "fusion_options": {"min_panel": 1, "panel_timeout_ms": 60000}}
 ```
 
-> Note: TOML cannot repeat the same key (`opus48`) inside one inline table. When
-> the same physical model must play two stages, use a distinct *composite-local
-> alias* per role (see §3.2).
+Cost ≈ 4× a single call. Good for: light-weight deliberation on complex
+questions where a second opinion from a different Anthropic model adds value.
 
-**Weight-driven (panel auto-selected by `fusion > 0`):**
+---
+
+**Example 2 — Provider-diverse panel (max epistemic diversity)**
+
+Three different providers as panelists — different RLHF/architecture — maximises
+blind-spot detection. `max_concurrent: 3` equals the panel size (full parallel
+fan-out), stated explicitly for documentation clarity.
 
 ```toml
+[models.free]
+opus48-synth = ["claude-opus-4-8", "", ""]
+
 [composite]
-"fusion-lite" = { \
-  "max-m3"        = { "fusion" = 1 }, \
-  "max-m2.7-high" = { "fusion" = 1 }, \
-  "opus48"        = { "fusion" = 1, "role" = "judge" }, \
-  "fable5"        = { "role" = "synth" } \
-}
+"fusion-diverse" = {"opus46": {"role": "panel"}, "deepseek-v4-flash": {"role": "panel"}, "gemini-3.0-flash-preview": {"role": "panel"}, "opus48": {"role": "judge"}, "opus48-synth": {"role": "synth"}, "fusion_options": {"min_panel": 2, "panel_timeout_ms": 90000, "max_concurrent": 3}}
 ```
+
+Cost ≈ 5×. Good for: research questions, compare/contrast, factually disputed
+topics.
+
+---
+
+**Example 3 — Cost-controlled with `max_concurrent`**
+
+Six-model panel (all cheap Anthropic models) batched 2-at-a-time to protect
+upstream rate limits. Strong model handles judge+synth.
+
+```toml
+[models.free]
+sonnet46-b = ["claude-sonnet-4-6", "", ""]
+fable5-b   = ["claude-fable-5",    "", ""]
+opus48-j   = ["claude-opus-4-8",   "", ""]
+
+[composite]
+"fusion-wide" = {"sonnet45": {"role": "panel"}, "sonnet46": {"role": "panel"}, "sonnet46-b": {"role": "panel"}, "fable5": {"role": "panel"}, "fable5-b": {"role": "panel"}, "opus48-j": {"role": "judge"}, "opus48": {"role": "synth"}, "fusion_options": {"min_panel": 3, "panel_timeout_ms": 120000, "max_concurrent": 2, "expose_metadata": true}}
+```
+
+`max_concurrent: 2` serialises the 6 panels into 3 batches of 2, trading ≈2×
+latency for bounded connection pressure. Good for: broad coverage when upstream
+rate limits are tight.
+
+---
+
+**Example 4 — Degradation-tolerant (judge optional)**
+
+Judge can be skipped without failing the request. Synthesis falls back to raw
+panel responses (§6 degradation ladder).
+
+```toml
+[models.free]
+minimax-m3-j = ["MiniMax-M3", "https://api.minimaxi.com/anthropic", "sk-cp-..."]
+
+[composite]
+"fusion-resilient" = {"opus46": {"role": "panel"}, "minimax-m3": {"role": "panel"}, "max-m3": {"role": "panel"}, "minimax-m3-j": {"role": "judge"}, "opus48": {"role": "synth"}, "fusion_options": {"min_panel": 1, "judge_required": false, "panel_timeout_ms": 45000, "expose_metadata": true}}
+```
+
+Good for: interactive use where you still want deliberation but cannot afford a
+hard failure if the judge errors or rate-limits.
+
+---
+
+**Example 5 — Weight-driven (`fusion` field instead of explicit `role`)**
+
+Alternative syntax: any target with `fusion > 0` (and no `role`) becomes a
+panelist. Useful when you want to later support weighted panel selection without
+changing the config key names. `fusion` weight currently only marks membership
+(all positive-weight targets run once); the value is reserved for future
+weighted-selection extension.
+
+```toml
+[models.free]
+opus48-s = ["claude-opus-4-8", "", ""]
+
+[composite]
+"fusion-weighted" = {"deepseek-v4-flash": {"fusion": 2}, "fable5": {"fusion": 1}, "gemini-3.0-flash-preview": {"fusion": 1}, "opus48": {"role": "judge"}, "opus48-s": {"role": "synth"}, "fusion_options": {"min_panel": 2, "max_concurrent": 2}}
+```
+
+---
 
 Resolution rules:
-- targets with `role: panel` **or** `fusion > 0` (and no other role) → **panel**;
-- exactly one `role: judge` → judge (if absent, see §6 fallback);
-- exactly one `role: synth` → synth (if absent, defaults to the judge target,
-  then to the first panel target);
-- `share`/`fallback`/`primary` are **ignored** in fusion mode (documented; a
+- targets with `role: "panel"` **or** `fusion > 0` (and no other `role`) → **panel**;
+- exactly one `role: "judge"` → judge (if absent, see §6 degradation);
+- exactly one `role: "synth"` → synth (if absent, defaults to judge target,
+  then to first panel target);
+- `share`/`fallback`/`primary` are **ignored** in fusion mode (a
   config-validation warning is emitted).
 
 ### 3.2 Distinct-alias-per-role pattern
@@ -387,6 +460,79 @@ partial-coverage points; surface unique insights as minority views; explicitly
 name blind spots. Write naturally — do not echo the JSON.
 ```
 
+### 5.5 Concurrency: does a fusion request block other incoming requests?
+
+**No.** A single fusion request does not prevent the proxy from accepting and
+serving other requests concurrently, provided it is written with the async
+patterns in §5.1. The reasoning is grounded in this proxy's runtime model:
+
+**1. The runtime is single-threaded but non-blocking.** Both deployment targets
+— Cloudflare Workers and the Node adapter (`src/server.ts`) — run on an event
+loop. While a fusion request `await`s upstream responses, the event loop is free
+to accept and dispatch other requests. Fan-out work is **network I/O, not CPU**,
+so it yields control during every wait.
+
+**2. `Promise.allSettled` fan-out is cooperative, not blocking.** In §5.1:
+
+```
+settled = await Promise.allSettled(panelAttempts.map(a => withTimeout(runAttempt(a), ...)))
+```
+
+The `await` suspends **only the fusion request's own handler**. The N concurrent
+upstream calls are in-flight network operations; every *other* in-flight request
+continues progressing on the same loop. This is exactly how the existing
+sequential retry loop (`index.ts:1088`) already `await`s `runAttempt` today — one
+request awaiting an upstream never freezes the others. Fusion just awaits N calls
+at once instead of one at a time.
+
+**So a single fusion request consumes only its own async "slot."** Cross-request
+impact is therefore *quantitative* (resource pressure), not *blocking*:
+
+- **Resource limits, not serialization.** A fusion call opens `N+2` upstream
+  connections vs. `1`. Under high concurrency this pressures connection pools,
+  upstream rate limits, and (on Workers) the per-invocation simultaneous-subrequest
+  cap. These **throttle the fusion request itself** — they do not serialize other
+  requests. The new `max_concurrent` option (§3, §5.1) bounds the panel batch
+  width to keep this pressure in check.
+- **Cloudflare Workers CPU-time cap.** Workers bill on CPU time, not wall-clock;
+  `await`ing upstreams does **not** count against the CPU budget. The long
+  wall-clock of a fusion pipeline (max(panel) + judge + synth) will not trip the
+  CPU limit. The `allSettled` waiting time is free.
+
+#### ⚠️ CPU caveat — the one real stall risk
+
+The only place a fusion request can briefly delay *all* other requests is the
+**synchronous aggregation step** between stages (§5.1):
+
+- `JSON.parse`-ing each buffered panel response body, and
+- string-concatenating them into the judge prompt (§5.3 / §5.4 templates).
+
+On a single-threaded event loop, a large synchronous `JSON.parse` / string build
+occupies the loop and *cannot* be interrupted — every other request waits until
+it finishes. With `N ≤ 8` panel responses of normal completion size this is
+negligible (low single-digit milliseconds), but it scales with **panel size ×
+response length**. Mitigations baked into the design:
+
+- keep aggregation lean — pass panel bodies as already-parsed objects where
+  possible rather than re-parsing/re-stringifying repeatedly;
+- cap panel breadth via `max_concurrent` and panel-size validation (§9);
+- if very large panel outputs are expected, truncate/summarize per-panel content
+  before concatenation rather than feeding raw multi-MB bodies to the judge.
+
+This caveat is about CPU-bound aggregation only; the network fan-out itself is
+fully non-blocking.
+
+#### `max_concurrent` semantics
+
+`fusion_options.max_concurrent` (default = panel size) caps how many panel
+upstream calls are *in flight simultaneously*. When the panel is larger than
+`max_concurrent`, `runFusion` dispatches the panel in sequential batches of that
+width (a simple windowed `allSettled`), trading a little latency for bounded
+upstream/connection pressure. It does **not** change correctness, the
+degradation ladder (§6), or token accounting (§8) — only the fan-out width. Note
+it bounds upstream connection pressure, **not** the aggregation-CPU caveat above,
+which is governed by total panel size and response length.
+
 ---
 
 ## 6. Failure handling & graceful degradation
@@ -476,7 +622,9 @@ Config validation (`config-loader.ts:803`) should additionally:
   (ignored in fusion mode);
 - error when an alias has `role: panel` targets but zero, or >1, `role: judge`
   without a defined fallback;
-- error when `min_panel > panel target count`.
+- error when `min_panel > panel target count`;
+- error when `max_concurrent < 1`; warn (and clamp) when
+  `max_concurrent > panel target count` since it cannot exceed the panel size.
 
 ---
 
@@ -494,19 +642,37 @@ Config validation (`config-loader.ts:803`) should additionally:
 
 ---
 
-## 11. Implementation surface (when greenlit)
+## 11. Implementation surface
 
-Ordered, minimal-diff plan. **Not executed in this doc.**
+Implemented in two files:
 
-1. `config-loader.ts`: extend `CompositeTargetConfig` + `CompositeModelConfig`;
-   add `resolveFusionPlan` + `getCompositeAliasMode`; extend serializer
-   (`:710`) and validator (`:803`) and `parseCompositeModelConfig` (`:547`).
-2. `index.ts`: factor the candidate-building block (`:708`) into a reusable
-   `buildRouteAttempt(target, body, path, …)`; add the fusion branch + `runFusion`
-   orchestrator using `Promise.allSettled`; add `x-fusion-depth` handling.
-3. `dashboard.ts`: surface `role` / `fusion` / `fusion_options` in the editor.
-4. Tests under `testcases/09_composite/`: panel fan-out, judge JSON enforcement,
-   degradation ladder, recursion cap, mixed-provider panel, token_limit summing.
+1. **`src/utils/config-loader.ts`** — types, TOML parsing, resolution:
+   - `FusionRole`, `FusionOptions`, `FusionPlan` types added
+   - `CompositeTargetConfig` extended with `fusion?: number`, `role?: FusionRole`
+   - `CompositeModelConfig` extended with `fusion_options?: FusionOptions`
+   - `getCompositeAliasMode()` — discriminates `'fusion' | 'fallback' | 'share' | undefined`
+   - `resolveFusionPlan()` — builds `FusionPlan` from config; reuses existing `resolveModelRouteFromConfig`
+   - `parseCompositeTargetConfig` extended to parse `fusion` and `role` fields from TOML
+   - `parseCompositeModelConfig` extended to parse `fusion_options` block
+   - `serializeCompositeTargetConfig` extended to serialize `fusion` and `role`
+   - `serializeCompositeModelConfig` extended to serialize `fusion_options`
+   - `sanitizeCompositeConfig` extended to preserve `fusion`, `role`, `fusion_options`
+   - `validateAndNormalizeComposite` extended to accept and validate `fusion`, `role`, `fusion_options`
+   - `validateProxyConfig` extended to warn on `share`/`fallback` + fusion coexistence
+
+2. **`src/index.ts`** — execution orchestration:
+   - `buildRouteAttempt()` helper factored from the existing `:708` inline block
+   - Import of `resolveFusionPlan`, `getCompositeAliasMode`, `FusionPlan` from config-loader
+   - `runFusion()` orchestrator: `Promise.allSettled` panel fan-out with `max_concurrent` windowing,
+     judge with structured JSON prompt, synthesis (streams to client), full degradation ladder,
+     `x-fusion-depth` recursion guard, per-stage stats + token accounting
+   - Fusion branch inserted at `:682` before existing `compositeCandidates` path
+
+3. **`dashboard.ts`** — not yet updated (§9 items remain TODO):
+   `role`, `fusion`, `fusion_options` fields are parsed/serialized/validated but not
+   yet surfaced in the dashboard editor UI.
+
+4. **Tests** (`testcases/09_composite/`) — not yet added.
 
 ---
 
