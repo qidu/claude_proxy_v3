@@ -21,6 +21,7 @@ export interface ProxyConfig {
     budget_to_effort_low?: number | string;
     budget_to_effort_medium?: number | string;
     budget_to_effort_high?: number | string;
+    global_token_limit?: string;
   };
   models?: Record<string, ModelCategoryConfig | ModelArrayConfig>;
   composite?: Record<string, CompositeModelConfig>;
@@ -1317,6 +1318,7 @@ export interface DashboardConfigPayload {
   models: Record<string, DashboardModelCategoryConfig>;
   composite: Record<string, CompositeModelConfig>;
   config_errors: ConfigValidationError[];
+  global_token_limit?: string;
 }
 
 function sanitizeDashboardCategoryConfig(categoryConfig: ModelCategoryConfig): DashboardModelCategoryConfig {
@@ -1424,6 +1426,7 @@ export function toDashboardConfigPayload(config: ProxyConfig): DashboardConfigPa
     models,
     composite: sanitizeCompositeConfig(config.composite),
     config_errors: (config as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors ?? [],
+    global_token_limit: config.upstream?.global_token_limit,
   };
 }
 
@@ -1753,6 +1756,22 @@ export function upsertCompositeAliasLimit(
     existingTargets.token_limit = { num, duration: duration as TokenLimitDuration };
   }
 
+  return nextConfig;
+}
+
+export function upsertGlobalTokenLimit(
+  baseConfig: ProxyConfig,
+  rawLimit: string | null,
+): ProxyConfig {
+  const nextConfig: ProxyConfig = {
+    ...baseConfig,
+    upstream: { ...baseConfig.upstream },
+  };
+  if (rawLimit === null || rawLimit.trim() === '') {
+    delete nextConfig.upstream!.global_token_limit;
+  } else {
+    nextConfig.upstream!.global_token_limit = rawLimit.trim();
+  }
   return nextConfig;
 }
 

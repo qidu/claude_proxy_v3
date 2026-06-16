@@ -123,6 +123,27 @@ upstream_mode = "openai-completions"
 
 **Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `token_limit` across all of its targets.
 
+#### Global token limit
+
+A global token limit applies to **all requests** regardless of model. Configure it in the `[upstream]` section:
+
+```toml
+[upstream]
+global_token_limit = "1.1b 1d"   # 1.1 billion tokens per day
+```
+
+Format: `<num>[k|m|b|t] <1h|1d|1w|1m>` — e.g. `50k 1h`, `1.5m 1d`, `1.1b 1w`. Once the rolling-window total reaches the limit, all incoming requests return **HTTP 429** until the window expires.
+
+The TUI shows the current window total alongside the limit in the Tokens Panel header:
+
+```
+Tokens Panel [572.9M L 1.1b/1d]
+```
+
+The `L limit/duration` indicator turns yellow at ≥80% and red at ≥100%. Press `l` in the main TUI view to set or clear the global limit interactively.
+
+The global limit is checked first on every request, before any alias-level `token_limit` check.
+
 #### Composite aliases
 
 ```toml
@@ -133,7 +154,7 @@ upstream_mode = "openai-completions"
 ```
 
 Composite behavior:
-- `token_limit`: time-bounded token cap for the alias. Format: `{"num": <number>, "duration": "1h"|"1d"|"1w"|"1m"}`. The proxy tracks accumulated tokens in a sliding window; once the window total reaches `num`, subsequent requests return **HTTP 413** and are not forwarded upstream. The window resets automatically after `duration` expires. Durations: `1h` (1 hour), `1d` (1 day), `1w` (1 week), `1m` (1 month). If `token_limit` is omitted, no limit is enforced. The limit counter and window state are persisted in the token log and restored on proxy restart (if the window hasn't expired). On TUI and dashboard, enter limits as `<num>[k|m|b|t]> <1h|1d|1w|1m>` — e.g. `50k 1d`, `1.5m 1h`, `100000 1w`.
+- `token_limit`: time-bounded token cap for the alias. Format: `{"num": <number>, "duration": "1h"|"1d"|"1w"|"1m"}`. The proxy tracks accumulated tokens in a sliding window; once the window total reaches `num`, subsequent requests return **HTTP 429** and are not forwarded upstream. The window resets automatically after `duration` expires. Durations: `1h` (1 hour), `1d` (1 day), `1w` (1 week), `1m` (1 month). If `token_limit` is omitted, no limit is enforced. The limit counter and window state are persisted in the token log and restored on proxy restart (if the window hasn't expired). On TUI and dashboard, enter limits as `<num>[k|m|b|t]> <1h|1d|1w|1m>` — e.g. `50k 1d`, `1.5m 1h`, `100000 1w`.
 - `primary: true`: always try this target first, then fail over to others (ignores `share`).
 - `fallback: N`: lower number = higher retry priority when primary is absent (ignores `share`). Use `0` to disable fallback for that target; the UI shows this as `no FB`.
 - `share`: when no `primary`/`fallback` is set, each request picks a target via **weighted random selection**. Total weight = sum of all targets' `share` (defaults to 1 if unset). Each request independently rolls the dice — e.g. `{"a": {"share": 70}, "b": {"share": 30}}` routes ~70% of requests to a and ~30% to b. Set `share: 0` to exclude a target from random selection.
@@ -332,22 +353,26 @@ The TUI shows live:
 - **Custom Models**: configured models with live response time (min/avg/max in seconds) shown as `[min/avg/maxs]` after each model, keyed by resolved route model name
 - model token stats
 - combined tool usage stats by tool (`req` aggregates across UA prefixes; `resp` is by tool)
-- composite alias summaries with live token usage (`used / limit (duration)` for aliases with `token_limit`) and per-target response time
-- `T` set/clear the alias-level token limit (format: `<num>[k|m|b|t]> <1h|1d|1w|1m>`, e.g. `50k 1d`, `1.5m 1h`, blank clears)
+- composite alias summaries with live token usage (`used / L limit/duration` for aliases with `token_limit`) and per-target response time
+- `Tokens Panel [total L limit/duration]` — shows rolling-window token total alongside the global limit; turns yellow at ≥80%, red at ≥100%
 - `Top Models` shows just the model id suffix, not the full routed upstream string
 
-Keyboard shortcuts:
+Keyboard shortcuts (main view):
+- `c` open composite alias editor
+- `t` open test model picker
+- `r` reload config
+- `l` set/clear the **global** token limit (applies to all models; format: `<num>[k|m|b|t]> <1h|1d|1w|1m>`, e.g. `1.1b 1d`, `50k 1h`, blank clears)
+- `Ctrl+U` dump today's tokens to log file
+- `Ctrl+C` quit
+
+Keyboard shortcuts (composite alias editor):
 - `↑/↓` or `j/k` to move
 - `a` add a composite alias
-- `L` (shift-l) set/clear the alias-level token limit
+- `L` (shift-l) set/clear the **alias-level** token limit (format: `<num>[k|m|b|t]> <1h|1d|1w|1m>`, e.g. `50k 1d`, `1.5m 1h`, blank clears)
 - `F` (shift-f) edit fusion_options for the selected alias (fusion aliases only)
 - `M` (shift-m) add a target to the selected alias
 - `E` (shift-e) edit the selected target
 - `D` (shift-d) delete the selected target
-- `r` reload config (clears the in-memory config cache and re-reads the config file, so external edits are picked up)
-- `T` (shift) open test model picker
-- `Ctrl+O` dump today's tokens data to log file
-- `Ctrl+C` quit the TUI
 
 > For fusion aliases (`fusion_options` is set), the `M`/`E` target prompts use `panel|judge|synth [weight]` instead of the usual `share [primary] [fallback]`. See [Editing fusion aliases in the TUI](#editing-fusion-aliases-in-the-tui) below.
 

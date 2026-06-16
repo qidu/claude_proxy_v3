@@ -20,9 +20,10 @@ import {
   upsertCompositeAliasLimitFromDashboard,
   upsertCompositeTargetFromDashboard,
   upsertFusionOptionsFromDashboard,
+  upsertGlobalTokenLimitFromDashboard,
 } from './handlers/dashboard.js';
 import { buildHeatmap, renderHeatmapPanel } from './heatmap.js';
-import { dumpTodayTokens, TOKEN_LOG_FILE, getActiveRequestCount } from './utils/dashboard-stats.js';
+import { dumpTodayTokens, TOKEN_LOG_FILE, getActiveRequestCount, getTokensInWindow } from './utils/dashboard-stats.js';
 import type { Env } from './types/shared.js';
 import type { ConfigValidationError } from './utils/config-loader.js';
 import type { ProxyConfig, FusionRole, FusionOptions } from './utils/config-loader.js';
@@ -596,7 +597,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
       const windowUsed = win?.accumulator ?? 0;
       const windowDuration = win ? win.duration : (aliasLimit?.duration ?? '');
       const aliasSummary = aliasLimit !== undefined && aliasLimit.num > 0
-        ? ` ${dim(fmt(windowUsed))} ${dim('/')} ${dim(fmt(aliasLimit.num))}${dim(' (' + windowDuration + ')')}`
+        ? ` ${dim(fmt(windowUsed))} ${dim('/')} ${dim('L')} ${dim(fmt(aliasLimit.num) + '/' + windowDuration)}`
         : '';
       const aliasTag = typedTargets?.fusion_options ? dim(' [F]') : dim(' [C]');
       lines.push(`  ${prefix} ${bold(alias)}${aliasTag}${aliasSummary}`);
@@ -709,6 +710,10 @@ class DashboardView implements Component {
       this.app.openCompositeAliasesOverlay();
       return;
     }
+    if (matchesKey(data, 'l')) {
+      void this.app.openEditGlobalTokenLimitPrompt();
+      return;
+    }
   }
 
   render(width: number): string[] {
@@ -743,13 +748,34 @@ class DashboardView implements Component {
     } else if (this.configStatus === 'saved') {
       configIndicator = lightBlue('(saved)');
     } else {
-      configIndicator = snap.config.read_only ? yellow('(read-only)') : cyan('(writable)');
+      configIndicator = snap.config.read_only ? yellow('(read-only)') : dim('(unchanged)');
     }
     lines.push(`${dim('Config:')} ${dim(snap.config.config_path ?? 'memory')} ${configIndicator}${((snap.config as unknown as { config_errors?: unknown[] }).config_errors?.length ?? 0) > 0 ? red(` (${(snap.config as unknown as { config_errors: unknown[] }).config_errors.length} errors)`) : ''}`);
     const tokenHeatmap = buildHeatmap(snap.tokenHeatmap);
     const heatmapRowFilter = termRows < 40 ? [1, 3, 5] : undefined; // show Mon/Wed/Fri in small terminals
     const tokenHeatmapLines = renderHeatmapPanel(tokenHeatmap, { title: 'Tokens Panel', rowFilter: heatmapRowFilter }).split('\n');
-    tokenHeatmapLines[0] = `${bold('Tokens Panel')} (${fmt(tokenHeatmap.totalValues)})`;
+    const globalLimit = snap.config.global_token_limit;
+    const globalLimitDisplay = globalLimit ? globalLimit.trim().replace(/\s+/, '/') : '';
+    let globalLimitSuffix = '';
+    if (globalLimitDisplay) {
+      const parsedGlobal = globalLimit ? parseHumanTokenLimit(globalLimit.trim()) : null;
+      let windowMs = 7 * 24 * 60 * 60 * 1000; // default: 1w
+      if (parsedGlobal) {
+        if (parsedGlobal.duration === '1h') windowMs = 60 * 60 * 1000;
+        else if (parsedGlobal.duration === '1d') windowMs = 24 * 60 * 60 * 1000;
+        else if (parsedGlobal.duration === '1w') windowMs = 7 * 24 * 60 * 60 * 1000;
+        else if (parsedGlobal.duration === '1m') windowMs = 30 * 24 * 60 * 60 * 1000;
+      }
+      const windowTotal = getTokensInWindow(windowMs);
+      let limitColor: (s: string) => string = dim;
+      if (parsedGlobal && parsedGlobal.num > 0) {
+        const ratio = windowTotal / parsedGlobal.num;
+        if (ratio >= 1) limitColor = red;
+        else if (ratio >= 0.8) limitColor = yellow;
+      }
+      globalLimitSuffix = ` ${limitColor('L')} ${limitColor(globalLimitDisplay)}]`;
+    }
+    tokenHeatmapLines[0] = `${bold('Tokens Panel')} [${fmt(tokenHeatmap.totalValues)}${globalLimitSuffix}`;
     lines.push(...tokenHeatmapLines);
     lines.push('');
     const customModels = this.customModels();
@@ -798,7 +824,7 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(`C ${dim('edit composite')}  T ${dim('test models')}  R ${dim('reload config')}  Ctrl+U ${dim('dump usage')}  Ctrl+C ${dim('quit')}`);
+    lines.push(`C ${dim('edit composite')}  T ${dim('test models')}  R ${dim('reload config')}  L ${dim('token limit')}  Ctrl+U ${dim('dump usage')}  Ctrl+C ${dim('quit')}`);
     lines.push(this.message ? yellow(this.message) : dim('Ready'));
 
     return lines.map((line) => clip(line, width));
@@ -918,7 +944,7 @@ class DashboardApp {
     this.renderTimer = setTimeout(() => {
       this.renderPending = false;
       const inflight = getActiveRequestCount();
-      stdout.write(inflight > 0 ? '\x1b]0;Proxy \u25cf\x07' : '\x1b]0;Proxy\x07');
+      stdout.write(inflight > 0 ? '\x1b]0;Proxy \u25cf\x07' : '\x1b]0;Proxy V3\x07');
       this.tui.requestRender();
     }, 100);
   }
@@ -997,7 +1023,7 @@ class DashboardApp {
       ? `${formatTokenLimit(current.num)} ${current.duration}`
       : '';
     this.openPrompt(
-      `Token limit for ${alias}`,
+      `Token limit for ${bold(alias)}`,
       'Format: <num[k|m|b|t]> <1h|1d|1w|1m>  (e.g. 50k 1d, 1.5m 1h, 100000 1w)  blank clears',
       defaultValue,
       async (value) => {
@@ -1027,6 +1053,38 @@ class DashboardApp {
     );
   }
 
+  openEditGlobalTokenLimitPrompt(): void {
+    const snapshot = this.viewSnapshot();
+    const current = snapshot?.config.global_token_limit;
+    const defaultValue = current ?? '';
+    this.openPrompt(
+      `${bold('Global')} token limit`,
+      'Format: <num[k|m|b|t]> <1h|1d|1w|1m>  (e.g. 1.1b 1d, 50k 1h)  blank clears',
+      defaultValue,
+      async (value) => {
+        const trimmed = value.trim();
+        if (trimmed.length === 0) {
+          upsertGlobalTokenLimitFromDashboard(this.source.env, null);
+          await this.refresh(true);
+          this.view.setMessage('cleared global token limit');
+          this.requestRender();
+          return;
+        }
+        const parsed = parseHumanTokenLimit(trimmed);
+        if (!parsed) {
+          this.view.setMessage('Invalid. Use: <num> <1h|1d|1w|1m>  e.g. 1.1b 1d');
+          await this.refresh();
+          this.requestRender();
+          return;
+        }
+        upsertGlobalTokenLimitFromDashboard(this.source.env, trimmed);
+        await this.refresh(true);
+        this.view.setMessage(`global token limit: ${formatTokenLimit(parsed.num)} ${parsed.duration}`);
+        this.requestRender();
+      },
+    );
+  }
+
   openEditFusionOptionsPrompt(alias: string): void {
     const snapshot = this.viewSnapshot();
     const cur = (snapshot?.config.composite?.[alias] as { fusion_options?: FusionOptions } | undefined)?.fusion_options ?? {};
@@ -1044,7 +1102,7 @@ class DashboardApp {
     // Step 4/5: max_concurrent
     const stepMaxConcurrent = () => {
       const def = opts.max_concurrent !== undefined ? String(opts.max_concurrent) : '';
-      this.openPrompt(`[4/5] max_concurrent for ${alias}`, 'max parallel panel calls  (blank = all)', def, async (v) => {
+      this.openPrompt(`Step 4/5 max_concurrent for ${bold(alias)}`, 'max parallel panel calls  (blank = all)', def, async (v) => {
         const t = v.trim();
         if (t === '') { delete opts.max_concurrent; } else {
           const n = Number(t);
@@ -1058,7 +1116,7 @@ class DashboardApp {
     // Step 3/5: expose_metadata
     const stepExposeMetadata = () => {
       const def = opts.expose_metadata !== undefined ? String(opts.expose_metadata) : '';
-      this.openPrompt(`[3/5] expose_metadata for ${alias}`, 'attach fusion_metadata to response  true / false  (blank = default true)', def, async (v) => {
+      this.openPrompt(`Step 3/5 expose_metadata for ${bold(alias)}`, 'attach fusion_metadata to response  true / false  (blank = default true)', def, async (v) => {
         const t = v.trim();
         if (t === '') { delete opts.expose_metadata; }
         else if (t === 'true') { opts.expose_metadata = true; }
@@ -1071,7 +1129,7 @@ class DashboardApp {
     // Step 2/5: judge_required
     const stepJudgeRequired = () => {
       const def = opts.judge_required !== undefined ? String(opts.judge_required) : '';
-      this.openPrompt(`[2/5] judge_required for ${alias}`, 'abort if judge fails  true / false  (blank = default false)', def, async (v) => {
+      this.openPrompt(`Step 2/5 judge_required for ${bold(alias)}`, 'abort if judge fails  true / false  (blank = default false)', def, async (v) => {
         const t = v.trim();
         if (t === '') { delete opts.judge_required; }
         else if (t === 'true') { opts.judge_required = true; }
@@ -1084,7 +1142,7 @@ class DashboardApp {
     // Step 1/5: min_panel  (also sets panel_timeout_ms inline as step 1b)
     const stepPanelTimeout = () => {
       const def = opts.panel_timeout_ms !== undefined ? String(opts.panel_timeout_ms) : '';
-      this.openPrompt(`[1b/5] panel_timeout_ms for ${alias}`, 'per-panel wall-clock ms  (blank = default 60000)', def, async (v) => {
+      this.openPrompt(`Step 1b/5 panel_timeout_ms for ${bold(alias)}`, 'per-panel wall-clock ms  (blank = default 60000)', def, async (v) => {
         const t = v.trim();
         if (t === '') { delete opts.panel_timeout_ms; } else {
           const n = Number(t);
@@ -1096,7 +1154,7 @@ class DashboardApp {
     };
 
     const def = opts.min_panel !== undefined ? String(opts.min_panel) : '';
-    this.openPrompt(`[1/5] min_panel for ${alias}`, 'min successful panel responses to proceed  (blank = default 1)', def, async (v) => {
+    this.openPrompt(`Step 1/5 min_panel for ${bold(alias)}`, 'min successful panel responses to proceed  (blank = default 1)', def, async (v) => {
       const t = v.trim();
       if (t === '') { delete opts.min_panel; } else {
         const n = Number(t);
@@ -1247,7 +1305,7 @@ class DashboardApp {
 
   async runModelTest(modelId: string): Promise<void> {
     const displayId = / \[[CF]\]$/.test(modelId) ? modelId.replace(/ \[[CF]\]$/, '').trim() : modelId;
-    this.view.setMessage(`testing ${displayId}…`, -1);
+    this.view.setMessage(`testing ${displayId} …`, -1);
     this.requestRender();
     const result = await this.executeModelTest(modelId);
     if (!result) return;
@@ -1355,7 +1413,7 @@ class DashboardApp {
   }
 
   // Run a test against every custom model in sequence. Composes a single
-  // progress line (`testing 3/12 — code-small...`) that updates per model.
+  // progress line (`testing 3/12 — code-small ...`) that updates per model.
   async runAllCustomModelTests(opts: { announce?: boolean } = {}): Promise<void> {
     if (this.modelTestInProgress) {
       this.view.setMessage('test-all already in progress');
@@ -1430,7 +1488,7 @@ class DashboardApp {
         current?.role ?? 'panel',
         current?.fusion !== undefined ? String(current.fusion) : '',
       ].filter(Boolean).join(' ');
-      this.openPrompt(`Edit ${alias}.${target} (fusion)`, 'panel|judge|synth [weight]', defaultValue, async (value) => {
+      this.openPrompt(`Edit ${alias}.${bold(target)} (fusion)`, 'panel|judge|synth [weight]', defaultValue, async (value) => {
         const patch = parseFusionTargetInput(value);
         if (typeof patch === 'string') {
           this.view.setMessage(patch);
@@ -1443,7 +1501,7 @@ class DashboardApp {
       });
       return;
     }
-    this.openPrompt(`Edit ${alias}.${target}`, 'input <share> <primary> <fallback>', '', async (value) => {
+    this.openPrompt(`Edit ${alias}.${bold(target)}`, 'input <share> <primary> <fallback>', '', async (value) => {
       const parts = value.trim().split(/\s+/).filter(Boolean);
       if (parts.length < 1 || parts.length > 3) {
         this.view.setMessage('Use: share [primary] [fallback]');

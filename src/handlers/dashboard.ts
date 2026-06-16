@@ -21,6 +21,7 @@ import {
   parseHumanTokenLimit,
   formatTokenLimit,
   validateProxyConfig,
+  upsertGlobalTokenLimit,
 } from '../utils/config-loader.js';
 import {
   getAgentStatsDesc,
@@ -175,6 +176,20 @@ export function upsertCompositeAliasLimitFromDashboard(
   return saveConfigMutation(env, (baseConfig) => upsertCompositeAliasLimit(baseConfig, alias, parsed));
 }
 
+export function upsertGlobalTokenLimitFromDashboard(
+  env: Env,
+  rawInput: string | null,
+): ReturnType<typeof toDashboardConfigPayload> {
+  if (rawInput === null || rawInput.trim() === '') {
+    return saveConfigMutation(env, (baseConfig) => upsertGlobalTokenLimit(baseConfig, null));
+  }
+  const parsed = parseHumanTokenLimit(rawInput);
+  if (!parsed) {
+    throw new Error(`Invalid token limit format: "${rawInput}". Use: <num> <1h|1d|1w|1m>  (e.g. 1.1b 1d, 50k 1h)`);
+  }
+  return saveConfigMutation(env, (baseConfig) => upsertGlobalTokenLimit(baseConfig, rawInput.trim()));
+}
+
 export function upsertFusionOptionsFromDashboard(
   env: Env,
   alias: string,
@@ -258,7 +273,14 @@ export function handleDashboardPage(): Response {
       .danger { background: #fff1f1; border: 1px solid #ffcccc; }
       .section-actions { margin-top: 8px; }
       .config-divider { margin: 14px 0; border-top: 3px solid #fff; }
-      .config-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+      .config-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .global-limit-group { display: flex; align-items: center; gap: 6px; margin-right: auto; }
+      .global-limit-group label { font-size: 13px; font-weight: 500; white-space: nowrap; }
+      #globalTokenLimitNum { padding: 4px 8px; font-size: 13px; border: 1px solid #bdbdbd; border-radius: 4px; }
+      #globalTokenLimitDuration { padding: 4px 6px; font-size: 13px; border: 1px solid #bdbdbd; border-radius: 4px; }
+      #saveGlobalLimit { padding: 4px 10px; font-size: 13px; border: 1px solid #bdbdbd; border-radius: 4px; background: white; cursor: pointer; }
+      #saveGlobalLimit:hover { background: #f0f0f0; }
+      #globalLimitStatus { font-size: 12px; color: #555; }
       .request-submodule { margin-top: 18px; }
       .primary-label { font-size: 11px; color: #444; }
       button {
@@ -318,6 +340,19 @@ export function handleDashboardPage(): Response {
       <div id="configForm"></div>
       <div class="config-divider"></div>
       <div class="config-toolbar">
+        <div class="global-limit-group">
+          <label for="globalTokenLimitNum">Total limit:</label>
+          <input type="text" id="globalTokenLimitNum" placeholder="e.g. 700m" title="Token amount only, e.g. 50k, 1.5m, 1.1b" style="width:90px;" autocomplete="off" />
+          <select id="globalTokenLimitDuration">
+            <option value="">(no limit)</option>
+            <option value="1h">1 hour</option>
+            <option value="1d">1 day</option>
+            <option value="1w">1 week</option>
+            <option value="1m">1 month</option>
+          </select>
+          <button id="saveGlobalLimit">Set</button>
+          <span id="globalLimitStatus"></span>
+        </div>
         <button id="reloadConfig">Reload</button>
         <button id="saveConfig">Save</button>
         <span id="configStatus"></span>
@@ -381,14 +416,15 @@ export function handleDashboardPage(): Response {
       const configForm = document.getElementById('configForm');
       const configStatus = document.getElementById('configStatus');
       const saveButton = document.getElementById('saveConfig');
+      const globalTokenLimitNum = document.getElementById('globalTokenLimitNum');
+      const globalTokenLimitDuration = document.getElementById('globalTokenLimitDuration');
+      const globalLimitStatus = document.getElementById('globalLimitStatus');
       let currentConfig = { models: {}, composite: {} };
       let isReadOnly = false;
       let configPathHint = '';
       let compositeResolved = [];
       let modelStats = [];
-      let compositeLimitWindowsSnapshot: Record<string, {
-        limit: number; duration: string; windowStartMs: number; windowMs: number; remainingMs: number; accumulator: number;
-      }> = {};
+      let compositeLimitWindowsSnapshot = {};
 
       function getAliasUsed(aliasName) {
         const resolved = compositeResolved.find(r => r.alias === aliasName);
@@ -909,6 +945,10 @@ export function handleDashboardPage(): Response {
         compositeResolved = json.compositeResolved || [];
         modelStats = json.modelStats || [];
         compositeLimitWindowsSnapshot = json.compositeLimitWindows || {};
+        const glRaw = (json.config.global_token_limit || '').trim();
+        const glParts = glRaw ? glRaw.split(/\s+/) : [];
+        globalTokenLimitNum.value = glParts[0] || '';
+        globalTokenLimitDuration.value = (glParts[1] || '').toLowerCase();
         renderConfigForm(currentConfig);
         saveButton.disabled = isReadOnly;
         configPathHint = json.config.config_path ? ' (' + json.config.config_path + ')' : '';
@@ -1062,6 +1102,33 @@ export function handleDashboardPage(): Response {
 
       document.getElementById('reloadConfig').addEventListener('click', () => loadConfig(true));
       document.getElementById('saveConfig').addEventListener('click', saveConfig);
+
+      async function saveGlobalLimit() {
+        const num = globalTokenLimitNum.value.trim();
+        const dur = globalTokenLimitDuration.value;
+        if (num && !dur) {
+          globalLimitStatus.textContent = 'Select a duration';
+          return;
+        }
+        const value = (num && dur) ? num + ' ' + dur : '';
+        globalLimitStatus.textContent = 'Saving...';
+        try {
+          const res = await fetch('/dashboard/api/global-token-limit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value })
+          });
+          const json = await res.json();
+          if (!res.ok) throw new Error(json.error || 'Failed');
+          globalLimitStatus.textContent = value ? 'Set' : 'Cleared';
+          setTimeout(() => { globalLimitStatus.textContent = ''; }, 2000);
+        } catch (err) {
+          globalLimitStatus.textContent = 'Error: ' + err.message;
+        }
+      }
+
+      document.getElementById('saveGlobalLimit').addEventListener('click', saveGlobalLimit);
+      globalTokenLimitNum.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveGlobalLimit(); });
       configForm.addEventListener('click', handleConfigAction);
 
       async function refreshAll() {
@@ -1136,6 +1203,16 @@ export async function handleDashboardPutConfig(request: Request, env: Env, _prox
 
     const reloadedConfig = await loadProxyConfig(env);
     return jsonResponse(getDashboardSnapshot(reloadedConfig, env));
+  } catch (error) {
+    return jsonResponse({ error: (error as Error).message }, 400);
+  }
+}
+
+export async function handleDashboardGlobalTokenLimit(request: Request, env: Env): Promise<Response> {
+  try {
+    const { value } = await request.json() as { value: string };
+    upsertGlobalTokenLimitFromDashboard(env, value ?? null);
+    return jsonResponse({ ok: true });
   } catch (error) {
     return jsonResponse({ error: (error as Error).message }, 400);
   }

@@ -21,13 +21,14 @@ import { handleChatCompletionsPassthrough } from './handlers/chat-completions.js
 import {
   handleDashboardAgentStats,
   handleDashboardGetConfig,
+  handleDashboardGlobalTokenLimit,
   handleDashboardModelStats,
   handleDashboardPage,
   handleDashboardPutConfig,
   handleDashboardRequestStats,
   handleDashboardTestModel,
 } from './handlers/dashboard.js';
-import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, getCompositeAliasMode, resolveFusionPlan, FusionPlan, ModelRouteConfig, ProxyConfig } from './utils/config-loader.js';
+import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, getCompositeAliasMode, resolveFusionPlan, FusionPlan, ModelRouteConfig, ProxyConfig, parseHumanTokenLimit } from './utils/config-loader.js';
 import {
   extractToolNamesFromBody,
   extractToolRequestCharLengthsFromBody,
@@ -57,6 +58,7 @@ import {
   getWindowMs,
   incrementActiveRequests,
   decrementActiveRequests,
+  getTokensInWindow,
 } from './utils/dashboard-stats.js';
 import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
 
@@ -486,6 +488,7 @@ export default {
         clearCompositeLimit(alias);
       }
     }
+
     let failedModelId: string | undefined;
     let modelFailureRecorded = false;
     let requestStartTime = 0;
@@ -536,6 +539,11 @@ export default {
         return applyCorsHeaders(response, request, env);
       }
 
+      if (path === '/dashboard/api/global-token-limit' && request.method === 'POST') {
+        const response = await handleDashboardGlobalTokenLimit(request, env);
+        return applyCorsHeaders(response, request, env);
+      }
+
       // Skip favicon requests
       if (path === '/favicon.ico') {
         return new Response(null, { status: 204 });
@@ -574,6 +582,21 @@ export default {
           status: 404,
           headers: { 'Content-Type': 'application/json' },
         });
+      }
+
+      // Global token limit check: only applies to model API requests, not dashboard/health
+      const globalTokenLimitRaw = proxyConfig.upstream?.global_token_limit;
+      if (globalTokenLimitRaw) {
+        const parsedGlobal = parseHumanTokenLimit(globalTokenLimitRaw.trim());
+        if (parsedGlobal && parsedGlobal.num > 0) {
+          const windowMs = getWindowMs(parsedGlobal.duration);
+          const windowTotal = getTokensInWindow(windowMs);
+          if (windowTotal >= parsedGlobal.num) {
+            throw new OverLimitError(
+              `Global token limit (${parsedGlobal.num} ${parsedGlobal.duration}) reached (${windowTotal}). No further requests will be routed.`
+            );
+          }
+        }
       }
 
       recordRequestEndpoint(path);

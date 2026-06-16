@@ -73,7 +73,8 @@ type TokenHeatmapEvent = {
   model?: string;
 };
 
-const TOKEN_HEATMAP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const TOKEN_HEATMAP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;   // heatmap rendering: 7 days
+const TOKEN_RETENTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // event retention for enforcement: 30 days
 
 // These must be declared before the daily token helpers that reference dailyTokenStats
 const modelStats = new Map<string, ModelStatsEntry>();
@@ -377,12 +378,13 @@ export function loadTokenStatsFromLog(): void {
     const content = readFileSync(TOKEN_LOG_FILE, 'utf-8');
     const lines = content.split('\n').filter((l) => l.trim());
 
-    // Build set of last 7 days (YYYY-MM-DD) for efficient lookup
-    const last7Days = new Set<string>();
-    for (let i = 0; i < 7; i++) {
+    // Build set of last 30 days (YYYY-MM-DD) for efficient lookup
+    // Events are retained 30d for enforcement; heatmap renders only the last 7d
+    const last30Days = new Set<string>();
+    for (let i = 0; i < 30; i++) {
       const d = new Date();
       d.setDate(d.getDate() - i);
-      last7Days.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+      last30Days.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
     }
 
     // First pass: find the latest timestamp per date
@@ -390,7 +392,7 @@ export function loadTokenStatsFromLog(): void {
     for (const line of lines) {
       try {
         const record = JSON.parse(line) as { date: string; timestamp?: string };
-        if (!last7Days.has(record.date)) continue;
+        if (!last30Days.has(record.date)) continue;
         const existing = latestPerDate.get(record.date);
         if (!existing || (record.timestamp && record.timestamp > existing)) {
           latestPerDate.set(record.date, record.timestamp || '');
@@ -402,7 +404,7 @@ export function loadTokenStatsFromLog(): void {
 
     // Second pass: load data only from the latest dump per date
     const seenHeatmap = new Set<string>();
-    const cutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
+    const cutoff = Date.now() - TOKEN_RETENTION_WINDOW_MS;
 
     for (const line of lines) {
       try {
@@ -414,7 +416,7 @@ export function loadTokenStatsFromLog(): void {
           heatmapEvents?: TokenHeatmapEvent[];
           compositeLimitWindows?: Record<string, PersistedLimitWindow>;
         };
-        if (!last7Days.has(record.date)) continue;
+        if (!last30Days.has(record.date)) continue;
         const latestTs = latestPerDate.get(record.date);
         if (record.timestamp !== latestTs) continue; // not the latest dump for this date, skip
 
@@ -461,8 +463,8 @@ export function loadTokenStatsFromLog(): void {
       }
     }
 
-    // Re-apply window pruning on heatmap after merge
-    const pruneCutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
+    // Re-apply window pruning on heatmap after merge (retain 30d for enforcement)
+    const pruneCutoff = Date.now() - TOKEN_RETENTION_WINDOW_MS;
     while (tokenHeatmapEvents.length > 0 && tokenHeatmapEvents[0].timestamp < pruneCutoff) {
       tokenHeatmapEvents.shift();
     }
@@ -866,7 +868,7 @@ function recordTokenHeatmapEvent(values: number, timestamp = Date.now(), model?:
   }
 
   tokenHeatmapEvents.push({ timestamp, values, model });
-  const cutoff = timestamp - TOKEN_HEATMAP_WINDOW_MS;
+  const cutoff = timestamp - TOKEN_RETENTION_WINDOW_MS;
   while (tokenHeatmapEvents.length > 0 && tokenHeatmapEvents[0].timestamp < cutoff) {
     tokenHeatmapEvents.shift();
   }
@@ -1151,6 +1153,17 @@ export function getTokenHeatmapStatsDesc(): Array<{ weekday: number; hour: numbe
     }
     return a.values - b.values;
   });
+}
+
+export function getTokensInWindow(durationMs: number): number {
+  const cutoff = Date.now() - durationMs;
+  let total = 0;
+  for (const event of tokenHeatmapEvents) {
+    if (event.timestamp >= cutoff) {
+      total += event.values;
+    }
+  }
+  return total;
 }
 
 function normalizeUpstreamBaseUrl(urlLike: string): string {
