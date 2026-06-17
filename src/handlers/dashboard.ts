@@ -946,7 +946,7 @@ export function handleDashboardPage(): Response {
         modelStats = json.modelStats || [];
         compositeLimitWindowsSnapshot = json.compositeLimitWindows || {};
         const glRaw = (json.config.global_token_limit || '').trim();
-        const glParts = glRaw ? glRaw.split(/\s+/) : [];
+        const glParts = glRaw ? glRaw.split(' ') : []; // ' ' is better than /\s+/
         globalTokenLimitNum.value = glParts[0] || '';
         globalTokenLimitDuration.value = (glParts[1] || '').toLowerCase();
         renderConfigForm(currentConfig);

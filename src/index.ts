@@ -134,7 +134,7 @@ function getCorsHeaders(request: Request, env: Env): Record<string, string> {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key, x-goog-api-key, anthropic-beta',
-    'Access-Control-Max-Age': '86400',
+    'Access-Control-Max-Age': '0',
   };
 }
 
