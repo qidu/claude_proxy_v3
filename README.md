@@ -333,13 +333,31 @@ npm run dev
 
 or
 ```bash
-git submodule update --init --recursive
-git submodule update --remote --merge
-npm run build-chatjimmy
-
 npm run build
 PROXY_CONFIG_PATH=./proxy_config.toml npx tsx dist/server.js
 ```
+
+#### Optional: ChatJimmy SDK (`sdk://` models)
+
+The ChatJimmy SDK is an **optional** dependency, shipped as the git submodule
+`submodules/chatjimmy`. It is **only** needed if your config routes a model to an
+`sdk://` upstream (see [ChatJimmy SDK Integration](#chatjimmy-sdk-integration-2026-03-04)). The submodule is loaded
+lazily at runtime via a dynamic import, so:
+
+- **Not using `sdk://` models?** Skip it entirely. A plain `git clone` (without
+  `--recurse-submodules`) leaves the submodule absent, and `npm install`,
+  `npm run typecheck`, `npm run build`, and `npm run server` all work normally.
+  Only `sdk://` routes would return an `SDK_ERROR` at request time.
+- **Using `sdk://` models?** Fetch and build the submodule once:
+
+  ```bash
+  git submodule update --init --recursive
+  git submodule update --remote --merge
+  npm run build-chatjimmy        # builds submodules/chatjimmy/dist
+  ```
+
+  The SDK handler imports the built output from `submodules/chatjimmy/dist/`, so
+  re-run `npm run build-chatjimmy` after updating the submodule.
 
 ### 3.1 Terminal Dashboard
 
@@ -1848,44 +1866,23 @@ MIT
 - **Streaming Thinking Extraction**: Improved thinking content extraction from `<thinking>` markers and `reasoning_content` fields
 - **Thinking Block Lifecycle**: Proper `content_block_start/delta/stop` events for thinking blocks in streaming
 
-**ChatJimmy SDK Path Mapping & Import Fixes**:
-- **package.json**: Added chatjimmy-sdk imports configuration
-- **tsconfig.json/tsconfig.server.json**: Added TypeScript path mappings for `chatjimmy-sdk` and `chatjimmy-sdk/*`
-- **src/utils/sdk-handler.ts**:
-  - Fixed SDK URL parsing (corrected prefix length from 5 to 6 characters)
-  - Simplified chatjimmy SDK import to use only built dist version
-  - Improved error messages for SDK import failures
-
-tsconfig.json / tsconfig.server.json
-```json
-    "esModuleInterop": true,
-    "baseUrl": "./",
-    "paths": {
-      "chatjimmy-sdk": ["submodules/chatjimmy/src/index.ts"],
-      "chatjimmy-sdk/*": ["submodules/chatjimmy/src/*"]
-    }
-```
-
-package.json
-```json
-  "imports": [
-    {
-      "pattern": "chatjimmy-sdk/*",
-      "target": "./submodules/chatjimmy/src/*"
-    }
-  ]
-```
-or
-```json
-    {
-      "pattern": "chatjimmy-sdk",
-      "target": "./submodules/chatjimmy/src/index.ts"
-    }
-```
+**ChatJimmy SDK Made Optional (2026-06-17)**:
+- **src/utils/sdk-handler.ts**: The submodule is imported through a non-literal
+  dynamic specifier, so `tsc` no longer treats it as a static build/typecheck
+  dependency. The existing try/catch surfaces a missing submodule only when an
+  `sdk://` route is hit at runtime.
+- **package.json / tsconfig.json / tsconfig.server.json**: Removed the unused
+  `chatjimmy-sdk` `imports` entry and TypeScript `paths` aliases (nothing in
+  `src/` imported that alias; the handler references `dist/` by relative path).
+- **Net effect**: clone, `npm install`, `npm run typecheck`, `npm run build`,
+  and `npm run server` all succeed without the submodule. See
+  [Optional: ChatJimmy SDK](#optional-chatjimmy-sdk-sdk-models).
 
 ### ChatJimmy SDK Integration (2026-03-04)
 
-**Direct source reference with path mapping**: ChatJimmy SDK is integrated via TypeScript path mapping instead of requiring separate build steps.
+**Optional, lazily-loaded submodule**: ChatJimmy SDK lives in
+`submodules/chatjimmy` and is loaded at runtime via dynamic import only when an
+`sdk://` model is requested. It is not required to build or run the proxy.
 
 **SDK Handler**: `src/utils/sdk-handler.ts` provides SDK-based request handling:
 - **SDK URL detection**: `sdk://` URLs use chatjimmy SDK clients instead of HTTP fetch

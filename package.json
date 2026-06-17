@@ -3,16 +3,6 @@
   "version": "3.2.0",
   "description": "Model API Proxy v3.2 - Claude,Gemini,GPT Compatibale API Proxy",
   "main": "src/index.ts",
-  "imports": [
-    {
-      "pattern": "chatjimmy-sdk/*",
-      "target": "./submodules/chatjimmy/src/*"
-    },
-    {
-      "pattern": "chatjimmy-sdk",
-      "target": "./submodules/chatjimmy/src/index.ts"
-    }
-  ],
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

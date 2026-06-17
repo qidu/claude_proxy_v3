@@ -15,11 +15,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "esModuleInterop": true,
-    "baseUrl": "./",
-    "paths": {
-      "chatjimmy-sdk": ["submodules/chatjimmy/src/index.ts"],
-      "chatjimmy-sdk/*": ["submodules/chatjimmy/src/*"]
-    }
+    "baseUrl": "./"
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules"]

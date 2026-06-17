@@ -60,8 +60,12 @@ export function parseSdkUrl(targetUrl: string): {
  */
 async function importChatJimmySdk() {
   try {
-    // Import from the built dist folder in the submodule
-    const chatjimmy = await import('../../submodules/chatjimmy/dist/index.js');
+    // Import from the built dist folder in the submodule.
+    // Use a non-literal specifier so the optional submodule is not a static
+    // build/typecheck dependency; it is only resolved at runtime when an
+    // sdk:// route is actually hit.
+    const sdkPath = '../../submodules/chatjimmy/dist/index.js';
+    const chatjimmy = await import(/* @vite-ignore */ sdkPath);
     return chatjimmy;
   } catch (error) {
     console.warn('Failed to import chatjimmy SDK:', error);
