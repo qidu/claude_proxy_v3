@@ -156,6 +156,35 @@ export interface Env {
      * without format conversion. Set to "true" or "1" to enable.
      */
     DEV_PASS_THROUGH?: string;
+
+    /**
+     * Base URL of the OPF privacy-filter sidecar, e.g. "http://127.0.0.1:8799".
+     * When unset, the privacy filter plugin is disabled (no behavior change).
+     */
+    PRIVACY_FILTER_URL?: string;
+
+    /**
+     * Comma-separated list of proxy request paths to run the privacy filter on.
+     * Default: "/v1/messages".
+     */
+    PRIVACY_FILTER_ENDPOINTS?: string;
+
+    /**
+     * When "true"/"1", if the sidecar is unreachable the original (unredacted) text
+     * is forwarded upstream instead of failing the request. Default: false (fail-closed).
+     */
+    PRIVACY_FILTER_FAIL_OPEN?: string;
+
+    /**
+     * Per-call timeout in milliseconds for sidecar requests. Default: 30000.
+     */
+    PRIVACY_FILTER_TIMEOUT_MS?: string;
+
+    /**
+     * Skip redaction when the combined text length exceeds this many characters.
+     * Default: 200000.
+     */
+    PRIVACY_FILTER_MAX_CHARS?: string;
 }
 
 

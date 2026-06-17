@@ -61,6 +61,14 @@ import {
   getTokensInWindow,
 } from './utils/dashboard-stats.js';
 import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
+import {
+  getPrivacyFilterConfig,
+  shouldFilterPath,
+  redactBody,
+  restoreText,
+  createRestoreTransformStream,
+  PiiMapping,
+} from './utils/privacy-filter.js';
 
 let hasLoggedUpstreamConfig = false;
 
@@ -69,6 +77,34 @@ let hasLoggedUpstreamConfig = false;
  */
 function generateRequestId(): string {
   return `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+/**
+ * Restore PII sentinels back to their original values in a client-facing
+ * response. Handles JSON (buffered) and text/event-stream (transform) bodies.
+ * Returns the response unchanged when the mapping is empty.
+ */
+async function restorePrivacyResponse(response: Response, mapping: PiiMapping): Promise<Response> {
+  if (Object.keys(mapping).length === 0) return response;
+  const contentType = response.headers.get('content-type') || '';
+
+  if (contentType.includes('text/event-stream') && response.body) {
+    return new Response(response.body.pipeThrough(createRestoreTransformStream(mapping)), response);
+  }
+
+  if (contentType.includes('application/json')) {
+    const text = await response.text();
+    const restored = restoreText(text, mapping);
+    const headers = new Headers(response.headers);
+    headers.delete('content-length'); // restored text length differs from redacted
+    return new Response(restored, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+
+  return response;
 }
 
 /**
@@ -653,6 +689,12 @@ export default {
       let compositeAttempts: RouteAttempt[] | undefined;
       let compositeAliasName: string | undefined;
 
+      // Privacy filter: sentinel -> original mapping for this request, restored
+      // on the client-facing response. Empty unless redaction actually runs.
+      const privacyConfig = getPrivacyFilterConfig(env);
+      const privacyActive = !!privacyConfig && shouldFilterPath(privacyConfig, path);
+      let piiMapping: PiiMapping = {};
+
       // Extract authentication headers early
       const authHeaders = extractAuthHeaders(request);
       let modelAuthHeaders = authHeaders;
@@ -667,8 +709,21 @@ export default {
            (env.DEV_PASS_THROUGH === 'true' || env.DEV_PASS_THROUGH === '1')) ||
           ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent') || path.includes(':countTokens')))) {
         try {
-          const bodyText = await request.text();
+          let bodyText = await request.text();
           const body = JSON.parse(bodyText);
+
+          // Privacy filter: redact PII out of the request body before routing so
+          // every downstream path (single/composite/fusion) operates on redacted
+          // text. The mapping is restored on the client-facing response below.
+          if (privacyActive) {
+            const { mapping } = await redactBody(privacyConfig!, body);
+            piiMapping = mapping;
+            if (Object.keys(mapping).length > 0) {
+              bodyText = JSON.stringify(body);
+              logger.info(requestId, `Privacy filter redacted ${Object.keys(mapping).length} PII span(s) from ${path}`);
+            }
+          }
+
           let modelName = body.model;
 
           // For generateContent/countTokens endpoint, extract model from URL if not in body
@@ -1519,7 +1574,7 @@ export default {
       if (_fusionPlan && _fusionBody) {
         const fusionResp = await runFusion(_fusionPlan, _fusionBody);
         recordRequestTiming(path, Date.now() - requestStartTime);
-        return applyCorsHeaders(fusionResp, request, env);
+        return applyCorsHeaders(await restorePrivacyResponse(fusionResp, piiMapping), request, env);
       }
 
       if (compositeAttempts && compositeAttempts.length > 0) {
@@ -1530,7 +1585,7 @@ export default {
             logger.info(requestId, `${new URL(attempt.request.url).pathname} for ${compositeAliasName ?? attempt.modelId} to ${attempt.targetUrl} (${attempt.upstreamMode})`);
             const response = await runAttempt(attempt);
             recordRequestTiming(path, Date.now() - requestStartTime);
-            return applyCorsHeaders(response, attempt.request, env);
+            return applyCorsHeaders(await restorePrivacyResponse(response, piiMapping), attempt.request, env);
           } catch (error) {
             lastError = error;
             if (attempt.modelId) {
@@ -1559,7 +1614,7 @@ export default {
 
       // Apply CORS headers
       recordRequestTiming(path, Date.now() - requestStartTime);
-      return applyCorsHeaders(response, request, env);
+      return applyCorsHeaders(await restorePrivacyResponse(response, piiMapping), request, env);
 
     } catch (error) {
       // Handle errors with Claude API format (without exposing sensitive info)

@@ -37,6 +37,11 @@ const env: NodeEnv = {
   PROXY_CONFIG_URL: process.env.PROXY_CONFIG_URL,
   PORT: process.env.PORT || '8788',
   DEV_PASS_THROUGH: process.env.DEV_PASS_THROUGH || 'false',
+  PRIVACY_FILTER_URL: process.env.PRIVACY_FILTER_URL,
+  PRIVACY_FILTER_ENDPOINTS: process.env.PRIVACY_FILTER_ENDPOINTS,
+  PRIVACY_FILTER_FAIL_OPEN: process.env.PRIVACY_FILTER_FAIL_OPEN,
+  PRIVACY_FILTER_TIMEOUT_MS: process.env.PRIVACY_FILTER_TIMEOUT_MS,
+  PRIVACY_FILTER_MAX_CHARS: process.env.PRIVACY_FILTER_MAX_CHARS,
 };
 
 const server = createServer(async (req, res) => {

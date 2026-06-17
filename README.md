@@ -1157,6 +1157,14 @@ LOG_LEVEL = "info"
 # When "true", stores each response in memory and auto-prepends history
 # for requests with previous_response_id. TTL: 3600s. In-memory only.
 # CONVERSATION = "false"
+
+# Privacy Filter (PII redaction) plugin — see "Privacy Filter" section below.
+# Entirely inert unless PRIVACY_FILTER_URL is set (points at the local sidecar).
+# PRIVACY_FILTER_URL = "http://127.0.0.1:8799"
+# PRIVACY_FILTER_ENDPOINTS = "/v1/messages"   # comma list of proxy paths to filter
+# PRIVACY_FILTER_FAIL_OPEN = "false"          # false = fail-closed (never leak PII upstream)
+# PRIVACY_FILTER_TIMEOUT_MS = "30000"
+# PRIVACY_FILTER_MAX_CHARS = "200000"
 ```
 
 For local Node.js runs, either pass inline or export them:
@@ -1198,6 +1206,92 @@ node dist/server.js
 | `MODELS_CACHE_TTL` | `MODELS_CACHE_TTL` | unset |
 | `JSON_STRINGIFY_METHOD` | `JSON_STRINGIFY_METHOD` | unset |
 | `TIKTOKEN_MODEL` | `TIKTOKEN_MODEL` | unset |
+| `PRIVACY_FILTER_URL` | `PRIVACY_FILTER_URL` | unset (plugin off) |
+| `PRIVACY_FILTER_ENDPOINTS` | `PRIVACY_FILTER_ENDPOINTS` | `"/v1/messages"` |
+| `PRIVACY_FILTER_FAIL_OPEN` | `PRIVACY_FILTER_FAIL_OPEN` | `"false"` |
+| `PRIVACY_FILTER_TIMEOUT_MS` | `PRIVACY_FILTER_TIMEOUT_MS` | `"30000"` |
+| `PRIVACY_FILTER_MAX_CHARS` | `PRIVACY_FILTER_MAX_CHARS` | `"200000"` |
+
+### Privacy Filter (PII redaction) plugin
+
+The proxy can redact personally identifiable information (PII) **out of every outbound
+request before it leaves the machine**, then restore the original values in the response
+returned to the client. The client sees correct, un-redacted data; the upstream model
+provider never sees the PII. The plugin is **entirely inert unless `PRIVACY_FILTER_URL`
+is set**, so default behavior is unchanged.
+
+It is built on [OpenAI Privacy Filter](https://huggingface.co/openai/privacy-filter)
+(`opf`) — a ~1.5B-param bidirectional token classifier that detects 8 PII categories
+(emails, phone numbers, names, addresses, account numbers, URLs, dates, secrets).
+
+#### How it works (reversible redact → restore)
+
+1. The proxy parses the request body and collects every user-visible text fragment
+   (Anthropic `system` + `messages[].content`, OpenAI `messages[].content`; both string
+   and `{type:'text'}` block shapes).
+2. It batches them in a single `POST /redact` call to the local sidecar.
+3. The sidecar runs `opf` and replaces each detected span with a **unique sentinel**
+   (`⟦PII:0⟧`, `⟦PII:1⟧`, …). It returns the redacted texts plus a `sentinel → original`
+   mapping. (Sentinels are unique — unlike `opf`'s bare `<PRIVATE_EMAIL>` placeholders —
+   so the substitution is reversible.)
+4. The proxy sends the redacted body upstream.
+5. On the response, every sentinel is replaced back with its original value — for JSON
+   responses via string replace, for `text/event-stream` (SSE) via a `TransformStream`
+   that buffers across chunk boundaries so a sentinel split across two chunks is still
+   matched. For **fusion**, intermediate panel/judge stages stay redacted; only the final
+   synthesized response is restored.
+
+Because the model is heavy to load, it runs in a **persistent Python HTTP sidecar** that
+keeps the model resident in memory. The proxy only talks to it over `fetch`, so the plugin
+stays compatible with both the Node server and Cloudflare Workers (only the sidecar is
+host-side).
+
+#### Start the sidecar
+
+The sidecar lives in the `privacy-filter` submodule:
+
+```bash
+git submodule update --init submodules/privacy-filter
+
+# --device auto probes mps (Apple Silicon) → cuda → cpu, with a warmup-based
+# fallback to cpu if the chosen backend fails to load.
+OPF_MOE_TRITON=0 python submodules/privacy-filter/serve.py --device auto --port 8799
+```
+
+> **Note:** the sidecar requires a Python where `torch` is installed. On this machine the
+> working interpreter is Python 3.13 (`/Users/chris/dev/ai/bin/python3.13`); the bare
+> `python` in the venv is 3.14 and lacks torch. Invoke the torch-enabled interpreter
+> explicitly if `import torch` fails.
+
+Then run the proxy pointed at it:
+
+```bash
+PRIVACY_FILTER_URL=http://127.0.0.1:8799 npm run server
+```
+
+Quick sidecar check:
+
+```bash
+curl -s localhost:8799/redact -d '{"texts":["email alice@x.com and bob@y.com"]}'
+# → {"redacted":["email ⟦PII:0⟧ and ⟦PII:1⟧"],"mapping":{"⟦PII:0⟧":"alice@x.com","⟦PII:1⟧":"bob@y.com"},"span_count":2}
+```
+
+#### Configuration
+
+| Var | Default | Meaning |
+|-----|---------|---------|
+| `PRIVACY_FILTER_URL` | unset | Sidecar base URL, e.g. `http://127.0.0.1:8799`. **Unset = plugin off.** |
+| `PRIVACY_FILTER_ENDPOINTS` | `/v1/messages` | Comma list of proxy paths to filter. |
+| `PRIVACY_FILTER_FAIL_OPEN` | `false` | `false` = **fail-closed** (if the sidecar is unreachable the request errors rather than leaking PII upstream). `true` = forward original text on sidecar error. |
+| `PRIVACY_FILTER_TIMEOUT_MS` | `30000` | Per-call timeout to the sidecar. |
+| `PRIVACY_FILTER_MAX_CHARS` | `200000` | Skip redaction above this total text size (safety cap). |
+
+#### Limitations
+
+- v1 covers the **text content** of chat endpoints only. Tool-call arguments, embeddings
+  input, and image blocks are out of scope.
+- `opf` is a redaction aid, not an anonymization guarantee — it can over- or under-redact.
+  See the submodule's README and model card for details.
 
 ### Performance Benchmark
 
