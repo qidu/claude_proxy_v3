@@ -57,7 +57,7 @@ import {
   clearCompositeLimit,
   getWindowMs,
   incrementActiveRequests,
-  decrementActiveRequests,
+  attachActiveRequestRelease,
   getTokensInWindow,
 } from './utils/dashboard-stats.js';
 import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
@@ -528,12 +528,17 @@ export default {
     let failedModelId: string | undefined;
     let modelFailureRecorded = false;
     let requestStartTime = 0;
+    // Set once the request is counted as in-flight (after preflight checks). The
+    // release is deferred onto the returned Response so server.ts can fire it when
+    // the body finishes streaming, rather than when the handler returns.
+    let releaseActiveRequest: (() => void) | undefined;
 
     if (!hasLoggedUpstreamConfig && proxyConfig.upstream) {
       logger.debug(requestId, `Upstream config: \n\tbudget_to_effort_low=${proxyConfig.upstream.budget_to_effort_low}, \n\tbudget_to_effort_medium=${proxyConfig.upstream.budget_to_effort_medium}, \n\tbudget_to_effort_high=${proxyConfig.upstream.budget_to_effort_high}`);
       hasLoggedUpstreamConfig = true;
     }
 
+    const finalResponse = await (async (): Promise<Response> => {
     try {
       // Handle CORS preflight
       if (request.method === 'OPTIONS') {
@@ -637,7 +642,7 @@ export default {
 
       recordRequestEndpoint(path);
       requestStartTime = Date.now();
-      incrementActiveRequests();
+      releaseActiveRequest = incrementActiveRequests();
 
       // Request body size limit (10MB)
       const contentLength = request.headers.get('content-length');
@@ -1625,8 +1630,18 @@ export default {
       recordRequestTiming(path, Date.now() - requestStartTime);
       recordModelTiming(failedModelId, Date.now() - requestStartTime);
       return createErrorResponse(error as Error, requestId);
-    } finally {
-      decrementActiveRequests();
     }
+    })();
+
+    // Defer the in-flight decrement until the response body has finished
+    // streaming to the client. server.ts consumes this release when it's done
+    // piping the body (or immediately for non-streaming/error responses). If the
+    // request was never counted (preflight returns before increment) this is a
+    // no-op. The release is once-guarded so a redundant call here as a safety net
+    // can't double-decrement.
+    if (releaseActiveRequest) {
+      attachActiveRequestRelease(finalResponse, releaseActiveRequest);
+    }
+    return finalResponse;
   },
 };

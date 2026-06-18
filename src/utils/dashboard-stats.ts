@@ -241,18 +241,43 @@ export function getCompositeLimitWindowsSnapshot(): Record<string, {
 export const TOKEN_LOG_FILE = './model_proxy_tokens.jsonl';
 
 // ── In-flight request tracking ─────────────────────────────────────────────────
-// Tracks the number of proxy requests currently being handled (between request
-// received and upstream response/stream returned). Used by the TUI header to
-// show an activity indicator. Incremented in src/index.ts's fetch handler after
-// the dashboard/health preflight checks, and decremented in the finally block.
+// Tracks the number of proxy requests currently being handled. Used by the TUI
+// header / terminal title to show an activity indicator. Incremented in
+// src/index.ts's fetch handler after the dashboard/health preflight checks. The
+// decrement is deferred until the response body has fully streamed to the client
+// (handled in src/server.ts), so the count reflects true client-facing duration
+// rather than just the time to obtain the upstream Response object.
 let activeRequestCount = 0;
 
-export function incrementActiveRequests(): void {
+// Symbol used to smuggle the per-request release callback on the Response object
+// from the fetch handler (src/index.ts) to the HTTP adapter (src/server.ts),
+// which calls it once the response body has finished streaming.
+const ACTIVE_REQUEST_RELEASE = Symbol('activeRequestRelease');
+
+// Marks a request as in-flight and returns a release callback. The callback is
+// guarded so it only ever decrements once, no matter how many times it's called
+// (e.g. both a stream `close` and a `res` `close` firing for the same request).
+export function incrementActiveRequests(): () => void {
   activeRequestCount += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (activeRequestCount > 0) activeRequestCount -= 1;
+  };
 }
 
-export function decrementActiveRequests(): void {
-  if (activeRequestCount > 0) activeRequestCount -= 1;
+export function attachActiveRequestRelease(response: Response, release: () => void): void {
+  (response as unknown as Record<symbol, unknown>)[ACTIVE_REQUEST_RELEASE] = release;
+}
+
+// Returns and detaches the release callback previously attached to a response,
+// or undefined if the request was never counted as in-flight.
+export function consumeActiveRequestRelease(response: Response): (() => void) | undefined {
+  const holder = response as unknown as Record<symbol, unknown>;
+  const release = holder[ACTIVE_REQUEST_RELEASE] as (() => void) | undefined;
+  if (release) delete holder[ACTIVE_REQUEST_RELEASE];
+  return release;
 }
 
 export function getActiveRequestCount(): number {

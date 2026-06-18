@@ -6,6 +6,7 @@
 import { createServer } from 'http';
 import type { Env } from './types/shared.js';
 import { loadProxyConfig, clearProxyConfigCache } from './utils/config-loader.js';
+import { consumeActiveRequestRelease } from './utils/dashboard-stats.js';
 import { startTUI } from './tui.js';
 
 const port = parseInt(process.env.PORT || '8788', 10);
@@ -79,6 +80,12 @@ const server = createServer(async (req, res) => {
 
     const response = await handler.fetch(request, env);
 
+    // Release the in-flight request counter once the body has fully streamed to
+    // the client (or immediately for non-streaming responses). The release is
+    // once-guarded in dashboard-stats, so wiring it to several completion paths
+    // (stream close/abort, pipe error, client disconnect) can't double-count.
+    const release = consumeActiveRequestRelease(response) ?? (() => {});
+
     // Handle streaming vs non-streaming responses differently.
     // For streaming, tee the stream so we can pipe one branch to the client
     // while leaving the other available for reading (e.g. .text()).
@@ -94,18 +101,23 @@ const server = createServer(async (req, res) => {
       const { PassThrough } = await import('stream');
       const passthrough = new PassThrough();
       passthrough.pipe(res);
+      // Safety net: if the client disconnects mid-stream, release here too.
+      res.on('close', release);
       response.body.pipeTo(new WritableStream({
         write(chunk) {
           passthrough.write(chunk);
         },
         close() {
           passthrough.end();
+          release();
         },
         abort(err) {
           passthrough.end();
+          release();
         },
       })).catch(() => {
         passthrough.end();
+        release();
       });
       return;
     }
@@ -113,6 +125,7 @@ const server = createServer(async (req, res) => {
     const responseBody = await response.clone().text();
     res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
     res.end(responseBody);
+    release();
   } catch (error) {
     console.error('Server error:', error);
     // Only write headers if they haven't been sent yet

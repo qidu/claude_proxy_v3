@@ -1255,7 +1255,9 @@ git submodule update --init submodules/privacy-filter
 
 # --device auto probes mps (Apple Silicon) → cuda → cpu, with a warmup-based
 # fallback to cpu if the chosen backend fails to load.
-OPF_MOE_TRITON=0 python submodules/privacy-filter/serve.py --device auto --port 8799
+# --timeout bounds each /redact call (default 30s; 0 disables) so a stalled
+# inference returns 504 instead of hanging the caller.
+OPF_MOE_TRITON=0 python submodules/privacy-filter/serve.py --device auto --port 8799 --timeout 30
 ```
 
 > **Note:** the sidecar requires a Python where `torch` is installed. On this machine the
@@ -1285,6 +1287,10 @@ curl -s localhost:8799/redact -d '{"texts":["email alice@x.com and bob@y.com"]}'
 | `PRIVACY_FILTER_FAIL_OPEN` | `false` | `false` = **fail-closed** (if the sidecar is unreachable the request errors rather than leaking PII upstream). `true` = forward original text on sidecar error. |
 | `PRIVACY_FILTER_TIMEOUT_MS` | `30000` | Per-call timeout to the sidecar. |
 | `PRIVACY_FILTER_MAX_CHARS` | `200000` | Skip redaction above this total text size (safety cap). |
+
+Timeouts are enforced on **both** ends: the proxy aborts the `fetch` after
+`PRIVACY_FILTER_TIMEOUT_MS`, and the sidecar's `--timeout` independently bounds each
+inference (returning `504`) so a stalled call can't tie up the serialized worker.
 
 #### Limitations
 
