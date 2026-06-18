@@ -88,6 +88,9 @@ const upstreamResponseToolStats = new Map<string, UpstreamResponseToolStatsEntry
 const requestEndpointTimingStats = new Map<string, RequestEndpointTimingStatsEntry>();
 const requestModelTimingStats = new Map<string, RequestEndpointTimingStatsEntry>();
 const tokenHeatmapEvents: TokenHeatmapEvent[] = [];
+// Tracks the in-memory event timestamp when last heatmap delta was written.
+// Used to write only new events since last dump (delta-only).
+let lastHeatmapDumpTs = 0;
 
 // ── Composite token limit windows ───────────────────────────────────────────────
 
@@ -304,7 +307,10 @@ function dumpDailyTokens(dateStr: string): void {
   ensureTokenLogDir(TOKEN_LOG_FILE);
   const timestamp = new Date().toISOString();
   const cutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
-  const recentEvents = tokenHeatmapEvents.filter((e) => e.timestamp >= cutoff);
+  const recentEvents = tokenHeatmapEvents.filter((e) => {
+    const eventDate = new Date(e.timestamp).toISOString().slice(0, 10);
+    return eventDate === dateStr && e.timestamp >= cutoff;
+  });
 
   // Serialize composite limit windows (keyed by alias → plain object)
   const windowsObj: Record<string, { limit: number; duration: string; windowStartMs: number; accumulator: number }> = {};
@@ -320,11 +326,14 @@ function dumpDailyTokens(dateStr: string): void {
   const logLine = JSON.stringify({
     date: dateStr,
     timestamp,
+    lastDumpTs: 0, // 0 = full snapshot, load treats missing/0 as full
     modelStats: [...dailyTokenStats.values()],
     heatmapEvents: recentEvents,
     compositeLimitWindows: windowsObj,
   }) + '\n';
   writeFileSync(TOKEN_LOG_FILE, logLine, { flag: 'a' });
+  // Reset: next delta dump starts from now (day rollover = fresh start)
+  lastHeatmapDumpTs = Date.now();
 }
 
 function getOrCreateDailyModelStat(model: string): ModelStatsEntry {
@@ -377,17 +386,22 @@ export function dumpTodayTokens(): void {
 
   const modelEntries = [...dailyTokenStats.values()];
 
-  // Collect heatmap events from the last 7 days
+  // Collect heatmap events from today only, delta-only (after last dump)
   const cutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
-  const recentEvents = tokenHeatmapEvents.filter((e) => e.timestamp >= cutoff);
+  const deltaEvents = tokenHeatmapEvents.filter((e) => {
+    const eventDate = new Date(e.timestamp).toISOString().slice(0, 10);
+    return eventDate === today && e.timestamp > lastHeatmapDumpTs && e.timestamp >= cutoff;
+  });
 
   const logLine = JSON.stringify({
     date: today,
     timestamp,
+    lastDumpTs: lastHeatmapDumpTs,
     modelStats: modelEntries,
-    heatmapEvents: recentEvents,
+    heatmapEvents: deltaEvents,
   }) + '\n';
   writeFileSync(TOKEN_LOG_FILE, logLine, { flag: 'a' });
+  lastHeatmapDumpTs = Date.now();
 }
 
 type PersistedLimitWindow = {
@@ -436,29 +450,33 @@ export function loadTokenStatsFromLog(): void {
         const record = JSON.parse(line) as {
           date: string;
           timestamp?: string;
+          lastDumpTs?: number;
           entries?: ModelStatsEntry[];
           modelStats?: ModelStatsEntry[];
           heatmapEvents?: TokenHeatmapEvent[];
           compositeLimitWindows?: Record<string, PersistedLimitWindow>;
         };
         if (!last30Days.has(record.date)) continue;
+
+        // Load model stats from the latest dump per date only
         const latestTs = latestPerDate.get(record.date);
         if (record.timestamp !== latestTs) continue; // not the latest dump for this date, skip
-
-        // Load model stats (support both old 'entries' and new 'modelStats' field)
-        // Note: modelStats is NOT loaded — it must start fresh at 0 so the token limit
-        // check in index.ts doesn't incorrectly count tokens from previous days.
-        // dailyTokenStats is still loaded for daily dump aggregation.
         const modelEntries = record.modelStats ?? record.entries ?? [];
         for (const entry of modelEntries) {
           dailyTokenStats.set(entry.model, entry);
         }
 
-        // Load heatmap events (only from latest dump per date)
+        // Load heatmap events from ALL rows — deduplication prevents duplicates.
+        // Backward compat:
+        //   - missing / 0 lastDumpTs: include all events (old cumulative rows or new full snapshots)
+        //   - > 0 lastDumpTs: delta row, include only events newer than lastDumpTs
+        // The 30-day cutoff always applies.
         const events = record.heatmapEvents;
         if (Array.isArray(events)) {
+          const eventCutoff = (record.lastDumpTs && record.lastDumpTs > 0) ? record.lastDumpTs : 0;
           for (const event of events) {
             if (event.timestamp < cutoff) continue;
+            if (eventCutoff > 0 && event.timestamp <= eventCutoff) continue;
             const key = `${event.timestamp}:${event.values}:${event.model ?? ''}`;
             if (seenHeatmap.has(key)) continue;
             seenHeatmap.add(key);
@@ -1455,4 +1473,21 @@ try {
   loadTokenStatsFromLog();
 } catch {
   // noop in Workers
+}
+
+// Periodic delta dump every 30 min — only runs when DUMP=1 (non-TUI mode).
+// (TUI=1 mode uses the TUI's own timer instead.)
+try {
+  void (() => {
+    if (!process.env.DUMP) return;
+    let lastDumpTokenCount = 0;
+    setInterval(() => {
+      const totalTokens = [...dailyTokenStats.values()].reduce((sum, m) => sum + m.total_tokens, 0);
+      if (totalTokens === lastDumpTokenCount) return;
+      dumpTodayTokens();
+      lastDumpTokenCount = totalTokens;
+    }, 30 * 60 * 1000);
+  })();
+} catch {
+  // noop in Workers runtime
 }

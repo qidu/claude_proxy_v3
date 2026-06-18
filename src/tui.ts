@@ -908,7 +908,7 @@ class DashboardApp {
     this.refreshTimer = setInterval(() => {
       void this.refresh();
     }, 500);
-    this.hourlyDumpTimer = setInterval(() => {
+    this.hourlyDumpTimer = setInterval(() => {  // every 30 min
       const today = new Date().toISOString().slice(0, 10);
       const dayChanged = today !== this.lastDumpedDate;
       if (!dayChanged && this.lastRefreshTotalTokens === this.lastDumpedTotalTokens) return;
@@ -916,7 +916,7 @@ class DashboardApp {
       this.lastDumpedDate = today;
       dumpTodayTokens();
       this.view.setMessage(`auto-dumped tokens -> ${TOKEN_LOG_FILE}`);
-    }, 60 * 60 * 1000);
+    }, 30 * 60 * 1000);
     return () => this.stop();
   }
 

@@ -380,7 +380,7 @@ Keyboard shortcuts (main view):
 - `t` open test model picker
 - `r` reload config
 - `l` set/clear the **global** token limit (applies to all models; format: `<num>[k|m|b|t]> <1h|1d|1w|1m>`, e.g. `1.1b 1d`, `50k 1h`, blank clears)
-- `Ctrl+U` dump today's tokens to log file
+- `Ctrl+U` dump today's tokens to log file (TUI mode)
 - `Ctrl+C` quit
 
 Keyboard shortcuts (composite alias editor):
@@ -408,19 +408,29 @@ The proxy persists token stats, heatmap data, and composite limit windows to `/t
 
 **Log file format** (one JSON object per line):
 ```json
-{"date":"2026-06-04","timestamp":"2026-06-04T23:59:59.000Z","modelStats":[{"model":"claude-opus-4-6","requests":42,"failed_requests":1,"input_tokens":8400,"cached_tokens":2100,"cache_written_tokens":0,"output_tokens":1260,"total_tokens":9660}],"heatmapEvents":[{"timestamp":1750000000000,"values":1200,"model":"claude-opus-4-6"}],"compositeLimitWindows":{"gpt-all":{"limit":120000,"duration":"1d","windowStartMs":1750000000000,"accumulator":8400}}}
+{"date":"2026-06-05","timestamp":"2026-06-05T15:20:09.156Z","lastDumpTs":1750000000000,"modelStats":[{"model":"deepseek-v4-flash","requests":53,"failed_requests":1,"input_tokens":333034,"cached_tokens":0,"cache_written_tokens":0,"output_tokens":4664,"total_tokens":337698}],"heatmapEvents":[{"timestamp":1750000000001,"values":24223,"model":"deepseek-v4-flash"}],"compositeLimitWindows":{"gpt-all":{"limit":120000,"duration":"1d","windowStartMs":1750000000000,"accumulator":8400}}}
 ```
 
-**Dump triggers:**
-- **Ctrl+O** — manual dump (press at any time in TUI)
-- **Day transition** — when a new day begins (first request after midnight), the previous day's data is dumped before clearing
-- **Midnight timer** — at 23:59:59, the day's data is dumped as a safety net (resets automatically)
+Fields:
+- `date` / `timestamp`: date string and ISO timestamp of the dump
+- `lastDumpTs`: unix ms timestamp of the previous dump. `0` = full snapshot (daily rollover). Used to write delta-only events and to filter events on load (backward compatible with old rows without this field).
+- `modelStats`: cumulative daily token stats per model (written every dump)
+- `heatmapEvents`: same-day heatmap events only. Each dump writes **delta-only** — events newer than `lastDumpTs`. Day rollover writes a full same-day snapshot.
+- `compositeLimitWindows`: persisted composite alias limit windows
 
-**Startup restore:**
-- On proxy startup, `loadTokenStatsFromLog()` reads the last 7 days from the log
-- **First pass**: finds the latest dump per date by comparing `timestamp` — only the newest entry for each date is used
-- **heatmapEvents**: restored into the heatmap (for Tokens Panel aggregation) — deduplicated by `timestamp:values:model`
-- **dailyTokenStats**: restored into the daily stats map (for aggregation purposes) — later dumps for the same date overwrite earlier ones
+**Dump triggers:**
+- **TUI=1** — automatic dump every 30 min (skipped if total tokens unchanged since last dump)
+- **DUMP=1** (non-TUI/server mode) — automatic dump every 30 min (skipped if total tokens unchanged)
+- **Ctrl+U** — manual dump at any time in TUI
+- **Day transition** — when a new day begins, previous day's data is dumped before clearing
+
+**Startup restore (backward compatible with all existing log files):**
+- On proxy startup, `loadTokenStatsFromLog()` reads the last 30 days from the log
+- **modelStats**: loaded from the latest dump per date only (later dumps overwrite earlier)
+- **heatmapEvents**: loaded from **all rows** across all dates, deduplicated by `timestamp:values:model`
+  - For rows without `lastDumpTs` (old format): all events included
+  - For rows with `lastDumpTs > 0` (new delta rows): only events newer than `lastDumpTs` are included
+  - 30-day retention cutoff always applied
 - **modelStats** (live counter): NOT restored — starts fresh at zero to ensure `token_limit` on composite aliases is not incorrectly triggered from previous-day tokens
 - **compositeLimitWindows**: restored if the window has not expired. If `windowStartMs + durationMs > now`, the accumulator is restored and enforcement continues from where it left off. If the window has expired, the window is NOT restored (fresh window starts).
 
