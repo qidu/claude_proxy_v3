@@ -36,7 +36,7 @@ export function getPrivacyFilterConfig(env?: Env): PrivacyFilterConfig | null {
   const url = env?.PRIVACY_FILTER_URL?.trim();
   if (!url) return null;
 
-  const endpointsRaw = env?.PRIVACY_FILTER_ENDPOINTS?.trim() || '/v1/messages';
+  const endpointsRaw = env?.PRIVACY_FILTER_ENDPOINTS?.trim() || '/v1/messages,/v1/chat/completions,/v1/responses,/v1/interactions';
   const endpoints = new Set(
     endpointsRaw
       .split(',')
@@ -47,10 +47,10 @@ export function getPrivacyFilterConfig(env?: Env): PrivacyFilterConfig | null {
   const failOpen = env?.PRIVACY_FILTER_FAIL_OPEN === 'true' || env?.PRIVACY_FILTER_FAIL_OPEN === '1';
 
   const timeoutParsed = Number(env?.PRIVACY_FILTER_TIMEOUT_MS);
-  const timeoutMs = Number.isFinite(timeoutParsed) && timeoutParsed > 0 ? Math.floor(timeoutParsed) : 30000;
+  const timeoutMs = Number.isFinite(timeoutParsed) && timeoutParsed > 0 ? Math.floor(timeoutParsed) : 5000;
 
   const maxCharsParsed = Number(env?.PRIVACY_FILTER_MAX_CHARS);
-  const maxChars = Number.isFinite(maxCharsParsed) && maxCharsParsed > 0 ? Math.floor(maxCharsParsed) : 200000;
+  const maxChars = Number.isFinite(maxCharsParsed) && maxCharsParsed > 0 ? Math.floor(maxCharsParsed) : 1024000;
 
   return { url: url.replace(/\/+$/, ''), endpoints, failOpen, timeoutMs, maxChars };
 }
@@ -58,7 +58,10 @@ export function getPrivacyFilterConfig(env?: Env): PrivacyFilterConfig | null {
 /** Whether the given proxy path should be filtered under this config. */
 export function shouldFilterPath(config: PrivacyFilterConfig, path: string): boolean {
   // Match on the path portion, ignoring any query string.
-  const bare = path.split('?', 1)[0];
+  const bare = path.split('?', 1)[0]; // TODO: not work for '/v1beta/models/${upstreamModelName}:', may split at ':' and then strip last '/' leave just '/v1beta/models'
+  if (path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) {
+    return config.endpoints.has('/v1beta/models') || config.endpoints.has('/v1/models');
+  }
   return config.endpoints.has(bare);
 }
 

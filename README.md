@@ -1163,8 +1163,8 @@ LOG_LEVEL = "info"
 # PRIVACY_FILTER_URL = "http://127.0.0.1:8799"
 # PRIVACY_FILTER_ENDPOINTS = "/v1/messages"   # comma list of proxy paths to filter
 # PRIVACY_FILTER_FAIL_OPEN = "false"          # false = fail-closed (never leak PII upstream)
-# PRIVACY_FILTER_TIMEOUT_MS = "30000"
-# PRIVACY_FILTER_MAX_CHARS = "200000"
+# PRIVACY_FILTER_TIMEOUT_MS = "5000"
+# PRIVACY_FILTER_MAX_CHARS = "1024000"
 ```
 
 For local Node.js runs, either pass inline or export them:
@@ -1207,10 +1207,10 @@ node dist/server.js
 | `JSON_STRINGIFY_METHOD` | `JSON_STRINGIFY_METHOD` | unset |
 | `TIKTOKEN_MODEL` | `TIKTOKEN_MODEL` | unset |
 | `PRIVACY_FILTER_URL` | `PRIVACY_FILTER_URL` | unset (plugin off) |
-| `PRIVACY_FILTER_ENDPOINTS` | `PRIVACY_FILTER_ENDPOINTS` | `"/v1/messages"` |
+| `PRIVACY_FILTER_ENDPOINTS` | `PRIVACY_FILTER_ENDPOINTS` | `"/v1/messages,/v1/chat/completions,/v1/responses,/v1/interactions"` |
 | `PRIVACY_FILTER_FAIL_OPEN` | `PRIVACY_FILTER_FAIL_OPEN` | `"false"` |
-| `PRIVACY_FILTER_TIMEOUT_MS` | `PRIVACY_FILTER_TIMEOUT_MS` | `"30000"` |
-| `PRIVACY_FILTER_MAX_CHARS` | `PRIVACY_FILTER_MAX_CHARS` | `"200000"` |
+| `PRIVACY_FILTER_TIMEOUT_MS` | `PRIVACY_FILTER_TIMEOUT_MS` | `"5000"` |
+| `PRIVACY_FILTER_MAX_CHARS` | `PRIVACY_FILTER_MAX_CHARS` | `"1024000"` |
 
 ### Privacy Filter (PII redaction) plugin
 
@@ -1283,10 +1283,10 @@ curl -s localhost:8799/redact -d '{"texts":["email alice@x.com and bob@y.com"]}'
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `PRIVACY_FILTER_URL` | unset | Sidecar base URL, e.g. `http://127.0.0.1:8799`. **Unset = plugin off.** |
-| `PRIVACY_FILTER_ENDPOINTS` | `/v1/messages` | Comma list of proxy paths to filter. |
+| `PRIVACY_FILTER_ENDPOINTS` | `/v1/messages,/v1/chat/completions,/v1/responses,/v1/interactions,/v1beta/models` | Comma list of proxy paths to filter. |
 | `PRIVACY_FILTER_FAIL_OPEN` | `false` | `false` = **fail-closed** (if the sidecar is unreachable the request errors rather than leaking PII upstream). `true` = forward original text on sidecar error. |
-| `PRIVACY_FILTER_TIMEOUT_MS` | `30000` | Per-call timeout to the sidecar. |
-| `PRIVACY_FILTER_MAX_CHARS` | `200000` | Skip redaction above this total text size (safety cap). |
+| `PRIVACY_FILTER_TIMEOUT_MS` | `5000` | Per-call timeout to the sidecar. |
+| `PRIVACY_FILTER_MAX_CHARS` | `1024000` | Skip redaction above this total text size (safety cap). |
 
 Timeouts are enforced on **both** ends: the proxy aborts the `fetch` after
 `PRIVACY_FILTER_TIMEOUT_MS`, and the sidecar's `--timeout` independently bounds each
