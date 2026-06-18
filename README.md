@@ -195,6 +195,21 @@ Pipeline:
 2. **Judge** — if configured and `>= min_panel` responses succeeded, the judge receives all panel text plus the original user prompt and returns a structured JSON analysis (consensus, contradictions, unique insights, blind spots). If the judge fails and `judge_required` is `false`, synthesis proceeds on raw panel text.
 3. **Synth** — receives the structured analysis (or raw panel in degraded mode) and the original user prompt. The client's `stream` flag is forwarded, so the synth response is streamed or buffered as requested.
 
+Timeouts:
+
+| Stage | Timeout | Default | Config |
+|---|---|---|---|
+| **Panel** | `panel_timeout_ms` | 60,000 ms (60 s) | `fusion_options.panel_timeout_ms` |
+| **Judge** | `UPSTREAM_BODY_TIMEOUT_MS` | 600,000 ms (10 min) | env var |
+| **Synth** | `UPSTREAM_BODY_TIMEOUT_MS` | 600,000 ms (10 min) | env var |
+| **Privacy filter** | `PRIVACY_FILTER_TIMEOUT_MS` | 40,000 ms (40 s) | env var |
+
+Importance: **Synth > Judge > Panel**
+
+- **Synth** is the most critical — it writes the final answer the user sees. A synth failure fails the entire request. Use the best/most expensive model here.
+- **Judge** is optional and degrades gracefully (`judge_required: false`, the default). A judge failure falls back to raw panel text. A medium-tier model is sufficient.
+- **Panel** generates diverse perspectives. Multiple models call in parallel, so absolute cost per request is high, but each individual call can use a cheaper model. The panel timeout only guards against hung calls; successful panels are always used regardless.
+
 Latency: the three stages run **sequentially**, so total time is the sum of the stages:
 
 ```
