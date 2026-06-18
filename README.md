@@ -1163,7 +1163,7 @@ LOG_LEVEL = "info"
 # PRIVACY_FILTER_URL = "http://127.0.0.1:8799"
 # PRIVACY_FILTER_ENDPOINTS = "/v1/messages"   # comma list of proxy paths to filter
 # PRIVACY_FILTER_FAIL_OPEN = "false"          # false = fail-closed (never leak PII upstream)
-# PRIVACY_FILTER_TIMEOUT_MS = "5000"
+# PRIVACY_FILTER_TIMEOUT_MS = "40000"
 # PRIVACY_FILTER_MAX_CHARS = "1024000"
 ```
 
@@ -1209,7 +1209,7 @@ node dist/server.js
 | `PRIVACY_FILTER_URL` | `PRIVACY_FILTER_URL` | unset (plugin off) |
 | `PRIVACY_FILTER_ENDPOINTS` | `PRIVACY_FILTER_ENDPOINTS` | `"/v1/messages,/v1/chat/completions,/v1/responses,/v1/interactions"` |
 | `PRIVACY_FILTER_FAIL_OPEN` | `PRIVACY_FILTER_FAIL_OPEN` | `"false"` |
-| `PRIVACY_FILTER_TIMEOUT_MS` | `PRIVACY_FILTER_TIMEOUT_MS` | `"5000"` |
+| `PRIVACY_FILTER_TIMEOUT_MS` | `PRIVACY_FILTER_TIMEOUT_MS` | `"40000"` |
 | `PRIVACY_FILTER_MAX_CHARS` | `PRIVACY_FILTER_MAX_CHARS` | `"1024000"` |
 
 ### Privacy Filter (PII redaction) plugin
@@ -1225,6 +1225,12 @@ It is built on [OpenAI Privacy Filter](https://huggingface.co/openai/privacy-fil
 (emails, phone numbers, names, addresses, account numbers, URLs, dates, secrets).
 
 #### How it works (reversible redact → restore)
+
+```
+endpoint  →  proxy  →  filter sidecar  →  proxy (replace sentinels)  →  upstream LLM
+                ↑                                                            │
+                └──────── proxy (restore originals)  ←  response  ←  ────────┘
+```
 
 1. The proxy parses the request body and collects every user-visible text fragment
    (Anthropic `system` + `messages[].content`, OpenAI `messages[].content`; both string
@@ -1255,9 +1261,12 @@ git submodule update --init submodules/privacy-filter
 
 # --device auto probes mps (Apple Silicon) → cuda → cpu, with a warmup-based
 # fallback to cpu if the chosen backend fails to load.
-# --timeout bounds each /redact call (default 30s; 0 disables) so a stalled
+# --timeout bounds each /redact call (default 100s; 0 disables) so a stalled
 # inference returns 504 instead of hanging the caller.
-OPF_MOE_TRITON=0 python submodules/privacy-filter/serve.py --device auto --port 8799 --timeout 30
+# --timeout should be longer than the proxy's PRIVACY_FILTER_TIMEOUT_MS so the proxy
+# gives up first (returning 504 to the client) rather than aborting mid-inference
+# (which would leave the sidecar thread hanging after writing to a closed socket).
+OPF_MOE_TRITON=0 python submodules/privacy-filter/serve.py --device auto --port 8799 --timeout 100
 ```
 
 > **Note:** the sidecar requires a Python where `torch` is installed. On this machine the
@@ -1274,9 +1283,34 @@ PRIVACY_FILTER_URL=http://127.0.0.1:8799 npm run server
 Quick sidecar check:
 
 ```bash
-curl -s localhost:8799/redact -d '{"texts":["email alice@x.com and bob@y.com"]}'
-# → {"redacted":["email ⟦PII:0⟧ and ⟦PII:1⟧"],"mapping":{"⟦PII:0⟧":"alice@x.com","⟦PII:1⟧":"bob@y.com"},"span_count":2}
+curl -s localhost:8799/redact -d '{"texts":["email test@abc.com, NO.123 Sunset BLVD, LA"]}'
+# → {"redacted":["⟦PII:0⟧, ⟦PII:1⟧, ⟦PII:2⟧, ⟦PII:3⟧"],"mapping":{"⟦PII:0⟧":"test@abc.com","⟦PII:1⟧":"123","⟦PII:2⟧":"Sunset BLVD","⟦PII:3⟧":"LA"},"span_count":4}
 ```
+
+**Proxy → sidecar request/response flow (one text):**
+
+```bash
+curl -s localhost:8799/redact -d '{"text":"Send to test@abc.com, Street No.123, LA"}'
+```
+
+Sidecar response — the model detected 2 PII spans and replaced them with sentinels:
+
+```json
+{
+  "redacted": ["⟦PII:0⟧, Street No.⟦PII:1⟧, LA"],
+  "mapping": {
+    "⟦PII:0⟧": "test@abc.com",
+    "⟦PII:1⟧": "123"
+  },
+  "span_count": 2
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `redacted` | Array of input texts with PII replaced by sentinels. Each sentinel (`⟦PII:N⟧`) is unique per-span so the mapping is reversible. |
+| `mapping` | Map of sentinel → original PII value. Used by the proxy to restore the response on the way back to the client. |
+| `span_count` | Total number of PII spans detected across all input texts. |
 
 #### Configuration
 
@@ -1285,7 +1319,7 @@ curl -s localhost:8799/redact -d '{"texts":["email alice@x.com and bob@y.com"]}'
 | `PRIVACY_FILTER_URL` | unset | Sidecar base URL, e.g. `http://127.0.0.1:8799`. **Unset = plugin off.** |
 | `PRIVACY_FILTER_ENDPOINTS` | `/v1/messages,/v1/chat/completions,/v1/responses,/v1/interactions,/v1beta/models` | Comma list of proxy paths to filter. |
 | `PRIVACY_FILTER_FAIL_OPEN` | `false` | `false` = **fail-closed** (if the sidecar is unreachable the request errors rather than leaking PII upstream). `true` = forward original text on sidecar error. |
-| `PRIVACY_FILTER_TIMEOUT_MS` | `5000` | Per-call timeout to the sidecar. |
+| `PRIVACY_FILTER_TIMEOUT_MS` | `40000` | Per-call timeout to the sidecar. A larger value is needed because AI agents (e.g. Claude Code) use long contexts — a full conversation history with dozens of messages and code files can easily reach 100K+ characters, which takes the OPF model several seconds to scan. The sidecar's `--timeout` should always be longer than this value so the proxy aborts first (clean 504 to the client) rather than closing the socket mid-inference (which would crash the sidecar thread). |
 | `PRIVACY_FILTER_MAX_CHARS` | `1024000` | Skip redaction above this total text size (safety cap). |
 
 Timeouts are enforced on **both** ends: the proxy aborts the `fetch` after

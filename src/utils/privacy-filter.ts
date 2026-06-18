@@ -47,7 +47,7 @@ export function getPrivacyFilterConfig(env?: Env): PrivacyFilterConfig | null {
   const failOpen = env?.PRIVACY_FILTER_FAIL_OPEN === 'true' || env?.PRIVACY_FILTER_FAIL_OPEN === '1';
 
   const timeoutParsed = Number(env?.PRIVACY_FILTER_TIMEOUT_MS);
-  const timeoutMs = Number.isFinite(timeoutParsed) && timeoutParsed > 0 ? Math.floor(timeoutParsed) : 5000;
+  const timeoutMs = Number.isFinite(timeoutParsed) && timeoutParsed > 0 ? Math.floor(timeoutParsed) : 40000;
 
   const maxCharsParsed = Number(env?.PRIVACY_FILTER_MAX_CHARS);
   const maxChars = Number.isFinite(maxCharsParsed) && maxCharsParsed > 0 ? Math.floor(maxCharsParsed) : 1024000;
