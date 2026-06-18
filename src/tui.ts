@@ -1027,7 +1027,7 @@ class DashboardApp {
       : '';
     this.openPrompt(
       `Token limit for ${bold(alias)}`,
-      'Format: <num[k|m|b|t]> <1h|1d|1w|1m>  (e.g. 50k 1d, 1.5m 1h, 100000 1w)  blank clears',
+      'Format: <num[k|M|B|T]> <1h|1d|1w|1m>  (e.g. 50k 1d, 1.5M 1h, 100000 1w)  blank clears',
       defaultValue,
       async (value) => {
         const trimmed = value.trim();
@@ -1062,7 +1062,7 @@ class DashboardApp {
     const defaultValue = current ?? '';
     this.openPrompt(
       `${bold('Global')} token limit`,
-      'Format: <num[k|m|b|t]> <1h|1d|1w|1m>  (e.g. 1.1b 1d, 50k 1h)  blank clears',
+      'Format: <num[k|M|B|T]> <1h|1d|1w|1m>  (e.g. 1.1B 1d, 50k 1h)  blank clears',
       defaultValue,
       async (value) => {
         const trimmed = value.trim();
@@ -1075,7 +1075,7 @@ class DashboardApp {
         }
         const parsed = parseHumanTokenLimit(trimmed);
         if (!parsed) {
-          this.view.setMessage('Invalid. Use: <num> <1h|1d|1w|1m>  e.g. 1.1b 1d');
+          this.view.setMessage('Invalid. Use: <num> <1h|1d|1w|1m>  e.g. 1.1B 1d');
           await this.refresh();
           this.requestRender();
           return;

@@ -67,6 +67,8 @@ type RequestEndpointTimingStatsEntry = {
   count: number;
 };
 
+// NOTE: timestamp is stored in SECONDS precision in the JSONL file (saves 3 chars/entry),
+// but kept in MILLISECONDS precision in memory — callers must convert accordingly.
 type TokenHeatmapEvent = {
   timestamp: number;
   values: number;
@@ -305,7 +307,7 @@ function ensureTokenLogDir(filePath: string): void {
 
 function dumpDailyTokens(dateStr: string): void {
   ensureTokenLogDir(TOKEN_LOG_FILE);
-  const timestamp = new Date().toISOString();
+  const timestampSec = Math.floor(Date.now() / 1000);
   const cutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
   const recentEvents = tokenHeatmapEvents.filter((e) => {
     const eventDate = new Date(e.timestamp).toISOString().slice(0, 10);
@@ -325,15 +327,15 @@ function dumpDailyTokens(dateStr: string): void {
 
   const logLine = JSON.stringify({
     date: dateStr,
-    timestamp,
+    timestamp: timestampSec, // Unix seconds (matching heatmapEvents timestamps)
     lastDumpTs: 0, // 0 = full snapshot, load treats missing/0 as full
     modelStats: [...dailyTokenStats.values()],
-    heatmapEvents: recentEvents,
+    heatmapEvents: recentEvents.map((e) => ({ ...e, timestamp: e.timestamp / 1000 })), // ms → sec for storage
     compositeLimitWindows: windowsObj,
   }) + '\n';
   writeFileSync(TOKEN_LOG_FILE, logLine, { flag: 'a' });
   // Reset: next delta dump starts from now (day rollover = fresh start)
-  lastHeatmapDumpTs = Date.now();
+  lastHeatmapDumpTs = timestampSec;
 }
 
 function getOrCreateDailyModelStat(model: string): ModelStatsEntry {
@@ -382,7 +384,7 @@ export function dumpTodayTokens(): void {
   }
 
   ensureTokenLogDir(TOKEN_LOG_FILE);
-  const timestamp = new Date().toISOString();
+  const timestampSec = Math.floor(Date.now() / 1000);
 
   const modelEntries = [...dailyTokenStats.values()];
 
@@ -390,18 +392,18 @@ export function dumpTodayTokens(): void {
   const cutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
   const deltaEvents = tokenHeatmapEvents.filter((e) => {
     const eventDate = new Date(e.timestamp).toISOString().slice(0, 10);
-    return eventDate === today && e.timestamp > lastHeatmapDumpTs && e.timestamp >= cutoff;
+    return eventDate === today && e.timestamp > lastHeatmapDumpTs * 1000 && e.timestamp >= cutoff;
   });
 
   const logLine = JSON.stringify({
     date: today,
-    timestamp,
+    timestamp: timestampSec, // Unix seconds (matching heatmapEvents timestamps)
     lastDumpTs: lastHeatmapDumpTs,
     modelStats: modelEntries,
-    heatmapEvents: deltaEvents,
+    heatmapEvents: deltaEvents.map((e) => ({ ...e, timestamp: e.timestamp / 1000 })), // ms → sec for storage
   }) + '\n';
   writeFileSync(TOKEN_LOG_FILE, logLine, { flag: 'a' });
-  lastHeatmapDumpTs = Date.now();
+  lastHeatmapDumpTs = timestampSec;
 }
 
 type PersistedLimitWindow = {
@@ -426,15 +428,21 @@ export function loadTokenStatsFromLog(): void {
       last30Days.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
     }
 
-    // First pass: find the latest timestamp per date
-    const latestPerDate = new Map<string, string>();
+    // First pass: find the latest timestamp per date (stored as Unix seconds)
+    const latestPerDate = new Map<string, number>();
     for (const line of lines) {
       try {
-        const record = JSON.parse(line) as { date: string; timestamp?: string };
+        const record = JSON.parse(line) as { date: string; timestamp?: string | number };
         if (!last30Days.has(record.date)) continue;
+        const ts =
+          typeof record.timestamp === 'number'
+            ? record.timestamp
+            : typeof record.timestamp === 'string'
+              ? Math.floor(new Date(record.timestamp).getTime() / 1000)
+              : 0;
         const existing = latestPerDate.get(record.date);
-        if (!existing || (record.timestamp && record.timestamp > existing)) {
-          latestPerDate.set(record.date, record.timestamp || '');
+        if (!existing || ts > existing) {
+          latestPerDate.set(record.date, ts);
         }
       } catch {
         // skip malformed lines
@@ -443,13 +451,13 @@ export function loadTokenStatsFromLog(): void {
 
     // Second pass: load data only from the latest dump per date
     const seenHeatmap = new Set<string>();
-    const cutoff = Date.now() - TOKEN_RETENTION_WINDOW_MS;
+    const cutoffSec = Math.floor((Date.now() - TOKEN_RETENTION_WINDOW_MS) / 1000); // event timestamps are in sec
 
     for (const line of lines) {
       try {
         const record = JSON.parse(line) as {
           date: string;
-          timestamp?: string;
+          timestamp?: string | number;
           lastDumpTs?: number;
           entries?: ModelStatsEntry[];
           modelStats?: ModelStatsEntry[];
@@ -460,7 +468,13 @@ export function loadTokenStatsFromLog(): void {
 
         // Load model stats from the latest dump per date only
         const latestTs = latestPerDate.get(record.date);
-        if (record.timestamp !== latestTs) continue; // not the latest dump for this date, skip
+        const recTs =
+          typeof record.timestamp === 'number'
+            ? record.timestamp
+            : typeof record.timestamp === 'string'
+              ? Math.floor(new Date(record.timestamp).getTime() / 1000)
+              : 0;
+        if (recTs !== latestTs) continue; // not the latest dump for this date, skip
         const modelEntries = record.modelStats ?? record.entries ?? [];
         for (const entry of modelEntries) {
           dailyTokenStats.set(entry.model, entry);
@@ -473,14 +487,19 @@ export function loadTokenStatsFromLog(): void {
         // The 30-day cutoff always applies.
         const events = record.heatmapEvents;
         if (Array.isArray(events)) {
-          const eventCutoff = (record.lastDumpTs && record.lastDumpTs > 0) ? record.lastDumpTs : 0;
+          // lastDumpTs was stored in ms (old data) or sec (new data); convert to sec for comparison
+          const rawLastDumpTs = record.lastDumpTs ?? 0;
+          const eventCutoffSec =
+            rawLastDumpTs > 1e11 // likely ms (e.g. 1781765466424) — convert to sec
+              ? Math.floor(rawLastDumpTs / 1000)
+              : rawLastDumpTs;
           for (const event of events) {
-            if (event.timestamp < cutoff) continue;
-            if (eventCutoff > 0 && event.timestamp <= eventCutoff) continue;
+            if (event.timestamp < cutoffSec) continue;
+            if (eventCutoffSec > 0 && event.timestamp <= eventCutoffSec) continue;
             const key = `${event.timestamp}:${event.values}:${event.model ?? ''}`;
             if (seenHeatmap.has(key)) continue;
             seenHeatmap.add(key);
-            tokenHeatmapEvents.push(event);
+            tokenHeatmapEvents.push({ ...event, timestamp: event.timestamp * 1000 }); // sec → ms in memory
           }
         }
 
@@ -910,8 +929,10 @@ function recordTokenHeatmapEvent(values: number, timestamp = Date.now(), model?:
     return;
   }
 
-  tokenHeatmapEvents.push({ timestamp, values, model });
-  const cutoff = timestamp - TOKEN_RETENTION_WINDOW_MS;
+  // Truncate to second precision so events with the same model+values+second are deduplicable
+  const secTimestamp = Math.floor(timestamp / 1000) * 1000;
+  tokenHeatmapEvents.push({ timestamp: secTimestamp, values, model });
+  const cutoff = secTimestamp - TOKEN_RETENTION_WINDOW_MS;
   while (tokenHeatmapEvents.length > 0 && tokenHeatmapEvents[0].timestamp < cutoff) {
     tokenHeatmapEvents.shift();
   }

@@ -43,9 +43,9 @@ export type TokenLimitDuration = '1h' | '1d' | '1w' | '1m';
 
 /**
  * Parse a human-readable token limit string into a number.
- * Supports raw numbers ("50000"), whole-number suffixes ("100k", "1.5m"),
- * and suffix-only with multiplier ("k", "m", "b", "t").
- * Examples: "50k 1d" → {num: 50000, duration: "1d"}, "1.5m 1h" → {num: 1500000, duration: "1h"}
+ * Supports raw numbers ("50000"), whole-number suffixes ("100k", "1.5M"),
+ * and suffix-only with multiplier ("k", "M", "B", "T").
+ * Examples: "50k 1d" → {num: 50000, duration: "1d"}, "1.5M 1h" → {num: 1500000, duration: "1h"}
  */
 export function parseHumanTokenLimit(raw: string): { num: number; duration: TokenLimitDuration } | null {
   const trimmed = raw.trim();
@@ -65,12 +65,12 @@ export function parseHumanTokenLimit(raw: string): { num: number; duration: Toke
 
 /**
  * Format a token limit as a human-readable string.
- * Examples: 50000 → "50k", 1500000 → "1.5m"
+ * Examples: 50000 → "50k", 1500000 → "1.5M"
  */
 export function formatTokenLimit(num: number): string {
-  if (num >= 1_000_000_000_000) return (num / 1_000_000_000_000).toFixed(1).replace(/\.0$/, '') + 't';
-  if (num >= 1_000_000_000) return (num / 1_000_000_000).toFixed(1).replace(/\.0$/, '') + 'b';
-  if (num >= 1_000_000) return (num / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'm';
+  if (num >= 1_000_000_000_000) return (num / 1_000_000_000_000).toFixed(1).replace(/\.0$/, '') + 'T';
+  if (num >= 1_000_000_000) return (num / 1_000_000_000).toFixed(1).replace(/\.0$/, '') + 'B';
+  if (num >= 1_000_000) return (num / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
   if (num >= 1_000) return (num / 1_000).toFixed(1).replace(/\.0$/, '') + 'k';
   return String(num);
 }

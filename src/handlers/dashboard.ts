@@ -185,7 +185,7 @@ export function upsertGlobalTokenLimitFromDashboard(
   }
   const parsed = parseHumanTokenLimit(rawInput);
   if (!parsed) {
-    throw new Error(`Invalid token limit format: "${rawInput}". Use: <num> <1h|1d|1w|1m>  (e.g. 1.1b 1d, 50k 1h)`);
+    throw new Error(`Invalid token limit format: "${rawInput}". Use: <num> <1h|1d|1w|1m>  (e.g. 1.1B 1d, 50k 1h)`);
   }
   return saveConfigMutation(env, (baseConfig) => upsertGlobalTokenLimit(baseConfig, rawInput.trim()));
 }
