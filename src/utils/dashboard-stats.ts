@@ -1,4 +1,5 @@
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
+import { createHash } from 'crypto';
 import { dirname } from 'path';
 import { stringify } from './stringify.js';
 import type { TokenLimitDuration } from './config-loader.js';
@@ -72,8 +73,25 @@ type RequestEndpointTimingStatsEntry = {
 type TokenHeatmapEvent = {
   timestamp: number;
   values: number;
-  model?: string;
+  id?: string;
 };
+
+// ── Heatmap model id registry ──────────────────────────────────────────────────
+// Model names are stored in the JSONL as compact hex ids; the `models` map
+// on each row maps the id back to the name. We use 4 hex chars (16 bits) —
+// enough for 65k unique ids, far more than any realistic model fleet.
+const modelIdByName = new Map<string, string>();
+const modelNameById = new Map<string, string>();
+const MODEL_ID_HEX_LEN = 4;
+
+function getOrAssignModelId(model: string): string {
+  const existing = modelIdByName.get(model);
+  if (existing) return existing;
+  const id = createHash('sha256').update(model).digest('hex').slice(0, MODEL_ID_HEX_LEN);
+  modelIdByName.set(model, id);
+  modelNameById.set(id, model);
+  return id;
+}
 
 const TOKEN_HEATMAP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;   // heatmap rendering: 7 days
 const TOKEN_RETENTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // event retention for enforcement: 30 days
@@ -305,6 +323,24 @@ function ensureTokenLogDir(filePath: string): void {
   }
 }
 
+type HeatmapDump = {
+  models: Record<string, string>;
+  sequences: Array<{ ts: number; values: number; id?: string }>;
+};
+
+function buildHeatmapDump(events: TokenHeatmapEvent[]): HeatmapDump {
+  const models: Record<string, string> = {};
+  const sequences: Array<{ ts: number; values: number; id?: string }> = [];
+  for (const e of events) {
+    if (e.id) {
+      const name = modelNameById.get(e.id);
+      if (name) models[e.id] = name;
+    }
+    sequences.push({ ts: Math.floor(e.timestamp / 1000), values: e.values, id: e.id });
+  }
+  return { models, sequences };
+}
+
 function dumpDailyTokens(dateStr: string): void {
   ensureTokenLogDir(TOKEN_LOG_FILE);
   const timestampSec = Math.floor(Date.now() / 1000);
@@ -330,7 +366,7 @@ function dumpDailyTokens(dateStr: string): void {
     timestamp: timestampSec, // Unix seconds (matching heatmapEvents timestamps)
     lastDumpTs: 0, // 0 = full snapshot, load treats missing/0 as full
     modelStats: [...dailyTokenStats.values()],
-    heatmapEvents: recentEvents.map((e) => ({ ...e, timestamp: e.timestamp / 1000 })), // ms → sec for storage
+    heatmapEvents: buildHeatmapDump(recentEvents),
     compositeLimitWindows: windowsObj,
   }) + '\n';
   writeFileSync(TOKEN_LOG_FILE, logLine, { flag: 'a' });
@@ -400,7 +436,7 @@ export function dumpTodayTokens(): void {
     timestamp: timestampSec, // Unix seconds (matching heatmapEvents timestamps)
     lastDumpTs: lastHeatmapDumpTs,
     modelStats: modelEntries,
-    heatmapEvents: deltaEvents.map((e) => ({ ...e, timestamp: e.timestamp / 1000 })), // ms → sec for storage
+    heatmapEvents: buildHeatmapDump(deltaEvents),
   }) + '\n';
   writeFileSync(TOKEN_LOG_FILE, logLine, { flag: 'a' });
   lastHeatmapDumpTs = timestampSec;
@@ -461,7 +497,7 @@ export function loadTokenStatsFromLog(): void {
           lastDumpTs?: number;
           entries?: ModelStatsEntry[];
           modelStats?: ModelStatsEntry[];
-          heatmapEvents?: TokenHeatmapEvent[];
+          heatmapEvents?: unknown;
           compositeLimitWindows?: Record<string, PersistedLimitWindow>;
         };
         if (!last30Days.has(record.date)) continue;
@@ -485,18 +521,47 @@ export function loadTokenStatsFromLog(): void {
         //   - missing / 0 lastDumpTs: include all events (old cumulative rows or new full snapshots)
         //   - > 0 lastDumpTs: delta row, include only events newer than lastDumpTs
         // The 30-day cutoff always applies.
-        const events = record.heatmapEvents;
-        if (Array.isArray(events)) {
+        // Two on-disk shapes are accepted:
+        //   - legacy: array of { timestamp, values, model }
+        //   - current: { models: { id: name }, sequences: [{ ts, values, id }] }
+        const rawEvents = record.heatmapEvents;
+        type NormEvent = { timestamp: number; values: number; id?: string };
+        const normalized: NormEvent[] = [];
+
+        if (Array.isArray(rawEvents)) {
+          for (const ev of rawEvents as Array<Record<string, unknown>>) {
+            if (typeof ev?.timestamp !== 'number' || typeof ev?.values !== 'number') continue;
+            const modelName = typeof ev.model === 'string' && ev.model ? ev.model : undefined;
+            const id = modelName ? getOrAssignModelId(modelName) : undefined;
+            normalized.push({ timestamp: ev.timestamp, values: ev.values, id });
+          }
+        } else if (rawEvents && typeof rawEvents === 'object' && Array.isArray((rawEvents as { sequences?: unknown }).sequences)) {
+          const dump = rawEvents as { models?: Record<string, string>; sequences: Array<Record<string, unknown>> };
+          const rowModels = dump.models ?? {};
+          for (const [id, name] of Object.entries(rowModels)) {
+            if (typeof id === 'string' && id && typeof name === 'string' && name) {
+              modelIdByName.set(name, id);
+              modelNameById.set(id, name);
+            }
+          }
+          for (const ev of dump.sequences) {
+            if (typeof ev?.ts !== 'number' || typeof ev?.values !== 'number') continue;
+            const id = typeof ev.id === 'string' && ev.id ? ev.id : undefined;
+            normalized.push({ timestamp: ev.ts, values: ev.values, id });
+          }
+        }
+
+        if (normalized.length > 0) {
           // lastDumpTs was stored in ms (old data) or sec (new data); convert to sec for comparison
           const rawLastDumpTs = record.lastDumpTs ?? 0;
           const eventCutoffSec =
             rawLastDumpTs > 1e11 // likely ms (e.g. 1781765466424) — convert to sec
               ? Math.floor(rawLastDumpTs / 1000)
               : rawLastDumpTs;
-          for (const event of events) {
+          for (const event of normalized) {
             if (event.timestamp < cutoffSec) continue;
             if (eventCutoffSec > 0 && event.timestamp <= eventCutoffSec) continue;
-            const key = `${event.timestamp}:${event.values}:${event.model ?? ''}`;
+            const key = `${event.timestamp}:${event.values}:${event.id ?? ''}`;
             if (seenHeatmap.has(key)) continue;
             seenHeatmap.add(key);
             tokenHeatmapEvents.push({ ...event, timestamp: event.timestamp * 1000 }); // sec → ms in memory
@@ -931,7 +996,8 @@ function recordTokenHeatmapEvent(values: number, timestamp = Date.now(), model?:
 
   // Truncate to second precision so events with the same model+values+second are deduplicable
   const secTimestamp = Math.floor(timestamp / 1000) * 1000;
-  tokenHeatmapEvents.push({ timestamp: secTimestamp, values, model });
+  const id = model ? getOrAssignModelId(model) : undefined;
+  tokenHeatmapEvents.push({ timestamp: secTimestamp, values, id });
   const cutoff = secTimestamp - TOKEN_RETENTION_WINDOW_MS;
   while (tokenHeatmapEvents.length > 0 && tokenHeatmapEvents[0].timestamp < cutoff) {
     tokenHeatmapEvents.shift();

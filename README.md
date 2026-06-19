@@ -444,14 +444,14 @@ The proxy persists token stats, heatmap data, and composite limit windows to `/t
 
 **Log file format** (one JSON object per line):
 ```json
-{"date":"2026-06-05","timestamp":"2026-06-05T15:20:09.156Z","lastDumpTs":1750000000000,"modelStats":[{"model":"deepseek-v4-flash","requests":53,"failed_requests":1,"input_tokens":333034,"cached_tokens":0,"cache_written_tokens":0,"output_tokens":4664,"total_tokens":337698}],"heatmapEvents":[{"timestamp":1750000000001,"values":24223,"model":"deepseek-v4-flash"}],"compositeLimitWindows":{"gpt-all":{"limit":120000,"duration":"1d","windowStartMs":1750000000000,"accumulator":8400}}}
+{"date":"2026-06-05","timestamp":"2026-06-05T15:20:09.156Z","lastDumpTs":1750000000000,"modelStats":[{"model":"deepseek-v4-flash","requests":53,"failed_requests":1,"input_tokens":333034,"cached_tokens":0,"cache_written_tokens":0,"output_tokens":4664,"total_tokens":337698}],"heatmapEvents":{"models":{"a3f1":"deepseek-v4-flash"},"sequences":[{"ts":1750000001,"values":24223,"id":"a3f1"}]},"compositeLimitWindows":{"gpt-all":{"limit":120000,"duration":"1d","windowStartMs":1750000000000,"accumulator":8400}}}
 ```
 
 Fields:
 - `date` / `timestamp`: date string and ISO timestamp of the dump
 - `lastDumpTs`: unix ms timestamp of the previous dump. `0` = full snapshot (daily rollover). Used to write delta-only events and to filter events on load (backward compatible with old rows without this field).
 - `modelStats`: cumulative daily token stats per model (written every dump)
-- `heatmapEvents`: same-day heatmap events only. Each dump writes **delta-only** — events newer than `lastDumpTs`. Day rollover writes a full same-day snapshot.
+- `heatmapEvents`: same-day heatmap events only. Each dump writes **delta-only** — events newer than `lastDumpTs`. Day rollover writes a full same-day snapshot. Stored as `{ models: { <hex-id>: <model-name> }, sequences: [{ ts, values, id? }] }`. Model ids are 4 hex chars (16 bits, 65k ids) — more than enough for any realistic model fleet. Only models referenced by this row's `sequences` are included in `models`, so each row is self-contained.
 - `compositeLimitWindows`: persisted composite alias limit windows
 
 **Dump triggers:**
@@ -463,9 +463,10 @@ Fields:
 **Startup restore (backward compatible with all existing log files):**
 - On proxy startup, `loadTokenStatsFromLog()` reads the last 30 days from the log
 - **modelStats**: loaded from the latest dump per date only (later dumps overwrite earlier)
-- **heatmapEvents**: loaded from **all rows** across all dates, deduplicated by `timestamp:values:model`
+- **heatmapEvents**: loaded from **all rows** across all dates, deduplicated by `ts:values:id`
   - For rows without `lastDumpTs` (old format): all events included
   - For rows with `lastDumpTs > 0` (new delta rows): only events newer than `lastDumpTs` are included
+  - Both the legacy array shape (`[{timestamp, values, model}]`) and the current object shape (`{models, sequences}`) are accepted; legacy rows are converted to the in-memory id form on load
   - 30-day retention cutoff always applied
 - **modelStats** (live counter): NOT restored — starts fresh at zero to ensure `token_limit` on composite aliases is not incorrectly triggered from previous-day tokens
 - **compositeLimitWindows**: restored if the window has not expired. If `windowStartMs + durationMs > now`, the accumulator is restored and enforcement continues from where it left off. If the window has expired, the window is NOT restored (fresh window starts).

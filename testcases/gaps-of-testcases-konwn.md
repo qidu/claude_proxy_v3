@@ -71,11 +71,11 @@ README L135–189 and `routing_config_revision.md` describe `PROXY_CONFIG_URL`-b
 
 ### E. Token log persistence — shallow
 
-README L242–261 describes `/tmp/model_proxy_tokens.log` JSONL format, 7-day restore, deduplication by `timestamp:values:model`, and that **modelStats are NOT restored** (so the `total_token_limit` does not re-trigger across restarts). `06_integration` TC615 only checks the file exists / is written. The following are not covered:
+README L441–475 describes `/tmp/model_proxy_tokens.log` JSONL format, 7-day restore, deduplication by `ts:values:id`, and that **modelStats are NOT restored** (so the `total_token_limit` does not re-trigger across restarts). `06_integration` TC615 only checks the file exists / is written. The following are not covered:
 
-- Line format (`date`, `timestamp`, `modelStats[]`, `heatmapEvents[]`)
+- Line format (`date`, `timestamp`, `modelStats[]`, `heatmapEvents:{models,sequences}`)
 - Restore reads only the latest dump per date
-- `heatmapEvents` dedup on restore
+- `heatmapEvents` dedup on restore (across mixed legacy array + new object rows)
 - `modelStats` is **not** restored
 - Day-transition dump, midnight safety-net dump, Ctrl+O manual dump (TUI) — manual/TUI scope, may be acceptable
 
