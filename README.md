@@ -374,6 +374,27 @@ lazily at runtime via a dynamic import, so:
   The SDK handler imports the built output from `submodules/chatjimmy/dist/`, so
   re-run `npm run build-chatjimmy` after updating the submodule.
 
+#### Routing a model through the SDK
+
+Any model entry can be routed through the ChatJimmy SDK by setting its
+`base_url` slot to an `sdk://host/path` URL. The handler rewrites the scheme
+(`sdk://host/path` → `https://host/path`) when building the SDK client, so the
+third-party endpoint is fully configurable per model — no code change needed to
+point at a different host, path, or vendor.
+
+```toml
+[models.free]
+upstream_mode = "openai-completions"
+api_key = "WELCOME_TO_USE"
+
+# Chatjimmy (default example)
+llama3 = ["llama3.1-8B", "sdk://chatjimmy.ai/api", "-"]
+```
+
+Leave the `api_key` slot empty to use the per-request `Authorization` /
+`x-api-key` header from the caller; set it to a literal key (or
+`x-api-key: sk-...` form) to force a specific upstream credential.
+
 ### 3.1 Terminal Dashboard
 
 Run the server with `TUI=true` to open the terminal dashboard in the same process:
@@ -1171,7 +1192,9 @@ LOG_LEVEL = "info"
 
 # Passthrough mode for /v1/chat/completions (OpenAI-compatible clients)
 # When "true", /v1/chat/completions forwards requests as-is to the default upstream
-# without format conversion. Dashboard stats are still recorded.
+# without format conversion. Requests are validated against the openai-completions
+# schema and request/response are logged. A startup warning is emitted. Do not
+# use in production. Dashboard stats are still recorded.
 # DEV_PASS_THROUGH = "false"
 
 # Default max_tokens for requests that don't include it (default: 8192)
@@ -1543,40 +1566,51 @@ The proxy forwards the client's real IP to upstream APIs via the `x-forwarded-fo
 
 ```
 src/
-├── index.ts                 # Main router and middleware
-├── handlers/
-│   ├── claude.ts           # Claude native API handler (anthropic-messages passthrough)
-│   ├── messages.ts         # Messages API handler (openai-completions conversion)
-│   ├── responses.ts        # Responses API handler
-│   ├── models.ts           # Models API handler
-│   ├── token-counting.ts   # Token counting handler
-│   ├── openai.ts           # OpenAI completions handler
-│   ├── gemini.ts           # Gemini API handler (dual-mode)
-│   └── embeddings.ts       # Embeddings API handler
 ├── converters/
-│   ├── claude-to-openai.ts # Request conversion
-│   ├── openai-to-claude.ts # Response conversion
-│   ├── streaming.ts        # Streaming response conversion
-│   ├── claude-to-gemini.ts # Claude to Gemini conversion
-│   ├── gemini-to-claude.ts # Gemini to Claude conversion
-│   ├── gemini-streaming.ts # Gemini streaming transformer
-│   └── responses-to-completions.ts # Responses API to Chat Completions
-├── utils/
-│   ├── routing.ts          # Auth header handling and URL building
-│   ├── validation.ts       # Request validation
-│   ├── errors.ts           # Error handling
-│   ├── thinking.ts         # Thinking utilities
-│   ├── config-loader.ts    # Proxy config TOML loader
-│   ├── fetch-timeout.ts    # Upstream request timeout
-│   ├── logger.ts           # Logging utilities
-│   ├── sdk-handler.ts      # SDK-based request handling
-│   ├── token-counting.ts   # Token counting utilities
-│   └── beta-features.ts    # Beta feature validation
-└── types/
-    ├── claude.ts           # Claude API types
-    ├── openai.ts           # OpenAI API types
-    ├── gemini.ts           # Gemini API types
-    └── shared.ts           # Shared types
+│   ├── claude-to-gemini.ts         # Claude to Gemini conversion
+│   ├── claude-to-openai.ts         # Request conversion
+│   ├── completions-to-responses.ts # Chat Completions to Responses API
+│   ├── gemini-streaming.ts         # Gemini streaming transformer
+│   ├── gemini-to-claude.ts         # Gemini to Claude conversion
+│   ├── openai-to-claude.ts         # Response conversion
+│   ├── openai-to-gemini.ts         # OpenAI response to Gemini generateContent format
+│   ├── responses-to-completions.ts # Responses API to Chat Completions
+│   └── streaming.ts                # Streaming response conversion
+├── handlers/
+│   ├── chat-completions.ts         # OpenAI /v1/chat/completions passthrough handler
+│   ├── claude.ts                   # Claude native API handler (anthropic-messages passthrough)
+│   ├── dashboard.ts                # Dashboard API handler (config editing and stats)
+│   ├── embeddings.ts               # Embeddings API handler
+│   ├── gemini.ts                   # Gemini API handler (dual-mode)
+│   ├── messages.ts                 # Messages API handler (openai-completions conversion)
+│   ├── models.ts                   # Models API handler
+│   ├── openai.ts                   # OpenAI completions handler
+│   ├── responses.ts                # Responses API handler
+│   └── token-counting.ts           # Token counting handler
+├── heatmap.ts                      # Heatmap rendering for the TUI
+├── index.ts                        # Main router and middleware
+├── server.ts                       # Node.js HTTP server adapter
+├── tui.ts                          # Terminal dashboard UI
+├── types/
+│   ├── claude.ts                   # Claude API types
+│   ├── gemini.ts                   # Gemini API types
+│   ├── openai.ts                   # OpenAI API types
+│   └── shared.ts                   # Shared types
+└── utils/
+    ├── beta-features.ts            # Beta feature validation
+    ├── config-loader.ts            # Proxy config TOML loader
+    ├── conversation-store.ts       # In-memory store for Responses API stateful mode
+    ├── dashboard-stats.ts          # Token/usage stats aggregation for the dashboard
+    ├── errors.ts                   # Error handling
+    ├── fetch-timeout.ts            # Upstream request timeout
+    ├── logger.ts                   # Logging utilities
+    ├── privacy-filter.ts           # PII redaction plugin (proxy to sidecar)
+    ├── routing.ts                  # Auth header handling and URL building
+    ├── sdk-handler.ts              # SDK-based request handling
+    ├── stringify.ts                # Configurable JSON stringifier (safe-stable / fast-safe / native)
+    ├── thinking.ts                 # Thinking utilities
+    ├── token-counting.ts           # Token counting utilities
+    └── validation.ts               # Request validation
 ```
 
 ### Key Components

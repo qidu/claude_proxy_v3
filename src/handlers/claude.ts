@@ -133,7 +133,7 @@ export async function handleClaudeRequest(
         } catch {
             upstreamErrorBody = '(failed to read response body)';
         }
-        const bodyPreview = JSON.stringify(requestBody).substring(0, 1000);
+        const bodyPreview = JSON.stringify(requestBody).substring(0, 300);
         handleTargetApiError(response, 'Claude API', { url: targetUrl, body: bodyPreview, upstreamBody: upstreamErrorBody });
     }
 

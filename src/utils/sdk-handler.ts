@@ -229,8 +229,10 @@ export async function handleSdkOpenAIRequest(
   const sdk = await importChatJimmySdk();
 
   // Create SDK client config
+  // baseURL is derived from the sdk:// target URL configured per-model
+  // (e.g. "sdk://chatjimmy.ai/api" → "https://chatjimmy.ai/api").
   const config: any = {
-    baseURL: 'https://chatjimmy.ai/api', // ChatJimmy API endpoint
+    baseURL: targetUrl.replace(/^sdk:\/\//, 'https://'),
     apiKey: apiKey || '',
     timeout: 3000,
     maxRetries: 3,
@@ -392,8 +394,10 @@ export async function handleSdkAnthropicRequest(
   const sdk = await importChatJimmySdk();
 
   // Create SDK client config
+  // baseURL is derived from the sdk:// target URL configured per-model
+  // (e.g. "sdk://chatjimmy.ai/api" → "https://chatjimmy.ai/api").
   const config: any = {
-    baseURL: 'https://chatjimmy.ai/api', // ChatJimmy API endpoint
+    baseURL: targetUrl.replace(/^sdk:\/\//, 'https://'),
     apiKey: apiKey || '',
     timeout: 30000,
     maxRetries: 3,

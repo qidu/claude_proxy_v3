@@ -7,7 +7,9 @@
 import type { Env, Logger } from '../types/shared.js';
 import { addForwardedHeaders } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
-import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
+import { recordResponseStatusCodeFromUpstream } from '../utils/dashboard-stats.js';
+import { validateOpenAICompletionsRequest } from '../utils/validation.js';
+import { ValidationError } from '../utils/errors.js';
 
 export async function handleChatCompletionsPassthrough(
   request: Request,
@@ -20,10 +22,32 @@ export async function handleChatCompletionsPassthrough(
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
-  logger.info(requestId, `${path} for ${modelId || 'unknown'} passthrough to ${targetUrl}`);
+  logger.info(requestId, `${path} passthrough → ${targetUrl} model=${modelId || 'unknown'}`);
 
-  // Forward the request body as-is -- no parsing, no conversion
   const bodyText = await request.text();
+
+  // Validate against openai-completions schema
+  let parsedBody: Record<string, unknown>;
+  try {
+    parsedBody = JSON.parse(bodyText);
+    validateOpenAICompletionsRequest(parsedBody);
+  } catch (err) {
+    if (err instanceof ValidationError) {
+      logger.warn(requestId, `${path} validation failed: ${err.message}`);
+      return new Response(JSON.stringify({ error: { message: err.message, type: 'invalid_request_error' } }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+      });
+    }
+    logger.warn(requestId, `${path} invalid JSON body: ${(err as Error).message}`);
+    return new Response(JSON.stringify({ error: { message: 'Invalid JSON body', type: 'invalid_request_error' } }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+    });
+  }
+
+  const isStreaming = parsedBody.stream === true;
+  logger.debug(requestId, `${path} req: model=${parsedBody.model} messages=${Array.isArray(parsedBody.messages) ? (parsedBody.messages as unknown[]).length : 0} stream=${isStreaming}`);
 
   const upstreamResponse = await fetch(targetUrl, {
     method: 'POST',
@@ -36,13 +60,13 @@ export async function handleChatCompletionsPassthrough(
   });
 
   recordResponseStatusCodeFromUpstream(upstreamResponse.status);
+  logger.info(requestId, `${path} resp: status=${upstreamResponse.status} stream=${isStreaming}`);
 
   // Forward the response body as-is -- preserve streaming or JSON
-  const responseBody = upstreamResponse.body;
   const responseHeaders = new Headers(upstreamResponse.headers);
   responseHeaders.set('x-request-id', requestId);
 
-  return new Response(responseBody, {
+  return new Response(upstreamResponse.body, {
     status: upstreamResponse.status,
     statusText: upstreamResponse.statusText,
     headers: responseHeaders,

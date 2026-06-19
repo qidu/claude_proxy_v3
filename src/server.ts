@@ -142,6 +142,10 @@ server.listen(port, '0.0.0.0', async () => {
   console.log(`Server running on http://0.0.0.0:${port}`);
   console.log(` and dashboard at http://0.0.0.0:${port}/dashboard`);
 
+  if (env.DEV_PASS_THROUGH === 'true' || env.DEV_PASS_THROUGH === '1') {
+    console.warn('[WARN] DEV_PASS_THROUGH is enabled: /v1/chat/completions requests are passed through directly with validation only (no model routing). Do not use in production.');
+  }
+
   const tuiEnabled = process.env.TUI === 'true' || process.env.TUI === '1';
   if (tuiEnabled && process.stdin.isTTY && process.stdout.isTTY) {
     console.log = () => {};

@@ -235,7 +235,7 @@ function extractAuthHeaders(request: Request): Record<string, string> {
       headers['anthropic-beta'] = JSON.stringify(validatedFeatures);
     } else {
       // Forward as-is if validation fails (should still work)
-      headers['anthropic-beta'] = betaVersionHeader;
+      headers['anthropic-beta'] = betaVersionHeader.replace(/[\r\n\0]/g, '');
     }
   }
 

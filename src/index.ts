@@ -73,10 +73,16 @@ import {
 let hasLoggedUpstreamConfig = false;
 
 /**
- * Generate a unique request ID
+ * Generate a unique request ID using a cryptographically secure source.
+ * Format: req_<unix_ms>_<uuid>
+ *
+ * Uses crypto.randomUUID(), which is available in:
+ *   - Cloudflare Workers
+ *   - Node.js >=19 (global Web Crypto)
+ *   - Modern browsers
  */
 function generateRequestId(): string {
-  return `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  return `req_${Date.now()}_${crypto.randomUUID()}`;
 }
 
 /**
@@ -498,9 +504,12 @@ export default {
           headers: { 'Content-Type': 'application/json' },
         });
       } catch (error) {
+        // Log full error server-side (may include config URLs/paths); return generic
+        // message to the client to avoid leaking internal filesystem or upstream details.
+        logger.error(requestId, `${path} failed: ${(error as Error).message}`);
         return new Response(JSON.stringify({
           status: 'failed',
-          error: (error as Error).message,
+          error: 'Config reload failed; see server logs for details.',
         }), {
           status: 500,
           headers: { 'Content-Type': 'application/json' },

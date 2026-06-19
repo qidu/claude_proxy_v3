@@ -153,8 +153,8 @@ export function handleTargetApiError(
           errorMessage += ` [URL: ${requestInfo.url}]`;
           if (requestInfo.body) {
             // Truncate body if too long
-            const bodyPreview = requestInfo.body.length > 500
-              ? requestInfo.body.substring(0, 500) + '...'
+            const bodyPreview = requestInfo.body.length > 300
+              ? requestInfo.body.substring(0, 300) + '...'
               : requestInfo.body;
             errorMessage += ` [Body: ${bodyPreview}]`;
           }

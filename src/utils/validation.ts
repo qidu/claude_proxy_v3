@@ -387,6 +387,59 @@ export function validateModelsRequestParams(params: {
 }
 
 /**
+ * Validate OpenAI chat completions request (used for DEV_PASS_THROUGH passthrough)
+ */
+export function validateOpenAICompletionsRequest(request: Record<string, unknown>): void {
+  if (!request.model || typeof request.model !== 'string') {
+    throw new ValidationError('model is required and must be a string');
+  }
+
+  if (!request.messages || !Array.isArray(request.messages)) {
+    throw new ValidationError('messages is required and must be an array');
+  }
+
+  if (request.messages.length === 0) {
+    throw new ValidationError('messages array must not be empty');
+  }
+
+  for (let i = 0; i < request.messages.length; i++) {
+    const msg = request.messages[i] as Record<string, unknown>;
+    if (!msg || typeof msg !== 'object') {
+      throw new ValidationError(`messages[${i}] must be an object`);
+    }
+    const validRoles = ['system', 'user', 'assistant', 'tool', 'developer'];
+    if (!msg.role || typeof msg.role !== 'string') {
+      throw new ValidationError(`messages[${i}].role is required and must be a string`);
+    }
+    if (!validRoles.includes(msg.role as string)) {
+      throw new ValidationError(`messages[${i}].role must be one of: ${validRoles.join(', ')}`);
+    }
+    if (msg.content === undefined || msg.content === null) {
+      throw new ValidationError(`messages[${i}].content is required`);
+    }
+    if (typeof msg.content !== 'string' && !Array.isArray(msg.content)) {
+      throw new ValidationError(`messages[${i}].content must be a string or array`);
+    }
+  }
+
+  if (request.max_tokens !== undefined) {
+    if (typeof request.max_tokens !== 'number' || request.max_tokens < 1) {
+      throw new ValidationError('max_tokens must be a positive number');
+    }
+  }
+
+  if (request.temperature !== undefined) {
+    if (typeof request.temperature !== 'number' || request.temperature < 0 || request.temperature > 2) {
+      throw new ValidationError('temperature must be a number between 0 and 2');
+    }
+  }
+
+  if (request.stream !== undefined && typeof request.stream !== 'boolean') {
+    throw new ValidationError('stream must be a boolean');
+  }
+}
+
+/**
  * Validate headers for API key or authorization
  */
 export function validateAuthHeaders(headers: Record<string, string>): void {
