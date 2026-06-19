@@ -775,7 +775,7 @@ class DashboardView implements Component {
       }
       globalLimitSuffix = ` ${limitColor('L')} ${limitColor(globalLimitDisplay)}]`;
     }
-    tokenHeatmapLines[0] = `${bold('Tokens Panel')} [${fmt(tokenHeatmap.totalValues)}${globalLimitSuffix}`;
+    tokenHeatmapLines[0] = `${bold('Tokens Panel')} [${fmt(tokenHeatmap.totalValues)}${globalLimitSuffix}${globalLimitSuffix ? '' : ']'}`;
     lines.push(...tokenHeatmapLines);
     lines.push('');
     const customModels = this.customModels();
@@ -947,7 +947,7 @@ class DashboardApp {
       // Blink the dot: only show it on even seconds, matching the in-TUI header
       // indicator. On odd seconds (or when idle) fall back to the plain title.
       const showDot = inflight > 0 && new Date().getSeconds() % 2 === 0;
-      stdout.write(showDot ? '\x1b]0;Proxy \u25cf\x07' : '\x1b]0;Proxy V3\x07');
+      stdout.write(showDot ? '\x1b]0;Proxy V3 \u25cf\x07' : '\x1b]0;Proxy V3\x07');
       this.tui.requestRender();
     }, 100);
   }
