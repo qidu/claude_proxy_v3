@@ -467,6 +467,21 @@ export default {
     const configPath = env.PROXY_CONFIG_PATH;
     const configUrl = env.PROXY_CONFIG_URL;
 
+    // Admin endpoints are restricted to loopback connections only.
+    // server.ts injects the real socket address as x-client-address.
+    const ADMIN_PATHS = ['/config-reload', '/dashboard'];
+    const isAdminPath = ADMIN_PATHS.some(p => path === p || path.startsWith('/dashboard'));
+    if (isAdminPath) {
+      const clientAddr = request.headers.get('x-client-address') || '';
+      const isLoopback = clientAddr === '127.0.0.1' || clientAddr === '::1' || clientAddr === 'localhost';
+      if (!isLoopback) {
+        return new Response(JSON.stringify({ error: 'Forbidden' }), {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
     if (path === '/config-reload') {
       logger.debug(requestId, `${path} Config path: ${configPath}, Config URL: ${configUrl}`);
       try {
