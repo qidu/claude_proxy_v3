@@ -71,7 +71,7 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
 ### 1. Clone and Install
 
 ```bash
-cd claude_proxy_v3
+cd model_proxy_v3
 npm install
 ```
 
@@ -1169,14 +1169,17 @@ MODELS_CACHE_TTL = "300"
 # Upstream body fetch timeout in milliseconds (default: 600000 = 10 minutes)
 UPSTREAM_BODY_TIMEOUT_MS = "600000"
 
-# Allowed target hosts for SSRF protection (comma-separated)
-# ⚠️ NOT YET WIRED: `isHostAllowed()` and `getAllowedHosts()` in src/utils/routing.ts
-# are defined and exported, but no code path currently calls them. The value of
-# `ALLOWED_HOSTS` is stored in `Env` (src/types/shared.ts) and parsed at module
-# load (src/server.ts), however the dynamic-routing pipeline builds the upstream
-# URL and dispatches the request without ever invoking `isHostAllowed()`. As a
-# result, this allowlist has no effect on routing or SSRF protection today —
-# adding entries here does not restrict or permit any host.
+# Allowed target hosts for SSRF protection on dynamic routes (comma-separated).
+# ⚠️ DYNAMIC ROUTES ONLY: `isHostAllowed()` (src/utils/routing.ts) is invoked from
+# src/index.ts when a request hits a `/https/{host}/...` dynamic-route path; the
+# parsed host is matched against `getAllowedHostsFromConfig(proxyConfig)`
+# (hosts derived from `[upstream].default_base_url`, every `[models.*].base_url`,
+# and per-model array overrides in proxy_config.toml), with `ALLOWED_HOSTS` here
+# serving as an additional fallback list. Wildcards are supported (e.g.,
+# `*.example.com` — note the literal `.` separator; the apex `example.com` does
+# not match). Fixed routes (`/v1/messages`, `/v1/responses`, etc.) do not consult
+# this list — they resolve their upstream from `proxy_config.toml` directly, so
+# SSRF protection for them depends on the config being trustworthy.
 ALLOWED_HOSTS = "127.0.0.1,localhost,api.qnaigc.com,api.example1.com,api.example2-ai.com,api.yoosheen.com,api.wenwen-ai.com"
 
 # Development mode - allows all CORS origins
@@ -1454,15 +1457,6 @@ upstream_mode = "openai-completions"
 - **Inheritance chain**: Model array → Category defaults → [upstream] defaults
 
 **Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `token_limit` across all of its targets.
-
-#### Composite aliases
-
-```toml
-[composite]
-"gpt-all" = {"token_limit": {"num": 120000, "duration": "1d"}, "gpt-5.4-mini": {"share": 50}, "gpt-5-mini": {"share": 20}, "nvidia/nemotron-3-super-120b-a12b-free": {}}
-"gpt-5" = {"token_limit": {"num": 80000, "duration": "1h"}, "gpt-5.4-mini": {"fallback": 1}, "gpt-5-mini": {"primary": true}, "nvidia/nemotron-3-super-120b-a12b-free": {"fallback": 2}}
-"llama" = {"token_limit": {"num": 40000, "duration": "1w"}, "llama3": {}, "g5-mini": {}}
-```
 
 ### Configuration Loading
 
@@ -1794,7 +1788,10 @@ Removed `FIXED_ROUTE_TARGET_URL` and `FIXED_ROUTE_PATH_PREFIX` environment varia
    ↓ (if missing)
 2. [upstream].upstream_mode / default_base_url / default_api_key
    ↓ (if missing)
-3. Hardcoded defaults: "openai-completions" / "https://api.qnaigc.com"
+3. Configurable fallback: "openai-completions" / "https://api.qnaigc.com"
+   (hardcoded in src/utils/config-loader.ts, src/index.ts, and src/tui.ts;
+    override by setting [upstream].default_base_url or [models.default].base_url
+    in proxy_config.toml — there is no env var to override this final fallback)
 ```
 
 See `docs/config_env_removal.md` for migration guide.
