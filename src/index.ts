@@ -644,14 +644,40 @@ export default {
       requestStartTime = Date.now();
       releaseActiveRequest = incrementActiveRequests();
 
-      // Request body size limit (10MB)
-      const contentLength = request.headers.get('content-length');
-      if (contentLength) {
-        const sizeInBytes = parseInt(contentLength, 10);
+      // Request body size limit (10MB).
+      // Content-Length is optional (chunked / HTTP2), so we enforce the cap
+      // by reading the body into a buffer and re-wrapping the request so that
+      // downstream code can still call request.text() / request.json() / etc.
+      {
         const maxSizeBytes = 10 * 1024 * 1024; // 10MB
-        if (sizeInBytes > maxSizeBytes) {
-          logger.warn(requestId, `Request body too large: ${sizeInBytes} bytes`);
+        const contentLength = request.headers.get('content-length');
+        if (contentLength && parseInt(contentLength, 10) > maxSizeBytes) {
+          logger.warn(requestId, `Request body too large (Content-Length): ${contentLength} bytes`);
           return createErrorResponse(new Error('Request body too large'), requestId, 413);
+        }
+        if (request.body) {
+          const reader = request.body.getReader();
+          const chunks: Uint8Array[] = [];
+          let totalBytes = 0;
+          let done = false;
+          while (!done) {
+            const { value, done: readerDone } = await reader.read();
+            done = readerDone;
+            if (value) {
+              totalBytes += value.byteLength;
+              if (totalBytes > maxSizeBytes) {
+                reader.cancel();
+                logger.warn(requestId, `Request body too large: exceeded ${maxSizeBytes} bytes`);
+                return createErrorResponse(new Error('Request body too large'), requestId, 413);
+              }
+              chunks.push(value);
+            }
+          }
+          // Reconstruct request with the buffered body so it remains readable.
+          const buffered = new Uint8Array(totalBytes);
+          let offset = 0;
+          for (const chunk of chunks) { buffered.set(chunk, offset); offset += chunk.byteLength; }
+          request = new Request(request, { body: buffered, duplex: 'half' } as RequestInit);
         }
       }
 
