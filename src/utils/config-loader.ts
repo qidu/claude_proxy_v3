@@ -560,7 +560,18 @@ function parseConsulScalarValue(value: string): string | number {
 }
 
 function buildConsulKvUrl(baseUrl: string): string {
-  return `${baseUrl.replace(/\/+$/, '')}/v1/kv/${CONSUL_CONFIG_PREFIX}?recurse=true`;
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error(`PROXY_CONFIG_URL is not a valid URL: ${baseUrl}`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`PROXY_CONFIG_URL must use http or https, got: ${parsed.protocol}`);
+  }
+  // Reconstruct from parsed URL to prevent path traversal / injection via the raw string
+  const origin = parsed.origin; // scheme + host + port, no path
+  return `${origin}/v1/kv/${CONSUL_CONFIG_PREFIX}?recurse=true`;
 }
 
 function applyConsulKvEntry(config: ProxyConfig, entry: ConsulKvEntry): void {
@@ -1059,6 +1070,38 @@ export function getConfiguredModelIds(config: ProxyConfig): string[] {
   }
 
   return [...ids];
+}
+
+/**
+ * Extract all hostnames (host[:port]) from base_url values configured in proxy_config.toml.
+ * Used to restrict dynamic route targets to pre-approved upstream hosts (SSRF protection).
+ */
+export function getAllowedHostsFromConfig(config: ProxyConfig): string[] {
+  const hosts = new Set<string>();
+
+  // [upstream].default_base_url
+  if (config.upstream?.default_base_url) {
+    try { hosts.add(new URL(config.upstream.default_base_url).host); } catch { /* ignore */ }
+  }
+
+  // [models.*].base_url and per-model base_url overrides in array entries
+  if (config.models) {
+    for (const categoryConfig of Object.values(config.models)) {
+      if (Array.isArray(categoryConfig)) continue;
+      if (categoryConfig.base_url) {
+        try { hosts.add(new URL(categoryConfig.base_url).host); } catch { /* ignore */ }
+      }
+      // Array entries: [model_alias, base_url, api_key]
+      for (const [key, value] of Object.entries(categoryConfig)) {
+        if (['upstream_mode', 'base_url', 'api_key'].includes(key)) continue;
+        if (Array.isArray(value) && value.length >= 2 && typeof value[1] === 'string' && value[1]) {
+          try { hosts.add(new URL(value[1]).host); } catch { /* ignore */ }
+        }
+      }
+    }
+  }
+
+  return [...hosts].filter(h => h.length > 0);
 }
 
 export function dumpProxyConfigToml(config: ProxyConfig, directory = './config-dumps'): string | null {

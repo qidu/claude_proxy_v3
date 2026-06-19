@@ -6,7 +6,7 @@
  */
 
 import { Env } from './types/shared.js';
-import { extractAuthHeaders, transformAuthHeadersForUpstream, formatApiKeyForUpstream } from './utils/routing.js';
+import { extractAuthHeaders, transformAuthHeadersForUpstream, formatApiKeyForUpstream, parseDynamicRoute, isHostAllowed, getHandlerType, buildTargetUrl } from './utils/routing.js';
 import { createErrorResponse, OverLimitError } from './utils/errors.js';
 import { createLogger } from './utils/logger.js';
 import { handleModelsRequest, getModelCount } from './handlers/models.js';
@@ -28,7 +28,7 @@ import {
   handleDashboardRequestStats,
   handleDashboardTestModel,
 } from './handlers/dashboard.js';
-import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, getCompositeAliasMode, resolveFusionPlan, FusionPlan, ModelRouteConfig, ProxyConfig, parseHumanTokenLimit } from './utils/config-loader.js';
+import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, getCompositeAliasMode, resolveFusionPlan, FusionPlan, ModelRouteConfig, ProxyConfig, parseHumanTokenLimit, getAllowedHostsFromConfig } from './utils/config-loader.js';
 import {
   extractToolNamesFromBody,
   extractToolRequestCharLengthsFromBody,
@@ -1035,8 +1035,27 @@ export default {
           return createErrorResponse(new Error('Invalid request body'), requestId, 400);
         }
       } else if (isDynamicRoute(path)) {
-        logger.error(requestId, `No dynamic routing: ${path}`);
-        return createErrorResponse(new Error('No Routing.'), requestId, 400);
+        // Dynamic routing: /http/host/... or /https/host/...
+        // Validate parsed host against config-approved upstream hosts (SSRF protection).
+        let parsedRoute;
+        try {
+          parsedRoute = parseDynamicRoute(path);
+        } catch (err) {
+          logger.error(requestId, `Dynamic route parse error for ${path}: ${(err as Error).message}`);
+          return createErrorResponse(new Error('Invalid dynamic route.'), requestId, 400);
+        }
+        const parsedHost = new URL(parsedRoute.targetConfig.targetUrl).host;
+        const allowedHosts = getAllowedHostsFromConfig(proxyConfig);
+        if (!isHostAllowed(parsedHost, allowedHosts.join(','))) {
+          logger.warn(requestId, `SSRF blocked: host '${parsedHost}' not in allowed list [${allowedHosts.join(', ')}]`);
+          return createErrorResponse(new Error('Target host not allowed.'), requestId, 403);
+        }
+        const { claudeEndpoint, modelId: dynModelId, targetConfig } = parsedRoute;
+        handlerType = getHandlerType(claudeEndpoint);
+        modelId = dynModelId;
+        targetUrl = buildTargetUrl(targetConfig, claudeEndpoint, dynModelId);
+        // Auth headers forwarded as-is for dynamic routes
+        modelAuthHeaders = authHeaders;
       } else {
         // Fixed routing: /v1/messages -> /v1/chat/completions
         const fixedRoute = parseFixedRoute(path, proxyConfig, env);
