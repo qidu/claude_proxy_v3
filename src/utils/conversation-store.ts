@@ -12,6 +12,7 @@
  */
 
 const CONVERSATION_TTL_MS = 3600 * 1000;
+const MAX_ENTRIES = parseInt(process.env.CONVERSATION_MAX_ENTRIES ?? '10000', 10);
 
 interface ConversationEntry {
   /**
@@ -30,6 +31,7 @@ interface ConversationEntry {
   expiresAt: number;
 }
 
+// Insertion-ordered map; oldest entries are at the front (Map preserves insertion order).
 const store = new Map<string, ConversationEntry>();
 
 function evictExpired(): void {
@@ -38,6 +40,14 @@ function evictExpired(): void {
     if (entry.expiresAt <= now) {
       store.delete(key);
     }
+  }
+}
+
+function evictOldest(): void {
+  // Map iteration is insertion-ordered, so the first key is the oldest.
+  const firstKey = store.keys().next().value;
+  if (firstKey !== undefined) {
+    store.delete(firstKey);
   }
 }
 
@@ -71,8 +81,11 @@ export function saveConversation(
     outputItems,
     expiresAt: Date.now() + CONVERSATION_TTL_MS,
   });
-  // Opportunistic cleanup to prevent unbounded growth
+  // Opportunistic cleanup: remove expired entries first, then enforce hard cap.
   evictExpired();
+  while (store.size > MAX_ENTRIES) {
+    evictOldest();
+  }
 }
 
 /**
