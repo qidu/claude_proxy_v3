@@ -18,6 +18,49 @@ export { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, 
 // Default allowed hosts for SSRF protection
 const DEFAULT_ALLOWED_HOSTS = ['127.0.0.1', 'localhost'];
 
+/**
+ * Returns true if the given hostname / IP resolves to localhost, a private
+ * RFC-1918 range, or a link-local range — i.e. it is safe to use as the
+ * target of an internal sidecar or config-server URL.
+ *
+ * Accepted:
+ *   - localhost / 127.x.x.x  (loopback)
+ *   - ::1                    (IPv6 loopback)
+ *   - 10.0.0.0/8             (RFC 1918)
+ *   - 172.16.0.0/12          (RFC 1918)
+ *   - 192.168.0.0/16         (RFC 1918)
+ *   - 169.254.0.0/16         (link-local / APIPA)
+ *   - fc00::/7               (IPv6 ULA)
+ *   - fe80::/10              (IPv6 link-local)
+ *   - *.local                (mDNS)
+ */
+export function isInternalHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[/, '').replace(/\]$/, ''); // strip IPv6 brackets
+
+  // Loopback
+  if (h === 'localhost' || h === '::1') return true;
+  if (h.endsWith('.local')) return true;
+
+  // IPv4 dotted-decimal checks
+  const ipv4Parts = h.split('.');
+  if (ipv4Parts.length === 4) {
+    const [a, b, c] = ipv4Parts.map(Number);
+    if (a === 127) return true;                          // 127.0.0.0/8 loopback
+    if (a === 10) return true;                           // 10.0.0.0/8
+    if (a === 172 && b >= 16 && b <= 31) return true;   // 172.16.0.0/12
+    if (a === 192 && b === 168) return true;             // 192.168.0.0/16
+    if (a === 169 && b === 254) return true;             // 169.254.0.0/16 link-local
+  }
+
+  // IPv6 private ranges (text prefix checks are sufficient for well-formed addresses)
+  if (h === '::1') return true;
+  if (h.startsWith('fc') || h.startsWith('fd')) return true; // fc00::/7 ULA
+  if (h.startsWith('fe8') || h.startsWith('fe9') ||
+      h.startsWith('fea') || h.startsWith('feb')) return true; // fe80::/10 link-local
+
+  return false;
+}
+
 export interface TargetConfig {
   targetUrl: string;
   targetPathPrefix: string;
@@ -47,7 +90,7 @@ function isHostAllowed(host: string, allowedHostsEnv?: string): boolean {
     // Handle wildcard domain (e.g., "*.example.com")
     if (allowed.startsWith('*.')) {
       const domain = allowed.slice(2);
-      return normalizedHost.endsWith(domain);
+      return normalizedHost === domain || normalizedHost.endsWith('.' + domain);
     }
     return false;
   });
@@ -267,15 +310,15 @@ function transformAuthHeadersForUpstream(
   if (requestId) {
     const logger = createLogger(env ?? {});
     if (googApiKey) {
-      const partialGoogKey = googApiKey.length > 8 ? `${googApiKey.substring(0, 16)}...${googApiKey.substring(googApiKey.length - 8)}` : '***';
+      const partialGoogKey = googApiKey.length > 4 ? `${googApiKey.substring(0, 4)}...` : '***';
       logger.debug(requestId, `Found x-goog-api-key header: ${partialGoogKey}`);
     }
     if (xApiKey) {
-      const partialXApiKey = xApiKey.length > 8 ? `${xApiKey.substring(0, 16)}...${xApiKey.substring(xApiKey.length - 8)}` : '***';
+      const partialXApiKey = xApiKey.length > 4 ? `${xApiKey.substring(0, 4)}...` : '***';
       logger.debug(requestId, `Found x-api-key header: ${partialXApiKey}`);
     }
     if (authHeader) {
-      const partialAuth = authHeader.length > 8 ? `${authHeader.substring(0, 16)}...${authHeader.substring(authHeader.length - 8)}` : '***';
+      const partialAuth = authHeader.length > 4 ? `${authHeader.substring(0, 4)}...` : '***';
       logger.debug(requestId, `Found Authorization header: ${partialAuth}`);
     }
     logger.debug(requestId, `Endpoint path: ${endpointPath}, Upstream mode: ${upstreamMode}`);
@@ -352,7 +395,7 @@ function transformAuthHeadersForUpstream(
       if (validatedFeatures) {
         headers['anthropic-beta'] = JSON.stringify(validatedFeatures);
       } else {
-        headers['anthropic-beta'] = betaVersionHeader;
+        headers['anthropic-beta'] = betaVersionHeader.replace(/[\r\n\0]/g, '');
       }
     }
   }

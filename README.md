@@ -129,15 +129,15 @@ A global token limit applies to **all requests** regardless of model. Configure 
 
 ```toml
 [upstream]
-global_token_limit = "1.1b 1d"   # 1.1 billion tokens per day
+global_token_limit = "1.1B 1d"   # 1.1 billion tokens per day
 ```
 
-Format: `<num>[k|m|b|t] <1h|1d|1w|1m>` — e.g. `50k 1h`, `1.5m 1d`, `1.1b 1w`. Once the rolling-window total reaches the limit, all incoming requests return **HTTP 429** until the window expires.
+Format: `<num>[K|M|B|T] <1h|1d|1w|1m>` — e.g. `50K 1h`, `1.5M 1d`, `1.1B 1w`. Once the rolling-window total reaches the limit, all incoming requests return **HTTP 429** until the window expires.
 
 The TUI shows the current window total alongside the limit in the Tokens Panel header:
 
 ```
-Tokens Panel [572.9M L 1.1b/1d]
+Tokens Panel [572.9M L 1.1B/1d]
 ```
 
 The `L limit/duration` indicator turns yellow at ≥80% and red at ≥100%. Press `l` in the main TUI view to set or clear the global limit interactively.
@@ -415,14 +415,14 @@ Keyboard shortcuts (main view):
 - `c` open composite alias editor
 - `t` open test model picker
 - `r` reload config
-- `l` set/clear the **global** token limit (applies to all models; format: `<num>[k|m|b|t]> <1h|1d|1w|1m>`, e.g. `1.1b 1d`, `50k 1h`, blank clears)
+- `l` set/clear the **global** token limit (applies to all models; format: `<num>[K|M|B|T]> <1h|1d|1w|1m>`, e.g. `1.1B 1d`, `50K 1h`, blank clears)
 - `Ctrl+U` dump today's tokens to log file (TUI mode)
 - `Ctrl+C` quit
 
 Keyboard shortcuts (composite alias editor):
 - `↑/↓` or `j/k` to move
 - `a` add a composite alias
-- `L` (shift-l) set/clear the **alias-level** token limit (format: `<num>[k|m|b|t]> <1h|1d|1w|1m>`, e.g. `50k 1d`, `1.5m 1h`, blank clears)
+- `L` (shift-l) set/clear the **alias-level** token limit (format: `<num>[K|M|B|T]> <1h|1d|1w|1m>`, e.g. `50K 1d`, `1.5M 1h`, blank clears)
 - `F` (shift-f) edit fusion_options for the selected alias (fusion aliases only)
 - `M` (shift-m) add a target to the selected alias
 - `E` (shift-e) edit the selected target
@@ -1507,7 +1507,7 @@ Each target model config must be an object with optional numeric/boolean fields:
 - `share` must be a finite number (e.g., `10`, `0`) — strings or non-numbers error
 - `primary` must be `true` or `false` — other values error
 - `fallback` must be a finite number (e.g., `1`, `0`) — strings or non-numbers error
-- `token_limit` must be an object with `num` (finite number ≥ 0) and `duration` (`"1h"`, `"1d"`, `"1w"`, or `"1m"`) — missing fields or invalid duration error. In TUI/dashboard, input format is `<num>[k|m|b|t]> <1h|1d|1w|1m>` — e.g. `50k 1d`, `1.5m 1h`, `100000 1w`
+- `token_limit` must be an object with `num` (finite number ≥ 0) and `duration` (`"1h"`, `"1d"`, `"1w"`, or `"1m"`) — missing fields or invalid duration error. In TUI/dashboard, input format is `<num>[K|M|B|T]> <1h|1d|1w|1m>` — e.g. `50K 1d`, `1.5M 1h`, `100000 1w`
 - Empty target `{}` is valid (all fields optional)
 - Non-object values error: `invalid target config`
 
@@ -2022,6 +2022,20 @@ MIT
 ## 🛠️ Technical Implementation
 
 ### Latest Changes (Current)
+
+**Security Hardening**: A batch of defensive fixes applied after review of the proxy boundary. All user-facing behavior changes.
+
+- **SSRF protection on internal sidecar URLs** — `PROXY_CONFIG_URL` (Consul config source) and `PRIVACY_FILTER_URL` (PII-redaction sidecar) are now validated against a new `isInternalHost()` helper (`src/utils/routing.ts`). The URL must resolve to `localhost` / `127.x.x.x`, an RFC-1918 range (`10/8`, `172.16/12`, `192.168/16`), a link-local range (`169.254/16`, `fe80::/10`), an IPv6 ULA (`fc00::/7`), `*.local` (mDNS), or `::1`. Anything else (public DNS names, public IPs, exotic schemes) is rejected at startup with a descriptive error. This closes the path where a misconfigured or attacker-controlled `PROXY_CONFIG_URL` could be used to exfiltrate the proxy's outbound traffic.
+- **No request body in client-facing error messages** — `handleTargetApiError` (`src/utils/errors.ts`) used to append a 300-char preview of the upstream request body to the `invalid_request_error` message returned to the client. That body can contain user prompts, tool arguments, or PII. The preview is now logged server-side only via `logger.debug('errors', ...)`; the client gets a generic message.
+- **No internal error messages from SDK handlers** — `handleSdkOpenAIRequest` and `handleSdkAnthropicRequest` (`src/utils/sdk-handler.ts`) caught exceptions and returned `error.message` verbatim to the caller, which could leak stack frames, file paths, or upstream error bodies. They now return `"An internal error occurred"`; the original error continues to be logged.
+- **Stricter `anthropic-beta` header handling** — `validateBetaFeatures()` (`src/utils/beta-features.ts`) silently forwarded any unknown beta feature name upstream. Unknown features are now dropped. Additionally, CRLF/control chars are stripped from the header value before forwarding, so a header value like `prompt-caching\r\nX-Injected: 1` cannot be used to inject extra response headers.
+- **Tighter API-key logging** — the partial-key formatter in `transformAuthHeadersForUpstream` (`src/utils/routing.ts`) used `first16...last8` for `x-goog-api-key`, `x-api-key`, and `Authorization`. Reduced to `first4...` (or `***` if shorter than 4 chars). The previous window could expose enough entropy to brute-force the prefix.
+- **Hardened host allowlist** — wildcard entries in `ALLOWED_HOSTS` (`*.example.com`) now require a literal `.` separator before the domain, so `*.example.com` no longer matches the apex `example.com`. The wildcard rule now correctly rejects suffixes that are not real subdomains.
+
+**Misc bug fixes** bundled with the hardening pass:
+
+- `crypto.randomUUID()` replaces `Math.random()` for `resp_*` and `msg_*` IDs in `completions-to-responses.ts` and `responses.ts`.
+- `dashboard.ts` uses `??` (not `||`) for `PROXY_CONFIG_PATH`, so an explicitly empty string is preserved as a real path instead of falling through to `null`.
 
 **Model Response Time Tracking**: The proxy now tracks per-model response time (min/avg/max in ms) alongside existing per-endpoint timing.
 

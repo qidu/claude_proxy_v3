@@ -351,7 +351,7 @@ function titleCase(value: string): string {
 function fmt(n: number): string {
   if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
 }
 function fmtSeconds(ms: number): string {
@@ -1027,7 +1027,7 @@ class DashboardApp {
       : '';
     this.openPrompt(
       `Token limit for ${bold(alias)}`,
-      'Format: <num[k|M|B|T]> <1h|1d|1w|1m>  (e.g. 50k 1d, 1.5M 1h, 100000 1w)  blank clears',
+      'Format: <num[K|M|B|T]> <1h|1d|1w|1m>  (e.g. 50K 1d, 1.5M 1h, 100000 1w)  blank clears',
       defaultValue,
       async (value) => {
         const trimmed = value.trim();
@@ -1041,7 +1041,7 @@ class DashboardApp {
         }
         const parsed = parseHumanTokenLimit(trimmed);
         if (!parsed) {
-          this.view.setMessage('Invalid. Use: <num> <1h|1d|1w|1m>  e.g. 50k 1d');
+          this.view.setMessage('Invalid. Use: <num> <1h|1d|1w|1m>  e.g. 50K 1d');
           await this.refresh();
           this.compositeOverlay?.focusAlias(alias);
           this.requestRender();
@@ -1062,7 +1062,7 @@ class DashboardApp {
     const defaultValue = current ?? '';
     this.openPrompt(
       `${bold('Global')} token limit`,
-      'Format: <num[k|M|B|T]> <1h|1d|1w|1m>  (e.g. 1.1B 1d, 50k 1h)  blank clears',
+      'Format: <num[K|M|B|T]> <1h|1d|1w|1m>  (e.g. 1.1B 1d, 50K 1h)  blank clears',
       defaultValue,
       async (value) => {
         const trimmed = value.trim();

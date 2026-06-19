@@ -72,7 +72,7 @@ export function convertCompletionsToResponses(
       status: 'completed',
       model: completionsResponse.model || model,
       output: [{
-        id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        id: `msg_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`,
         type: 'message',
         status: 'completed',
         role: 'assistant',
@@ -83,7 +83,7 @@ export function convertCompletionsToResponses(
 
   if (message) {
     const outputItem: OpenAIResponsesResponse['output'][0] = {
-      id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      id: `msg_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`,
       type: 'message',
       status: 'completed',
       role: 'assistant',
@@ -186,7 +186,7 @@ export function convertCompletionsToResponses(
  * Generate a response ID
  */
 function generateResponseId(): string {
-  return `resp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  return `resp_${crypto.randomUUID().replace(/-/g, '')}`;
 }
 
 /**

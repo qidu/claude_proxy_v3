@@ -8,6 +8,7 @@ import { Env } from '../types/shared.js';
 import { mkdirSync, readFileSync, writeFileSync, renameSync, copyFileSync, existsSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
+import { isInternalHost } from './routing.js';
 
 // Check if we're running in Node.js environment
 const isNodeEnvironment = (typeof process !== 'undefined' && process.versions?.node) ||
@@ -64,14 +65,15 @@ export function parseHumanTokenLimit(raw: string): { num: number; duration: Toke
 }
 
 /**
- * Format a token limit as a human-readable string.
- * Examples: 50000 → "50k", 1500000 → "1.5M"
+ * Format a token limit as a human-readable string. Units are always uppercase
+ * (K/M/B/T) per the project convention.
+ * Examples: 50000 → "50K", 1500000 → "1.5M"
  */
 export function formatTokenLimit(num: number): string {
   if (num >= 1_000_000_000_000) return (num / 1_000_000_000_000).toFixed(1).replace(/\.0$/, '') + 'T';
   if (num >= 1_000_000_000) return (num / 1_000_000_000).toFixed(1).replace(/\.0$/, '') + 'B';
   if (num >= 1_000_000) return (num / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
-  if (num >= 1_000) return (num / 1_000).toFixed(1).replace(/\.0$/, '') + 'k';
+  if (num >= 1_000) return (num / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
   return String(num);
 }
 
@@ -568,6 +570,9 @@ function buildConsulKvUrl(baseUrl: string): string {
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error(`PROXY_CONFIG_URL must use http or https, got: ${parsed.protocol}`);
+  }
+  if (!isInternalHost(parsed.hostname)) {
+    throw new Error(`PROXY_CONFIG_URL must point to localhost or a private/LAN address, got: ${parsed.hostname}`);
   }
   // Reconstruct from parsed URL to prevent path traversal / injection via the raw string
   const origin = parsed.origin; // scheme + host + port, no path
@@ -1813,9 +1818,23 @@ export function upsertGlobalTokenLimit(
   if (rawLimit === null || rawLimit.trim() === '') {
     delete nextConfig.upstream!.global_token_limit;
   } else {
-    nextConfig.upstream!.global_token_limit = rawLimit.trim();
+    nextConfig.upstream!.global_token_limit = normalizeHumanTokenLimit(rawLimit.trim());
   }
   return nextConfig;
+}
+
+/**
+ * Normalize a raw `<num>[K|M|B|T] <1h|1d|1w|1m>` string so the unit suffix is
+ * always uppercase. Preserves the duration as-is. Returns the trimmed input
+ * unchanged if it doesn't match the expected shape — the parser will reject
+ * invalid input elsewhere, so this is a best-effort cosmetic pass.
+ */
+export function normalizeHumanTokenLimit(raw: string): string {
+  const m = raw.match(/^([\d.]+)\s*([kKmMbBtT]?)\s+(1[hHdDwWmM])$/);
+  if (!m) return raw.trim();
+  const [, num, suffix, duration] = m;
+  const upperSuffix = suffix ? suffix.toUpperCase() : '';
+  return `${num}${upperSuffix} ${duration}`;
 }
 
 export function upsertFusionOptions(

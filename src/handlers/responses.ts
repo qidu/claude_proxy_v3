@@ -165,8 +165,8 @@ function streamCompletionsAsResponses(
   logger?: Logger,
   onComplete?: (responseId: string, outputItems: unknown[]) => void
 ): Response {
-  const responseId = `resp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  const itemId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+  const responseId = `resp_${crypto.randomUUID().replace(/-/g, '')}`;
+  const itemId = `msg_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
   const created_at = Math.floor(Date.now() / 1000);
 
   let sequenceNumber = 0;

@@ -54,8 +54,7 @@ export function validateBetaFeatures(headerValue: string | null): AnthropicBeta[
             if (VALID_BETA_FEATURES.includes(feature as any)) {
                 validFeatures.push(feature as AnthropicBeta);
             } else {
-                // Forward unknown features silently
-                validFeatures.push(feature as AnthropicBeta);
+                // Drop unknown features — do NOT forward unrecognized beta values upstream.
             }
         }
 

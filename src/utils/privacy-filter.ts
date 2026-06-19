@@ -11,6 +11,7 @@
  */
 
 import type { Env } from '../types/shared.js';
+import { isInternalHost } from './routing.js';
 
 /** Sentinels minted by the sidecar look like `⟦PII:0⟧`. */
 const SENTINEL_REGEX = /\u27e6PII:\d+\u27e7/g;
@@ -35,6 +36,20 @@ export type PiiMapping = Record<string, string>;
 export function getPrivacyFilterConfig(env?: Env): PrivacyFilterConfig | null {
   const url = env?.PRIVACY_FILTER_URL?.trim();
   if (!url) return null;
+
+  // Validate the URL is internal-only (localhost / RFC-1918 / link-local)
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`PRIVACY_FILTER_URL is not a valid URL: ${url}`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`PRIVACY_FILTER_URL must use http or https, got: ${parsed.protocol}`);
+  }
+  if (!isInternalHost(parsed.hostname)) {
+    throw new Error(`PRIVACY_FILTER_URL must point to localhost or a private/LAN address, got: ${parsed.hostname}`);
+  }
 
   const endpointsRaw = env?.PRIVACY_FILTER_ENDPOINTS?.trim() || '/v1/messages,/v1/chat/completions,/v1/responses,/v1/interactions';
   const endpoints = new Set(

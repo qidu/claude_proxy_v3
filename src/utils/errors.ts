@@ -3,6 +3,7 @@
  */
 
 import { ClaudeErrorResponse } from '../types/shared.js';
+import { createLogger } from './logger.js';
 
 export class ClaudeProxyError extends Error {
   constructor(
@@ -148,15 +149,18 @@ export function handleTargetApiError(
       errorType = 'invalid_request_error';
       if (!upstreamMessage) {
         errorMessage = `Invalid request to ${targetApiName}`;
-        // Include request details in error message for debugging
+        // Log the body server-side only; do NOT include it in the client-facing
+        // error message (it may contain user messages, PII, or tool arguments).
         if (requestInfo) {
-          errorMessage += ` [URL: ${requestInfo.url}]`;
+          const logger = createLogger({});
+          if (requestInfo.url) {
+            logger.debug('errors', `Upstream 400 from ${targetApiName} [URL: ${requestInfo.url}]`);
+          }
           if (requestInfo.body) {
-            // Truncate body if too long
             const bodyPreview = requestInfo.body.length > 300
               ? requestInfo.body.substring(0, 300) + '...'
               : requestInfo.body;
-            errorMessage += ` [Body: ${bodyPreview}]`;
+            logger.debug('errors', `Upstream 400 from ${targetApiName} [Body: ${bodyPreview}]`);
           }
         }
       }

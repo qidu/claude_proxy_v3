@@ -94,7 +94,7 @@ export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): Dashbo
   const config = {
     ...toDashboardConfigPayload(proxyConfig),
     read_only: isDashboardReadOnly(env),
-    config_path: env.PROXY_CONFIG_PATH || null,
+    config_path: env.PROXY_CONFIG_PATH ?? null,
   };
 
   const compositeResolved = Object.keys(config.composite)
@@ -171,7 +171,7 @@ export function upsertCompositeAliasLimitFromDashboard(
   }
   const parsed = parseHumanTokenLimit(rawInput);
   if (!parsed) {
-    throw new Error(`Invalid token limit format: "${rawInput}". Use: <num> <1h|1d|1w|1m>  (e.g. 50k 1d, 1.5m 1h, 100000 1w)`);
+    throw new Error(`Invalid token limit format: "${rawInput}". Use: <num> <1h|1d|1w|1m>  (e.g. 50K 1d, 1.5M 1h, 100000 1w)`);
   }
   return saveConfigMutation(env, (baseConfig) => upsertCompositeAliasLimit(baseConfig, alias, parsed));
 }
@@ -185,7 +185,7 @@ export function upsertGlobalTokenLimitFromDashboard(
   }
   const parsed = parseHumanTokenLimit(rawInput);
   if (!parsed) {
-    throw new Error(`Invalid token limit format: "${rawInput}". Use: <num> <1h|1d|1w|1m>  (e.g. 1.1B 1d, 50k 1h)`);
+    throw new Error(`Invalid token limit format: "${rawInput}". Use: <num> <1h|1d|1w|1m>  (e.g. 1.1B 1d, 50K 1h)`);
   }
   return saveConfigMutation(env, (baseConfig) => upsertGlobalTokenLimit(baseConfig, rawInput.trim()));
 }
@@ -342,7 +342,7 @@ export function handleDashboardPage(): Response {
       <div class="config-toolbar">
         <div class="global-limit-group">
           <label for="globalTokenLimitNum">Total limit:</label>
-          <input type="text" id="globalTokenLimitNum" placeholder="e.g. 700m" title="Token amount only, e.g. 50k, 1.5m, 1.1b" style="width:90px;" autocomplete="off" />
+          <input type="text" id="globalTokenLimitNum" placeholder="e.g. 700M" title="Token amount only, e.g. 50K, 1.5M, 1.1B" style="width:90px;" autocomplete="off" />
           <select id="globalTokenLimitDuration">
             <option value="">(no limit)</option>
             <option value="1h">1 hour</option>
@@ -458,10 +458,10 @@ export function handleDashboardPage(): Response {
       }
 
       function formatTokenLimitNum(num) {
-        if (num >= 1e12) return (num / 1e12).toFixed(1).replace(/\.0$/, '') + 't';
-        if (num >= 1e9) return (num / 1e9).toFixed(1).replace(/\.0$/, '') + 'b';
-        if (num >= 1e6) return (num / 1e6).toFixed(1).replace(/\.0$/, '') + 'm';
-        if (num >= 1e3) return (num / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+        if (num >= 1e12) return (num / 1e12).toFixed(1).replace(/\.0$/, '') + 'T';
+        if (num >= 1e9) return (num / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+        if (num >= 1e6) return (num / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+        if (num >= 1e3) return (num / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
         return String(num);
       }
 
@@ -524,7 +524,7 @@ export function handleDashboardPage(): Response {
         const rows = [
           '<div class="config-row" style="flex-wrap:wrap;gap:6px;align-items:center;">'
             + '<label style="min-width:120px;">' + escapeHtml(aliasName + '.token_limit') + '</label>'
-            + '<input type="text" data-kind="comp-limit-num" data-alias="' + escapeHtml(aliasName) + '" value="' + escapeHtml(displayNum) + '" placeholder="e.g. 50k, 1.5m, 100000" style="width:140px;"' + disabledAttr + ' />'
+            + '<input type="text" data-kind="comp-limit-num" data-alias="' + escapeHtml(aliasName) + '" value="' + escapeHtml(displayNum) + '" placeholder="e.g. 50K, 1.5M, 100000" style="width:140px;"' + disabledAttr + ' />'
             + '<select data-kind="comp-limit-duration" data-alias="' + escapeHtml(aliasName) + '"' + disabledAttr + '>' + durationOptionsHtml + '</select>'
             + usageLabel
             + '</div>'
@@ -668,7 +668,7 @@ export function handleDashboardPage(): Response {
           const numVal = limitNumEl ? limitNumEl.value.trim() : '';
           const durVal = limitDurEl ? limitDurEl.value.trim() : '';
           if (numVal !== '' && durVal !== '') {
-            // Parse human-readable format: "50k", "1.5m", "100000" etc.
+            // Parse human-readable format: "50K", "1.5M", "100000" etc.
             const rawInput = numVal + ' ' + durVal;
             const parsed = parseHumanTokenLimit(rawInput);
             if (parsed) {
@@ -909,7 +909,7 @@ export function handleDashboardPage(): Response {
             const rawInput = numVal + ' ' + durVal;
             const parsed = parseHumanTokenLimit(rawInput);
             if (!parsed) {
-              window.alert('Invalid token limit. Use: <num[k|m|b|t]> <1h|1d|1w|1m>  (e.g. 50k 1d, 1.5m 1h)');
+              window.alert('Invalid token limit. Use: <num[K|M|B|T]> <1h|1d|1w|1m>  (e.g. 50K 1d, 1.5M 1h)');
               return;
             }
             currentConfig.composite[alias].token_limit = parsed;

@@ -351,7 +351,7 @@ export async function handleSdkOpenAIRequest(
     
     return new Response(JSON.stringify({
       error: {
-        message: (error as Error).message,
+        message: 'An internal error occurred',
         type: 'SDK_ERROR',
         code: 500
       }
@@ -481,7 +481,7 @@ export async function handleSdkAnthropicRequest(
     }
     return new Response(JSON.stringify({
       error: {
-        message: (error as Error).message,
+        message: 'An internal error occurred',
         type: 'SDK_ERROR',
         code: 500
       }
