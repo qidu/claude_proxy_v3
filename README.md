@@ -1893,13 +1893,13 @@ MIT
 
 ## Models and Tools
 ### Models Involved
-1. DeepSeek-R1, V3.2, V4-Flash, V4-Pro
-2. Minimax-M2.6, M2.7-highspeed, M3
-4. Kimi-K2.6
-5. GPT-5.4-mini, GPT-5.4
-6. Gemini-2.5, 3.0, 3.1-Flash
-7. Claude-Sonnet-4.5, 4.6, Opus 4.6, Opus 4.8, Fable 5
-8. Nemotron-3-Super-120b
+1. `DeepSeek-R1`, `V3.2`, `V4-Flash`, `V4-Pro`
+2. `Minimax-M2.6`, `M2.7-highspeed`, `M3`
+4. `Kimi-K2.6`
+5. `GPT-5.4-Mini`, `GPT-5.4`
+6. `Gemini-2.5-Flash`, `3.0-Preview`, `3.1-Flash`
+7. `Claude-Sonnet-4.5`, `Sonnet-4.6`, `Opus 4.6`, `Opus 4.8`, `Fable 5`
+8. `Nemotron-3-Super-120b`, `gpt-oss-120b`
 
 ### Tools Involved
 1. Claude Code
