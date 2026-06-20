@@ -143,6 +143,15 @@ const tokenHeatmapEvents: TokenHeatmapEvent[] = [];
 // Used to write only new events since last dump (delta-only).
 let lastHeatmapDumpTs = 0;
 
+// ── getTokensInWindow incremental cache ────────────────────────────────────────
+// tokenHeatmapEvents is append-only and sorted by ascending timestamp.
+// Events before `windowSumCutoff` never change, so their total is cached in
+// `windowSumFrozen`. getTokensInWindow only needs to scan the live tail
+// (events after windowSumCutoff) plus add windowSumFrozen.
+// windowSumCutoff is stored in milliseconds, matching tokenHeatmapEvents.timestamp.
+let windowSumFrozen = 0;
+let windowSumCutoff = 0; // ms; 0 = cache is empty, rebuild on first call
+
 // ── Composite token limit windows ───────────────────────────────────────────────
 
 export interface CompositeLimitWindow {
@@ -373,6 +382,7 @@ function buildHeatmapDump(events: TokenHeatmapEvent[]): HeatmapDump {
 }
 
 function dumpDailyTokens(dateStr: string): void {
+  if (!persistenceEnabled) return;
   ensureTokenLogDir(TOKEN_LOG_FILE);
   const timestampSec = Math.floor(Date.now() / 1000);
   const cutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
@@ -421,7 +431,10 @@ function getOrCreateDailyModelStat(model: string): ModelStatsEntry {
 function advanceDaySlotIfNeeded(): void {
   const today = getTodayDateStr();
   if (today !== currentDaySlot) {
-    dumpDailyTokens(currentDaySlot);
+    // Persist the previous day only when persistence is enabled. With
+    // persistence disabled the in-memory map is still cleared so today's
+    // bucket starts fresh — the daily stats feed the live dashboard.
+    if (persistenceEnabled) dumpDailyTokens(currentDaySlot);
     dailyTokenStats.clear();
     currentDaySlot = today;
   }
@@ -441,6 +454,7 @@ function recordDailyToken(model: string, usage?: UsageStats, failed = false): vo
 }
 
 export function dumpTodayTokens(): void {
+  if (!persistenceEnabled) return;
   const today = getTodayDateStr();
 
   // Handle day rollover — persist the old day's data and reset for the new day
@@ -481,19 +495,39 @@ type PersistedLimitWindow = {
   accumulator: number;
 };
 
-export function loadTokenStatsFromLog(): void {
+// Stats persistence (dump to JSONL + restore from JSONL) is opt-in:
+// the Node entry point calls `setStatsPersistenceEnabled(true)` when either
+// TUI=1 or DUMP=1 is set. With persistence disabled, stats live only in
+// memory (capped at the 30d retention window by recordTokenHeatmapEvent)
+// and no file I/O happens on the hot path or at day rollover.
+let persistenceEnabled = false;
+
+export function setStatsPersistenceEnabled(enabled: boolean): void {
+  persistenceEnabled = enabled;
+}
+
+export function isStatsPersistenceEnabled(): boolean {
+  return persistenceEnabled;
+}
+
+let statsLoaded = false;
+
+export function loadTokenStatsFromLog(retentionDays = 30): void {
+  if (statsLoaded) return;
+  statsLoaded = true;
+  if (!persistenceEnabled) return;
   if (!existsSync(TOKEN_LOG_FILE)) return;
   try {
     const content = readFileSync(TOKEN_LOG_FILE, 'utf-8');
     const lines = content.split('\n').filter((l) => l.trim());
 
-    // Build set of last 30 days (YYYY-MM-DD) for efficient lookup
-    // Events are retained 30d for enforcement; heatmap renders only the last 7d
-    const last30Days = new Set<string>();
-    for (let i = 0; i < 30; i++) {
+    // Build set of last N days (YYYY-MM-DD) for efficient lookup
+    // N = max(7d heatmap, global token limit window, max composite token limit window)
+    const lastNDays = new Set<string>();
+    for (let i = 0; i < retentionDays; i++) {
       const d = new Date();
       d.setDate(d.getDate() - i);
-      last30Days.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+      lastNDays.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
     }
 
     // First pass: find the latest timestamp per date (stored as Unix seconds)
@@ -501,7 +535,7 @@ export function loadTokenStatsFromLog(): void {
     for (const line of lines) {
       try {
         const record = JSON.parse(line) as { date: string; timestamp?: string | number };
-        if (!last30Days.has(record.date)) continue;
+        if (!lastNDays.has(record.date)) continue;
         const ts =
           typeof record.timestamp === 'number'
             ? record.timestamp
@@ -533,7 +567,7 @@ export function loadTokenStatsFromLog(): void {
           heatmapEvents?: unknown;
           compositeLimitWindows?: Record<string, PersistedLimitWindow>;
         };
-        if (!last30Days.has(record.date)) continue;
+        if (!lastNDays.has(record.date)) continue;
 
         // Load model stats from the latest dump per date only
         const latestTs = latestPerDate.get(record.date);
@@ -673,8 +707,8 @@ export function loadTokenStatsFromLog(): void {
       }
     }
 
-    // Re-apply window pruning on heatmap after merge (retain 30d for enforcement)
-    const pruneCutoff = Date.now() - TOKEN_RETENTION_WINDOW_MS;
+    // Re-apply window pruning on heatmap after merge (retain N days for enforcement)
+    const pruneCutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
     while (tokenHeatmapEvents.length > 0 && tokenHeatmapEvents[0].timestamp < pruneCutoff) {
       tokenHeatmapEvents.shift();
     }
@@ -1373,11 +1407,51 @@ export function getTokenHeatmapStatsDesc(): Array<{ weekday: number; hour: numbe
 
 export function getTokensInWindow(durationMs: number): number {
   const cutoff = Date.now() - durationMs;
-  let total = 0;
-  for (const event of tokenHeatmapEvents) {
-    if (event.timestamp >= cutoff) {
-      total += event.values;
+
+  // tokenHeatmapEvents is append-only (within the 30d retention window) and
+  // sorted by ascending timestamp.  Events before `cutoff` are immutable —
+  // their sum is cached in `windowSumFrozen` / `windowSumCutoff` so we only
+  // need to scan the live tail on each call instead of the full 30d array.
+  //
+  // Pruning (shift) only removes events older than 30d, which are always
+  // outside any query window (durationMs <= 30d), so the frozen sum is never
+  // invalidated by pruning.
+
+  if (windowSumCutoff > 0) {
+    // Binary-search for the first event at or after the previous boundary so
+    // we only walk events added since the last call.
+    let lo = 0;
+    let hi = tokenHeatmapEvents.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (tokenHeatmapEvents[mid].timestamp < windowSumCutoff) lo = mid + 1;
+      else hi = mid;
     }
+    // Absorb events in [lo, ...) that are now before the new cutoff into the frozen sum.
+    let i = lo;
+    for (; i < tokenHeatmapEvents.length; i++) {
+      if (tokenHeatmapEvents[i].timestamp >= cutoff) break;
+      windowSumFrozen += tokenHeatmapEvents[i].values;
+    }
+    windowSumCutoff = cutoff;
+    // Sum the remaining live tail.
+    let total = windowSumFrozen;
+    for (let j = i; j < tokenHeatmapEvents.length; j++) {
+      total += tokenHeatmapEvents[j].values;
+    }
+    return total;
+  }
+
+  // Cold start: split the array at cutoff, cache the frozen portion.
+  let i = 0;
+  for (; i < tokenHeatmapEvents.length; i++) {
+    if (tokenHeatmapEvents[i].timestamp >= cutoff) break;
+    windowSumFrozen += tokenHeatmapEvents[i].values;
+  }
+  windowSumCutoff = cutoff;
+  let total = windowSumFrozen;
+  for (let j = i; j < tokenHeatmapEvents.length; j++) {
+    total += tokenHeatmapEvents[j].values;
   }
   return total;
 }
@@ -1786,13 +1860,9 @@ export function createResponseToolTrackingTransformStream(
   });
 }
 
-// Load today's token stats from log on module startup (Node.js runtime).
-// In Workers runtime this silently fails since fs is unavailable.
-try {
-  loadTokenStatsFromLog();
-} catch {
-  // noop in Workers
-}
+// loadTokenStatsFromLog() is now invoked explicitly by the Node entry point
+// (server.ts) after the proxy config is loaded, with a retention window
+// derived from the configured token-limit durations.
 
 // Periodic delta dump every 30 min — only runs when DUMP=1 (non-TUI mode).
 // (TUI=1 mode uses the TUI's own timer instead.)

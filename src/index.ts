@@ -715,22 +715,10 @@ export default {
       const userAgentPrefix = extractUserAgentPrefix(request.headers.get('user-agent'));
       let requestToolNames: string[] = ['none'];
 
-      // Collect tool names from request body for all JSON endpoints (without consuming request body).
-      if (request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'OPTIONS') {
-        try {
-          const contentType = request.headers.get('content-type') || '';
-          if (contentType.includes('application/json')) {
-            const bodyForToolStats = await request.clone().json() as Record<string, unknown>;
-            requestToolNames = extractToolNamesFromBody(bodyForToolStats);
-            recordToolRequestChars(extractToolRequestCharLengthsFromBody(bodyForToolStats), userAgentPrefix);
-          }
-        } catch {
-          // ignore parse failures for stats collection
-        }
-      }
-
-      // Count Agent/Tool for all incoming requests (including failures later in routing/upstream).
-      recordAgentStat(userAgentPrefix, requestToolNames);
+      // Tool stats are extracted from the already-parsed body inside the routing
+      // block below (where body is parsed anyway for model resolution). recordAgentStat
+      // is called there for routed requests. For non-routed paths (models list,
+      // dashboard, dynamic routes) there are no tools to record.
 
       type RouteAttemptHandlerType = 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' | 'responses-compact' | 'responses-input-tokens' | 'embeddings' | 'chat-completions';
       type RouteAttempt = {
@@ -767,6 +755,12 @@ export default {
         try {
           let bodyText = await request.text();
           const body = JSON.parse(bodyText);
+
+          // Extract tool stats from the already-parsed body — avoids a second
+          // clone()+parse that would otherwise happen before the routing block.
+          requestToolNames = extractToolNamesFromBody(body);
+          recordToolRequestChars(extractToolRequestCharLengthsFromBody(body), userAgentPrefix);
+          recordAgentStat(userAgentPrefix, requestToolNames);
 
           // Privacy filter: redact PII out of the request body before routing so
           // every downstream path (single/composite/fusion) operates on redacted

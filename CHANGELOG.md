@@ -7,6 +7,62 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Request Hot-Path Performance: Single Body Parse + Incremental Token-Window Cache
+
+Two optimizations on the per-request hot path, applied without changing any
+behavioral contract.
+
+- **Single request body parse** (`src/index.ts`) — tool/agent stats were
+  previously extracted from a `request.clone().json()` call at the top of
+  the request handler, *before* the routing block parsed the same body via
+  `request.text()` + `JSON.parse()`. That meant every JSON request paid
+  for two full body parses (and a full body clone allocation). The
+  extraction now happens inside the routing block, reading from the body
+  that was already parsed for model resolution. `recordAgentStat()` is
+  also called from that same site, so routed requests still record tool
+  stats exactly as before; non-routed paths (`/v1/models`, `/dashboard`,
+  dynamic routes) had no tool stats to record in the first place.
+- **Incremental cache for `getTokensInWindow`** (`src/utils/dashboard-stats.ts`)
+  — `tokenHeatmapEvents` is append-only within the 30-day retention window
+  and sorted by ascending timestamp, so events older than the current
+  query cutoff are immutable. The function previously did an O(n) scan of
+  the entire 30-day array on every call (each call: every active token-
+  limit window checks its accumulator). It now caches the sum of all
+  events older than the previous cutoff in `windowSumFrozen`, with
+  `windowSumCutoff` marking the boundary, and only scans the live tail
+  plus absorbs newly-eligible events into the frozen sum on each call.
+  Pruning (30-day `shift()`) only removes events outside any query window,
+  so the frozen sum is never invalidated. Cold start still pays a single
+  O(n) pass to seed the cache; subsequent calls are O(tail length).
+
+### Token Log Persistence Made Opt-In (TUI=1 / DUMP=1)
+
+Token log persistence (the `model_proxy_tokens.jsonl` JSONL file holding
+token stats, heatmap data, and composite limit windows) is now gated on
+`TUI=true|1` or `DUMP=true|1`. Without one of those flags the proxy
+performs no JSONL file I/O at all — no startup restore, no day-rollover
+dump, no periodic 30-min dump, no `Ctrl+U` dump.
+
+- **src/utils/dashboard-stats.ts** — added a module-level
+  `persistenceEnabled` flag plus `setStatsPersistenceEnabled(enabled)` /
+  `isStatsPersistenceEnabled()` exports. `dumpTodayTokens()`,
+  `dumpDailyTokens()`, `advanceDaySlotIfNeeded()` (the day-rollover dump
+  path), and `loadTokenStatsFromLog()` all early-return when the flag is
+  false. The in-memory `recordTokenHeatmapEvent()` 30-day pruning is
+  unchanged, so heatmap stats still age out after 30 days; they just
+  don't outlive the process.
+- **src/server.ts** — computes `persistenceEnabled = TUI || DUMP`,
+  calls `setStatsPersistenceEnabled()` once, and wraps the
+  `loadTokenStatsFromLog(retentionDays)` call (and its retention-window
+  computation) in an `if (persistenceEnabled)` block. The retention
+  window is still derived from the configured global / composite token
+  limits and falls back to 30 days when no local TOML config is available.
+- The live `/dashboard` and TUI views continue to work either way — they
+  read from the in-memory state, which is always populated by the request
+  hot path regardless of persistence.
+- See [README § 3.2 Token Log Persistence](./README.md#32-token-log-persistence)
+  for the full behavior.
+
 ### Tool Blocklist (TUI `P` key)
 
 Added a Tool Blocklist overlay in the TUI that lists every observed

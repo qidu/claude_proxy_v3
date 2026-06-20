@@ -448,7 +448,18 @@ Press `Enter` to toggle the block state for the highlighted tool. The blocklist 
 
 ### 3.2 Token Log Persistence
 
-The proxy persists token stats, heatmap data, and composite limit windows to `/tmp/model_proxy_tokens.log` (JSONL format) for recovery after restart.
+Token log persistence is **opt-in**. It only runs when the proxy is started
+with `TUI=true` (or `TUI=1`) or `DUMP=true` (or `DUMP=1`). Without one of
+those flags, the proxy keeps all stats in memory only — heatmap events are
+capped at the 30-day in-memory retention window (`recordTokenHeatmapEvent`
+in `src/utils/dashboard-stats.ts`), and the JSONL log file is neither read
+at startup nor written at day rollover. In-memory stats feed the live
+`/dashboard` and TUI views exactly the same way; only restart-survival
+requires the log.
+
+When persistence is enabled, the proxy writes token stats, heatmap data,
+and composite limit windows to `./model_proxy_tokens.jsonl` (JSONL format)
+for recovery after restart.
 
 **Log file format** (one JSON object per line):
 ```json
@@ -463,13 +474,23 @@ Fields:
 - `heatmapEvents`: same-day heatmap events only. Each dump writes **delta-only** — events newer than `lastDumpTs`. Day rollover writes a full same-day snapshot. Stored as `{ models: { <hex-id>: <model-name> }, sequences: [{ ts, values, id? }] }`. Model ids are 4 hex chars (16 bits, 65k ids) — more than enough for any realistic model fleet. Only models referenced by this row's `sequences` are included in `models`, so each row is self-contained.
 - `compositeLimitWindows`: persisted composite alias limit windows
 
-**Dump triggers:**
+**Persistence gate (opt-in):**
+- `TUI=true` or `DUMP=true` — enables JSONL persistence. The flag must be set
+  for both the periodic 30-min dump, the manual `Ctrl+U` dump (TUI), the
+  day-rollover dump, and the startup restore. Without it, none of these
+  touch the filesystem.
+- The flag is computed once at startup (`setStatsPersistenceEnabled()` in
+  `src/utils/dashboard-stats.ts`) and read by every dump function. Day
+  rollover still clears the in-memory daily bucket so the live dashboard
+  resets correctly — only the file write is skipped.
+
+**Dump triggers (only active when persistence is enabled):**
 - **TUI=1** — automatic dump every 30 min (skipped if total tokens unchanged since last dump)
 - **DUMP=1** (non-TUI/server mode) — automatic dump every 30 min (skipped if total tokens unchanged)
 - **Ctrl+U** — manual dump at any time in TUI
 - **Day transition** — when a new day begins, previous day's data is dumped before clearing
 
-**Startup restore (backward compatible with all existing log files):**
+**Startup restore (only runs when persistence is enabled; backward compatible with all existing log files):**
 - On proxy startup, `loadTokenStatsFromLog()` reads the last 30 days from the log
 - **modelStats** (dashboard daily map): loaded from the latest dump per date only (later dumps overwrite earlier). The cumulative `modelStats` Map that powers the TUI "Top Models" panel and `getModelTotalTokens()` is **accumulated** across the latest dump per date — each per-date dump is that day's totals (the day-rollover dump is the authoritative end-of-day snapshot), so summing them reconstructs true all-time totals. This restores the cumulative counters used by composite aliases with no duration window (`legacy total_token_limit` path) for 413 enforcement, including the historical (pre-restart) day totals that the previous overwrite-only behavior missed.
 - **toolStats**: loaded from the latest dump per date only (later dumps overwrite earlier). Each row is split back into the three source maps consumed by the dashboard:
@@ -1419,6 +1440,21 @@ Results on Node.js v24.6.0 (linux x64):
 | **Dashboard stats** per-request overhead | ~0.69 µs/1M ops |
 
 > Built-in `JSON.stringify` is fastest for normal JSON. Use `fast-safe-stringify` if your payloads may contain circular references. The proxy's own processing overhead is negligible — real latency comes from upstream LLM inference and network I/O.
+
+#### Request Hot-Path Optimizations
+
+- **Single body parse per request** (`src/index.ts`) — tool/agent stats are
+  extracted from the same parsed body that the routing block uses for
+  model resolution, instead of a separate `request.clone().json()` call
+  before routing. Each JSON request now pays for one body parse instead
+  of two.
+- **Incremental `getTokensInWindow` cache** (`src/utils/dashboard-stats.ts`)
+  — the function used to scan the full 30-day heatmap array on every
+  call (called once per active composite / global token-limit window per
+  request). It now caches the immutable prefix sum
+  (`windowSumFrozen` / `windowSumCutoff`) and only walks the live tail
+  on each call. Cold start is one O(n) pass; subsequent calls are
+  O(events added since the previous cutoff).
 
 ### Model Configuration
 

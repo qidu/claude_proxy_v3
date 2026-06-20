@@ -5,8 +5,8 @@
 
 import { createServer } from 'http';
 import type { Env } from './types/shared.js';
-import { loadProxyConfig, clearProxyConfigCache } from './utils/config-loader.js';
-import { consumeActiveRequestRelease } from './utils/dashboard-stats.js';
+import { loadProxyConfig, clearProxyConfigCache, loadProxyConfigFromPath, parseHumanTokenLimit } from './utils/config-loader.js';
+import { consumeActiveRequestRelease, loadTokenStatsFromLog, getWindowMs, setStatsPersistenceEnabled } from './utils/dashboard-stats.js';
 import { startTUI } from './tui.js';
 
 const port = parseInt(process.env.PORT || '8788', 10);
@@ -146,7 +146,44 @@ server.listen(port, '0.0.0.0', async () => {
     console.warn('[WARN] DEV_PASS_THROUGH is enabled: /v1/chat/completions requests are passed through directly with validation only (no model routing). Do not use in production.');
   }
 
+  // Token stats persistence (JSONL dump + restore) is opt-in: it only runs
+  // when the TUI dashboard or the standalone DUMP timer is active. Without
+  // it, stats live purely in memory, capped at the 30d retention window by
+  // recordTokenHeatmapEvent.
   const tuiEnabled = process.env.TUI === 'true' || process.env.TUI === '1';
+  const dumpEnabled = process.env.DUMP === 'true' || process.env.DUMP === '1';
+  const persistenceEnabled = tuiEnabled || dumpEnabled;
+  setStatsPersistenceEnabled(persistenceEnabled);
+
+  if (persistenceEnabled) {
+    // Restore token stats from log with a retention window sized to fit the
+    // largest configured token-limit duration. Falls back to 30 days when no
+    // local TOML config is available (e.g. PROXY_CONFIG_URL mode).
+    let retentionDays = 30;
+    const configPath = env.PROXY_CONFIG_PATH;
+    if (configPath && !env.PROXY_CONFIG_URL) {
+      try {
+        const cfg = loadProxyConfigFromPath(configPath);
+        const durationDays = (d: string): number => Math.ceil(getWindowMs(d as '1h' | '1d' | '1w' | '1m') / (24 * 60 * 60 * 1000));
+        let maxDays = 7; // 7d heatmap baseline
+        const globalRaw = cfg.upstream?.global_token_limit;
+        if (globalRaw) {
+          const parsed = parseHumanTokenLimit(globalRaw.trim());
+          if (parsed) maxDays = Math.max(maxDays, durationDays(parsed.duration));
+        }
+        const composite = cfg.composite ?? {};
+        for (const aliasCfg of Object.values(composite)) {
+          const lim = aliasCfg?.token_limit;
+          if (lim?.duration) maxDays = Math.max(maxDays, durationDays(lim.duration));
+        }
+        retentionDays = maxDays;
+      } catch {
+        // keep default 30 on parse error
+      }
+    }
+    loadTokenStatsFromLog(retentionDays);
+  }
+
   if (tuiEnabled && process.stdin.isTTY && process.stdout.isTTY) {
     console.log = () => {};
     console.info = () => {};
