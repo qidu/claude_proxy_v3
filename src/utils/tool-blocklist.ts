@@ -1,0 +1,116 @@
+import { isToolBlocked } from './dashboard-stats.js';
+import type { Logger } from '../types/shared.js';
+
+export type EraseResult = {
+  erasedNames: string[];
+  toolChoiceReset: boolean;
+};
+
+/**
+ * Remove blocked tools from the request body before forwarding to upstream.
+ * Mutates `body` in place. Also resets `tool_choice` to 'auto' if it forces
+ * a blocked tool (so the request still succeeds with a tool the model picks).
+ *
+ * Supports the three tool shapes the proxy sees on the wire:
+ *   - Claude:    body.tools[i] = { name, description?, input_schema }
+ *   - OpenAI:    body.tools[i] = { type: 'function', function: { name, ... } }
+ *   - Gemini:    body.tools[i] = { functionDeclarations: [{ name, ... }] }
+ *
+ * If the filtered tools array becomes empty, the field is deleted (some
+ * upstreams reject tools: []). Past `tool_use` / `tool_result` blocks in
+ * message history are intentionally left alone — only the tool schema is
+ * removed.
+ */
+export function eraseBlockedTools(
+  body: Record<string, unknown>,
+  log: Logger | undefined,
+  requestId: string,
+): EraseResult {
+  const result: EraseResult = { erasedNames: [], toolChoiceReset: false };
+  const tools = body.tools;
+  if (!Array.isArray(tools) || tools.length === 0) {
+    sanitizeToolChoice(body, result);
+    return result;
+  }
+
+  const filtered: unknown[] = [];
+  for (const tool of tools) {
+    if (!tool || typeof tool !== 'object') {
+      filtered.push(tool);
+      continue;
+    }
+    const t = tool as Record<string, unknown>;
+    // Gemini native shape: { functionDeclarations: [{ name, ... }] }
+    if (Array.isArray(t.functionDeclarations)) {
+      const newDecls = t.functionDeclarations.filter((d) => {
+        if (!d || typeof d !== 'object') return true;
+        const name = (d as Record<string, unknown>).name;
+        if (typeof name === 'string' && isToolBlocked(name)) {
+          result.erasedNames.push(name);
+          return false;
+        }
+        return true;
+      });
+      if (newDecls.length === 0) {
+        // No surviving declarations — drop the wrapper entirely
+        continue;
+      }
+      filtered.push({ ...t, functionDeclarations: newDecls });
+      continue;
+    }
+    // Claude / OpenAI / Responses shape
+    const name = extractToolName(t);
+    if (name && isToolBlocked(name)) {
+      result.erasedNames.push(name);
+      continue;
+    }
+    filtered.push(tool);
+  }
+
+  if (result.erasedNames.length > 0) {
+    if (filtered.length === 0) {
+      delete body.tools;
+    } else {
+      body.tools = filtered;
+    }
+  }
+
+  sanitizeToolChoice(body, result);
+
+  if (result.erasedNames.length > 0) {
+    log?.info(requestId, `Erased blocked tools from request: ${result.erasedNames.join(', ')}`);
+  }
+  if (result.toolChoiceReset) {
+    log?.info(requestId, `Reset tool_choice to 'auto' (was forcing a blocked tool)`);
+  }
+
+  return result;
+}
+
+function extractToolName(tool: Record<string, unknown>): string | undefined {
+  // Claude / Responses (rare): { name, ... }
+  if (typeof tool.name === 'string') return tool.name;
+  // OpenAI / Responses: { type: 'function', function: { name, ... } }
+  if (tool.function && typeof tool.function === 'object') {
+    const fn = tool.function as Record<string, unknown>;
+    if (typeof fn.name === 'string') return fn.name;
+  }
+  return undefined;
+}
+
+function sanitizeToolChoice(body: Record<string, unknown>, result: EraseResult): void {
+  const tc = body.tool_choice;
+  if (!tc || typeof tc !== 'object') return;
+  const choice = tc as Record<string, unknown>;
+  let referenced: string | undefined;
+  if (typeof choice.name === 'string') {
+    referenced = choice.name;
+  } else if (choice.function && typeof choice.function === 'object') {
+    const fn = choice.function as Record<string, unknown>;
+    if (typeof fn.name === 'string') referenced = fn.name;
+  }
+  if (referenced && isToolBlocked(referenced)) {
+    body.tool_choice = 'auto';
+    result.toolChoiceReset = true;
+  }
+}

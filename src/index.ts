@@ -69,6 +69,7 @@ import {
   createRestoreTransformStream,
   PiiMapping,
 } from './utils/privacy-filter.js';
+import { eraseBlockedTools } from './utils/tool-blocklist.js';
 
 let hasLoggedUpstreamConfig = false;
 
@@ -777,6 +778,15 @@ export default {
               bodyText = JSON.stringify(body);
               logger.info(requestId, `Privacy filter redacted ${Object.keys(mapping).length} PII span(s) from ${path}`);
             }
+          }
+
+          // Erase blocked tools from the request body before routing so every
+          // downstream path (single/composite/fusion) operates on the filtered
+          // body. Mirrors the privacy-filter pattern above — mutate `body`, then
+          // reserialize `bodyText` so the passthrough reconstruction picks it up.
+          const eraseResult = eraseBlockedTools(body, logger, requestId);
+          if (eraseResult.erasedNames.length > 0 || eraseResult.toolChoiceReset) {
+            bodyText = JSON.stringify(body);
           }
 
           let modelName = body.model;
