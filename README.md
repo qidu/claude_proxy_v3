@@ -471,7 +471,7 @@ Fields:
 
 **Startup restore (backward compatible with all existing log files):**
 - On proxy startup, `loadTokenStatsFromLog()` reads the last 30 days from the log
-- **modelStats** (dashboard daily map): loaded from the latest dump per date only (later dumps overwrite earlier). The cumulative `modelStats` Map that powers the TUI "Top Models" panel and `getModelTotalTokens()` is also restored from the same latest row per date — equivalent to "latest day", not true all-time. This restores the cumulative counters used by composite aliases with no duration window (`legacy total_token_limit` path) for 413 enforcement.
+- **modelStats** (dashboard daily map): loaded from the latest dump per date only (later dumps overwrite earlier). The cumulative `modelStats` Map that powers the TUI "Top Models" panel and `getModelTotalTokens()` is **accumulated** across the latest dump per date — each per-date dump is that day's totals (the day-rollover dump is the authoritative end-of-day snapshot), so summing them reconstructs true all-time totals. This restores the cumulative counters used by composite aliases with no duration window (`legacy total_token_limit` path) for 413 enforcement, including the historical (pre-restart) day totals that the previous overwrite-only behavior missed.
 - **toolStats**: loaded from the latest dump per date only (later dumps overwrite earlier). Each row is split back into the three source maps consumed by the dashboard:
   - `agentStats` (key = `${agent} / ${tool}`) — restored only when `req > 0`
   - `upstreamResponseToolStats` (key = `${tool}\0${agent}`) — restored only when `resp > 0`
@@ -482,7 +482,6 @@ Fields:
   - For rows with `lastDumpTs > 0` (new delta rows): only events newer than `lastDumpTs` are included
   - Both the legacy array shape (`[{timestamp, values, model}]`) and the current object shape (`{models, sequences}`) are accepted; legacy rows are converted to the in-memory id form on load
   - 30-day retention cutoff always applied
-- **modelStats** (live counter): NOT restored — starts fresh at zero to ensure `token_limit` on composite aliases is not incorrectly triggered from previous-day tokens
 - **compositeLimitWindows**: restored if the window has not expired. If `windowStartMs + durationMs > now`, the accumulator is restored and enforcement continues from where it left off. If the window has expired, the window is NOT restored (fresh window starts).
 
 **Composite alias limit behavior**: Each `token_limit` tracks tokens in a sliding duration window. Tokens accumulated across proxy restarts are counted toward the limit **only if** the window hasn't expired. When the window expires, the accumulator resets to 0 and a fresh window begins.
@@ -2043,7 +2042,7 @@ MIT
 - `agentToolStats` and `blockedTools` fields are now part of the dashboard snapshot (`src/handlers/dashboard.ts`) — `agentToolStats` is built by the new `getAgentToolPanelStats()` in `src/utils/dashboard-stats.ts`, which joins the three source maps (`agentStats`, `toolRequestChars`, `upstreamResponseToolStats`) into a per-(tool, agent) row keyed by `${tool}\0${agent}`.
 - `recordToolRequestChars()` and `recordUpstreamResponseToolNames()` now take an `agent` argument; `createResponseToolTrackingTransformStream()` now takes an `agent` argument and threads it into the `flush()` callback. The Claude request handler (`src/index.ts`) passes the user-agent prefix through both call sites.
 - `dumpTodayTokens()` writes a new `toolStats` field (per-(tool, agent) rows with `name`, `agent`, `req`, `resp`, `len`, `blocked`) in the JSONL token log. `loadTokenStatsFromLog()` restores those rows back into the three source maps on startup (latest dump per date wins, `blocked` is informational and not restored).
-- The cumulative `modelStats` Map (powers TUI "Top Models" + `getModelTotalTokens()`) is now also restored from the latest dump per date. Previously only the daily `modelStats` map was restored.
+- The cumulative `modelStats` Map (powers TUI "Top Models" + `getModelTotalTokens()`) is now also restored from the latest dump per date, and is **accumulated** across the latest per-date dumps (each per-date dump is that day's totals, so summing reconstructs true all-time). Previously only the daily `modelStats` map was restored, and the cumulative map was not restored at all.
 - `recordAgentStat()`, `recordToolRequestChars()`, and `recordUpstreamResponseToolNames()` short-circuit on `blockedTools` so blocked tools no longer grow their counters.
 
 **TUI keybinding change**: the model test picker's "test all (30m)" / "stop test timer" toggle is now `W`. The `P` key on the main view now opens the Tool Blocklist overlay.

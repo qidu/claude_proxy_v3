@@ -547,14 +547,28 @@ export function loadTokenStatsFromLog(): void {
         const modelEntries = record.modelStats ?? record.entries ?? [];
         for (const entry of modelEntries) {
           dailyTokenStats.set(entry.model, entry);
-          // Also restore the cumulative modelStats Map (powers the TUI
-          // "Top Models" panel via getModelStatsDesc). The dump's
-          // modelStats field is a daily snapshot, so the restored
-          // cumulative is equivalent to the latest day — not true
-          // all-time. Note: getModelTotalTokens() reads from this Map
-          // and is used by composite aliases with no duration window
-          // (legacy total_token_limit path) for 413 enforcement.
-          modelStats.set(entry.model, entry);
+          // Restore the cumulative modelStats Map by ACCUMULATING across
+          // the latest dump per date. Each per-date dump represents that
+          // day's totals (the day-rollover dump is the authoritative
+          // end-of-day snapshot), so summing them reconstructs true
+          // all-time totals. Powers the TUI "Top Models" panel via
+          // getModelStatsDesc(), and is also read by getModelTotalTokens()
+          // for the legacy total_token_limit fallback path in
+          // getCompositeAliasTokenUsage() (used when an alias has
+          // token_limit but no compositeLimitWindows entry — e.g. an
+          // expired window at restore time).
+          const existing = modelStats.get(entry.model);
+          if (existing) {
+            existing.requests += toSafeNumber(entry.requests);
+            existing.failed_requests += toSafeNumber(entry.failed_requests);
+            existing.input_tokens += toSafeNumber(entry.input_tokens);
+            existing.cached_tokens += toSafeNumber(entry.cached_tokens);
+            existing.cache_written_tokens += toSafeNumber(entry.cache_written_tokens);
+            existing.output_tokens += toSafeNumber(entry.output_tokens);
+            existing.total_tokens += toSafeNumber(entry.total_tokens);
+          } else {
+            modelStats.set(entry.model, { ...entry });
+          }
         }
 
         // Restore tool stats from the latest dump per date (full snapshot —
@@ -569,6 +583,9 @@ export function loadTokenStatsFromLog(): void {
             const req = toSafeNumber(row.req);
             const resp = toSafeNumber(row.resp);
             const len = toSafeNumber(row.len);
+            if (toSafeNumber(row.blocked) === 1) {
+              blockTool(name);
+            }
             if (req > 0) {
               const key = `${agent} / ${name}`;
               agentStats.set(key, { key, uses: req });

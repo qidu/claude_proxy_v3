@@ -1039,8 +1039,12 @@ class DashboardApp {
       in_request_chars: number;
     };
 
+    // Prefix character conveys block state (✗ = blocked, · = active) without
+    // embedded ANSI color codes — embedded resets would terminate the theme's
+    // `selectedText: green(...)` wrap mid-line and break the selected-line
+    // highlighting that the Test custom model list gets for free.
     const formatLabel = (item: ToolItem): string =>
-      `${isToolBlocked(item.tool_name) ? red('✗') : green('·')} ${item.tool_name.padEnd(26)}${item.agent.padEnd(18)}${alignRight(fmt(item.in_requests), 4)} ${alignRight(fmt(item.in_responses), 5)} ${alignRight(fmt(item.in_request_chars), 10)}`;
+      `${isToolBlocked(item.tool_name) ? '✗' : '·'} ${item.tool_name.padEnd(26)}${item.agent.padEnd(18)}${alignRight(fmt(item.in_requests), 4)} ${alignRight(fmt(item.in_responses), 5)} ${alignRight(fmt(item.in_request_chars), 10)}`;
 
     const items: ToolItem[] = (snap.agentToolStats || []).map((e) => ({
       value: `${e.tool_name}\0${e.agent}`,
