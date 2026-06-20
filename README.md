@@ -25,6 +25,7 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
   - `GET /dashboard/api/stats/models` - Model request + token stats
   - Dashboard "Export CSV" button reads table data from the DOM and triggers a download; it does **not** change the in-memory stats data.
   - `GET /dashboard/api/stats/agents` - Combined tool usage stats by tool (`in requests` is aggregated across UA prefixes; `in responses` is by tool)
+  - **Tool Blocklist** (TUI `P`): per-(tool, agent) panel in the TUI with `Enter` to toggle block; blocked tools stop accumulating `in_requests` / `in_responses` / `in_request_chars` stats (existing pre-block counts are preserved). Snapshot fields: `agentToolStats` (per-(tool, agent) rows) and `blockedTools` (string array of currently-blocked tool names).
   - `GET /dashboard/api/stats/requests` - Request/response stats by endpoint, upstream, and status code, plus **model timing** (min/avg/max ms per model)
   - **model_timings** field: tracks per-model response time (`min_time_ms`, `avg_time_ms`, `max_time_ms`, `count`) — keyed by the resolved upstream model name (e.g., `moonshotai/kimi-k2.6` for config key `kimi-k2.6`)
   - **endpoint_timings** field: tracks per-endpoint response time (existing)
@@ -416,6 +417,7 @@ Keyboard shortcuts (main view):
 - `t` open test model picker
 - `r` reload config
 - `l` set/clear the **global** token limit (applies to all models; format: `<num>[K|M|B|T]> <1h|1d|1w|1m>`, e.g. `1.1B 1d`, `50K 1h`, blank clears)
+- `p` open the **Tool Blocklist** overlay (per-(tool, agent) panel — `Enter` toggles a tool's block state, `↑/↓` moves, `P`/`Esc` closes; blocked tools are marked with a red `✗` at the left of each row and stop accumulating stats)
 - `Ctrl+U` dump today's tokens to log file (TUI mode)
 - `Ctrl+C` quit
 
@@ -436,6 +438,12 @@ Keyboard shortcuts (composite alias editor):
 
 **Test fusion aliases** (`[F]`): the test is sent **directly to one of the panel target models** (a plain text request, no judge/synth stages). This avoids the full fusion pipeline (which would fail the test format check) while still exercising that panel member's route and API key. The chosen panel target is the first one in config order with `role: panel` or `fusion > 0`.
 
+**Tool Blocklist (`P`)**: opens a per-(tool, agent) panel sourced from the dashboard snapshot's `agentToolStats`. Each row shows the tool name, agent (user-agent prefix), and three counters (`req`, `resp`, `len`). The leftmost column shows the current block state:
+- `·` (green) — tool is allowed; stats continue to be recorded.
+- `✗` (red) — tool is blocked; future stat recording is skipped. Existing pre-block counts are preserved.
+
+Press `Enter` to toggle the block state for the highlighted tool. The blocklist is in-memory only (lives in `blockedTools` inside `src/utils/dashboard-stats.ts`); it is not persisted across proxy restarts and is not exposed via the dashboard edit API. Subtitle shows `↑↓ move  Enter toggle block  P/Esc close`.
+
 > **Important**: When a model name has **both** a `[models.*]` config entry and a `[composite]` alias with the same name, selecting the model **without** `[C]` does **not** use the model entry's specific `base_url` or `api_key` — it routes through the composite alias instead. The composite routing resolves each target model independently, and the model entry's URL/key is only used for the picker display label. The `[C]` suffix is the actual way to test the composite alias routing; selecting the base name effectively bypasses the model's own config. To test a model entry's own base URL and API key in isolation, either remove the conflicting composite alias or test a model that doesn't share a name with a composite alias.
 
 ### 3.2 Token Log Persistence
@@ -444,13 +452,14 @@ The proxy persists token stats, heatmap data, and composite limit windows to `/t
 
 **Log file format** (one JSON object per line):
 ```json
-{"date":"2026-06-05","timestamp":"2026-06-05T15:20:09.156Z","lastDumpTs":1750000000000,"modelStats":[{"model":"deepseek-v4-flash","requests":53,"failed_requests":1,"input_tokens":333034,"cached_tokens":0,"cache_written_tokens":0,"output_tokens":4664,"total_tokens":337698}],"heatmapEvents":{"models":{"a3f1":"deepseek-v4-flash"},"sequences":[{"ts":1750000001,"values":24223,"id":"a3f1"}]},"compositeLimitWindows":{"gpt-all":{"limit":120000,"duration":"1d","windowStartMs":1750000000000,"accumulator":8400}}}
+{"date":"2026-06-05","timestamp":"2026-06-05T15:20:09.156Z","lastDumpTs":1750000000000,"modelStats":[{"model":"deepseek-v4-flash","requests":53,"failed_requests":1,"input_tokens":333034,"cached_tokens":0,"cache_written_tokens":0,"output_tokens":4664,"total_tokens":337698}],"toolStats":[{"name":"Bash","agent":"claude-cli","req":12,"resp":10,"len":43821,"blocked":0}],"heatmapEvents":{"models":{"a3f1":"deepseek-v4-flash"},"sequences":[{"ts":1750000001,"values":24223,"id":"a3f1"}]},"compositeLimitWindows":{"gpt-all":{"limit":120000,"duration":"1d","windowStartMs":1750000000000,"accumulator":8400}}}
 ```
 
 Fields:
 - `date` / `timestamp`: date string and ISO timestamp of the dump
 - `lastDumpTs`: unix ms timestamp of the previous dump. `0` = full snapshot (daily rollover). Used to write delta-only events and to filter events on load (backward compatible with old rows without this field).
 - `modelStats`: cumulative daily token stats per model (written every dump)
+- `toolStats`: per-(tool, agent) cumulative usage rows (`name`, `agent`, `req`, `resp`, `len`, `blocked`). Rows are sorted by `(req+resp+len)` desc with `req` desc as a tiebreak. `agent` defaults to `all` for legacy single-tenant rows. `blocked` is a snapshot of the in-memory `blockedTools` set at dump time (1 = blocked, 0 = not blocked) — it is informational only and **not** restored on load; the blocklist itself is in-memory and resets at startup.
 - `heatmapEvents`: same-day heatmap events only. Each dump writes **delta-only** — events newer than `lastDumpTs`. Day rollover writes a full same-day snapshot. Stored as `{ models: { <hex-id>: <model-name> }, sequences: [{ ts, values, id? }] }`. Model ids are 4 hex chars (16 bits, 65k ids) — more than enough for any realistic model fleet. Only models referenced by this row's `sequences` are included in `models`, so each row is self-contained.
 - `compositeLimitWindows`: persisted composite alias limit windows
 
@@ -462,7 +471,12 @@ Fields:
 
 **Startup restore (backward compatible with all existing log files):**
 - On proxy startup, `loadTokenStatsFromLog()` reads the last 30 days from the log
-- **modelStats**: loaded from the latest dump per date only (later dumps overwrite earlier)
+- **modelStats** (dashboard daily map): loaded from the latest dump per date only (later dumps overwrite earlier). The cumulative `modelStats` Map that powers the TUI "Top Models" panel and `getModelTotalTokens()` is also restored from the same latest row per date — equivalent to "latest day", not true all-time. This restores the cumulative counters used by composite aliases with no duration window (`legacy total_token_limit` path) for 413 enforcement.
+- **toolStats**: loaded from the latest dump per date only (later dumps overwrite earlier). Each row is split back into the three source maps consumed by the dashboard:
+  - `agentStats` (key = `${agent} / ${tool}`) — restored only when `req > 0`
+  - `upstreamResponseToolStats` (key = `${tool}\0${agent}`) — restored only when `resp > 0`
+  - `toolRequestChars` (key = `${tool}\0${agent}`) — restored only when `len > 0`
+  Rows from older dump files that lack the `agent` field (or have an empty `agent`) are loaded under `agent = 'all'`. The `blocked` field is **not** restored — the in-memory `blockedTools` set always starts empty.
 - **heatmapEvents**: loaded from **all rows** across all dates, deduplicated by `ts:values:id`
   - For rows without `lastDumpTs` (old format): all events included
   - For rows with `lastDumpTs > 0` (new delta rows): only events newer than `lastDumpTs` are included
@@ -1080,6 +1094,9 @@ The proxy includes a built-in web dashboard for config editing and runtime stats
   - Requests, input tokens, output tokens by model (DESC)
 - `GET /dashboard/api/stats/agents`
   - Requests by `user-agent-prefix / tool-name`
+- The full `/dashboard` snapshot includes:
+  - `agentToolStats`: per-(tool, agent) rows from `getAgentToolPanelStats()` — `{ tool_name, agent, in_requests, in_responses, in_request_chars }`. Keys are composite (`${tool}\0${agent}`) so the same tool used by different agents is reported as separate rows. Powers the TUI Tool Blocklist overlay (`P` key).
+  - `blockedTools`: array of currently-blocked tool names (snapshot of the in-memory `blockedTools` set). Empty on a fresh proxy — the set is not persisted across restarts.
 - `GET /dashboard/api/stats/requests`
   - Requests by endpoint
   - Responses by upstream base URL
@@ -2019,6 +2036,17 @@ MIT
 ## 🛠️ Technical Implementation
 
 ### Latest Changes (Current)
+
+**Tool Blocklist (TUI `P` key)**: Added a Tool Blocklist overlay in the TUI that lists every observed `(tool, agent)` pair with `req` / `resp` / `len` counters. Press `Enter` to toggle the block state for the highlighted tool; blocked tools are marked with a red `✗` and stop accumulating stats (existing pre-block counts are preserved). Blocklist state is in-memory only and resets at proxy restart. See the **Tool Blocklist (`P`)** section above for full details.
+
+**Per-(tool, agent) stats and persistence changes**:
+- `agentToolStats` and `blockedTools` fields are now part of the dashboard snapshot (`src/handlers/dashboard.ts`) — `agentToolStats` is built by the new `getAgentToolPanelStats()` in `src/utils/dashboard-stats.ts`, which joins the three source maps (`agentStats`, `toolRequestChars`, `upstreamResponseToolStats`) into a per-(tool, agent) row keyed by `${tool}\0${agent}`.
+- `recordToolRequestChars()` and `recordUpstreamResponseToolNames()` now take an `agent` argument; `createResponseToolTrackingTransformStream()` now takes an `agent` argument and threads it into the `flush()` callback. The Claude request handler (`src/index.ts`) passes the user-agent prefix through both call sites.
+- `dumpTodayTokens()` writes a new `toolStats` field (per-(tool, agent) rows with `name`, `agent`, `req`, `resp`, `len`, `blocked`) in the JSONL token log. `loadTokenStatsFromLog()` restores those rows back into the three source maps on startup (latest dump per date wins, `blocked` is informational and not restored).
+- The cumulative `modelStats` Map (powers TUI "Top Models" + `getModelTotalTokens()`) is now also restored from the latest dump per date. Previously only the daily `modelStats` map was restored.
+- `recordAgentStat()`, `recordToolRequestChars()`, and `recordUpstreamResponseToolNames()` short-circuit on `blockedTools` so blocked tools no longer grow their counters.
+
+**TUI keybinding change**: the model test picker's "test all (30m)" / "stop test timer" toggle is now `W`. The `P` key on the main view now opens the Tool Blocklist overlay.
 
 **Security Hardening**: A batch of defensive fixes applied after review of the proxy boundary. All user-facing behavior changes.
 

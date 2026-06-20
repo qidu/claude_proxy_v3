@@ -721,7 +721,7 @@ export default {
           if (contentType.includes('application/json')) {
             const bodyForToolStats = await request.clone().json() as Record<string, unknown>;
             requestToolNames = extractToolNamesFromBody(bodyForToolStats);
-            recordToolRequestChars(extractToolRequestCharLengthsFromBody(bodyForToolStats));
+            recordToolRequestChars(extractToolRequestCharLengthsFromBody(bodyForToolStats), userAgentPrefix);
           }
         } catch {
           // ignore parse failures for stats collection
@@ -1625,7 +1625,7 @@ export default {
                 }
               }
               const toolNames = extractToolNamesFromResponsePayload(payload);
-              recordUpstreamResponseToolNames(toolNames);
+              recordUpstreamResponseToolNames(toolNames, userAgentPrefix);
             } catch {
               // ignore stats extraction failures
             }
@@ -1634,7 +1634,7 @@ export default {
             // from Claude SSE events (message_start.usage.input_tokens,
             // message_delta.usage.output_tokens)
             const usageStream = createUsageTrackingTransformStream(attemptModelId, compositeAliasName);
-            const toolStream = createResponseToolTrackingTransformStream(recordUpstreamResponseToolNames);
+            const toolStream = createResponseToolTrackingTransformStream((names, agent) => recordUpstreamResponseToolNames(names, agent), userAgentPrefix);
             response = new Response(response.body!.pipeThrough(usageStream).pipeThrough(toolStream), response);
           }
         }

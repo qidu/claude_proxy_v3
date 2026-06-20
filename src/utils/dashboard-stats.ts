@@ -35,6 +35,17 @@ type ToolUsageStatsEntry = {
   in_request_chars: number;
 };
 
+// On-disk dump shape: per (tool, agent) row with shortened keys and a
+// `blocked` flag (1 = currently in blockedTools set, 0 = not blocked).
+type DumpedToolStatsEntry = {
+  name: string;
+  agent: string;
+  req: number;
+  resp: number;
+  len: number;
+  blocked: number;
+};
+
 type ToolRequestStatsEntry = {
   tool_name: string;
   request_chars: number;
@@ -95,6 +106,26 @@ function getOrAssignModelId(model: string): string {
 
 const TOKEN_HEATMAP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;   // heatmap rendering: 7 days
 const TOKEN_RETENTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // event retention for enforcement: 30 days
+
+// Tools in this set are blocked: future stat recording is skipped for them.
+// Existing (pre-block) counts are preserved but stop growing.
+const blockedTools = new Set<string>();
+
+export function blockTool(toolName: string): void {
+  blockedTools.add(toolName);
+}
+
+export function unblockTool(toolName: string): void {
+  blockedTools.delete(toolName);
+}
+
+export function isToolBlocked(toolName: string): boolean {
+  return blockedTools.has(toolName);
+}
+
+export function getBlockedTools(): Set<string> {
+  return blockedTools;
+}
 
 // These must be declared before the daily token helpers that reference dailyTokenStats
 const modelStats = new Map<string, ModelStatsEntry>();
@@ -436,6 +467,7 @@ export function dumpTodayTokens(): void {
     timestamp: timestampSec, // Unix seconds (matching heatmapEvents timestamps)
     lastDumpTs: lastHeatmapDumpTs,
     modelStats: modelEntries,
+    toolStats: getToolUsageDumpDesc(),
     heatmapEvents: buildHeatmapDump(deltaEvents),
   }) + '\n';
   writeFileSync(TOKEN_LOG_FILE, logLine, { flag: 'a' });
@@ -497,6 +529,7 @@ export function loadTokenStatsFromLog(): void {
           lastDumpTs?: number;
           entries?: ModelStatsEntry[];
           modelStats?: ModelStatsEntry[];
+          toolStats?: unknown;
           heatmapEvents?: unknown;
           compositeLimitWindows?: Record<string, PersistedLimitWindow>;
         };
@@ -514,6 +547,39 @@ export function loadTokenStatsFromLog(): void {
         const modelEntries = record.modelStats ?? record.entries ?? [];
         for (const entry of modelEntries) {
           dailyTokenStats.set(entry.model, entry);
+          // Also restore the cumulative modelStats Map (powers the TUI
+          // "Top Models" panel via getModelStatsDesc). The dump's
+          // modelStats field is a daily snapshot, so the restored
+          // cumulative is equivalent to the latest day — not true
+          // all-time. Note: getModelTotalTokens() reads from this Map
+          // and is used by composite aliases with no duration window
+          // (legacy total_token_limit path) for 413 enforcement.
+          modelStats.set(entry.model, entry);
+        }
+
+        // Restore tool stats from the latest dump per date (full snapshot —
+        // toolStats rows are cumulative, no delta tracking needed). Splits
+        // each row back into the three source maps consumed by the dashboard.
+        const toolEntries = record.toolStats;
+        if (Array.isArray(toolEntries)) {
+          for (const row of toolEntries as Array<Record<string, unknown>>) {
+            const name = typeof row?.name === 'string' ? row.name.trim() : '';
+            if (!name) continue;
+            const agent = typeof row.agent === 'string' && row.agent ? row.agent : 'all';
+            const req = toSafeNumber(row.req);
+            const resp = toSafeNumber(row.resp);
+            const len = toSafeNumber(row.len);
+            if (req > 0) {
+              const key = `${agent} / ${name}`;
+              agentStats.set(key, { key, uses: req });
+            }
+            if (resp > 0) {
+              upstreamResponseToolStats.set(`${name}\0${agent}`, { tool_name: name, tools: resp });
+            }
+            if (len > 0) {
+              toolRequestChars.set(`${name}\0${agent}`, len);
+            }
+          }
         }
 
         // Load heatmap events from ALL rows — deduplication prevents duplicates.
@@ -1026,6 +1092,7 @@ export function recordAgentStat(userAgentPrefix: string, toolNames: string[]): v
   const effectiveTools = toolNames.length > 0 ? toolNames : ['none'];
 
   for (const toolName of effectiveTools) {
+    if (blockedTools.has(toolName)) continue;
     const key = `${ua} / ${toolName}`;
     const current = agentStats.get(key) || { key, uses: 0 };
     current.uses += 1;
@@ -1033,7 +1100,7 @@ export function recordAgentStat(userAgentPrefix: string, toolNames: string[]): v
   }
 }
 
-export function recordToolRequestChars(toolChars: Array<{ tool_name: string; request_chars: number }>): void {
+export function recordToolRequestChars(toolChars: Array<{ tool_name: string; request_chars: number }>, agent: string = ''): void {
   if (!Array.isArray(toolChars) || toolChars.length === 0) {
     return;
   }
@@ -1043,8 +1110,10 @@ export function recordToolRequestChars(toolChars: Array<{ tool_name: string; req
       continue;
     }
     const toolName = entry.tool_name.trim();
+    if (blockedTools.has(toolName)) continue;
     const requestChars = Number.isFinite(entry.request_chars) ? Math.max(0, Math.floor(entry.request_chars)) : 0;
-    toolRequestChars.set(toolName, (toolRequestChars.get(toolName) ?? 0) + requestChars);
+    const key = agent ? `${toolName}\0${agent}` : toolName;
+    toolRequestChars.set(key, (toolRequestChars.get(key) ?? 0) + requestChars);
   }
 }
 
@@ -1336,15 +1405,17 @@ export function recordResponseStatusCodeFromUpstream(statusCode: number): void {
   requestStatusCodeFromUpstreamStats.set(statusCode, current);
 }
 
-export function recordUpstreamResponseToolNames(toolNames: string[]): void {
+export function recordUpstreamResponseToolNames(toolNames: string[], agent: string = 'all'): void {
   if (!Array.isArray(toolNames) || toolNames.length === 0) {
     return;
   }
 
   for (const toolName of toolNames) {
-    const current = upstreamResponseToolStats.get(toolName) || { tool_name: toolName, tools: 0 };
+    if (blockedTools.has(toolName)) continue;
+    const key = agent ? `${toolName}\0${agent}` : toolName;
+    const current = upstreamResponseToolStats.get(key) || { tool_name: toolName, tools: 0 };
     current.tools += 1;
-    upstreamResponseToolStats.set(toolName, current);
+    upstreamResponseToolStats.set(key, current);
   }
 }
 
@@ -1362,6 +1433,70 @@ export function getAgentStatsDesc(): AgentStatsEntry[] {
   });
 }
 
+type AgentToolPanelEntry = {
+  tool_name: string;
+  agent: string;
+  in_requests: number;
+  in_responses: number;
+  in_request_chars: number;
+};
+
+export function getAgentToolPanelStats(): AgentToolPanelEntry[] {
+  // Build per-(tool, agent) entries from agentStats + toolRequestChars + upstreamResponseToolStats
+  // agentStats key = "${agent} / ${tool}"
+  const combined = new Map<string, AgentToolPanelEntry>();
+
+  for (const entry of agentStats.values()) {
+    const sepIdx = entry.key.lastIndexOf(' / ');
+    if (sepIdx < 0) continue;
+    const agent = entry.key.slice(0, sepIdx);
+    const tool_name = entry.key.slice(sepIdx + 3);
+    const key = `${tool_name}\0${agent}`;
+    const current = combined.get(key) || { tool_name, agent, in_requests: 0, in_responses: 0, in_request_chars: 0 };
+    current.in_requests += entry.uses;
+    combined.set(key, current);
+  }
+
+  // request chars are keyed by `${tool}\0${agent}` (or plain `tool` for legacy)
+  for (const [key, request_chars] of toolRequestChars.entries()) {
+    let tool_name = key;
+    let agent = 'all';
+    const sepIdx = key.indexOf('\0');
+    if (sepIdx >= 0) {
+      tool_name = key.slice(0, sepIdx);
+      agent = key.slice(sepIdx + 1);
+    }
+    const rowKey = `${tool_name}\0${agent}`;
+    const current = combined.get(rowKey) || { tool_name, agent, in_requests: 0, in_responses: 0, in_request_chars: 0 };
+    current.in_request_chars += request_chars;
+    combined.set(rowKey, current);
+  }
+
+  // upstream response tools are keyed by `${tool}\0${agent}` (or plain `tool` for legacy)
+  for (const [key, entry] of upstreamResponseToolStats.entries()) {
+    let tool_name = entry.tool_name;
+    let agent = 'all';
+    const sepIdx = key.indexOf('\0');
+    if (sepIdx >= 0) {
+      tool_name = key.slice(0, sepIdx);
+      agent = key.slice(sepIdx + 1);
+    }
+    const rowKey = `${tool_name}\0${agent}`;
+    const current = combined.get(rowKey) || { tool_name, agent, in_requests: 0, in_responses: 0, in_request_chars: 0 };
+    current.in_responses += entry.tools;
+    combined.set(rowKey, current);
+  }
+
+  return [...combined.values()].sort((a, b) => {
+    const aTotal = a.in_requests + a.in_responses;
+    const bTotal = b.in_requests + b.in_responses;
+    if (bTotal !== aTotal) return bTotal - aTotal;
+    const toolCmp = a.tool_name.localeCompare(b.tool_name);
+    if (toolCmp !== 0) return toolCmp;
+    return a.agent.localeCompare(b.agent);
+  });
+}
+
 export function getToolUsageStatsDesc(): ToolUsageStatsEntry[] {
   const combined = new Map<string, ToolUsageStatsEntry>();
 
@@ -1372,14 +1507,19 @@ export function getToolUsageStatsDesc(): ToolUsageStatsEntry[] {
     combined.set(tool_name, current);
   }
 
-  for (const [tool_name, request_chars] of toolRequestChars.entries()) {
+  // toolRequestChars keys are `${tool}\0${agent}` (or plain `tool` for legacy) — strip agent suffix
+  for (const [key, request_chars] of toolRequestChars.entries()) {
+    const sepIdx = key.indexOf('\0');
+    const tool_name = sepIdx >= 0 ? key.slice(0, sepIdx) : key;
     const current = combined.get(tool_name) || { tool_name, in_requests: 0, in_responses: 0, in_request_chars: 0 };
     current.in_request_chars += request_chars;
     combined.set(tool_name, current);
   }
 
-  for (const entry of upstreamResponseToolStats.values()) {
-    const tool_name = entry.tool_name;
+  // upstreamResponseToolStats keys are `${tool}\0${agent}` (or plain `tool` for legacy) — strip agent suffix
+  for (const [key, entry] of upstreamResponseToolStats.entries()) {
+    const sepIdx = key.indexOf('\0');
+    const tool_name = sepIdx >= 0 ? key.slice(0, sepIdx) : entry.tool_name;
     const current = combined.get(tool_name) || { tool_name, in_requests: 0, in_responses: 0, in_request_chars: 0 };
     current.in_responses += entry.tools;
     combined.set(tool_name, current);
@@ -1395,6 +1535,80 @@ export function getToolUsageStatsDesc(): ToolUsageStatsEntry[] {
       return b.in_requests - a.in_requests;
     }
     return a.tool_name.localeCompare(b.tool_name);
+  });
+}
+
+/**
+ * On-disk dump view of tool usage: per-(tool, agent) row with shortened keys
+ * and a `blocked` flag derived from the current blockedTools set (1=blocked, 0=not).
+ * Used only by `dumpTodayTokens` — the dashboard continues to consume
+ * `getToolUsageStatsDesc()` for its existing field shape.
+ */
+export function getToolUsageDumpDesc(): DumpedToolStatsEntry[] {
+  const combined = new Map<string, DumpedToolStatsEntry>();
+
+  for (const entry of agentStats.values()) {
+    const sepIdx = entry.key.lastIndexOf(' / ');
+    if (sepIdx < 0) continue;
+    const agent = entry.key.slice(0, sepIdx);
+    const name = entry.key.slice(sepIdx + 3);
+    const rowKey = `${name}\0${agent}`;
+    const current = combined.get(rowKey) || {
+      name,
+      agent,
+      req: 0,
+      resp: 0,
+      len: 0,
+      blocked: isToolBlocked(name) ? 1 : 0,
+    };
+    current.req += entry.uses;
+    combined.set(rowKey, current);
+  }
+
+  // toolRequestChars keys are `${tool}\0${agent}` (or plain `tool` for legacy)
+  for (const [key, request_chars] of toolRequestChars.entries()) {
+    const sepIdx = key.indexOf('\0');
+    const name = sepIdx >= 0 ? key.slice(0, sepIdx) : key;
+    const agent = sepIdx >= 0 ? key.slice(sepIdx + 1) : 'all';
+    const rowKey = `${name}\0${agent}`;
+    const current = combined.get(rowKey) || {
+      name,
+      agent,
+      req: 0,
+      resp: 0,
+      len: 0,
+      blocked: isToolBlocked(name) ? 1 : 0,
+    };
+    current.len += request_chars;
+    combined.set(rowKey, current);
+  }
+
+  // upstreamResponseToolStats keys are `${tool}\0${agent}` (or plain `tool` for legacy)
+  for (const [key, entry] of upstreamResponseToolStats.entries()) {
+    const sepIdx = key.indexOf('\0');
+    const name = sepIdx >= 0 ? key.slice(0, sepIdx) : entry.tool_name;
+    const agent = sepIdx >= 0 ? key.slice(sepIdx + 1) : 'all';
+    const rowKey = `${name}\0${agent}`;
+    const current = combined.get(rowKey) || {
+      name,
+      agent,
+      req: 0,
+      resp: 0,
+      len: 0,
+      blocked: isToolBlocked(name) ? 1 : 0,
+    };
+    current.resp += entry.tools;
+    combined.set(rowKey, current);
+  }
+
+  return [...combined.values()].sort((a, b) => {
+    const aTotal = a.req + a.resp + a.len;
+    const bTotal = b.req + b.resp + b.len;
+    if (bTotal !== aTotal) return bTotal - aTotal;
+    if (b.req !== a.req) return b.req - a.req;
+    const nameCmp = a.name.localeCompare(b.name);
+    if (nameCmp !== 0) return nameCmp;
+    return a.agent.localeCompare(b.agent);
   });
 }
 
@@ -1443,7 +1657,8 @@ export function getUpstreamResponseToolStatsDesc(): UpstreamResponseToolStatsEnt
 }
 
 export function createResponseToolTrackingTransformStream(
-  onNames: (toolNames: string[]) => void,
+  onNames: (toolNames: string[], agent: string) => void,
+  agent: string = 'all',
 ): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
   let remainder = '';
@@ -1548,7 +1763,7 @@ export function createResponseToolTrackingTransformStream(
     },
     flush() {
       if (toolNames.length > 0) {
-        onNames(toolNames);
+        onNames(toolNames, agent);
       }
     },
   });

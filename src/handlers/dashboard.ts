@@ -36,6 +36,8 @@ import {
   getTokenHeatmapStatsDesc,
   getToolUsageStatsDesc,
   getUpstreamResponseToolStatsDesc,
+  getAgentToolPanelStats,
+  getBlockedTools,
 } from '../utils/dashboard-stats.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -68,6 +70,8 @@ export interface DashboardSnapshot {
   };
   modelStats: ReturnType<typeof getModelStatsDesc>;
   toolStats: ReturnType<typeof getToolUsageStatsDesc>;
+  agentToolStats: ReturnType<typeof getAgentToolPanelStats>;
+  blockedTools: string[];
   requestStats: {
     endpoints: ReturnType<typeof getRequestEndpointStatsDesc>;
     upstreams: ReturnType<typeof getRequestUpstreamStatsDesc>;
@@ -118,6 +122,8 @@ export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): Dashbo
     config,
     modelStats: getModelStatsDesc(),
     toolStats: getToolUsageStatsDesc(),
+    agentToolStats: getAgentToolPanelStats(),
+    blockedTools: [...getBlockedTools()],
     requestStats: {
       endpoints: getRequestEndpointStatsDesc(),
       upstreams: getRequestUpstreamStatsDesc(),

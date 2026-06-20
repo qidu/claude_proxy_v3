@@ -23,7 +23,7 @@ import {
   upsertGlobalTokenLimitFromDashboard,
 } from './handlers/dashboard.js';
 import { buildHeatmap, renderHeatmapPanel } from './heatmap.js';
-import { dumpTodayTokens, TOKEN_LOG_FILE, getActiveRequestCount, getTokensInWindow } from './utils/dashboard-stats.js';
+import { dumpTodayTokens, TOKEN_LOG_FILE, getActiveRequestCount, getTokensInWindow, blockTool, unblockTool, isToolBlocked } from './utils/dashboard-stats.js';
 import type { Env } from './types/shared.js';
 import type { ConfigValidationError } from './utils/config-loader.js';
 import type { ProxyConfig, FusionRole, FusionOptions } from './utils/config-loader.js';
@@ -714,6 +714,10 @@ class DashboardView implements Component {
       void this.app.openEditGlobalTokenLimitPrompt();
       return;
     }
+    if (matchesKey(data, 'p') || matchesKey(data, 'shift+p')) {
+      this.app.openToolBlocklistOverlay();
+      return;
+    }
   }
 
   render(width: number): string[] {
@@ -824,7 +828,7 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(`C ${dim('edit composite')}  T ${dim('test models')}  R ${dim('reload config')}  L ${dim('token limit')}  Ctrl+U ${dim('dump usage')}  Ctrl+C ${dim('quit')}`);
+    lines.push(`C ${dim('edit composite')}  T ${dim('test models')}  R ${dim('reload config')}  L ${dim('token limit')}  P ${dim('tool blocklist')}  Ctrl+U ${dim('dump usage')}  Ctrl+C ${dim('quit')}`);
     lines.push(this.message ? yellow(this.message) : dim('Ready'));
 
     return lines.map((line) => clip(line, width));
@@ -1017,6 +1021,77 @@ class DashboardApp {
     overlay.setSnapshot(this.viewSnapshot());
     this.tui.setFocus(overlay);
     this.requestRender();
+  }
+
+  openToolBlocklistOverlay(): void {
+    const snap = this.viewSnapshot();
+    if (!snap) return;
+
+    // SelectList stores a reference to the items array and re-reads `label`
+    // on every render, so we extend SelectItem with the source fields we need
+    // to rebuild the label after a toggle. Avoids the destructive
+    // re-open-inside-Enter-handler that broke key input.
+    type ToolItem = SelectItem & {
+      tool_name: string;
+      agent: string;
+      in_requests: number;
+      in_responses: number;
+      in_request_chars: number;
+    };
+
+    const formatLabel = (item: ToolItem): string =>
+      `${isToolBlocked(item.tool_name) ? red('✗') : green('·')} ${item.tool_name.padEnd(26)}${item.agent.padEnd(18)}${alignRight(fmt(item.in_requests), 4)} ${alignRight(fmt(item.in_responses), 5)} ${alignRight(fmt(item.in_request_chars), 10)}`;
+
+    const items: ToolItem[] = (snap.agentToolStats || []).map((e) => ({
+      value: `${e.tool_name}\0${e.agent}`,
+      tool_name: e.tool_name,
+      agent: e.agent,
+      in_requests: e.in_requests,
+      in_responses: e.in_responses,
+      in_request_chars: e.in_request_chars,
+      label: '',
+    }));
+    for (const item of items) item.label = formatLabel(item);
+
+    if (items.length === 0) {
+      this.view.setMessage('No tools recorded');
+      this.requestRender();
+      return;
+    }
+
+    if (this.overlay) this.hideOverlay();
+    const overlay = new ListOverlay(
+      'Tool Blocklist',
+      `↑↓ ${dim('move')}  Enter ${dim('toggle block')}  P/Esc ${dim('close')}`,
+      items,
+      (item) => {
+        const t = item as ToolItem;
+        if (isToolBlocked(t.tool_name)) {
+          unblockTool(t.tool_name);
+        } else {
+          blockTool(t.tool_name);
+        }
+        // In-place label refresh — the same `items` reference is held by
+        // the SelectList, and render() re-reads `item.label` each call.
+        t.label = formatLabel(t);
+        this.requestRender();
+      },
+      () => {
+        this.hideOverlay();
+        this.requestRender();
+      },
+      12,
+      (data) => {
+        if (matchesKey(data, 'p')) {
+          this.hideOverlay();
+          this.requestRender();
+          return true;
+        }
+        return false;
+      },
+    );
+    this.overlay = this.tui.showOverlay(overlay, { width: '90%', maxHeight: '70%', anchor: 'center' });
+    this.overlay.focus();
   }
 
   openEditAliasLimitPrompt(alias: string): void {
@@ -1287,7 +1362,7 @@ class DashboardApp {
       },
       8,
       (data) => {
-        if (matchesKey(data, 'p')) {
+        if (matchesKey(data, 'w')) {
           this.togglePeriodicModelTest();
           this.hideOverlay();
           return true;
@@ -1301,8 +1376,8 @@ class DashboardApp {
 
   private testPickerSubtitle(): string {
     const pHint = this.modelTestTimerActive
-      ? `P ${dim('stop test timer')}`
-      : `P ${dim('test all (30m)')}`;
+      ? `W ${dim('stop test timer')}`
+      : `W ${dim('test all (30m)')}`;
     return `↑/↓ ${dim('move')}  Enter ${dim('test')}  ${pHint}  Esc ${dim('cancel')}`;
   }
 
@@ -1545,6 +1620,10 @@ class DashboardApp {
   }
 
   openDeleteConfirm(alias: string, target: string): void {
+    // Capture the composite overlay instance BEFORE closeOverlay() nulls it out —
+    // closeOverlay() destroys the reference, so we need the live instance to
+    // re-show it from the dialog callbacks.
+    const compositeToRestore = this.compositeOverlay;
     this.closeOverlay();
     const overlay = new ListOverlay(
       `Delete ${alias}.${target}?`,
@@ -1563,10 +1642,12 @@ class DashboardApp {
           this.view.setMessage('delete cancelled');
           void this.refresh();
         }
+        if (compositeToRestore) this.showCompositeOverlayInstance(compositeToRestore);
       },
       () => {
         this.closeOverlay();
         this.view.setMessage('delete cancelled');
+        if (compositeToRestore) this.showCompositeOverlayInstance(compositeToRestore);
         this.requestRender();
       },
       2,
@@ -1611,10 +1692,17 @@ class DashboardApp {
   }
 
   private showCompositeOverlay(): void {
-    if (!this.compositeOverlay || this.overlay) return;
-    this.overlay = this.tui.showOverlay(this.compositeOverlay, { width: '80%', maxHeight: '70%', anchor: 'center' });
-    this.compositeOverlay.setSnapshot(this.viewSnapshot());
-    this.tui.setFocus(this.compositeOverlay);
+    if (this.compositeOverlay) this.showCompositeOverlayInstance(this.compositeOverlay);
+  }
+
+  // Re-show a previously-captured composite overlay instance. Used by callbacks
+  // that need to restore the panel after closeOverlay() has nulled the field.
+  private showCompositeOverlayInstance(overlay: CompositeAliasesOverlay): void {
+    if (this.overlay) return;
+    this.overlay = this.tui.showOverlay(overlay, { width: '80%', maxHeight: '70%', anchor: 'center' });
+    overlay.setSnapshot(this.viewSnapshot());
+    this.compositeOverlay = overlay;
+    this.tui.setFocus(overlay);
   }
 
   private openPrompt(
@@ -1717,7 +1805,7 @@ class DashboardApp {
     });
   }
 
-  private viewSnapshot(): Awaited<ReturnType<typeof getDashboardSnapshot>> | null {
+  viewSnapshot(): Awaited<ReturnType<typeof getDashboardSnapshot>> | null {
     return (this.view as unknown as { snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null }).snapshot;
   }
 }
