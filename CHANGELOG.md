@@ -7,6 +7,61 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Dashboard Tool Blocklist (mirrors TUI `P` overlay)
+
+The `/dashboard` web UI now ships the same tool blocklist the TUI exposes
+behind the `P` key. The previous "Tools Used" aggregated view is replaced
+by a per-`(tool, agent)` table with a Block/Unblock button per row.
+
+- **`GET /dashboard/api/tools/blocklist`** (`src/handlers/dashboard.ts`) —
+  returns `{ rows: AgentToolPanelEntry[], blockedTools: string[] }` from
+  `getAgentToolPanelStats()` + `[...getBlockedTools()]`. Reuses the
+  same data feed the TUI overlay consumes (per-tool × per-agent
+  `in_requests` / `in_responses` / `in_request_chars`).
+- **`POST /dashboard/api/tools/toggle-block`** — body
+  `{ tool_name: string, blocked: boolean }`, calls `blockTool()` /
+  `unblockTool()` from `src/utils/dashboard-stats.ts`, returns
+  `{ ok, tool_name, blocked }`. Returns `400 { error }` when `tool_name`
+  is missing or empty.
+- **Routes registered** in `src/index.ts` next to the existing
+  `/dashboard/api/stats/agents`, `/test-model`, `/global-token-limit`
+  handlers.
+- **Dashboard UI** (`section-agent` in `handleDashboardPage()`):
+  - Heading renamed "Tools Used" → "Tool Blocklist" with a one-line
+    caption pointing at the TUI `P` overlay.
+  - Table now has 7 columns: status (`✗` / `·`) | Tool | Agent | in req
+    | in resp | total len | Action.
+  - Blocked rows get a red `✗` status cell, a light red background,
+    and the action button toggles between `Block` (neutral) and
+    `Unblock` (red).
+  - Click handler delegated on `#toolStats` posts to the toggle-block
+    endpoint and re-fetches `/tools/blocklist` to refresh the view.
+  - 5-second auto-refresh already in place keeps the block state live
+    with the rest of the dashboard.
+- **Behavior parity with TUI**: blocked tools stop accumulating
+  `in_requests` / `in_responses` / `in_request_chars` (existing
+  pre-block counts are preserved). In-memory only — same as the TUI,
+  resets at proxy restart.
+- **Backward compatibility**: `GET /dashboard/api/stats/agents` and
+  the `toolStats` field on the main `/dashboard/api/config` snapshot
+  are unchanged. The aggregated per-tool view is still available via
+  the API; only the dashboard UI now uses the per-`(tool, agent)` view.
+
+### Model Statistic Collapse (default 10)
+
+The Model Statistic table in `/dashboard` now collapses to the top 10
+models by default and shows a `Show all (N)` / `Collapse` toggle next
+to the existing Export CSV button — same pattern as the Tool Blocklist
+section.
+
+- **Default view** shows 10 rows; the toggle is hidden when fewer than
+  10 models are present, otherwise it reads `Show all (N)` (collapsed)
+  or `Collapse` (expanded).
+- **`Export CSV` interaction**: the existing button reads rows from the
+  DOM, so it exports only the currently visible rows. Click `Show all`
+  first if a full export is needed. This matches the pre-existing CSV
+  behavior (the button always reflected whatever was rendered).
+
 ### Request Hot-Path Performance: Single Body Parse + Incremental Token-Window Cache
 
 Two optimizations on the per-request hot path, applied without changing any

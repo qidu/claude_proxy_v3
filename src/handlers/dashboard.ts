@@ -38,6 +38,8 @@ import {
   getUpstreamResponseToolStatsDesc,
   getAgentToolPanelStats,
   getBlockedTools,
+  blockTool,
+  unblockTool,
 } from '../utils/dashboard-stats.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -278,6 +280,12 @@ export function handleDashboardPage(): Response {
       .test-btn.success-result { background: #e8f5e9; border-color: #a5d6a7; color: #2e7d32; }
       .danger { background: #fff1f1; border: 1px solid #ffcccc; }
       .section-actions { margin-top: 8px; }
+      /* Tool blocklist */
+      tr.tool-row.blocked { background: #fff1f1; }
+      tr.tool-row td.status-blocked { color: #c62828; font-weight: 700; }
+      .block-btn { padding: 2px 8px; font-size: 12px; cursor: pointer; border-radius: 4px; }
+      .block-btn.block { background: white; border: 1px solid #bdbdbd; }
+      .block-btn.unblock { background: #fff1f1; border: 1px solid #ef9a9a; color: #c62828; }
       .config-divider { margin: 14px 0; border-top: 3px solid #fff; }
       .config-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; }
       .global-limit-group { display: flex; align-items: center; gap: 6px; margin-right: auto; }
@@ -368,7 +376,7 @@ export function handleDashboardPage(): Response {
     <div id="testResultPanel" style="display:none; position:fixed; top:50%; left:0; transform:translateY(-50%); width:240px; border-radius:0 8px 8px 0; padding:14px 16px; z-index:999; font-size:13px; line-height:1.5; word-break:break-all; box-shadow:2px 2px 12px rgba(0,0,0,0.12);"></div>
 
     <section class="card" id="section-model">
-      <h2>Model Statistic <button id="exportModelStatsCsv" class="mini-btn" style="font-size:12px;">Export CSV</button></h2>
+      <h2>Model Statistic <button id="toggleModelStats" class="mini-btn" style="font-size:12px;">Show all</button> <button id="exportModelStatsCsv" class="mini-btn" style="font-size:12px;">Export CSV</button></h2>
       <table id="modelStats">
         <thead><tr><th>Model ID</th><th class="num">Requests</th><th class="num">Failed</th><th class="num">Input Tokens</th><th class="num">Cached Tokens</th><th class="num">Cache Written Tokens</th><th class="num">Output Tokens</th><th class="num">Total Tokens</th><th class="num">min(s)</th><th class="num">avg(s)</th><th class="num">max(s)</th></tr></thead>
         <tbody></tbody>
@@ -411,9 +419,10 @@ export function handleDashboardPage(): Response {
     </section>
 
     <section class="card" id="section-agent">
-      <h2>Tools Used <button id="toggleToolStats" class="mini-btn" style="font-size:12px;">Show all</button></h2>
+      <h2>Tool Blocklist <button id="toggleToolStats" class="mini-btn" style="font-size:12px;">Show all</button></h2>
+      <p style="font-size:12px;color:#666;margin:0 0 8px;">Blocked tools stop accumulating <code>in req</code> / <code>in resp</code> / <code>total len</code> stats. Existing pre-block counts are preserved. Same as TUI <code>P</code> overlay.</p>
       <table id="toolStats">
-        <thead><tr><th>Tool</th><th class="num">in req</th><th class="num">in resp</th><th class="num">total len</th></tr></thead>
+        <thead><tr><th></th><th>Tool</th><th>Agent</th><th class="num">in req</th><th class="num">in resp</th><th class="num">total len</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
@@ -1015,13 +1024,28 @@ export function handleDashboardPage(): Response {
         for (const t of (reqJson.model_timings || [])) {
           timingMap[t.endpoint] = t;
         }
-        renderRows('#modelStats', modelsJson.data || [], (row) => {
+        renderModelRows(modelsJson.data || [], (row) => {
           const timing = timingMap[row.model];
           const minS = timing ? (timing.min_time_ms / 1000).toFixed(2) : '-';
           const avgS = timing ? (timing.avg_time_ms / 1000).toFixed(2) : '-';
           const maxS = timing ? (timing.max_time_ms / 1000).toFixed(2) : '-';
           return '<tr><td>' + (row.model.split('/').pop() || row.model) + '</td><td class="num">' + fmtStat(row.requests) + '</td><td class="num">' + fmtStat(row.failed_requests || 0) + '</td><td class="num">' + fmtStat(row.input_tokens) + '</td><td class="num">' + fmtStat(row.cached_tokens) + '</td><td class="num">' + fmtStat(row.cache_written_tokens) + '</td><td class="num">' + fmtStat(row.output_tokens) + '</td><td class="num">' + fmtStat(row.total_tokens) + '</td><td class="num">' + minS + '</td><td class="num">' + avgS + '</td><td class="num">' + maxS + '</td></tr>';
         });
+      }
+
+      let modelStatsExpanded = false;
+
+      function renderModelRows(data, mapper) {
+        const tbody = document.querySelector('#modelStats tbody');
+        const rows = modelStatsExpanded ? data : data.slice(0, 10);
+        tbody.innerHTML = rows.map(mapper).join('');
+        const btn = document.getElementById('toggleModelStats');
+        if (data.length > 10) {
+          btn.style.display = 'inline-block';
+          btn.textContent = modelStatsExpanded ? 'Collapse' : 'Show all (' + data.length + ')';
+        } else {
+          btn.style.display = 'none';
+        }
       }
 
       let toolStatsExpanded = false;
@@ -1033,12 +1057,27 @@ export function handleDashboardPage(): Response {
         return String(n);
       }
 
-      function renderToolRows(data) {
+      function renderToolRows(data, blocked) {
         const tbody = document.querySelector('#toolStats tbody');
         const rows = toolStatsExpanded ? data : data.slice(0, 10);
-        tbody.innerHTML = rows.map((row) =>
-          '<tr><td>' + row.tool_name + '</td><td class="num">' + fmtStat(row.in_requests) + '</td><td class="num">' + fmtStat(row.in_responses) + '</td><td class="num">' + fmtStat(row.in_request_chars || 0) + '</td></tr>'
-        ).join('');
+        const blockedSet = new Set(blocked || []);
+        tbody.innerHTML = rows.map((row) => {
+          const isBlocked = blockedSet.has(row.tool_name);
+          const status = isBlocked ? '✗' : '·';
+          const statusCls = isBlocked ? 'status-blocked' : '';
+          const rowCls = isBlocked ? 'tool-row blocked' : 'tool-row';
+          const actionLabel = isBlocked ? 'Unblock' : 'Block';
+          const actionCls = isBlocked ? 'block-btn unblock' : 'block-btn block';
+          return '<tr class="' + rowCls + '">'
+            + '<td class="' + statusCls + '">' + status + '</td>'
+            + '<td>' + escapeHtml(row.tool_name) + '</td>'
+            + '<td>' + escapeHtml(row.agent) + '</td>'
+            + '<td class="num">' + fmtStat(row.in_requests) + '</td>'
+            + '<td class="num">' + fmtStat(row.in_responses) + '</td>'
+            + '<td class="num">' + fmtStat(row.in_request_chars || 0) + '</td>'
+            + '<td><button type="button" class="' + actionCls + '" data-action="toggle-tool-block" data-tool="' + escapeHtml(row.tool_name) + '" data-blocked="' + (isBlocked ? '1' : '0') + '">' + actionLabel + '</button></td>'
+            + '</tr>';
+        }).join('');
         const btn = document.getElementById('toggleToolStats');
         if (data.length > 10) {
           btn.style.display = 'inline-block';
@@ -1049,14 +1088,41 @@ export function handleDashboardPage(): Response {
       }
 
       async function loadToolStats() {
-        const res = await fetch('/dashboard/api/stats/agents');
+        const res = await fetch('/dashboard/api/tools/blocklist');
         const json = await res.json();
-        renderToolRows(json.data || []);
+        renderToolRows(json.rows || [], json.blockedTools || []);
       }
+
+      async function toggleToolBlock(toolName, currentlyBlocked) {
+        try {
+          const res = await fetch('/dashboard/api/tools/toggle-block', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tool_name: toolName, blocked: !currentlyBlocked })
+          });
+          const json = await res.json();
+          if (!res.ok) throw new Error(json.error || 'Failed');
+          await loadToolStats();
+        } catch (err) {
+          window.alert('Toggle failed: ' + err.message);
+        }
+      }
+
+      document.querySelector('#toolStats').addEventListener('click', (e) => {
+        const target = e.target;
+        if (target && target.dataset && target.dataset.action === 'toggle-tool-block') {
+          void toggleToolBlock(target.dataset.tool, target.dataset.blocked === '1');
+        }
+      });
 
       document.getElementById('toggleToolStats').addEventListener('click', () => {
         toolStatsExpanded = !toolStatsExpanded;
         loadToolStats();
+      });
+
+      document.getElementById('toggleModelStats').addEventListener('click', () => {
+        modelStatsExpanded = !modelStatsExpanded;
+        loadModelStats();
       });
 
       document.getElementById('exportModelStatsCsv').addEventListener('click', () => {
@@ -1230,6 +1296,32 @@ export function handleDashboardModelStats(): Response {
 
 export function handleDashboardAgentStats(): Response {
   return jsonResponse({ data: getToolUsageStatsDesc() });
+}
+
+export function handleDashboardToolBlocklist(): Response {
+  return jsonResponse({
+    rows: getAgentToolPanelStats(),
+    blockedTools: [...getBlockedTools()],
+  });
+}
+
+export async function handleDashboardToggleToolBlock(request: Request): Promise<Response> {
+  try {
+    const body = await request.json() as { tool_name?: unknown; blocked?: unknown };
+    const tool_name = typeof body.tool_name === 'string' ? body.tool_name.trim() : '';
+    const blocked = body.blocked === true;
+    if (!tool_name) {
+      return jsonResponse({ error: 'tool_name is required' }, 400);
+    }
+    if (blocked) {
+      blockTool(tool_name);
+    } else {
+      unblockTool(tool_name);
+    }
+    return jsonResponse({ ok: true, tool_name, blocked });
+  } catch (error) {
+    return jsonResponse({ error: (error as Error).message }, 400);
+  }
 }
 
 export function handleDashboardRequestStats(): Response {

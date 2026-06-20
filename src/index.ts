@@ -27,6 +27,8 @@ import {
   handleDashboardPutConfig,
   handleDashboardRequestStats,
   handleDashboardTestModel,
+  handleDashboardToggleToolBlock,
+  handleDashboardToolBlocklist,
 } from './handlers/dashboard.js';
 import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, getCompositeAliasMode, resolveFusionPlan, FusionPlan, ModelRouteConfig, ProxyConfig, parseHumanTokenLimit, getAllowedHostsFromConfig } from './utils/config-loader.js';
 import {
@@ -594,6 +596,15 @@ export default {
 
       if (path === '/dashboard/api/stats/agents' && request.method === 'GET') {
         return applyCorsHeaders(handleDashboardAgentStats(), request, env);
+      }
+
+      if (path === '/dashboard/api/tools/blocklist' && request.method === 'GET') {
+        return applyCorsHeaders(handleDashboardToolBlocklist(), request, env);
+      }
+
+      if (path === '/dashboard/api/tools/toggle-block' && request.method === 'POST') {
+        const response = await handleDashboardToggleToolBlock(request);
+        return applyCorsHeaders(response, request, env);
       }
 
       if (path === '/dashboard/api/stats/requests' && request.method === 'GET') {
