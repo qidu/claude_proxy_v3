@@ -1,6 +1,7 @@
 # Model Proxy v3
 
-A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports multiple AI models and providers with Claude and Gemini API format.
+A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports multiple AI models and providers with Claude, Gemini, Interactions and Responses API schema.
+It also supports models composite, alias, fusion, compress, and models, tokens, tools, requests counting and tokens limit with duration. 
 
 ## ✨ Features
 
@@ -30,15 +31,6 @@ A complete Claude and Gemini API Proxy and also Reponses Endpoints that supports
   - **model_timings** field: tracks per-model response time (`min_time_ms`, `avg_time_ms`, `max_time_ms`, `count`) — keyed by the resolved upstream model name (e.g., `moonshotai/kimi-k2.6` for config key `kimi-k2.6`)
   - **endpoint_timings** field: tracks per-endpoint response time (existing)
   - `TUI=true npm run server` - Terminal dashboard for live stats and composite alias editing
-
-- **Multiple Model Providers**: Support for 6+ providers:
-  - DeepSeek (v3.1, v3.2, R1, etc.)
-  - MiniMax (M2.1, M2.5, M1)
-  - GLM/Z-AI (GLM-4.5, GLM-5, etc.)
-  - Moonshot/Kimi (K2.5, K2-0905)
-  - Qwen (Qwen3, Qwen-Max, Qwen-Turbo, Qwen-Coder)
-  - Doubao (Seed-1.6-Thinking)
-  - Gemini (2.5-Flash with native API support)
 
 - **Extended Thinking Support**: Full Claude-style thinking with signature verification
   - **Model Support**: DeepSeek R1 series, Doubao Thinking, Qwen Thinking variants, Gemini reasoning models
@@ -2082,9 +2074,9 @@ MIT
 8. `Nemotron-3-Super-120b`, `gpt-oss-120b`
 
 ### Tools Involved
-1. Claude Code
-2. Kiro
-3. Gemini-cli
+1. `Claude Code`
+2. `Kiro`
+3. `Gemini-Cli`
 
 ## 🔗 Links
 
