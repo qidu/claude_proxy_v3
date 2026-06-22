@@ -130,11 +130,16 @@ export async function handleOpenAIRequest(
     activeLogger.debug(requestId, `x-api-key: ${apiKey.substring(32)}`);
     activeLogger.debug(requestId, `x-goog-api-key: ${googApiKey.substring(32)}`);
 
-    if (isGeminiEndpoint) {
-        authHeaders['Authorization'] = googApiKey;
-    }
-    else {
-        authHeaders['Authorization'] = authTokenIn;
+    // This handler always targets an OpenAI-compatible upstream (openai-completions),
+    // which expects `Authorization: Bearer <key>` regardless of the incoming endpoint
+    // (/v1/messages, /v1/interactions, or :generateContent mapped here). Resolve the
+    // key from whichever header the client supplied and forward it as Bearer.
+    const incomingKey =
+        (authTokenIn ? authTokenIn.replace(/^Bearer\s+/i, '') : '') ||
+        apiKey ||
+        (googApiKey ? googApiKey.replace(/^Bearer\s+/i, '') : '');
+    if (incomingKey) {
+        authHeaders['Authorization'] = `Bearer ${incomingKey}`;
     }
 
     // Parse request body

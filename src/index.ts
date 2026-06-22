@@ -1509,9 +1509,14 @@ export default {
               },
             };
             const enriched = { ...synthJson, ...metadata };
+            // Adding fusion_metadata changes the body size, so the upstream
+            // Content-Length is stale and would truncate the client read.
+            // Drop it and let the runtime recompute it for the new body.
+            const enrichedHeaders = new Headers(synthResp.headers);
+            enrichedHeaders.delete('content-length');
             return new Response(JSON.stringify(enriched), {
               status: synthResp.status,
-              headers: synthResp.headers,
+              headers: enrichedHeaders,
             });
           }
         }
