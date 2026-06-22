@@ -7,7 +7,7 @@
 
 import { Env } from './types/shared.js';
 import { extractAuthHeaders, transformAuthHeadersForUpstream, formatApiKeyForUpstream, parseDynamicRoute, isHostAllowed, getHandlerType, buildTargetUrl } from './utils/routing.js';
-import { createErrorResponse, OverLimitError } from './utils/errors.js';
+import { createErrorResponse, OverLimitError, ClaudeProxyError } from './utils/errors.js';
 import { createLogger } from './utils/logger.js';
 import { handleModelsRequest, getModelCount } from './handlers/models.js';
 import { handleTokenCountingRequest } from './handlers/token-counting.js';
@@ -1073,6 +1073,13 @@ export default {
             });
           }
         } catch (error) {
+          // Re-raise typed proxy errors (e.g. OverLimitError from composite /
+          // global token-limit checks) so the client sees the correct status and
+          // error type. Only swallow generic errors as a 400 body-parse failure.
+          if (error instanceof ClaudeProxyError) {
+            logger.error(requestId, `Proxy error during model routing ${path}: ${error.message}`);
+            return createErrorResponse(error, requestId);
+          }
           logger.error(requestId, `Failed to parse request body for model routing ${path}: ${(error as Error).message}`);
           return createErrorResponse(new Error('Invalid request body'), requestId, 400);
         }

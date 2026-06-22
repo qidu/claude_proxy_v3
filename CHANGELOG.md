@@ -7,6 +7,43 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Bug fixes: OpenAI thinking passthrough + composite 413 path
+
+Two single-case regressions caught by the full integration suite are now
+fixed; the suite runs **18/18 suites, 165/165 cases** against the local
+proxy (port 7799, `qnaigc` upstream). Recorded in
+`tests/test_results_at_2026-06-22_20-14-47.md`.
+
+- **TC413 — OpenAI-style thinking field (`{ enabled, budget_tokens }`)
+  was rejected with HTTP 400** on `/v1/messages`. The request was dispatched
+  to the Claude-format path (because `requestBody.thinking` is truthy) and
+  then failed `validateClaudeMessagesRequest` with `thinking.type is
+  required`. Added `normalizeOpenAIToClaudeThinking()` in
+  `src/utils/thinking.ts` and applied it in `src/handlers/messages.ts`
+  right after JSON parsing, so format detection, validation, and
+  conversion all see the canonical Claude shape
+  (`{ type: 'enabled'|'disabled', budget_tokens }`).
+  Test now uses `budget_tokens: 2000` (validation floor is 1024) and
+  `max_tokens: 3000` to fit.
+- **TC1110 — Composite `token_limit` exhaustion returned 400 instead of
+  413.** Two issues stacked:
+  1. `OverLimitError` in `src/utils/errors.ts` was using 429 /
+     `rate_limit_error`, the rate-limit shape. Token-limit exhaustion is a
+     payload-size / quota concept, not RPM, so it now returns 413 /
+     `over_limit_error` to match the documented `token_limit reached`
+     contract and the canonical Anthropic-style error envelope.
+  2. The catch block in `src/index.ts` around the model-routing body
+     parse was swallowing *every* error (including typed
+     `ClaudeProxyError` instances) and rewriting it as a 400 "Invalid
+     request body". Added an `instanceof ClaudeProxyError` re-raise
+     branch so the original status code and `type` field reach the
+     client.
+
+  Manual verification: two consecutive requests against a temporary
+  `__test_ttl413__` alias with `token_limit: { num: 1, duration: '1h' }`
+  now return `200` then
+  `413 {"type":"over_limit_error","error":{"type":"over_limit_error","message":"Composite alias '__test_ttl413__' token limit (1 1h) reached (10). No further requests will be routed through this alias."}}`.
+
 ### Kompress (context compression) plugin
 
 The proxy can now drop low-importance tokens out of outbound request text to cut

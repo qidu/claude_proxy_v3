@@ -7,6 +7,38 @@
 import { ThinkingConfigParam } from '../types/claude.js';
 
 /**
+ * Convert an OpenAI-style thinking field ({ enabled: true, budget_tokens: N })
+ * to the canonical Claude-style { type: 'enabled'|'disabled', budget_tokens: N }
+ * shape. If the input is already in Claude format (has `type`), it is returned
+ * unchanged. Returns undefined for non-object or empty input.
+ */
+export function normalizeOpenAIToClaudeThinking(
+  thinking: any
+): ThinkingConfigParam | undefined {
+  if (!thinking || typeof thinking !== 'object') {
+    return undefined;
+  }
+
+  // Already in Claude format — leave alone so callers can pick the right path.
+  if (thinking.type !== undefined) {
+    return undefined;
+  }
+
+  // OpenAI-style shape: { enabled, budget_tokens }
+  if (typeof thinking.enabled === 'boolean') {
+    const result: ThinkingConfigParam = {
+      type: thinking.enabled ? 'enabled' : 'disabled'
+    } as ThinkingConfigParam;
+    if (thinking.budget_tokens !== undefined) {
+      (result as { budget_tokens?: number }).budget_tokens = thinking.budget_tokens;
+    }
+    return result;
+  }
+
+  return undefined;
+}
+
+/**
  * Normalize thinking configuration to standard string format
  * Converts boolean values to string equivalents
  */

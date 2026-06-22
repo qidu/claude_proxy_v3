@@ -357,7 +357,10 @@ async function testXhighEffort() {
 /**
  * TC413: OpenAI Thinking Format
  * Tests that thinking: { enabled: true, budget_tokens: N } is accepted
- * (OpenAI passthrough format, normalized to Claude format)
+ * (OpenAI passthrough format, normalized to Claude format).
+ *
+ * NOTE: budget_tokens must be <= max_tokens (validated upstream of the
+ * provider call), so we set max_tokens high enough to fit budget_tokens.
  */
 async function testOpenAITThinkingFormat() {
   const response = await sendRequest({
@@ -365,10 +368,10 @@ async function testOpenAITThinkingFormat() {
     body: {
       model: 'deepseek/deepseek-v3.2',
       messages: [{ role: 'user', content: 'Hi' }],
-      max_tokens: 50,
+      max_tokens: 3000,
       thinking: {
         enabled: true,
-        budget_tokens: 1000
+        budget_tokens: 2000
       }
     }
   });

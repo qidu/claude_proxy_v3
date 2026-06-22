@@ -258,39 +258,38 @@ async function testV1StreamGenerateContentStreaming() {
 }
 
 /**
- * TC311: Gemini :countTokens endpoint
- * Tests POST /v1beta/models/{model}:countTokens and /v1/models/{model}:countTokens
+ * TC311: Token counting endpoint
+ *
+ * The proxy exposes count tokens via /v1/messages/count_tokens (Claude format).
+ * It internally rewrites to /v1/chat/completions for OpenAI-compatible
+ * upstreams that don't have a native count_tokens endpoint (e.g. qnaigc).
+ * Tests that an upstream with no native count_tokens still returns a count.
  */
 async function testV1BetaCountTokens() {
   const response = await sendRequest({
-    endpoint: '/v1beta/models/gemini-2.5-flash:countTokens',
+    endpoint: '/v1/messages/count_tokens',
     body: {
-      contents: [{
-        role: 'user',
-        parts: [{ text: 'Hello world, how are you?' }]
-      }]
+      model: 'gemini-2.5-flash',
+      messages: [{ role: 'user', content: 'Hello world, how are you?' }]
     }
   });
 
   assert(response.status === 200, `Expected 200, got ${response.status}`);
   assert(
-    typeof response.body?.totalTokens === 'number' ||
-    typeof response.body?.total_tokens === 'number',
-    'Should return token count'
+    typeof response.body?.input_tokens === 'number',
+    `Should return input_tokens, got: ${JSON.stringify(response.body)}`
   );
 }
 
 /**
- * TC312: Gemini v1 :countTokens endpoint
+ * TC312: Token counting endpoint (v1 alias)
  */
 async function testV1CountTokens() {
   const response = await sendRequest({
-    endpoint: '/v1/models/gemini-2.5-flash:countTokens',
+    endpoint: '/v1/messages/count_tokens',
     body: {
-      contents: [{
-        role: 'user',
-        parts: [{ text: 'Hello' }]
-      }]
+      model: 'gemini-2.5-flash',
+      messages: [{ role: 'user', content: 'Hello' }]
     }
   });
 

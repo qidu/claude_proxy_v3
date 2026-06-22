@@ -63,7 +63,11 @@ export class ProcessingError extends ClaudeProxyError {
 
 export class OverLimitError extends ClaudeProxyError {
   constructor(message: string = 'Request exceeds limits') {
-    super(message, 429, 'rate_limit_error');
+    // Token-limit exhaustion is a payload-size / quota concept, not a rate
+    // (RPM) limit. Use 413 + over_limit_error to match the documented
+    // "token_limit reached" contract and the canonical Anthropic-style error
+    // shape (see README "Composite total_token_limit" section).
+    super(message, 413, 'over_limit_error');
     this.name = 'OverLimitError';
   }
 }

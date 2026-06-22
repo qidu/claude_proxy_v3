@@ -1797,6 +1797,29 @@ src/
 npm run typecheck
 ```
 
+### Integration Test Suite (testcases/)
+
+The full integration suite lives under `testcases/` and is driven by
+`run-tests-loop-wrapper.js`. It starts a local proxy (port 7799 by
+default), copies `proxy_config.toml` → `test_proxy_config.toml` so the
+run never mutates the live config, executes 18 suites across
+`01_endpoints` / `02_features` / `03_errors` / `04_models` /
+`05_upstream_modes` / `06_integration` / `07_dashboard` /
+`08_regression` / `09_composite` / `10_auth` / `11_responses` /
+`12_config_validation` / `13_fusion`, and writes a timestamped markdown
+report to `tests/test_results_at_<date>_<time>.md`.
+
+```bash
+PORT=7799 TEST_CONFIG=test_ \
+  PROXY_URL=http://localhost:7799 \
+  API_KEY=<your-upstream-key> \
+  node run-tests-loop-wrapper.js
+```
+
+**Latest run (2026-06-22 20:14 UTC):** 18/18 suites pass,
+165/165 cases pass — see
+`tests/test_results_at_2026-06-22_20-14-47.md`.
+
 ### Test Multiple Models
 
 ```bash

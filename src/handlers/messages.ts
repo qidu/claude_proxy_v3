@@ -13,6 +13,7 @@ import { convertOpenAIToClaudeResponse, TokenCountingConfig } from '../converter
 import { createStreamTransformer } from '../converters/streaming.js';
 import { validateClaudeMessagesRequest } from '../utils/validation.js';
 import { handleTargetApiError } from '../utils/errors.js';
+import { normalizeOpenAIToClaudeThinking } from '../utils/thinking.js';
 import { isSdkUrl, handleSdkOpenAIRequest, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
 import { addForwardedHeaders } from '../utils/routing.js';
 import { getLocalTokenCountingConfig } from '../utils/token-counting.js';
@@ -58,6 +59,16 @@ export async function handleMessagesRequest(
   // Clone request before parsing body to preserve body for SDK handler
   // Parse request body from cloned request
   const requestBody = isSdkUrl(targetUrl) ? await request.clone().json() as Record<string, unknown> : await request.json() as Record<string, unknown>;
+
+  // Normalize OpenAI-style thinking ({ enabled, budget_tokens }) to Claude
+  // format ({ type, budget_tokens }) up-front so downstream code (format
+  // detection, validation, conversion) can assume the canonical shape.
+  if (requestBody.thinking && typeof requestBody.thinking === 'object') {
+    const normalized = normalizeOpenAIToClaudeThinking(requestBody.thinking);
+    if (normalized) {
+      requestBody.thinking = normalized;
+    }
+  }
   // const requestBody = await request.json() as Record<string, unknown>;
   
   // Detect Gemini CLI and force non-streaming to avoid JSON parsing issues
