@@ -71,6 +71,7 @@ import {
   createRestoreTransformStream,
   PiiMapping,
 } from './utils/privacy-filter.js';
+import { getKompressConfig, shouldCompressPath, compressBody } from './utils/kompress.js';
 import { eraseBlockedTools } from './utils/tool-blocklist.js';
 
 let hasLoggedUpstreamConfig = false;
@@ -750,6 +751,11 @@ export default {
       const privacyActive = !!privacyConfig && shouldFilterPath(privacyConfig, path);
       let piiMapping: PiiMapping = {};
 
+      // Kompress: lossy, one-directional compression of outbound request text.
+      // No response-side handling needed.
+      const kompressConfig = getKompressConfig(env);
+      const kompressActive = !!kompressConfig && shouldCompressPath(kompressConfig, path);
+
       // Extract authentication headers early
       const authHeaders = extractAuthHeaders(request);
       let modelAuthHeaders = authHeaders;
@@ -782,6 +788,18 @@ export default {
             if (Object.keys(mapping).length > 0) {
               bodyText = JSON.stringify(body);
               logger.info(requestId, `Privacy filter redacted ${Object.keys(mapping).length} PII span(s) from ${path}`);
+            }
+          }
+
+          // Kompress: drop low-importance tokens from compressible request text
+          // (user messages + tool defs/results) to save upstream tokens. Runs
+          // after redaction so it operates on already-redacted text. One-directional
+          // — no response-side restore. Fails open by default.
+          if (kompressActive) {
+            const { fragments, savedPct } = await compressBody(kompressConfig!, body);
+            if (fragments > 0) {
+              bodyText = JSON.stringify(body);
+              logger.info(requestId, `Kompress compressed ${fragments} fragment(s), saved ~${savedPct.toFixed(1)}% chars from ${path}`);
             }
           }
 

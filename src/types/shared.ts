@@ -185,6 +185,47 @@ export interface Env {
      * Default: 200000.
      */
     PRIVACY_FILTER_MAX_CHARS?: string;
+
+    /**
+     * Base URL of the kompress compression sidecar, e.g. "http://127.0.0.1:7777".
+     * When unset, the compression plugin is disabled (no behavior change).
+     */
+    KOMPRESS_URL?: string;
+
+    /**
+     * Comma-separated list of proxy request paths to compress.
+     * Default: "/v1/messages,/v1/chat/completions,/v1/responses".
+     */
+    KOMPRESS_ENDPOINTS?: string;
+
+    /**
+     * Fail-open behavior. Defaults to TRUE (compression is an optimization, not a
+     * correctness boundary): on sidecar error the original text is forwarded.
+     * Set to "false"/"0" to fail-closed (error the request instead).
+     */
+    KOMPRESS_FAIL_OPEN?: string;
+
+    /**
+     * Per-call timeout in milliseconds for sidecar requests. Default: 40000.
+     */
+    KOMPRESS_TIMEOUT_MS?: string;
+
+    /**
+     * Skip compression when the combined compressible text length exceeds this
+     * many characters. Default: 1024000.
+     */
+    KOMPRESS_MAX_CHARS?: string;
+
+    /**
+     * Fraction of tokens to keep, passed to the sidecar. Default: 0.5.
+     */
+    KOMPRESS_KEEP_RATIO?: string;
+
+    /**
+     * Per-fragment floor: fragments shorter than this many characters are skipped
+     * (compression saves nothing meaningful). Default: 200.
+     */
+    KOMPRESS_MIN_CHARS?: string;
 }
 
 
