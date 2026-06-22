@@ -79,20 +79,26 @@ function safeModels(models) {
 }
 
 /**
- * Minimal fusion alias using models known to be in the default upstream.
- * Panel: max-m3 (×2, different roles aren't required but shown), synth: max-m2.7-high.
- * We use the same model twice via two alias keys in a real config scenario;
- * here we use two real aliases as panel members.
+ * Minimal fusion alias built from real models proven to route through the
+ * default qnaigc upstream in the other suites:
+ *   - panel: deepseek/deepseek-v3.2  (TC401)
+ *   - judge: moonshotai/kimi-k2.5    (TC404)
+ *   - synth: qwen/qwen3.6-plus       (TC402)
  *
  * fusion_options: min_panel: 1 (so one panel response is enough),
- *                 judge_required: false (judge stage skipped → degrade gracefully).
+ *                 judge_required: false (synth degrades to raw panel if judge fails).
  */
 const TEST_ALIAS = '__test_fusion__';
 
+const FUSION_PANEL_MODEL = 'deepseek/deepseek-v3.2';
+const FUSION_JUDGE_MODEL = 'moonshotai/kimi-k2.5';
+const FUSION_SYNTH_MODEL = 'qwen/qwen3.6-plus';
+
 function buildTestFusionAlias() {
   return {
-    'max-m3': { fusion: 1 },
-    'max-m2.7-high': { role: 'synth' },
+    [FUSION_PANEL_MODEL]: { fusion: 1 },
+    [FUSION_JUDGE_MODEL]: { role: 'judge' },
+    [FUSION_SYNTH_MODEL]: { role: 'synth' },
     fusion_options: { min_panel: 1, judge_required: false, panel_timeout_ms: 25000 }
   };
 }
@@ -291,8 +297,8 @@ async function testFusionMinPanelEnforcement() {
   const composite = config.composite || {};
 
   const impossibleAlias = {
-    'max-m3': { fusion: 1 },
-    'max-m2.7-high': { role: 'synth' },
+    [FUSION_PANEL_MODEL]: { fusion: 1 },
+    [FUSION_SYNTH_MODEL]: { role: 'synth' },
     fusion_options: { min_panel: 99, judge_required: false, panel_timeout_ms: 5000 }
   };
 
@@ -361,18 +367,18 @@ async function testFusionConfigRoundTrip() {
       `fusion_options.judge_required should be false (got ${alias.fusion_options?.judge_required})`
     );
 
-    // max-m2.7-high should have role: 'synth'
-    const synthTarget = alias['max-m2.7-high'];
+    // synth model should have role: 'synth'
+    const synthTarget = alias[FUSION_SYNTH_MODEL];
     assert(
       synthTarget && synthTarget.role === 'synth',
-      `max-m2.7-high should have role: synth (got ${JSON.stringify(synthTarget)})`
+      `${FUSION_SYNTH_MODEL} should have role: synth (got ${JSON.stringify(synthTarget)})`
     );
 
-    // max-m3 should have fusion: 1
-    const panelTarget = alias['max-m3'];
+    // panel model should have fusion: 1
+    const panelTarget = alias[FUSION_PANEL_MODEL];
     assert(
       panelTarget && panelTarget.fusion === 1,
-      `max-m3 should have fusion: 1 (got ${JSON.stringify(panelTarget)})`
+      `${FUSION_PANEL_MODEL} should have fusion: 1 (got ${JSON.stringify(panelTarget)})`
     );
   } finally {
     await putConfig(models, composite);
@@ -392,8 +398,8 @@ async function testFusionNoJudgeDegrade() {
 
   // Alias with NO judge role and judge_required: false
   const noJudgeAlias = {
-    'max-m3': { fusion: 1 },
-    'max-m2.7-high': { role: 'synth' },
+    [FUSION_PANEL_MODEL]: { fusion: 1 },
+    [FUSION_SYNTH_MODEL]: { role: 'synth' },
     fusion_options: { min_panel: 1, judge_required: false }
   };
 
@@ -440,8 +446,8 @@ async function testFusionExposeMetadata() {
   const composite = config.composite || {};
 
   const metaAlias = {
-    'max-m3': { fusion: 1 },
-    'max-m2.7-high': { role: 'synth' },
+    [FUSION_PANEL_MODEL]: { fusion: 1 },
+    [FUSION_SYNTH_MODEL]: { role: 'synth' },
     fusion_options: { min_panel: 1, judge_required: false, expose_metadata: true }
   };
 

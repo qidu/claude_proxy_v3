@@ -78,6 +78,7 @@ const suites = [
   '10_auth/auth_headers.test.js',
   '11_responses/responses_api.test.js',
   '12_config_validation/config_validation.test.js',
+  '13_fusion/fusion.test.js',
 ];
 
 function replaceRequire(src, baseName, dstPath) {

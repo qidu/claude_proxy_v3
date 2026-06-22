@@ -55,7 +55,7 @@ async function testDeepSeekModels() {
  * Tests various Qwen model variants
  */
 async function testQwenModels() {
-  const models = ['qwen3-32b', 'qwen-max-2025-01-25'];
+  const models = ['qwen/qwen3.6-plus', 'qwen/qwen3.7-max'];
 
   for (const model of models) {
     const response = await sendRequest({
