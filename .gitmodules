@@ -4,3 +4,6 @@
 [submodule "submodules/privacy-filter"]
 	path = submodules/privacy-filter
 	url = git@github.com:qidu/privacy-filter.git
+[submodule "submodules/kompress"]
+	path = submodules/kompress
+	url = git@github.com:qidu/kompress.git
