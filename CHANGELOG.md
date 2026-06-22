@@ -7,6 +7,39 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Kompress (context compression) plugin
+
+The proxy can now drop low-importance tokens out of outbound request text to cut
+upstream token usage and cost. It mirrors the privacy-filter architecture: a thin
+`fetch`-only client (`src/utils/kompress.ts`) talks to a persistent
+[kompress](./submodules/kompress/README.md) HTTP sidecar (`POST /compress`), so it
+stays Cloudflare-Workers-compatible and is **entirely inert unless `KOMPRESS_URL`
+is set**.
+
+Unlike the privacy filter, compression is **lossy and one-directional** — there is
+no response-side restore (no sentinel map, no transform stream).
+
+- **`src/utils/kompress.ts`** (new) — `getKompressConfig(env)` (returns `null` when
+  `KOMPRESS_URL` unset; validates the sidecar is an internal host), `shouldCompressPath`,
+  `isCjkHeavy` (English-only model guard), and `compressBody` (parallel per-fragment
+  fan-out to the sidecar).
+- **Scope:** compresses only **user-message text** and **tool definitions/results**
+  (Anthropic `tools[].description` + `tool_result`, OpenAI `function.description` +
+  `role:'tool'`). The system prompt, assistant messages, JSON schemas, images, and
+  tool-call inputs are left untouched.
+- **CJK guard:** the model is English-only and garbles non-Latin input, so fragments
+  above a non-ASCII threshold (or containing CJK/Kana/Hangul) are passed through
+  uncompressed.
+- **Fail-open by default** (inverse of the privacy filter): a sidecar outage forwards
+  the original uncompressed text rather than failing the request. Override with
+  `KOMPRESS_FAIL_OPEN=false`.
+- **Wiring** (`src/index.ts`): runs right after PII redaction and before tool-blocklist
+  erasure, inside the same body-parse block, so single/composite/fusion paths all see
+  the compressed body.
+- **Env:** `KOMPRESS_URL`, `KOMPRESS_ENDPOINTS`, `KOMPRESS_FAIL_OPEN`,
+  `KOMPRESS_TIMEOUT_MS`, `KOMPRESS_MAX_CHARS`, `KOMPRESS_KEEP_RATIO`, `KOMPRESS_MIN_CHARS`
+  (declared in `src/types/shared.ts`, surfaced in `src/server.ts`).
+
 ### Dashboard Tool Blocklist (mirrors TUI `P` overlay)
 
 The `/dashboard` web UI now ships the same tool blocklist the TUI exposes

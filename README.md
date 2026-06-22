@@ -1254,6 +1254,17 @@ LOG_LEVEL = "info"
 # PRIVACY_FILTER_FAIL_OPEN = "false"          # false = fail-closed (never leak PII upstream)
 # PRIVACY_FILTER_TIMEOUT_MS = "40000"
 # PRIVACY_FILTER_MAX_CHARS = "1024000"
+
+# Kompress (context compression) plugin — see "Kompress" section below.
+# Entirely inert unless KOMPRESS_URL is set (points at the local sidecar).
+# Lossy and one-directional: drops low-importance tokens to save upstream tokens.
+# KOMPRESS_URL = "http://127.0.0.1:7777"
+# KOMPRESS_ENDPOINTS = "/v1/messages,/v1/chat/completions,/v1/responses"
+# KOMPRESS_FAIL_OPEN = "true"          # true = fail-open (forward original text on sidecar error)
+# KOMPRESS_TIMEOUT_MS = "40000"
+# KOMPRESS_MAX_CHARS = "1024000"
+# KOMPRESS_KEEP_RATIO = "0.5"          # fraction of tokens to keep
+# KOMPRESS_MIN_CHARS = "200"           # skip fragments shorter than this
 ```
 
 For local Node.js runs, either pass inline or export them:
@@ -1300,6 +1311,13 @@ node dist/server.js
 | `PRIVACY_FILTER_FAIL_OPEN` | `PRIVACY_FILTER_FAIL_OPEN` | `"false"` |
 | `PRIVACY_FILTER_TIMEOUT_MS` | `PRIVACY_FILTER_TIMEOUT_MS` | `"40000"` |
 | `PRIVACY_FILTER_MAX_CHARS` | `PRIVACY_FILTER_MAX_CHARS` | `"1024000"` |
+| `KOMPRESS_URL` | `KOMPRESS_URL` | unset (plugin off) |
+| `KOMPRESS_ENDPOINTS` | `KOMPRESS_ENDPOINTS` | `"/v1/messages,/v1/chat/completions,/v1/responses"` |
+| `KOMPRESS_FAIL_OPEN` | `KOMPRESS_FAIL_OPEN` | `"true"` |
+| `KOMPRESS_TIMEOUT_MS` | `KOMPRESS_TIMEOUT_MS` | `"40000"` |
+| `KOMPRESS_MAX_CHARS` | `KOMPRESS_MAX_CHARS` | `"1024000"` |
+| `KOMPRESS_KEEP_RATIO` | `KOMPRESS_KEEP_RATIO` | `"0.5"` |
+| `KOMPRESS_MIN_CHARS` | `KOMPRESS_MIN_CHARS` | `"200"` |
 
 ### Privacy Filter (PII redaction) plugin
 
@@ -1421,6 +1439,108 @@ inference (returning `504`) so a stalled call can't tie up the serialized worker
   input, and image blocks are out of scope.
 - `opf` is a redaction aid, not an anonymization guarantee — it can over- or under-redact.
   See the submodule's README and model card for details.
+
+### Kompress (context compression) plugin
+
+The proxy can **drop low-importance tokens out of outbound request text** to reduce the
+number of tokens the upstream model is billed for. Unlike the privacy filter this is
+**lossy and one-directional** — there is nothing to restore on the response side. The
+plugin is **entirely inert unless `KOMPRESS_URL` is set**, so default behavior is
+unchanged.
+
+It is built on [kompress](./submodules/kompress/README.md)
+([`chopratejas/kompress-v2-base`](https://huggingface.co/chopratejas/kompress-v2-base)) —
+a ModernBERT-based token-importance scorer that keeps the top-N% most important tokens.
+
+#### How it works (one-directional compress)
+
+```
+endpoint  →  proxy (compress text)  →  kompress sidecar  →  proxy  →  upstream LLM
+                                                                         │
+                       (response passes straight through, unchanged)  ←──┘
+```
+
+1. The proxy parses the request body and collects the fragments it is allowed to
+   compress: **user-message text** (Anthropic/OpenAI string and `{type:'text'}` blocks)
+   and **tool definitions/results** (Anthropic `tools[].description` + `tool_result`,
+   OpenAI `function.description` + `role:'tool'` content). The system prompt, assistant
+   messages, JSON schemas, images, and tool-call inputs are **never** touched.
+2. Tiny fragments (below `KOMPRESS_MIN_CHARS`) and **non-English / CJK-heavy** fragments
+   are skipped — the model is English-only and would garble non-Latin input.
+3. Remaining fragments are sent in parallel, one `POST /compress` each (`{text,
+   keep_ratio, max_length}`), and the returned `compressed` text is written back in place
+   when it is shorter than the original.
+4. The (smaller) body is sent upstream. The response is returned to the client unchanged.
+
+Because the model is heavy to load, it runs in a **persistent Python HTTP sidecar** that
+keeps the model resident in memory. The proxy only talks to it over `fetch`, so the plugin
+stays compatible with both the Node server and Cloudflare Workers (only the sidecar is
+host-side).
+
+#### Start the sidecar
+
+The sidecar lives in the `kompress` submodule:
+
+```bash
+git submodule update --init submodules/kompress
+
+# See submodules/kompress/README.md for install + model download.
+kompress-api-server --port 7777
+```
+
+Then run the proxy pointed at it:
+
+```bash
+KOMPRESS_URL=http://127.0.0.1:7777 npm run server
+```
+
+Quick sidecar check:
+
+```bash
+curl -s localhost:7777/compress \
+  -d '{"text":"The quick brown fox jumps over the lazy dog.","keep_ratio":0.5,"max_length":512}'
+# → {"compressed":" quick brown fox over lazy dog","n_total":12,"n_kept":8,"kept_pct":66.7}
+```
+
+#### Configuration
+
+| Var | Default | Meaning |
+|-----|---------|---------|
+| `KOMPRESS_URL` | unset | Sidecar base URL, e.g. `http://127.0.0.1:7777`. **Unset = plugin off.** |
+| `KOMPRESS_ENDPOINTS` | `/v1/messages,/v1/chat/completions,/v1/responses` | Comma list of proxy paths to compress. |
+| `KOMPRESS_FAIL_OPEN` | `true` | `true` = **fail-open** (on sidecar error, forward the original uncompressed text — compression is an optimization, not a correctness boundary). Set `false`/`0` to fail-closed (error the request). |
+| `KOMPRESS_TIMEOUT_MS` | `40000` | Per-call timeout to the sidecar. |
+| `KOMPRESS_MAX_CHARS` | `1024000` | Skip compression above this total compressible-text size (safety cap). |
+| `KOMPRESS_KEEP_RATIO` | `0.5` | Fraction of tokens to keep, passed to the sidecar. Lower = more aggressive compression. |
+| `KOMPRESS_MIN_CHARS` | `200` | Per-fragment floor: fragments shorter than this are skipped (compression saves nothing meaningful). |
+
+When both plugins are enabled, **redaction runs first** and compression operates on the
+already-redacted text.
+
+#### Limitations
+
+- Compression is **lossy by design** — dropped tokens are gone. Tune `KOMPRESS_KEEP_RATIO`
+  to trade savings against fidelity.
+- **English-only.** CJK / non-Latin fragments are auto-skipped to avoid garbling.
+- JSON schemas (`input_schema` / `function.parameters`) are intentionally left intact;
+  only human-language tool `description` fields are compressed.
+
+#### Test results
+
+The plugin logic is covered by a self-contained suite that runs against a **mock
+sidecar** (no model download or running server required). Latest run: **29 passed,
+0 failed**.
+
+| Group | Checks | What it verifies |
+|-------|--------|------------------|
+| `isCjkHeavy` guard | 5 | English passes; Chinese/Japanese and CJK-heavy text flagged; isolated accents ignored; empty string safe. |
+| `getKompressConfig` | 6 | `null` when `KOMPRESS_URL` unset; `failOpen` defaults true and is overridable; `keepRatio`/`minChars` defaults; rejects non-internal sidecar hosts. |
+| `shouldCompressPath` | 2 | `/v1/messages` active, `/v1/embeddings` inactive. |
+| `compressBody` (Anthropic) | 11 | Compresses user text + `tool_result` + tool `description`; leaves `system`, assistant, CJK, tiny (`< minChars`), and JSON schemas untouched; sidecar never receives skipped text. |
+| Fail modes | 3 | Sidecar down → fail-open (original text preserved); `KOMPRESS_FAIL_OPEN=false` + sidecar 500 → throws. |
+| `compressBody` (OpenAI) | 2 | `role:'tool'` content + `function.description` compressed; `parameters` schema left intact. |
+
+`npm run typecheck` is also clean.
 
 ### Performance Benchmark
 
@@ -1650,6 +1770,7 @@ src/
     ├── dashboard-stats.ts          # Token/usage stats aggregation for the dashboard
     ├── errors.ts                   # Error handling
     ├── fetch-timeout.ts            # Upstream request timeout
+    ├── kompress.ts                 # Context compression plugin (proxy to sidecar)
     ├── logger.ts                   # Logging utilities
     ├── privacy-filter.ts           # PII redaction plugin (proxy to sidecar)
     ├── routing.ts                  # Auth header handling and URL building
