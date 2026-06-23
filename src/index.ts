@@ -671,7 +671,7 @@ export default {
           const windowTotal = getTokensInWindow(windowMs);
           if (windowTotal >= parsedGlobal.num) {
             throw new OverLimitError(
-              `Global token limit (${parsedGlobal.num} ${parsedGlobal.duration}) reached (${windowTotal}). No further requests will be routed.`
+              `exceed local token limit: global token limit (${parsedGlobal.num} ${parsedGlobal.duration}) reached (${windowTotal}). No further requests will be routed.`
             );
           }
         }
@@ -861,7 +861,7 @@ export default {
                   const totalUsed = getCompositeAliasTokenUsage(modelName, allTargets);
                   if (totalUsed >= limitCfg.num) {
                     throw new OverLimitError(
-                      `Composite alias '${modelName}' token limit (${limitCfg.num} ${limitCfg.duration}) reached (${totalUsed}).`
+                      `exceed local token limit: composite alias '${modelName}' token limit (${limitCfg.num} ${limitCfg.duration}) reached (${totalUsed}).`
                     );
                   }
                 }
@@ -889,7 +889,7 @@ export default {
               if (totalUsed >= limitCfg.num) {
                 logger.info(requestId, `Rejecting request for ${modelName}: ${totalUsed} window tokens >= limit ${limitCfg.num}`);
                 throw new OverLimitError(
-                  `Composite alias '${modelName}' token limit (${limitCfg.num} ${limitCfg.duration}) reached (${totalUsed}). No further requests will be routed through this alias.`
+                  `exceed local token limit: composite alias '${modelName}' token limit (${limitCfg.num} ${limitCfg.duration}) reached (${totalUsed}). No further requests will be routed through this alias.`
                 );
               }
             }

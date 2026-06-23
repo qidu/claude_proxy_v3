@@ -7,7 +7,7 @@
  * - primary: true always-routes-first behavior
  * - fallback: N retry priority ordering
  * - share weighted distribution
- * - total_token_limit (HTTP 413 when exceeded)
+ * - total_token_limit (HTTP 429 when exceeded)
  * - Composite fallback to default upstream for unresolved targets
  *
  * Reference: README §"Composite aliases"
@@ -163,7 +163,7 @@ async function testCompositeShare() {
 /**
  * TC1105: Composite Token Limit — config presence check
  * Verifies that at least one composite alias has a token_limit configured,
- * and that a small request against it does not spuriously return 413.
+ * and that a small request against it does not spuriously return 429.
  * Discovers the alias dynamically so the test isn't tied to a specific name.
  *
  * Note: token_limit in the dashboard payload is the object form
@@ -201,7 +201,7 @@ async function testCompositeTotalTokenLimit() {
     `${aliasName} should have token_limit set`
   );
 
-  // Make a small request — should NOT trigger 413 on a fresh small request
+  // Make a small request — should NOT trigger 429 on a fresh small request
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
@@ -212,11 +212,11 @@ async function testCompositeTotalTokenLimit() {
   });
 
   assert(
-    response.status === 200 || response.status === 413 || response.status >= 400,
-    'Response should be 200, 413 (limit reached), or graceful 4xx'
+    response.status === 200 || response.status === 429 || response.status >= 400,
+    'Response should be 200, 429 (limit reached), or graceful 4xx'
   );
-  if (response.status === 413) {
-    console.log(`    (note: 413 on small request to "${aliasName}" — cumulative usage may already exceed limit)`);
+  if (response.status === 429) {
+    console.log(`    (note: 429 on small request to "${aliasName}" — cumulative usage may already exceed limit)`);
   }
 }
 
@@ -384,9 +384,10 @@ async function testCompositeShareZeroExclusion() {
 }
 
 /**
- * TC1110: Composite total_token_limit 413 path
+ * TC1110: Composite total_token_limit 429 path
  * Creates a temporary composite alias with token_limit: 1, routes through a
- * real model to accumulate 1+ token, then asserts the next request gets 413.
+ * real model to accumulate 1+ token, then asserts the next request gets 429
+ * ("exceed local token limit").
  *
  * Reference: README L129
  */
@@ -447,11 +448,11 @@ async function testCompositeTotalTokenLimit413() {
     });
 
     if (req1.status !== 200) {
-      console.log(`    (skipped: first request failed with ${req1.status}, cannot test 413 path)`);
+      console.log(`    (skipped: first request failed with ${req1.status}, cannot test 429 path)`);
       return;
     }
 
-    // 3. Second request — accumulator is now >= 1 token, should get 413
+    // 3. Second request — accumulator is now >= 1 token, should get 429
     const req2 = await sendRequest({
       endpoint: '/v1/messages',
       body: {
@@ -462,14 +463,14 @@ async function testCompositeTotalTokenLimit413() {
     });
 
     assert(
-      req2.status === 413,
-      `Second request with exhausted token limit should return 413, got ${req2.status}`
+      req2.status === 429,
+      `Second request with exhausted token limit should return 429, got ${req2.status}`
     );
 
-    if (req2.status === 413) {
+    if (req2.status === 429) {
       assert(
         req2.body?.error?.type === 'over_limit_error' || typeof req2.body?.error === 'string',
-        'HTTP 413 response should have over_limit_error type'
+        'HTTP 429 response should have over_limit_error type'
       );
     }
   } finally {
@@ -541,7 +542,7 @@ if (require.main === module) {
     { name: 'TC1107: All Aliases', fn: testAllConfiguredAliases },
     { name: 'TC1108: Same Name as Model', fn: testCompositeSameNameAsModel },
     { name: 'TC1109: share:0 Exclusion', fn: testCompositeShareZeroExclusion },
-    { name: 'TC1110: Token Limit 413 Path', fn: testCompositeTotalTokenLimit413 },
+    { name: 'TC1110: Token Limit 429 Path', fn: testCompositeTotalTokenLimit413 },
     { name: 'TC1111: Limit Exposed in Dashboard', fn: testCompositeLimitExposedInDashboard }
   ]);
 }

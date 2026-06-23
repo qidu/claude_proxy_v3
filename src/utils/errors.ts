@@ -62,12 +62,13 @@ export class ProcessingError extends ClaudeProxyError {
 }
 
 export class OverLimitError extends ClaudeProxyError {
-  constructor(message: string = 'Request exceeds limits') {
-    // Token-limit exhaustion is a payload-size / quota concept, not a rate
-    // (RPM) limit. Use 413 + over_limit_error to match the documented
-    // "token_limit reached" contract and the canonical Anthropic-style error
-    // shape (see README "Composite total_token_limit" section).
-    super(message, 413, 'over_limit_error');
+  constructor(message: string = 'exceed local token limit') {
+    // Hitting a locally-configured token quota (global or composite alias) is
+    // a "slow down / quota exhausted" signal, so return HTTP 429 — distinct
+    // from a real upstream rejection. The type stays `over_limit_error` so it
+    // is distinguishable from upstream RPM rate-limits (see README global /
+    // composite token_limit sections).
+    super(message, 429, 'over_limit_error');
     this.name = 'OverLimitError';
   }
 }

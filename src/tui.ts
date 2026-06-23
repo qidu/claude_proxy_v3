@@ -595,7 +595,10 @@ class CompositeAliasesOverlay implements Component, Focusable {
       const aliasLimit = typedTargets?.token_limit;
       const win = snap.compositeLimitWindows?.[alias];
       const windowUsed = win?.accumulator ?? 0;
-      const windowDuration = win ? win.duration : (aliasLimit?.duration ?? '');
+      // Display the configured limit duration (updates immediately on edit), not
+      // the in-memory window's duration, which only re-syncs on the next proxy
+      // request and would otherwise show a stale value right after an edit.
+      const windowDuration = aliasLimit?.duration ?? '';
       const aliasSummary = aliasLimit !== undefined && aliasLimit.num > 0
         ? ` ${dim(fmt(windowUsed))} ${dim('/')} ${dim('L')} ${dim(fmt(aliasLimit.num) + '/' + windowDuration)}`
         : '';
