@@ -455,14 +455,15 @@ for recovery after restart.
 
 **Log file format** (one JSON object per line):
 ```json
-{"date":"2026-06-05","timestamp":"2026-06-05T15:20:09.156Z","lastDumpTs":1750000000000,"modelStats":[{"model":"deepseek-v4-flash","requests":53,"failed_requests":1,"input_tokens":333034,"cached_tokens":0,"cache_written_tokens":0,"output_tokens":4664,"total_tokens":337698}],"toolStats":[{"name":"Bash","agent":"claude-cli","req":12,"resp":10,"len":43821,"blocked":0}],"heatmapEvents":{"models":{"a3f1":"deepseek-v4-flash"},"sequences":[{"ts":1750000001,"values":24223,"id":"a3f1"}]},"compositeLimitWindows":{"gpt-all":{"limit":120000,"duration":"1d","windowStartMs":1750000000000,"accumulator":8400}}}
+{"date":"2026-06-05","timestamp":1750000009,"lastDumpTs":0,"modelStats":[{"model":"deepseek-v4-flash","requests":53,"failed_requests":1,"input_tokens":333034,"cached_tokens":0,"cache_written_tokens":0,"output_tokens":4664,"total_tokens":337698},{"model":"gpt-5-mini","requests":12,"failed_requests":0,"input_tokens":80000,"cached_tokens":10000,"cache_written_tokens":5000,"output_tokens":12000,"total_tokens":97000}],"toolStats":[{"name":"Bash","agent":"claude-cli","req":12,"resp":10,"len":43821,"blocked":0}],"heatmapEvents":{"models":{"a3f1":"deepseek-v4-flash","b7c2":"gpt-5-mini"},"sequences":[{"ts":1750000001,"values":24223,"id":"a3f1"},{"ts":1750000005,"values":8100,"id":"b7c2"}]},"compositeLimitWindows":{"gpt-all":{"limit":120000,"duration":"1d","windowStartMs":1750000000000,"accumulator":8400}}}
 ```
+> Note: `lastDumpTs: 0` = full snapshot (day rollover); `lastDumpTs: 1750000000` = delta row (events newer than the previous dump). `timestamp` is Unix seconds in new-format dumps. `heatmapEvents` uses `ts` in seconds with model ids (`a3f1`, `b7c2`) referencing the `models` lookup map.
 
 Fields:
-- `date` / `timestamp`: date string and ISO timestamp of the dump
+- `date` / `timestamp`: date string and Unix seconds timestamp of the dump (new format); legacy dumps may use ISO string
 - `lastDumpTs`: unix ms timestamp of the previous dump. `0` = full snapshot (daily rollover). Used to write delta-only events and to filter events on load (backward compatible with old rows without this field).
-- `modelStats`: cumulative daily token stats per model (written every dump)
-- `toolStats`: per-(tool, agent) cumulative usage rows (`name`, `agent`, `req`, `resp`, `len`, `blocked`). Rows are sorted by `(req+resp+len)` desc with `req` desc as a tiebreak. `agent` defaults to `all` for legacy single-tenant rows. `blocked` is a snapshot of the in-memory `blockedTools` set at dump time (1 = blocked, 0 = not blocked) — it is informational only and **not** restored on load; the blocklist itself is in-memory and resets at startup.
+- `modelStats`: cumulative daily token stats per model (written every dump). Fields: `model`, `requests`, `failed_requests`, `input_tokens`, `cached_tokens`, `cache_written_tokens`, `output_tokens`, `total_tokens`. **Format evolution**: old dumps wrote 1 entry per record with an ISO `timestamp`; new dumps write all active models in a single record with `timestamp` as Unix seconds and the new `lastDumpTs`, `toolStats`, and restructured `heatmapEvents` top-level fields. Both shapes are accepted on load.
+- `toolStats`: per-(tool, agent) cumulative usage rows (`name`, `agent`, `req`, `resp`, `len`, `blocked`). Example row: `{"name":"Bash","agent":"claude-cli","req":12,"resp":10,"len":43821,"blocked":0}`. Rows are sorted by `(req+resp+len)` desc with `req` desc as a tiebreak. `agent` defaults to `all` for legacy single-tenant rows. `blocked` is a snapshot of the in-memory `blockedTools` set at dump time (1 = blocked, 0 = not blocked) — it is informational only and **not** restored on load; the blocklist itself is in-memory and resets at startup.
 - `heatmapEvents`: same-day heatmap events only. Each dump writes **delta-only** — events newer than `lastDumpTs`. Day rollover writes a full same-day snapshot. Stored as `{ models: { <hex-id>: <model-name> }, sequences: [{ ts, values, id? }] }`. Model ids are 4 hex chars (16 bits, 65k ids) — more than enough for any realistic model fleet. Only models referenced by this row's `sequences` are included in `models`, so each row is self-contained.
 - `compositeLimitWindows`: persisted composite alias limit windows
 
@@ -484,7 +485,7 @@ Fields:
 
 **Startup restore (only runs when persistence is enabled; backward compatible with all existing log files):**
 - On proxy startup, `loadTokenStatsFromLog()` reads the last 30 days from the log
-- **modelStats** (dashboard daily map): loaded from the latest dump per date only (later dumps overwrite earlier). The cumulative `modelStats` Map that powers the TUI "Top Models" panel and `getModelTotalTokens()` is **accumulated** across the latest dump per date — each per-date dump is that day's totals (the day-rollover dump is the authoritative end-of-day snapshot), so summing them reconstructs true all-time totals. This restores the cumulative counters used by composite aliases with no duration window (`legacy total_token_limit` path) for 429 enforcement, including the historical (pre-restart) day totals that the previous overwrite-only behavior missed.
+- **modelStats** (dashboard daily map): loaded from the latest dump per date only (later dumps overwrite earlier). The cumulative `modelStats` Map that powers the TUI "Top Models" panel and `getModelTotalTokens()` is **accumulated** across the latest dump per date — each per-date dump is that day's totals (the day-rollover dump is the authoritative end-of-day snapshot), so summing them reconstructs true all-time totals. `dailyTokenStats` is cleared at every day rollover, so each dump covers exactly one day with no overlap — no double-counting. This is also the fallback used by composite `token_limit` when the rolling window has expired and no duration was configured.
 - **toolStats**: loaded from the latest dump per date only (later dumps overwrite earlier). Each row is split back into the three source maps consumed by the dashboard:
   - `agentStats` (key = `${agent} / ${tool}`) — restored only when `req > 0`
   - `upstreamResponseToolStats` (key = `${tool}\0${agent}`) — restored only when `resp > 0`
@@ -494,10 +495,14 @@ Fields:
   - For rows without `lastDumpTs` (old format): all events included
   - For rows with `lastDumpTs > 0` (new delta rows): only events newer than `lastDumpTs` are included
   - Both the legacy array shape (`[{timestamp, values, model}]`) and the current object shape (`{models, sequences}`) are accepted; legacy rows are converted to the in-memory id form on load
+  - **Timestamp unit**: on-disk timestamps in sequences are always in **seconds** (e.g., `ts: 1750000001`). Legacy array timestamps were in **milliseconds** (e.g., `timestamp: 1750000001000`) — these are converted to seconds (`* 1000` → ms) on load so they land in the correct range for `getTokensInWindow` to scan correctly. After running the transform script (`tests/transform_dump_data_precise_size.py`) to convert legacy rows to the new format, timestamps are always seconds and no unit conversion is needed.
   - 30-day retention cutoff always applied
 - **compositeLimitWindows**: restored if the window has not expired. If `windowStartMs + durationMs > now`, the accumulator is restored and enforcement continues from where it left off. If the window has expired, the window is NOT restored (fresh window starts).
 
-**Composite alias limit behavior**: Each `token_limit` tracks tokens in a sliding duration window. Tokens accumulated across proxy restarts are counted toward the limit **only if** the window hasn't expired. When the window expires, the accumulator resets to 0 and a fresh window begins.
+**Token limit enforcement and reload behavior**: There are two independent limit mechanisms:
+
+- **Composite alias `token_limit`** (e.g., `"gpt-all" = {"token_limit": {"num": 120000, "duration": "1d"}, ...}`): uses the `compositeLimitWindows` rolling window accumulator. On reload, if `windowStartMs + durationMs > now`, the accumulator is restored and enforcement picks up where it left off. If the window has expired, the window is dropped and a fresh window starts at 0.
+- **Global `global_token_limit`** (e.g., `global_token_limit = "1.1B 1d"`): uses `getTokensInWindow(durationMs)` which scans the full `tokenHeatmapEvents[]` array with a `windowSumFrozen`/`windowSumCutoff` optimization — events older than the window boundary are cached in a frozen sum and excluded from repeated scans. After reload, all restored heatmap events (within the 30d retention window) are available for the global scan, so the limit is enforced accurately from the first request.
 
 ### 4. Deploy
 
