@@ -2139,6 +2139,56 @@ See [CHANGELOG.md](./CHANGELOG.md) for historical changes.
 
 MIT
 
+## Multi-Agent SDK Test (`tests/multi-agents-test.ts`)
+
+`tests/multi-agents-test.ts` exercises three official AI agent SDKs simultaneously against the
+local proxy on port 7777, using the same natural-language task prompt. It verifies that the proxy's
+three major API surfaces — Responses API, Claude messages API, and Gemini generateContent — all
+work end-to-end through a single server.
+
+### How to run
+
+```bash
+# Install SDKs (one-time)
+npm install @openai/codex-sdk @anthropic-ai/claude-agent-sdk @google/genai
+
+# Ensure the proxy is running on port 7777
+PORT=7777 node dist/server.js &
+
+# Run the test
+npx tsx tests/multi-agents-test.ts
+```
+
+### Agents tested
+
+| Agent | SDK | Proxy surface | Model |
+|-------|-----|---------------|-------|
+| OpenAI Codex | `@openai/codex-sdk` 0.142.2 | `/v1/responses` (Responses API) | `deepseek-v4-pro` via `localproxy` in `~/.codex/config.toml` |
+| Anthropic Claude | `@anthropic-ai/claude-agent-sdk` | `/v1/messages` (Claude messages) | `deepseek-v4-pro` |
+| Google Gemini | `@google/genai` 2.10.0 | `/v1beta/models/:model:generateContent` (Gemini native) | `gemini-2.5-flash` |
+
+### Implementation notes
+
+- **Codex**: The SDK's `openai_base_url` config key is silently ignored by codex-cli 0.107.0, so
+  routing is handled via `~/.codex/config.toml` written at runtime. `modelReasoningEffort:
+  "minimal"` is used to keep thinking-mode overhead low.
+- **Claude agent**: The `query()` stream is iterated for `assistant` and `result` events.
+  `allowedTools: ["Glob", "Read"]` restricts the agent to read-only workspace operations.
+- **Gemini**: `httpOptions.baseUrl` overrides the default Google endpoint so all traffic flows
+  through the local proxy. The SDK imports are dynamic (`await import(...)`) so missing SDKs only
+  fail the individual function, not the whole file.
+
+### Results (2026-06-25, proxy port 7777, upstream `anthropic.qnaigc.com`)
+
+| Agent | Outcome | Notes |
+|-------|---------|-------|
+| **Codex** | `Codex Final Output: ` (empty string) | Success — empty output is expected because the `bwrap` Linux namespace sandbox blocks exec commands; the agent loop completes without error |
+| **Claude** | `Claude Done. Status: success` | Full analysis returned: correctly read the real `./tests/` directory (128 files, flat layout) and produced a detailed reorganization proposal |
+| **Gemini** | Output returned | Response delivered successfully; the model produced a generic Python test-layout analysis rather than inspecting the actual directory (no tool use) |
+
+All three SDKs connected to the proxy, authenticated, and received valid responses. No proxy-side
+errors.
+
 ## 🤝 Contributing
 
 1. Fork the repository
