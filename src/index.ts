@@ -662,6 +662,23 @@ export default {
         });
       }
 
+      // Require at least one of: Authorization, x-api-key, x-goog-api-key
+      // for model API requests. Health/dashboard/admin paths above are exempt.
+      const authHeader = request.headers.get('authorization');
+      const xApiKey = request.headers.get('x-api-key');
+      const xGoogApiKey = request.headers.get('x-goog-api-key');
+      const hasAuth = (authHeader && authHeader.trim() !== '') ||
+                      (xApiKey && xApiKey.trim() !== '') ||
+                      (xGoogApiKey && xGoogApiKey.trim() !== '');
+      if (!hasAuth) {
+        logger.warn(requestId, `Missing auth headers (need Authorization, x-api-key, or x-goog-api-key) for ${path}`);
+        return createErrorResponse(
+          new Error('Missing authentication: provide Authorization, x-api-key, or x-goog-api-key header.'),
+          requestId,
+          401
+        );
+      }
+
       // Global token limit check: only applies to model API requests, not dashboard/health
       const globalTokenLimitRaw = proxyConfig.upstream?.global_token_limit;
       if (globalTokenLimitRaw) {

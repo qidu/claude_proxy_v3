@@ -345,6 +345,7 @@ npm run dev
 or
 ```bash
 npm run build
+cp proxy_config.toml_example proxy_config.toml
 PROXY_CONFIG_PATH=./proxy_config.toml npx tsx dist/server.js
 ```
 
@@ -396,6 +397,7 @@ Leave the `api_key` slot empty to use the per-request `Authorization` /
 Run the server with `TUI=true` to open the terminal dashboard in the same process:
 
 ```bash
+cp proxy_config.toml_example proxy_config.toml
 TUI=true PROXY_CONFIG_PATH=./proxy_config.toml npx tsx dist/server.js
 ```
 
@@ -512,6 +514,7 @@ Fields:
 #### Docker
 ```bash
 # export VERSION=$(git log -n 1 --pretty=format:"%h")
+cp proxy_config.toml_example proxy_config.toml
 docker build --build-arg VERSION=$(git log -n 1 --pretty=format:"%h") -t model-proxy-v3 .
 docker run -p 8788:8788 -v $(pwd)/proxy_config.toml:/app/proxy_config.toml model-proxy-v3
 ```
@@ -538,7 +541,7 @@ pm2 start dist/server.js -i 4
 ./tests/test_all.sh
 ```
 
-**Test Configuration**: All tests use `proxy_config.toml` with category-based structure. See `docs/test_guideline.md` for details.
+**Test Configuration**: All tests use `TEST_CONFIG` and `proxy_config.toml` with category-based structure. See `docs/test_guideline.md` for details.
 
 ### Test Scripts
 
@@ -1270,6 +1273,7 @@ LOG_LEVEL = "info"
 For local Node.js runs, either pass inline or export them:
 
 ```bash
+cp proxy_config.toml_example proxy_config.toml
 # Inline (all vars)
 LOCAL_TIKTOKEN=true LOG_LEVEL=debug PROXY_CONFIG_PATH=./proxy_config.toml node dist/server.js
 

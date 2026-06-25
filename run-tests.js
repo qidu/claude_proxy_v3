@@ -2,9 +2,10 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-
+// Start testing proxy server WITH PORT=7777
+// DO NOT use 'pkill -f "node dist/server.js"' , use 'lsof -ni 77777' to find process id, and kill the pid
 const TEST_DIR = './testcases';
-const PROXY_URL = process.env.PROXY_URL || 'http://localhost:8788';
+const PROXY_URL = process.env.PROXY_URL || 'http://localhost:7777';
 const API_KEY = process.env.API_KEY || 'sk-test-key';
 const TEST_TIMEOUT = process.env.TEST_TIMEOUT || '30000';
 
@@ -89,6 +90,7 @@ const suites = [
   '11_responses/responses_api.test.js',
   '12_config_validation/config_validation.test.js',
   '13_fusion/fusion.test.js',
+  '14_routing/routing.test.js',
 ];
 
 function replaceRequire(src, baseName, dstPath) {

@@ -10,6 +10,9 @@ Two runner scripts live at the project root:
 - **`run-tests-loop-wrapper.js`** — repeating loop, writes a timestamped Markdown report to `./tests/`
 
 ```bash
+# Start testing proxy server WITH PORT=7777
+# DO NOT use 'pkill -f "node dist/server.js"' , use 'lsof -ni 77777' to find process id, and kill the pid
+
 # Single pass
 node run-tests.js
 
