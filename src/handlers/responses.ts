@@ -17,6 +17,41 @@ import { getConversation, saveConversation, normalizeInputToItems } from '../uti
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
 
 /**
+ * Short-lived store: tool call ID → reasoning_content string.
+ *
+ * When a thinking-mode upstream (DeepSeek) returns reasoning_content alongside
+ * tool_calls, the Codex SDK echoes back the tool_calls on the next turn but
+ * does NOT include the reasoning.  The upstream then rejects with
+ * "reasoning_content must be passed back".
+ *
+ * We solve this server-side: store the reasoning keyed by each call_id from
+ * the response, then look it up when those call_ids appear in a later request
+ * and inject reasoning_content onto the assistant messages we create.
+ *
+ * Entries auto-expire after 10 minutes so the map stays bounded.
+ */
+const reasoningByCallId = new Map<string, { reasoning: string; expiry: number }>();
+const REASONING_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+function storeReasoningForCalls(callIds: string[], reasoning: string) {
+  if (!reasoning || callIds.length === 0) return;
+  const expiry = Date.now() + REASONING_TTL_MS;
+  for (const id of callIds) {
+    reasoningByCallId.set(id, { reasoning, expiry });
+  }
+}
+
+function lookupReasoningForCall(callId: string): string | undefined {
+  const entry = reasoningByCallId.get(callId);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiry) {
+    reasoningByCallId.delete(callId);
+    return undefined;
+  }
+  return entry.reasoning;
+}
+
+/**
  * Handle responses API request
  */
 export async function handleResponsesRequest(
@@ -88,6 +123,26 @@ async function handleAsCompletions(
 
   // Convert Responses API request to Chat Completions format
   const completionsRequest = convertResponsesToChatCompletions(effectiveBody, model);
+
+  // Inject stored reasoning_content onto any assistant messages that have tool_calls
+  // whose IDs were recorded from a prior thinking-mode response (DeepSeek requires
+  // reasoning_content to be passed back when continuing a thinking-mode conversation).
+  for (const msg of completionsRequest.messages) {
+    if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+      const msgAny = msg as unknown as Record<string, unknown>;
+      if (!msgAny.reasoning_content) {
+        // Try each call_id until we find stored reasoning
+        for (const tc of msg.tool_calls) {
+          const stored = lookupReasoningForCall(tc.id);
+          if (stored) {
+            msgAny.reasoning_content = stored;
+            logger.debug(requestId, `[reasoning] injected stored reasoning_content for call_id=${tc.id}`);
+            break;
+          }
+        }
+      }
+    }
+  }
 
   logger.debug(requestId, `Converted to completions format: ${JSON.stringify(completionsRequest)}`);
 
@@ -195,6 +250,7 @@ function streamCompletionsAsResponses(
       })));
 
       let accumulatedText = '';
+      let accumulatedReasoning = ''; // reasoning_content / thinking tokens from upstream
       let textPartOpened = false;
       let textOutputIndex = -1; // set when text item is opened
       let usageData: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
@@ -255,8 +311,13 @@ function streamCompletionsAsResponses(
           const delta = choices[0].delta;
           if (!delta) continue;
 
-          // Thinking tokens in delta.thinking / delta.reasoning_content are silently skipped;
-          // the fallback output item below ensures output is never empty if no text or tool calls follow.
+          // --- reasoning content (DeepSeek: delta.reasoning_content, OpenAI: delta.thinking) ---
+          // Accumulate so it can be included in the output items for round-trip fidelity.
+          const reasoningDelta = (delta as Record<string, unknown>).reasoning_content
+            ?? (delta as Record<string, unknown>).thinking;
+          if (typeof reasoningDelta === 'string' && reasoningDelta) {
+            accumulatedReasoning += reasoningDelta;
+          }
 
           // --- text content ---
           if (delta.content) {
@@ -359,6 +420,15 @@ function streamCompletionsAsResponses(
           content_index: 0,
           text: accumulatedText,
         })));
+        // Include reasoning_text alongside output_text so Codex echoes it back on
+        // the next turn. DeepSeek rejects multi-turn requests when reasoning_content
+        // is missing from the assistant message that followed a thinking turn.
+        const doneContent: Array<{ type: string; text: string }> = [
+          { type: 'output_text', text: accumulatedText },
+        ];
+        if (accumulatedReasoning) {
+          doneContent.push({ type: 'reasoning_text', text: accumulatedReasoning });
+        }
         await writer.write(encoder.encode(sseEvent('response.output_item.done', {
           type: 'response.output_item.done',
           sequence_number: nextSeq(),
@@ -368,7 +438,7 @@ function streamCompletionsAsResponses(
             type: 'message',
             status: 'completed',
             role: 'assistant',
-            content: [{ type: 'output_text', text: accumulatedText }],
+            content: doneContent,
           },
         })));
       }
@@ -402,22 +472,49 @@ function streamCompletionsAsResponses(
 
       // Build output array for response.completed
       const outputItems: unknown[] = [];
+
+      // Prepend a reasoning output item when the upstream produced reasoning content.
+      // This preserves the reasoning so Codex can echo it back on the next turn, which
+      // is required by thinking-mode upstreams like DeepSeek ("reasoning_content must
+      // be passed back to the API").
+      if (accumulatedReasoning) {
+        const reasoningId = `rs_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+        outputItems.push({
+          id: reasoningId,
+          type: 'reasoning',
+          status: 'completed',
+          content: [{ type: 'reasoning_text', text: accumulatedReasoning }],
+        });
+      }
+
       if (textPartOpened) {
+        const textContent: Array<{ type: string; text: string }> = [{ type: 'output_text', text: accumulatedText }];
+        // Also embed reasoning_text inside the message so it round-trips via assistant
+        // message content when Codex sends the conversation back.
+        if (accumulatedReasoning) {
+          textContent.push({ type: 'reasoning_text', text: accumulatedReasoning });
+        }
         outputItems.push({
           id: itemId,
           type: 'message',
           status: 'completed',
           role: 'assistant',
-          content: [{ type: 'output_text', text: accumulatedText }],
+          content: textContent,
         });
       }
       outputItems.push(...completedToolCalls);
 
+      // If there was reasoning and tool calls, persist the reasoning keyed by each
+      // call_id so we can inject it on the next turn when Codex echoes the calls back
+      // without the reasoning (which thinking-mode upstreams require).
+      if (accumulatedReasoning && completedToolCalls.length > 0) {
+        storeReasoningForCalls(completedToolCalls.map(tc => tc.id), accumulatedReasoning);
+      }
+
       // output: [] is invalid per spec. If the stream had only thinking/reasoning content
       // (no text, no tool calls), emit a fallback empty-text message item so the client
-      // receives a non-empty output array. This handles models that emit thinking tokens
-      // in delta.thinking / delta.reasoning_content without a separate text delta.
-      if (outputItems.length === 0) {
+      // receives a non-empty output array.
+      if (outputItems.every((it: unknown) => (it as Record<string, unknown>).type === 'reasoning')) {
         outputItems.push({
           id: itemId,
           type: 'message',

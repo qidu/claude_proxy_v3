@@ -7,6 +7,42 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Bug fixes: `/v1/responses` reasoning round-trip (DeepSeek thinking mode + Codex multi-turn)
+
+Four root causes behind the persistent `"reasoning_content must be passed back to the API"` error
+when using the Responses API (`/v1/responses`) with DeepSeek thinking-mode upstreams and the Codex
+CLI. All changes are in the responses handler and its two converter modules.
+
+- **Streaming path silently dropped `delta.reasoning_content`** — `streamCompletionsAsResponses`
+  in `src/handlers/responses.ts` was ignoring the `reasoning_content` / `thinking` delta fields
+  that DeepSeek and OpenAI thinking-mode upstreams send per chunk. Added accumulation into
+  `accumulatedReasoning` and emitted a `reasoning` output item (with the text) in the final
+  `response.output_item.done` event for each text message. The `reasoning_text` is also appended
+  inside the assistant message's content array so Codex can echo it back on the next turn.
+
+- **Non-streaming path produced an empty `reasoning` output item** —
+  `src/converters/completions-to-responses.ts` was emitting a `reasoning` item with no content
+  when the upstream `message.reasoning_content` field was present. Fixed to actually extract the
+  string and populate `content: [{ type: 'reasoning_text', text: reasoningText }]`. Also handles
+  `part.type === 'thinking'` content parts from OpenAI-style array content.
+
+- **Consecutive `function_call` input items produced separate assistant messages** —
+  `src/converters/responses-to-completions.ts` was converting each `function_call` item into its
+  own assistant message. Chat Completions (and DeepSeek) require all tool calls from a single
+  assistant turn to be in *one* assistant message with multiple `tool_calls` entries. The new
+  `convertInputItemsToMessages` exported function collects all consecutive `function_call` items
+  and merges them into a single assistant message.
+
+- **Server-side call_id → reasoning store for Codex multi-turn** — Codex builds conversation
+  history from `response.output_item.done` events and echoes `function_call` items back as input
+  on the next turn, but does **not** re-send `reasoning` items. Without a server-side store, the
+  `reasoning_content` field would be absent from the echoed assistant message, causing DeepSeek to
+  reject the request. Added a module-level `reasoningByCallId` map (10-minute TTL) in
+  `src/handlers/responses.ts`: when a streaming response ends with both tool calls and accumulated
+  reasoning, the reasoning is keyed by each `call_id`. On the next request, `handleAsCompletions`
+  walks the converted messages and injects the stored `reasoning_content` onto any assistant message
+  whose `tool_calls` match a stored entry.
+
 ### Bug fixes: OpenAI thinking passthrough + composite 413 path
 
 Two single-case regressions caught by the full integration suite are now

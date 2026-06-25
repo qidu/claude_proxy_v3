@@ -36,11 +36,8 @@ export function convertResponsesToChatCompletions(
         content: input,
       });
     } else if (Array.isArray(input)) {
-      // Array of input items
-      for (const item of input) {
-        const convertedMessages = convertInputItemToMessages(item as Record<string, unknown>);
-        messages.push(...convertedMessages);
-      }
+      // Array of input items — use the stateful converter to thread reasoning across turns
+      messages.push(...convertInputItemsToMessages(input as Array<Record<string, unknown>>));
     } else {
       // Object input - treat as user message
       messages.push({
@@ -142,25 +139,111 @@ export function convertResponsesToChatCompletions(
 }
 
 /**
+ * Convert a list of input items to messages, threading reasoning_content from
+ * standalone reasoning items through to adjacent assistant/function_call turns.
+ *
+ * Multiple consecutive function_call items are merged into a single assistant
+ * message with multiple tool_calls — the Chat Completions API (and DeepSeek)
+ * require all tool_calls from a single turn to appear in one assistant message.
+ */
+export function convertInputItemsToMessages(items: Array<Record<string, unknown>>): OpenAIMessage[] {
+  const allMessages: OpenAIMessage[] = [];
+  let pendingReasoningContent: string | null = null;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+
+    if (item.type === 'reasoning') {
+      // Extract text from reasoning item content array
+      const content = item.content as Array<Record<string, unknown>> | undefined;
+      if (Array.isArray(content)) {
+        pendingReasoningContent = content
+          .filter(c => c.type === 'reasoning_text')
+          .map(c => c.text as string)
+          .join('');
+      }
+      continue; // no message emitted for reasoning items
+    }
+
+    if (item.type === 'function_call') {
+      // Collect ALL consecutive function_call items and merge into ONE assistant
+      // message with multiple tool_calls.  This is required by Chat Completions:
+      // a single assistant turn that calls N tools must list all N calls in one
+      // message, followed by N tool-result messages.
+      const toolCallItems: Record<string, unknown>[] = [item];
+      while (i + 1 < items.length && items[i + 1].type === 'function_call') {
+        i++;
+        toolCallItems.push(items[i]);
+      }
+
+      const assistantMsg: OpenAIMessage = {
+        role: 'assistant',
+        content: null as unknown as string,
+        tool_calls: toolCallItems.map(tc => ({
+          id: tc.call_id as string || tc.id as string,
+          type: 'function' as const,
+          function: {
+            name: tc.name as string,
+            arguments: tc.arguments as string,
+          },
+        })),
+      };
+      if (pendingReasoningContent) {
+        (assistantMsg as unknown as Record<string, unknown>).reasoning_content = pendingReasoningContent;
+      }
+      pendingReasoningContent = null;
+      allMessages.push(assistantMsg);
+      continue;
+    }
+
+    const msgs = convertInputItemToMessages(item, pendingReasoningContent);
+    if (item.type === 'message') {
+      pendingReasoningContent = null;
+    }
+    allMessages.push(...msgs);
+  }
+  return allMessages;
+}
+
+/**
  * Convert a single input item to one or more messages
  */
-function convertInputItemToMessages(item: Record<string, unknown>): OpenAIMessage[] {
+function convertInputItemToMessages(item: Record<string, unknown>, pendingReasoningContent?: string | null): OpenAIMessage[] {
   const messages: OpenAIMessage[] = [];
   const role = item.role as string;
   const type = item.type as string;
 
+  if (type === 'reasoning') {
+    // Standalone reasoning output item — consumed by convertInputItemsToMessages above.
+    // Emit nothing here; the reasoning text is attached to the next assistant turn.
+    return messages;
+  }
+
   if (type === 'message') {
     const content = item.content;
     if (role === 'assistant' && Array.isArray(content)) {
-      // Output messages passed as input (continuing conversations) — extract output_text
+      // Output messages passed as input (continuing conversations) — extract output_text.
+      // When the prior turn used thinking mode, also pull out reasoning_text so
+      // upstreams like DeepSeek that require reasoning_content to be round-tripped
+      // (when sending the conversation back on a later turn) do not reject the request.
       const textContent = content.find(
         (c: Record<string, unknown>) => c.type === 'output_text'
       );
-      if (textContent) {
-        messages.push({
+      const reasoningContent = content.find(
+        (c: Record<string, unknown>) => c.type === 'reasoning_text'
+      );
+      if (textContent || reasoningContent) {
+        const assistantMsg: OpenAIMessage = {
           role: 'assistant',
-          content: (textContent as Record<string, unknown>).text as string,
-        });
+          content: textContent
+            ? (textContent as Record<string, unknown>).text as string
+            : '',
+        };
+        if (reasoningContent) {
+          (assistantMsg as unknown as Record<string, unknown>).reasoning_content =
+            (reasoningContent as Record<string, unknown>).text as string;
+        }
+        messages.push(assistantMsg);
       }
     } else if (content) {
       messages.push({
@@ -169,8 +252,10 @@ function convertInputItemToMessages(item: Record<string, unknown>): OpenAIMessag
       });
     }
   } else if (type === 'function_call') {
-    // Assistant-side tool call — map to an assistant message with tool_calls
-    messages.push({
+    // Assistant-side tool call — map to an assistant message with tool_calls.
+    // Attach reasoning_content when a preceding reasoning item was collected so
+    // thinking-mode upstreams (e.g. DeepSeek) don't reject the multi-turn request.
+    const assistantMsg: OpenAIMessage = {
       role: 'assistant',
       content: null as unknown as string,
       tool_calls: [{
@@ -181,7 +266,11 @@ function convertInputItemToMessages(item: Record<string, unknown>): OpenAIMessag
           arguments: item.arguments as string,
         },
       }],
-    });
+    };
+    if (pendingReasoningContent) {
+      (assistantMsg as unknown as Record<string, unknown>).reasoning_content = pendingReasoningContent;
+    }
+    messages.push(assistantMsg);
   } else if (type === 'function_call_output') {
     // Tool result — map to a tool message
     messages.push({
@@ -202,7 +291,7 @@ function convertRole(role: string): OpenAIMessage['role'] {
     case 'system':
       return 'system';
     case 'developer':
-      return 'developer';
+      return 'system';
     case 'user':
       return 'user';
     case 'assistant':
