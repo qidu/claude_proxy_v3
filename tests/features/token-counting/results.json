@@ -1,0 +1,238 @@
+[
+  {
+    "name": "Short Text Token Counting",
+    "results": [
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 28
+      },
+      {
+        "model": "minimax/minimax-m2.5",
+        "inputTokens": 24
+      },
+      {
+        "model": "moonshotai/kimi-k2.5",
+        "inputTokens": 25
+      },
+      {
+        "model": "z-ai/glm-5",
+        "inputTokens": 23
+      }
+    ]
+  },
+  {
+    "name": "Documentation Content Token Counting",
+    "results": [
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 718,
+        "countingMethod": "tiktoken"
+      },
+      {
+        "model": "minimax/minimax-m2.5",
+        "inputTokens": 714,
+        "countingMethod": "tiktoken"
+      },
+      {
+        "model": "moonshotai/kimi-k2.5",
+        "inputTokens": 715,
+        "countingMethod": "tiktoken"
+      },
+      {
+        "model": "z-ai/glm-5",
+        "inputTokens": 713,
+        "countingMethod": "tiktoken"
+      },
+      {
+        "model": "claude-sonnet-4-20250514",
+        "inputTokens": 717,
+        "countingMethod": "tiktoken"
+      }
+    ]
+  },
+  {
+    "name": "Model Comparison",
+    "results": [
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 59
+      },
+      {
+        "model": "minimax/minimax-m2.5",
+        "inputTokens": 55
+      },
+      {
+        "model": "moonshotai/kimi-k2.5",
+        "inputTokens": 56
+      },
+      {
+        "model": "z-ai/glm-5",
+        "inputTokens": 54
+      },
+      {
+        "model": "claude-sonnet-4-20250514",
+        "inputTokens": 58
+      }
+    ]
+  },
+  {
+    "name": "Source Files Token Counting",
+    "results": [
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 6957,
+        "file": "model_proxy_v3/src/index.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 6793,
+        "file": "model_proxy_v3/src/handlers/gemini.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 3852,
+        "file": "model_proxy_v3/src/utils/routing.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 3659,
+        "file": "model_proxy_v3/src/handlers/openai.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 3065,
+        "file": "model_proxy_v3/src/utils/validation.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 2878,
+        "file": "model_proxy_v3/src/converters/claude-to-openai.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 2836,
+        "file": "model_proxy_v3/src/utils/sdk-handler.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 2809,
+        "file": "model_proxy_v3/src/utils/token-counting.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 2721,
+        "file": "model_proxy_v3/src/handlers/messages.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 2664,
+        "file": "model_proxy_v3/src/utils/config-loader.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 2139,
+        "file": "model_proxy_v3/src/converters/claude-to-gemini.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 2016,
+        "file": "model_proxy_v3/src/types/gemini.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 1810,
+        "file": "model_proxy_v3/src/converters/gemini-streaming.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 1749,
+        "file": "model_proxy_v3/src/utils/errors.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 1704,
+        "file": "model_proxy_v3/src/handlers/token-counting.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 1533,
+        "file": "model_proxy_v3/src/utils/thinking.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 1507,
+        "file": "model_proxy_v3/src/converters/gemini-to-claude.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 1419,
+        "file": "model_proxy_v3/src/converters/streaming.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 1299,
+        "file": "model_proxy_v3/src/converters/responses-to-completions.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 1248,
+        "file": "model_proxy_v3/src/converters/openai-to-claude.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 1211,
+        "file": "model_proxy_v3/src/handlers/responses.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 1157,
+        "file": "model_proxy_v3/src/types/claude.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 1073,
+        "file": "model_proxy_v3/src/converters/completions-to-responses.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 1039,
+        "file": "model_proxy_v3/src/types/shared.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 972,
+        "file": "model_proxy_v3/src/types/openai.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 848,
+        "file": "model_proxy_v3/src/utils/beta-features.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 831,
+        "file": "model_proxy_v3/src/server.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 676,
+        "file": "model_proxy_v3/src/handlers/claude.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 643,
+        "file": "model_proxy_v3/src/converters/openai-to-gemini.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 628,
+        "file": "model_proxy_v3/src/handlers/models.ts"
+      },
+      {
+        "model": "deepseek/deepseek-v3.2-251201",
+        "inputTokens": 494,
+        "file": "model_proxy_v3/src/utils/logger.ts"
+      }
+    ]
+  }
+]
