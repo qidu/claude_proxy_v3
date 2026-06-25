@@ -84,25 +84,27 @@ upstream_mode = "openai-completions"
 default_base_url = "https://api.qnaigc.com"
 default_api_key = "your-api-key"
 
-# Gemini models with native API
-[models.gemini]
-upstream_mode = "gemini-generatecontent"
-base_url = "https://api.example.com"
-api_key = "your-gemini-key"
-"gemini-3.1-pro-preview" = ["", "", ""]  # Inherits all from category
-"gemini-3.0-flash-preview" = ["gemini-3-flash-preview", "", ""]  # Override alias
-
 # Claude models with native API
 [models.claude]
 upstream_mode = "anthropic-messages"
 base_url = "https://api.anthropic.com"
 api_key = "your-claude-key"
-"claude-4.6-sonnet" = ["claude-opus-4-1-20250805-thinking", "", ""]  # Model alias
+claude-* = ["claude-*", "", ""]                      # Wildcard: catch-all for all claude-* models
+"claude-4.6-sonnet" = ["claude-opus-4-1-20250805-thinking", "", ""]  # Explicit override
+
+# Gemini models with native API
+[models.gemini]
+upstream_mode = "gemini-generatecontent"
+base_url = "https://api.example.com"
+api_key = "your-gemini-key"
+gemini-* = ["gemini-*", "", ""]                        # Wildcard: catch-all for all gemini-* models
+"gemini-3.0-flash-preview" = ["gemini-3-flash-preview", "", ""]        # Explicit override
 
 # OpenAI-compatible models (default category)
 [models.default]
 upstream_mode = "openai-completions"
 # Inherits base_url and api_key from [upstream]
+* = ["*", "", ""]                         # Catch-all: routes any unmatched model to default config
 "deepseek/deepseek-v3.2" = ["", "", ""]
 "gpt-oss-120b" = ["", "", ""]
 ```
@@ -113,6 +115,7 @@ upstream_mode = "openai-completions"
 - **upstream_mode**: Explicit mode per category (`anthropic-messages`, `gemini-generatecontent`, `openai-completions`)
 - **Model names**: Preserve original names (no normalization) - `"deepseek/deepseek-v3.2"`, `"gemini-2.5-flash"`
 - **Inheritance chain**: Model array → Category defaults → [upstream] defaults
+- **Wildcard routing**: `prefix-*` patterns (e.g. `claude-*`, `gemini-*`) in `models.claude`/`models.gemini` catch unmatched models; `*` in `models.default` is the catch-all safety net. See [Model Routing Priority](#model-routing-priority) for full lookup order.
 
 **Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `token_limit` across all of its targets.
 
@@ -1625,6 +1628,77 @@ upstream_mode = "openai-completions"
 - **Model names**: Preserve original names (no normalization) - `"deepseek/deepseek-v3.2"`, `"gemini-2.5-flash"`
 - **Inheritance chain**: Model array → Category defaults → [upstream] defaults
 
+#### Model Routing Priority
+
+Model lookup follows three priority levels (highest first):
+
+| Priority | Lookup | Categories checked |
+|:--------:|:-------|:------------------|
+| 1 | Exact key match | All `[models.*]` sections |
+| 2 | `prefix-*` wildcard | `models.claude` → `models.gemini` |
+| 3 | `*` catch-all | `models.default` |
+
+**Wildcard patterns**: Only **`prefix-*`** (with hyphen before `*`) is recognized. `claude-*` matches `claude-sonnet-4-6`; the `*` is substituted so upstream sees the real model name. Bare `*` as key means "catch-all" — routes to that category's config while preserving the original model name.
+
+**Exact entries override wildcards** within the same category. An explicit `claude-sonnet-4-6` in `models.claude` is found by Priority 1 before any wildcard in Priority 2 is checked.
+
+| Section | Exact entries | `prefix-*` wildcards | `*` catch-all |
+|:--------|:-------------:|:--------------------:|:-------------:|
+| `models.claude` | ✅ | ✅ | ❌ |
+| `models.gemini` | ✅ | ✅ | ❌ |
+| `models.free` | ✅ | ❌ | ❌ |
+| `models.default` | ✅ | ✅ (optional) | ✅ (recommended) |
+| `models.embedding` | ✅ | ❌ | ❌ |
+
+**Example routing flow**:
+```
+"claude-haiku-4-5"  → Priority 1: not found → Priority 2: "claude-*" matches → api.anthropic.com ✅
+"claude-sonnet-4-6" → Priority 1: exact in models.free → localhost:3000 ✅ (exact wins)
+"unknown-model"     → Priority 1: not found → Priority 2: not found → Priority 3: "*" in default → api.minimaxi.com ✅
+```
+
+#### Full Configuration Example with Wildcards
+
+```toml
+[upstream]
+default_base_url = "https://api.qnaigc.com"
+default_api_key = "sk-..."
+upstream_mode = "openai-completions"
+
+[models.claude]
+upstream_mode = "anthropic-messages"
+base_url = "https://api.anthropic.com"
+api_key = "sk-claude-key"
+# Wildcard: catch-all for any claude-* model not explicitly listed below
+claude-* = ["claude-*", "", ""]
+# Explicit overrides take priority over the wildcard above
+claude-opus-4-8 = ["claude-opus-4-8", "", ""]
+claude-sonnet-4-6 = ["claude-sonnet-4-6", "", ""]
+
+[models.gemini]
+upstream_mode = "gemini-generatecontent"
+base_url = "https://api.example.com"
+api_key = "sk-gemini-key"
+gemini-* = ["gemini-*", "", ""]
+gemini-3.0-flash-preview = ["gemini-3-flash-preview", "", ""]
+
+[models.free]
+upstream_mode = "anthropic-messages"
+base_url = "http://localhost:3000"
+api_key = "invalid-sk-..."
+# Short aliases for composite configs (not wildcards)
+opus48 = ["claude-opus-4-8", "", ""]
+deepseek-v4 = ["deepseek-v4-flash", "", ""]
+
+[models.default]
+upstream_mode = "openai-completions"
+base_url = "https://api.minimaxi.com"
+# Catch-all: routes any unmatched model to default config, preserving model name
+* = ["*", "", ""]
+max-m3 = ["MiniMax-M3", "", ""]
+deepseek-v4-flash = ["deepseek-v4-flash", "https://api.deepseek.com", "sk-..."]
+```
+
 **Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `token_limit` across all of its targets.
 
 ### Configuration Loading
@@ -1648,7 +1722,7 @@ Must be either **1 element** or **exactly 3 elements**:
 | 3 elements | `gpt-5.4-mini = ["gpt-5.4-mini", "https://...", "sk-..."]` | per-model `base_url` | per-model `api_key` |
 
 **Validation rules:**
-- `target` (element 1) cannot be empty
+- `target` (element 1) cannot be empty — `*` is allowed for the catch-all pattern
 - If 1 element: **both** `base_url` **and** `api_key` must be set in the category (otherwise error)
 - If 3 elements: empty `base_url`/`api_key` falls back to category values
 - 2-element arrays are **not allowed** (error: `must be [target] or [target, base_url, api_key]`)

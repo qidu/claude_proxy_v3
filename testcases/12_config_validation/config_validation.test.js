@@ -17,6 +17,7 @@
  * - TC1212: PUT with non-object models payload is rejected
  * - TC1213: PUT rejects api_key in models payload
  * - TC1214: PUT with an empty composite alias (no targets) round-trips and is accepted
+ * - TC1215: PUT with bare * as model target (catch-all entry) is accepted
  *
  * Reference: README §"Config validation", §"Per-Model Configuration Array Format"
  */
@@ -404,6 +405,78 @@ async function testPutApiKeyInModels() {
 }
 
 /**
+ * TC1215: PUT — bare * as model target (catch-all entry) is accepted
+ *
+ * The models.default section supports a bare '*' key:
+ *   * = ["*", "", ""]
+ * This entry means "passthrough the original model name to the upstream".
+ * The validation rules must NOT reject '*' as a target (element 0) value,
+ * even though it looks like a "wildcard" by name.
+ *
+ * Reference: docs/routing_config_revision.md §"models.default section"
+ */
+async function testPutBareStarTargetAccepted() {
+  const rawModels = await getLiveModels();
+  const composite = await getLiveComposite();
+
+  // Normalize to valid 1- or 3-element arrays (same normalization as TC1214)
+  const models = {};
+  for (const [cat, cfg] of Object.entries(rawModels)) {
+    const catOut = {};
+    for (const [k, v] of Object.entries(cfg)) {
+      if (!Array.isArray(v)) {
+        catOut[k] = v;
+      } else if (v.length >= 2 && v[1]) {
+        catOut[k] = [v[0], v[1], ''];
+      } else {
+        catOut[k] = [v[0]];
+      }
+    }
+    models[cat] = catOut;
+  }
+
+  // Add a catch-all entry in models.default using bare '*' as the target
+  if (!models.default) {
+    models.default = {};
+  }
+  models.default.__test_catchall__ = ['*', '', ''];
+
+  const res = await putConfig({ models, composite });
+  assert(
+    res.status === 200,
+    `PUT with bare '*' as model target should be accepted (got ${res.status}${res.status !== 200 ? ': ' + JSON.stringify(res.body?.error) : ''})`
+  );
+
+  // Verify the entry round-trips through the reload
+  const returnedModels = res.body?.config?.models || {};
+  const defaultCat = returnedModels.default || {};
+  assert(
+    '__test_catchall__' in defaultCat,
+    `Bare '*' catch-all entry should survive the round-trip`
+  );
+
+  // Clean up: restore the original config (normalize rawModels to valid arrays,
+  // same as TC1214 — the GET response returns 2-element arrays but the PUT
+  // validator only accepts 1- or 3-element arrays).
+  const restoreModels = {};
+  for (const [cat, cfg] of Object.entries(rawModels)) {
+    const catOut = {};
+    for (const [k, v] of Object.entries(cfg)) {
+      if (!Array.isArray(v)) {
+        catOut[k] = v;
+      } else if (v.length >= 2 && v[1]) {
+        catOut[k] = [v[0], v[1], ''];
+      } else {
+        catOut[k] = [v[0]];
+      }
+    }
+    restoreModels[cat] = catOut;
+  }
+  const restoreRes = await putConfig({ models: restoreModels, composite });
+  assert(restoreRes.status === 200, 'Config cleanup PUT should succeed');
+}
+
+/**
  * TC1214: PUT — empty composite alias (no targets) is accepted and round-trips
  *
  * Regression for the TUI "press A to add alias" flow: adding an alias creates
@@ -480,7 +553,8 @@ module.exports = {
   testPutEmptyCompositeTargetValid,
   testPutNonObjectModels,
   testPutApiKeyInModels,
-  testPutEmptyCompositeAlias
+  testPutEmptyCompositeAlias,
+  testPutBareStarTargetAccepted
 };
 
 if (require.main === module) {
@@ -499,5 +573,6 @@ if (require.main === module) {
     { name: 'TC1212: PUT non-object models', fn: testPutNonObjectModels },
     { name: 'TC1213: PUT api_key rejected', fn: testPutApiKeyInModels },
     { name: 'TC1214: PUT empty composite alias round-trips', fn: testPutEmptyCompositeAlias },
+    { name: 'TC1215: PUT bare * target accepted', fn: testPutBareStarTargetAccepted },
   ]);
 }

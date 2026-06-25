@@ -313,6 +313,106 @@ api_key = "sk-key"
 4. **Maintainability**: Single source of truth for model routing
 5. **Type Safety**: Full TypeScript type checking passes
 
+## Wildcard and Catch-All Routing
+
+**Date**: 2026-06-01
+**Status**: ✅ Implemented
+
+### Routing Priority (highest to lowest)
+
+| Priority | Lookup | Scope | Description |
+|---|---|---|---|
+| 1 | Exact key match | All categories | `claude-opus-4-6` found directly in any `[models.*]` |
+| 2 | `prefix-*` wildcard | `models.claude`, `models.gemini` | `claude-*` matches `claude-sonnet-4-6`; `gemini-*` matches `gemini-pro` |
+| 3 | `*` catch-all | `models.default` | Last resort — routes any unmatched model to default config |
+
+**Important**: Within each category, exact entries always override wildcard entries. An exact `claude-opus-4-6` in `models.claude` is matched by Priority 1 before `claude-*`'s wildcard in Priority 2 is ever checked.
+
+### Section Responsibilities
+
+| Section | Exact entries | `prefix-*` wildcards | `*` catch-all | Notes |
+|---|---|---|---|---|
+| `models.claude` | ✅ Yes | ✅ Yes | ❌ No | Wildcards route to `api.anthropic.com` |
+| `models.gemini` | ✅ Yes | ✅ Yes | ❌ No | Wildcards route to `models.gemini`'s base_url |
+| `models.free` | ✅ Yes | ❌ No | ❌ No | Short aliases only (e.g. `opus48`, `deepseek-v4`) |
+| `models.default` | ✅ Yes | ✅ Optional | ✅ Optional (recommended) | Catch-all safety net for all unmatched models |
+| `models.embedding` | ✅ Yes | ❌ No | ❌ No | Embedding-specific routing |
+
+### Wildcard Pattern Format
+
+Only **`prefix-*`** (with hyphen before `*`) is recognized as a wildcard. The hyphen acts as a separator to prevent accidental matches.
+
+```toml
+# Valid wildcard patterns
+claude-*   # matches "claude-sonnet-4-6", "claude-opus-4-8", etc.
+gemini-*   # matches "gemini-pro", "gemini-flash", etc.
+deepseek-* # matches "deepseek-v4-flash", etc.
+
+# Invalid (not recognized as wildcards)
+claude*     # ❌ no hyphen — treated as a literal key
+```
+
+### Wildcard Substitution
+
+When a `prefix-*` wildcard matches, the `*` in the target is replaced with the remainder of the model name:
+
+```toml
+# In [models.claude]:
+claude-* = ["claude-*", "", ""]
+
+# "claude-sonnet-4-6" matches → target becomes "claude-sonnet-4-6"
+# "claude-opus-4-8" matches   → target becomes "claude-opus-4-8"
+```
+
+### Catch-All (`*`) Behavior
+
+The bare `*` in `models.default` means "route to default config, keep model name unchanged":
+
+```toml
+# In [models.default]:
+* = ["*", "", ""]
+
+# Any model not matched by Priority 1 or 2:
+#   → upstream_mode = models.default's upstream_mode
+#   → base_url     = models.default's base_url
+#   → api_key      = models.default's api_key
+#   → model name   = original request model (NOT "*")
+```
+
+Without the `*` catch-all, an unmatched model returns `undefined` from `getModelConfig()` and falls through to `upstream` defaults.
+
+### Example: Full Routing Flow
+
+```
+Request: "claude-haiku-4-5"
+  Priority 1 (exact): search all categories
+    → models.free:  not found
+    → models.claude: not found
+    → models.default: not found
+  Priority 2 (wildcard): models.claude
+    → "claude-*" matches "claude-haiku-4-5"? YES
+    → Return: upstream_mode=anthropic-messages, base_url=api.anthropic.com, modelAlias=claude-haiku-4-5
+  ✅ Routed to api.anthropic.com
+
+Request: "claude-sonnet-4-6"
+  Priority 1 (exact): models.free["claude-sonnet-4-6"] found
+    → Return: upstream_mode=anthropic-messages, base_url=localhost:3000, modelAlias=claude-sonnet-4-6
+  ✅ Routed to localhost:3000 (exact match wins, wildcard never checked)
+
+Request: "unknown-model-xyz"
+  Priority 1: not found
+  Priority 2: no wildcard matches
+  Priority 3: models.default["*"] found
+    → Return: upstream_mode=openai-completions, base_url=api.minimaxi.com, modelAlias=unknown-model-xyz
+  ✅ Routed to api.minimaxi.com (passthrough)
+```
+
+### Code Locations
+
+- `getModelConfig()` (`src/utils/config-loader.ts:1350`) — Priority 1/2/3 lookup
+- `findWildcardPatternMatch()` (`src/utils/config-loader.ts:1443`) — `prefix-*` pattern matching
+- `resolveModelRouteFromEntry()` (`src/utils/config-loader.ts:153`) — `*` substitution and passthrough
+
 ## Future Enhancements
 
 1. **Model List Configuration**: Add support for `[models.list]` section
@@ -320,6 +420,7 @@ api_key = "sk-key"
 3. **Hot Reload**: Watch config file for changes
 4. **Validation**: Stricter config validation with error messages
 5. **TOML Library**: Replace simple parser with full TOML library
+6. **Bare prefix wildcard**: Support `claude*` (no hyphen) in addition to `claude-*`
 
 ## Related Documentation
 

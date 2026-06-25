@@ -153,7 +153,8 @@ interface CompositeResolvedTarget {
 function resolveModelRouteFromEntry(
   modelEntry: string | string[],
   categoryConfig: ModelCategoryConfig,
-  proxyConfig: ProxyConfig
+  proxyConfig: ProxyConfig,
+  modelName?: string,
 ): ModelRouteConfig {
   const categoryUpstreamMode = categoryConfig.upstream_mode ||
                                proxyConfig.upstream?.upstream_mode ||
@@ -166,11 +167,29 @@ function resolveModelRouteFromEntry(
 
   if (Array.isArray(modelEntry)) {
     const [modelAlias, modelBaseUrl, modelApiKey] = modelEntry;
+    let resolvedTarget = modelAlias;
+
+    // Case 1: Prefix wildcard — e.g. "claude-*" matches "claude-sonnet-4-6"
+    // Substitute * so upstream sees "claude-sonnet-4-6" instead of the literal "claude-*"
+    if (modelName && modelAlias?.endsWith('*') && modelAlias.includes('-')) {
+      const asteriskIdx = modelAlias.indexOf('*');
+      const prefix = modelAlias.slice(0, asteriskIdx); // "claude-" from "claude-*"
+      if (modelName.startsWith(prefix)) {
+        resolvedTarget = prefix + modelName.slice(prefix.length);
+      }
+    }
+
+    // Case 2: Bare catch-all — "*" means "route to default config, keep model name unchanged"
+    // resolvedTarget stays as "*" only when modelName is unavailable; otherwise passthrough.
+    if (resolvedTarget === '*' && modelName) {
+      resolvedTarget = modelName;
+    }
+
     return {
       targetUrl: modelBaseUrl || categoryBaseUrl,
       apiKey: parseApiKey(modelApiKey || categoryApiKey),
       upstreamMode: categoryUpstreamMode,
-      modelAlias: modelAlias || undefined,
+      modelAlias: resolvedTarget || undefined,
     };
   }
 
@@ -196,7 +215,7 @@ function resolveModelRouteFromConfig(
     return undefined;
   }
 
-  return resolveModelRouteFromEntry(entry, modelConfig.categoryConfig, proxyConfig);
+  return resolveModelRouteFromEntry(entry, modelConfig.categoryConfig, proxyConfig, modelName);
 }
 
 function getOrderedCompositeTargets(
@@ -945,7 +964,7 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
         if (value.length === 1) {
           // 1 element = target only (base_url/api_key from category)
           const target = value[0] as unknown;
-          if (typeof target !== 'string' || target.trim() === '') {
+          if (typeof target !== 'string' || (target.trim() === '' && !String(target).includes('*'))) {
             errors.push({ path: `models.${categoryName}.${key}`, message: `target cannot be empty` });
           }
           if (!categoryBaseUrl && !categoryApiKey) {
@@ -957,7 +976,7 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
           const baseUrl = value[1] as unknown;
           const apiKey = value[2] as unknown;
 
-          if (typeof target !== 'string' || target.trim() === '') {
+          if (typeof target !== 'string' || (target.trim() === '' && !String(target).includes('*'))) {
             errors.push({ path: `models.${categoryName}.${key}`, message: `target cannot be empty` });
           }
           if (typeof baseUrl !== 'string') {
@@ -1337,7 +1356,8 @@ export function parseSimpleToml(content: string): ProxyConfig {
 export function getModelConfig(config: ProxyConfig, modelName: string) {
   if (!config.models) return undefined;
 
-  // Search for model in all categories
+  // Priority 1: Exact key match across all categories.
+  // Exact entries in models.claude / models.gemini always override wildcards.
   for (const [categoryName, categoryConfig] of Object.entries(config.models)) {
     if (Array.isArray(categoryConfig)) continue;
 
@@ -1351,6 +1371,68 @@ export function getModelConfig(config: ProxyConfig, modelName: string) {
     }
   }
 
+  // Priority 2: Wildcard pattern match in provider categories (claude, gemini).
+  // models.free does NOT support wildcards — it only has explicit model entries.
+  const providerWildcardOrder = ['claude', 'gemini'];
+  for (const cat of providerWildcardOrder) {
+    const categoryConfig = config.models[cat];
+    if (categoryConfig && !Array.isArray(categoryConfig)) {
+      const wildcardMatch = findWildcardPatternMatch(categoryConfig, modelName);
+      if (wildcardMatch) {
+        return {
+          category: cat,
+          entry: wildcardMatch.entry,
+          categoryConfig: wildcardMatch.categoryConfig,
+        };
+      }
+    }
+  }
+
+  // Priority 3: Catch-all via models.default (* pattern). Must be checked LAST.
+  const defaultConfig = config.models['default'];
+  if (defaultConfig && !Array.isArray(defaultConfig)) {
+    // models.default: exact match checked already in Priority 1.
+    // Check for wildcard patterns (if any) first, then fall through to the catch-all.
+    const wildcardMatch = findWildcardPatternMatch(defaultConfig, modelName);
+    if (wildcardMatch) {
+      return {
+        category: 'default',
+        entry: wildcardMatch.entry,
+        categoryConfig: defaultConfig,
+      };
+    }
+    // Catch-all: any model not matched by exact or wildcard goes to models.default.
+    // A "*" entry in models.default (e.g. "* = ["*", "", ""]") means "use default config".
+    const catchAllEntry = defaultConfig['*'];
+    if (catchAllEntry !== undefined) {
+      return {
+        category: 'default',
+        entry: catchAllEntry,
+        categoryConfig: defaultConfig,
+      };
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Find a wildcard pattern entry in a category that matches a model name.
+ * Matches "prefix-*" against "prefix-suffix" (suffix may contain hyphens).
+ * Checks each key ending with "-*" to see if modelName starts with the prefix.
+ */
+function findWildcardPatternMatch(
+  categoryConfig: ModelCategoryConfig,
+  modelName: string,
+): { entry: [string, string, string]; categoryConfig: ModelCategoryConfig } | undefined {
+  for (const [key, value] of Object.entries(categoryConfig)) {
+    if (key.endsWith('-*') && Array.isArray(value) && value.length >= 1) {
+      const prefix = key.slice(0, -2); // strip "-*"
+      if (modelName.startsWith(prefix)) {
+        return { entry: value as [string, string, string], categoryConfig };
+      }
+    }
+  }
   return undefined;
 }
 
