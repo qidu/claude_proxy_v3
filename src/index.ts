@@ -474,9 +474,9 @@ export default {
     const path = url.pathname;
 
     // Debug: log all request headers
-    const headersObj: Record<string, string> = {};
-    request.headers.forEach((value, key) => { headersObj[key] = value; });
-    logger.debug(requestId, `Request headers: ${JSON.stringify(headersObj)}`);
+    // const headersObj: Record<string, string> = {};
+    // request.headers.forEach((value, key) => { headersObj[key] = value; });
+    // logger.debug(requestId, `Request headers: ${JSON.stringify(headersObj)}`);
 
     // Load proxy config on first request
     const configPath = env.PROXY_CONFIG_PATH;
