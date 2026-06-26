@@ -135,6 +135,7 @@ export interface ModelRouteConfig {
   apiKey?: string;
   upstreamMode: string;
   modelAlias?: string;
+  section?: string;
 }
 
 export interface CompositeRouteSelection {
@@ -155,6 +156,7 @@ function resolveModelRouteFromEntry(
   categoryConfig: ModelCategoryConfig,
   proxyConfig: ProxyConfig,
   modelName?: string,
+  sectionName?: string,
 ): ModelRouteConfig {
   const categoryUpstreamMode = categoryConfig.upstream_mode ||
                                proxyConfig.upstream?.upstream_mode ||
@@ -190,6 +192,7 @@ function resolveModelRouteFromEntry(
       apiKey: parseApiKey(modelApiKey || categoryApiKey),
       upstreamMode: categoryUpstreamMode,
       modelAlias: resolvedTarget || undefined,
+      section: sectionName,
     };
   }
 
@@ -198,6 +201,7 @@ function resolveModelRouteFromEntry(
     apiKey: parseApiKey(categoryApiKey),
     upstreamMode: categoryUpstreamMode,
     modelAlias: modelEntry || undefined,
+    section: sectionName,
   };
 }
 
@@ -215,7 +219,7 @@ function resolveModelRouteFromConfig(
     return undefined;
   }
 
-  return resolveModelRouteFromEntry(entry, modelConfig.categoryConfig, proxyConfig, modelName);
+  return resolveModelRouteFromEntry(entry, modelConfig.categoryConfig, proxyConfig, modelName, modelConfig.category);
 }
 
 function getOrderedCompositeTargets(

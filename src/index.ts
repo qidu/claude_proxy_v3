@@ -473,6 +473,11 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
+    // Debug: log all request headers
+    const headersObj: Record<string, string> = {};
+    request.headers.forEach((value, key) => { headersObj[key] = value; });
+    logger.debug(requestId, `Request headers: ${JSON.stringify(headersObj)}`);
+
     // Load proxy config on first request
     const configPath = env.PROXY_CONFIG_PATH;
     const configUrl = env.PROXY_CONFIG_URL;
@@ -1187,12 +1192,24 @@ export default {
         });
 
         let candidateAuthHeaders = transformAuthHeadersForUpstream(candidateRequest, route.upstreamMode, path, requestId, env as Record<string, unknown>);
-        if (route.upstreamMode === 'openai-completions') {
-          if (route.modelAlias && route.apiKey) {
+        // Only override with config api_key for free section; user key takes priority for paid sections
+        if (route.section === 'free' && route.apiKey) {
+          if (route.upstreamMode === 'openai-completions') {
+            if (route.modelAlias) {
+              candidateAuthHeaders = { ...candidateAuthHeaders, ...formatApiKeyForUpstream(route.apiKey, route.upstreamMode) };
+            }
+          } else {
             candidateAuthHeaders = { ...candidateAuthHeaders, ...formatApiKeyForUpstream(route.apiKey, route.upstreamMode) };
           }
-        } else if (route.apiKey) {
-          candidateAuthHeaders = { ...candidateAuthHeaders, ...formatApiKeyForUpstream(route.apiKey, route.upstreamMode) };
+        }
+
+        if (route.upstreamMode === 'openai-completions') {
+          const authVal = candidateAuthHeaders['Authorization'] || candidateAuthHeaders['x-api-key'];
+          if (authVal) {
+            const masked = authVal.length > 8 ? `${authVal.substring(0, 8)}...` : '***';
+            const attemptLogger = createLogger(env as Record<string, unknown>);
+            attemptLogger.debug(requestId, `Upstream Authorization: ${masked}`);
+          }
         }
 
         const isNativeMode = route.upstreamMode === 'anthropic-messages' ||

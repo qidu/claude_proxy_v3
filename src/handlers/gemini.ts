@@ -129,11 +129,11 @@ async function handleGeminiCountTokensRequest(
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
     activeLogger.debug(requestId, `Gemini countTokens request to: ${targetUrl}`);
 
-    const geminiHeaders: Record<string, string> = {
+    let geminiHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
         ...authHeaders,
     };
-    addForwardedHeaders(geminiHeaders, request);
+    geminiHeaders = addForwardedHeaders(geminiHeaders, request);
 
     const response = await fetch(targetUrl, {
         method: 'POST',
@@ -247,13 +247,13 @@ async function handleGeminiInteractionsRequest(
     
     // Prepare headers for Gemini API - authHeaders already contains the correct format
     // from the main router (x-goog-api-key for native Gemini mode)
-    const geminiHeaders: Record<string, string> = {
+    let geminiHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
         ...authHeaders,  // Already has correct x-goog-api-key from router
     };
 
     activeLogger.debug(requestId, `Using auth headers: ${Object.keys(geminiHeaders).join(', ')}`);
-    addForwardedHeaders(geminiHeaders, request);
+    geminiHeaders = addForwardedHeaders(geminiHeaders, request);
     const response = await fetch(targetUrl, {
         method: 'POST',
         headers: geminiHeaders,
@@ -369,11 +369,11 @@ async function handleGeminiToOpenAIMode(
     }
 
     activeLogger.debug(requestId, `Gemini→OpenAI mode: ${targetUrl}`);
-    addForwardedHeaders(authHeaders, request);
+    const finalAuthHeaders = addForwardedHeaders(authHeaders, request);
 
     const response = await fetch(targetUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        headers: { 'Content-Type': 'application/json', ...finalAuthHeaders },
         body: JSON.stringify(openaiRequest),
     });
 
@@ -543,13 +543,13 @@ async function handleGeminiToGeminiMode(
 
     // Prepare headers for Gemini API - authHeaders already contains the correct format
     // from the main router (x-goog-api-key for native Gemini mode)
-    const geminiHeaders: Record<string, string> = {
+    let geminiHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
         ...authHeaders,
     };
 
     activeLogger.debug(requestId, `Using auth headers: ${Object.keys(geminiHeaders).join(', ')}`);
-    addForwardedHeaders(geminiHeaders, request);
+    geminiHeaders = addForwardedHeaders(geminiHeaders, request);
 
     try {
         const response = await fetch(fullTargetUrl, {
@@ -645,13 +645,13 @@ async function handleGeminiGenerateContentRequest(
 
     // Prepare headers for Gemini API - authHeaders already contains the correct format
     // from the main router (x-goog-api-key for native Gemini mode)
-    const geminiHeaders: Record<string, string> = {
+    let geminiHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
         ...authHeaders,
     };
 
     activeLogger.debug(requestId, `Using auth headers: ${Object.keys(geminiHeaders).join(', ')}`);
-    addForwardedHeaders(geminiHeaders, request);
+    geminiHeaders = addForwardedHeaders(geminiHeaders, request);
 
     try {
         const response = await fetch(fullTargetUrl, {

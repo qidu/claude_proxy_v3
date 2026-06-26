@@ -304,6 +304,16 @@ export async function handleMessagesRequest(
   const upstreamRequest = JSON.stringify(openaiRequest);
   activeLogger.debug(requestId, `Converted request (claude->openai): ${upstreamRequest.substring(0, 250)} ... ${upstreamRequest.substring(upstreamRequest.length - 250)}`);
 
+  // Log the actual auth headers being sent upstream (for openai-completions)
+  const finalHeaders = addForwardedHeaders(authHeaders, request);
+  if (finalHeaders['Authorization']) {
+    const masked = finalHeaders['Authorization'].length > 16 ? `${finalHeaders['Authorization'].substring(0, 16)}...` : '***';
+    activeLogger.debug(requestId, `Upstream Authorization: ${masked}`);
+  } else if (finalHeaders['x-api-key']) {
+    const masked = finalHeaders['x-api-key'].length > 8 ? `${finalHeaders['x-api-key'].substring(0, 8)}...` : '***';
+    activeLogger.debug(requestId, `Upstream x-api-key: ${masked}`);
+  }
+
     const response = await fetch(targetUrl, {
 
     method: 'POST',

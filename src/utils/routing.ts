@@ -492,9 +492,9 @@ export function getClientIp(request: Request): string | undefined {
 export function addForwardedHeaders(authHeaders: Record<string, string>, request: Request): Record<string, string> {
   const clientIp = getClientIp(request);
   if (clientIp) {
-    authHeaders['x-forwarded-for'] = clientIp;
+    return { ...authHeaders, 'x-forwarded-for': clientIp };
   }
-  return authHeaders;
+  return { ...authHeaders };
 }
 
 
