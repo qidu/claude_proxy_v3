@@ -1,4 +1,38 @@
-# Gemini API Tests
+# Tests
+
+## Multi-Agent SDK Test
+
+### `multi-agents-test.ts`
+
+Runs three agent SDKs (OpenAI Codex, Anthropic Claude, Google Gemini) against eight models with diverse prefixes through the local proxy (`127.0.0.1:7777`).
+
+#### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ANTHROPIC_API_KEY` | For Claude | API key for the proxy. Used by Claude Agent. |
+| `CODEX_API_KEY` | For Codex | API key for Codex Agent (uncomment `runCodexAgent` to enable). |
+| `GEMINI_API_KEY` | For Gemini | API key for Gemini Agent (uncomment `runGeminiAgent` to enable). |
+
+#### Usage
+
+```bash
+# Required for at least one agent to run, the key should be valid key from proxy's upstream server.
+export ANTHROPIC_API_KEY="sk-a-valid-key"
+
+# Optional — only needed if you enable Codex or Gemini below
+# export CODEX_API_KEY="your-codex-key"
+# export GEMINI_API_KEY="your-gemini-key"
+
+# Start the proxy first, then run the test
+npx tsx tests/multi-agents-test.ts
+```
+
+By default all 3 agents is active. Comment some of them in `main()` to just enable left one.
+
+---
+
+## Gemini API Tests
 
 This directory contains tests for the Gemini handler with support for both Gemini Interactions API and OpenAI-compatible endpoints.
 

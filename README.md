@@ -2141,7 +2141,13 @@ MIT
 `tests/multi-agents-test.ts` exercises three official AI agent SDKs simultaneously against the
 local proxy on port 7777, using the same natural-language task prompt. It verifies that the proxy's
 three major API surfaces — Responses API, Claude messages API, and Gemini generateContent — all
-work end-to-end through a single server.
+work end-to-end through a single server. Envs bellow are **important**, refer to `tests/README.md` for more.
+
++| Variable | Required | Description |
++|----------|----------|-------------|
++| `ANTHROPIC_API_KEY` | For Claude | API key for the proxy. Used by Claude Agent. |
++| `CODEX_API_KEY` | For Codex | API key for Codex Agent (uncomment `runCodexAgent` to enable). |
++| `GEMINI_API_KEY` | For Gemini | API key for Gemini Agent (uncomment `runGeminiAgent` to enable). |
 
 ### How to run
 
