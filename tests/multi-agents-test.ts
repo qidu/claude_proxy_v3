@@ -12,6 +12,8 @@
  *   // await runCodexAgent(task, model);  // export CODEX_API_KEY=a-valid-key
  *   // await runClaudeAgent(task, model); // export ANTHROPIC_API_KEY=a-valid-key
  *   // await runGeminiAgent(task, model); // export GEMINI_API_KEY=a-valid-key
+ *
+ *   // or export API_KEY=a-valid-key for all them three.
  */
 
 import { GoogleGenAI, Type } from "@google/genai";
@@ -121,7 +123,7 @@ wire_api = "responses"
   fs.mkdirSync(codexDir, { recursive: true });
   fs.writeFileSync(codexConfig, configBody);
 
-  const KEY = process.env.CODEX_API_KEY || "sk-hi";
+  const KEY = process.env.CODEX_API_KEY || process.env.API_KEY || "sk-hi";
   try {
     const codex = new Codex({ apiKey: KEY });
     const thread = codex.startThread({
@@ -151,7 +153,7 @@ async function runClaudeAgent(prompt: string, model: string) {
         maxTurns: 30,
         env: {
           ANTHROPIC_BASE_URL: PROXY_BASE,
-          ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || "sk-fake-56db1e204bf4597e71bb921fc74f464bf771a009cb9971ba8fd2a2331ae13145",
+          ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || process.env.API_KEY || "sk-fake",
         },
       },
     });
@@ -213,7 +215,7 @@ const GEMINI_TOOLS: Record<string, any>[] = [
 async function runGeminiAgent(prompt: string, model: string) {
   console.log(`\n--- Gemini Agent | model=${model} ---`);
   const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY || "x-proxy-auth",
+    apiKey: process.env.GEMINI_API_KEY || process.env.API_KEY || "x-proxy-auth",
     httpOptions: { baseUrl: PROXY_BASE },
   });
 
@@ -325,8 +327,8 @@ async function main() {
     const task = USER_TASK;
 
     await runCodexAgent(task, model);   // export CODEX_API_KEY=a-valid-key
-    // await runClaudeAgent(task, model); // export ANTHROPIC_API_KEY=a-valid-key
-    // await runGeminiAgent(task, model); // export GEMINI_API_KEY=a-valid-key
+    await runClaudeAgent(task, model);  // export ANTHROPIC_API_KEY=a-valid-key
+    await runGeminiAgent(task, model);  // export GEMINI_API_KEY=a-valid-key
   }
 }
 
