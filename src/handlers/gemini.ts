@@ -42,8 +42,8 @@ const DEFAULT_GEMINI_CONFIG: GeminiConfig = {
  */
 function getGeminiConfig(env: Env): GeminiConfig {
     return {
-        baseUrl: env.GEMINI_BASE_URL || DEFAULT_GEMINI_CONFIG.baseUrl,
-        apiVersion: env.GEMINI_API_VERSION || DEFAULT_GEMINI_CONFIG.apiVersion,
+        baseUrl: DEFAULT_GEMINI_CONFIG.baseUrl,
+        apiVersion: DEFAULT_GEMINI_CONFIG.apiVersion,
     };
 }
 

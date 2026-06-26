@@ -1294,9 +1294,7 @@ node dist/server.js
 | `ALLOWED_HOSTS` | `ALLOWED_HOSTS` | `"127.0.0.1,localhost"` |
 | `IMAGE_BLOCK_DATA_MAX_SIZE` | `IMAGE_BLOCK_DATA_MAX_SIZE` | `"10485760"` |
 | `LOG_LEVEL` | `LOG_LEVEL` | `"info"` |
-| `GEMINI_BASE_URL` | — (hardcoded) | `"https://generativelanguage.googleapis.com"` |
 | `GEMINI_API_VERSION` | — (hardcoded) | `"v1beta"` |
-| `CLAUDE_BASE_URL` | — (hardcoded) | `"https://api.anthropic.com"` |
 | `MESSAGES_UPSTREAM_MODE` | — (hardcoded) | `"openai-completions"` |
 | `INTERACTIONS_UPSTREAM_MODE` | — (hardcoded) | `"native"` |
 | `GENERATE_CONTENT_UPSTREAM_MODE` | — (hardcoded) | `"native"` |
@@ -1794,7 +1792,6 @@ For Gemini API endpoints, authentication headers are automatically mapped:
 - API keys can be provided via:
   - Request headers: `Authorization: Bearer <key>`, `x-api-key: <key>`, or `x-goog-api-key: <key>`
   - Configuration file: `api_key` in model or category config
-  - Environment variable: `GEMINI_API_KEY` (for Gemini CLI compatibility)
 
 #### Client IP Forwarding
 The proxy forwards the client's real IP to upstream APIs via the `x-forwarded-for` header. Supports:

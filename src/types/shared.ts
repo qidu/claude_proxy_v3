@@ -62,28 +62,10 @@ export interface Env {
     LOG_LEVEL?: string;
 
     /**
-     * Gemini API key for direct Gemini API access.
-     * Used when routing requests to Gemini Generative Language API.
-     */
-    GEMINI_API_KEY?: string;
-
-    /**
-     * Gemini API base URL.
-     * Default: https://generativelanguage.googleapis.com
-     */
-    GEMINI_BASE_URL?: string;
-
-    /**
      * Gemini API version.
      * Default: v1beta
      */
     GEMINI_API_VERSION?: string;
-
-    /**
-     * Claude API base URL for native mode.
-     * Default: https://api.anthropic.com
-     */
-    CLAUDE_BASE_URL?: string;
 
     /**
      * /v1/messages upstream mode.
