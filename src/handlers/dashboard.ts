@@ -41,6 +41,7 @@ import {
   blockTool,
   unblockTool,
 } from '../utils/dashboard-stats.js';
+import { formatApiKeyForUpstream } from '../utils/routing.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -497,11 +498,19 @@ export function handleDashboardPage(): Response {
         const disabledAttr = isReadOnly ? ' disabled' : '';
         const alias = Array.isArray(modelValue) ? modelValue[0] || '' : (modelValue || '');
         const base = Array.isArray(modelValue) ? modelValue[1] || '' : '';
+        // Wildcard entries (e.g. "*", "claude-*", "gemini-*") are routing
+        // patterns, not concrete model names, so they cannot be tested via
+        // the proxy's /v1/messages endpoint. Hide the test button but keep
+        // the alias/base_url inputs editable.
+        const isWildcard = modelKey === '*' || modelKey.endsWith('-*');
+        const testBtnHtml = isWildcard
+          ? ''
+          : '<button type="button" class="test-btn mini-btn" data-action="test-model" data-model="' + escapeHtml(modelKey) + '">t</button>';
         return '<div class="config-row">'
           + '<label>' + escapeHtml(modelKey) + '</label>'
           + '<input type="text" data-kind="model-alias" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '" value="' + escapeHtml(alias) + '" placeholder="model alias"' + disabledAttr + ' />'
           + '<div class="row-actions">'
-            + '<button type="button" class="test-btn mini-btn" data-action="test-model" data-model="' + escapeHtml(modelKey) + '">t</button>'
+            + testBtnHtml
             + '<input type="text" data-kind="model-base" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '" value="' + escapeHtml(base) + '" placeholder="base_url override"' + disabledAttr + ' />'
             + '<button type="button" class="mini-btn danger" data-action="remove-model" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
           + '</div>'
@@ -1475,22 +1484,30 @@ export async function handleDashboardTestModel(
 
     // Resolve config for this model
     let upstreamMode = 'openai-completions';
+    let testApiKey: string | undefined;
 
     // Check composite aliases first
     const alias = snapshot.compositeResolved.find((a) => a.alias === modelId);
     if (alias && alias.targets.length > 0) {
       upstreamMode = alias.targets[0].upstreamMode;
+      // Composite aliases don't expose a per-target API key in the snapshot;
+      // fall back to the proxy-wide default. The proxy's auth check just
+      // needs any non-empty value, and this same key is what the upstream
+      // call will use.
+      testApiKey = proxyConfig.upstream?.default_api_key;
     } else {
-      // Check model configs
-      for (const categoryConfig of Object.values(snapshot.config.models)) {
+      // Check model configs (use unsanitized proxyConfig to access api_key)
+      for (const categoryConfig of Object.values(proxyConfig.models || {})) {
         if (Array.isArray(categoryConfig)) continue;
         for (const [key, value] of Object.entries(categoryConfig || {})) {
           if (key === 'upstream_mode' || key === 'base_url' || key === 'api_key') continue;
           if (value === undefined) continue;
           if (key !== modelId) continue;
           upstreamMode = categoryConfig.upstream_mode || 'openai-completions';
+          testApiKey = categoryConfig.api_key || proxyConfig.upstream?.default_api_key;
           break;
         }
+        if (testApiKey) break;
       }
     }
 
@@ -1499,6 +1516,25 @@ export async function handleDashboardTestModel(
 
     const port = env.PORT || '8788';
     const endpoint = `http://127.0.0.1:${port}${TEST_MODEL_ENDPOINT}`;
+
+    // Build auth headers for the local /v1/messages call.
+    // The proxy requires at least one of Authorization/x-api-key/x-goog-api-key
+    // (see src/index.ts auth check), and the same header is forwarded upstream,
+    // so we reuse the model's configured key, formatted per upstream mode:
+    //   anthropic-messages  -> x-api-key: <key>
+    //   openai-completions  -> Authorization: Bearer <key>
+    //   gemini-*            -> x-goog-api-key: <key>
+    const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (testApiKey) {
+      Object.assign(authHeaders, formatApiKeyForUpstream(testApiKey, upstreamMode));
+    } else {
+      // No key configured anywhere: still send a placeholder so the local
+      // auth check passes and the request reaches the upstream. The upstream
+      // call will then fail with its own 401, which is a clearer signal than
+      // a generic local 401.
+      Object.assign(authHeaders, formatApiKeyForUpstream('unconfigured-test-key', upstreamMode));
+      console.warn(`[dashboard-test-model] No API key configured for "${modelId}" or upstream.default_api_key; using placeholder.`);
+    }
 
     // Debug log test request/response to /tmp/test_model.log (LOG_LEVEL=debug)
     if (env.LOG_LEVEL === 'debug') {
@@ -1516,7 +1552,7 @@ export async function handleDashboardTestModel(
 
     const testResponse = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify(fullRequestBody),
     });
 

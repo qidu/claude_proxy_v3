@@ -28,6 +28,7 @@ import type { Env } from './types/shared.js';
 import type { ConfigValidationError } from './utils/config-loader.js';
 import type { ProxyConfig, FusionRole, FusionOptions } from './utils/config-loader.js';
 import { parseHumanTokenLimit, formatTokenLimit } from './utils/config-loader.js';
+import { formatApiKeyForUpstream } from './utils/routing.js';
 
 const TEST_ENDPOINT = '/v1/messages';
 const TEST_TOOL_NAME = 'test_tool';
@@ -893,6 +894,10 @@ class DashboardApp {
   private refreshing = false;
   private renderPending = false;
   private renderTimer: ReturnType<typeof setTimeout> | null = null;
+  // Cached unsanitized ProxyConfig (includes api_key). The snapshot config
+  // is the sanitized dashboard payload which strips api_key, so we keep
+  // the raw config here for test-request auth header construction.
+  private proxyConfig: ProxyConfig | null = null;
 
   constructor(private readonly source: DashboardSource) {}
 
@@ -965,6 +970,7 @@ class DashboardApp {
     this.refreshing = true;
     try {
       const proxyConfig = await this.source.loadConfig(forceReload);
+      this.proxyConfig = proxyConfig;
       const validationErrors = (proxyConfig as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors;
       const snapshot = getDashboardSnapshot(proxyConfig, this.source.env);
       this.lastRefreshTotalTokens = snapshot.modelStats.reduce((sum, m) => sum + m.total_tokens, 0);
@@ -1435,6 +1441,23 @@ class DashboardApp {
 
     const fullRequestBody = { ...requestBody, model: testModelId };
 
+    // Build auth headers for the local /v1/messages call.
+    // The proxy requires at least one of Authorization/x-api-key/x-goog-api-key
+    // (see src/index.ts auth check), and the same header is forwarded upstream,
+    // so we reuse the model's configured key, formatted per upstream mode:
+    //   anthropic-messages  -> x-api-key: <key>
+    //   openai-completions  -> Authorization: Bearer <key>
+    //   gemini-*            -> x-goog-api-key: <key>
+    // For composite aliases we fall back to the proxy-wide default_api_key
+    // (read from the unsanitized config).
+    const testApiKey = modelConfig?.apiKey || this.proxyConfig?.upstream?.default_api_key;
+    const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (testApiKey) {
+      Object.assign(authHeaders, formatApiKeyForUpstream(testApiKey, upstreamMode));
+    } else {
+      Object.assign(authHeaders, formatApiKeyForUpstream('unconfigured-test-key', upstreamMode));
+    }
+
     // Debug log test request/response to /tmp/test_model.log (LOG_LEVEL=debug)
     if (process.env.LOG_LEVEL === 'debug') {
       try {
@@ -1453,7 +1476,7 @@ class DashboardApp {
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify(fullRequestBody),
         signal: this.modelTestAbortController.signal,
       });
@@ -1762,6 +1785,10 @@ class DashboardApp {
       for (const [key, value] of Object.entries(categoryConfig || {})) {
         if (key === 'upstream_mode' || key === 'base_url' || key === 'api_key') continue;
         if (value === undefined || seenNames.has(key)) continue;
+        // Skip wildcard model entries (e.g. "*", "claude-*", "gemini-*").
+        // They are routing patterns, not concrete model names, so they can't
+        // be tested directly via the proxy's /v1/messages endpoint.
+        if (key === '*' || key.endsWith('-*')) continue;
         seenNames.add(key);
         const modelUrl = Array.isArray(value) && value.length >= 2 && value[1]
           ? value[1]
