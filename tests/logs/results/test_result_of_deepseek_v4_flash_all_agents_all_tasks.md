@@ -943,7 +943,7 @@ Example report format (if you share the files, I will produce a real one):
 
 ```
 File: ./tests/test_config.py
-Line 12: api_key = "sk_live_4eC39HqLyjWDarjtT1zdp7dc"
+Line 12: api_key = "sk_live_4eC39*****"
 Severity: HIGH (real Stripe live key)
 Recommendation: Remove and use environment variable.
 
