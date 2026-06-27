@@ -89,7 +89,7 @@ default_api_key = "your-api-key"
 upstream_mode = "anthropic-messages"
 base_url = "https://api.anthropic.com"
 api_key = "your-claude-key"
-claude-* = ["claude-*", "", ""]                      # Wildcard: catch-all for all claude-* models
+"claude-*" = ["claude-*", "", ""]                    # Wildcard: catch-all for all claude-* models
 "claude-4.6-sonnet" = ["claude-opus-4-1-20250805-thinking", "", ""]  # Explicit override
 
 # Gemini models with native API
@@ -97,14 +97,14 @@ claude-* = ["claude-*", "", ""]                      # Wildcard: catch-all for a
 upstream_mode = "gemini-generatecontent"
 base_url = "https://api.example.com"
 api_key = "your-gemini-key"
-gemini-* = ["gemini-*", "", ""]                        # Wildcard: catch-all for all gemini-* models
+"gemini-*" = ["gemini-*", "", ""]                      # Wildcard: catch-all for all gemini-* models
 "gemini-3.0-flash-preview" = ["gemini-3-flash-preview", "", ""]        # Explicit override
 
 # OpenAI-compatible models (default category)
 [models.default]
 upstream_mode = "openai-completions"
 # Inherits base_url and api_key from [upstream]
-* = ["*", "", ""]                         # Catch-all: routes any unmatched model to default config
+"*" = ["*", "", ""]                       # Catch-all: routes any unmatched model to default config
 "deepseek/deepseek-v3.2" = ["", "", ""]
 "gpt-oss-120b" = ["", "", ""]
 ```
@@ -118,6 +118,8 @@ upstream_mode = "openai-completions"
 - **Wildcard routing**: `prefix-*` patterns (e.g. `claude-*`, `gemini-*`) in `models.claude`/`models.gemini` catch unmatched models; `*` in `models.default` is the catch-all safety net. See [Model Routing Priority](#model-routing-priority) for full lookup order.
 
 **Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `token_limit` across all of its targets.
+
+**TOML syntax note**: The proxy parses TOML with a relaxed hand-rolled reader, not a spec-compliant one. Wildcard keys are quoted in the examples above (`"claude-*"`, `"gemini-*"`, `"*"`) so a spec parser like `toml` / `tomllib` will also accept them. The composite / fusion inline tables below use `:` as the separator (e.g. `{"key": value}`) — that is JSON syntax, not TOML; the spec form is `{key = value}`. The proxy accepts both, and the TUI / dashboard round-trip preserves the `:` form on write. See the deviation note at the end of the file for the full list of accepted non-spec forms.
 
 #### API key priority (caller vs. config)
 
@@ -1694,7 +1696,7 @@ upstream_mode = "anthropic-messages"
 base_url = "https://api.anthropic.com"
 api_key = "sk-claude-key"
 # Wildcard: catch-all for any claude-* model not explicitly listed below
-claude-* = ["claude-*", "", ""]
+"claude-*" = ["claude-*", "", ""]
 # Explicit overrides take priority over the wildcard above
 claude-opus-4-8 = ["claude-opus-4-8", "", ""]
 claude-sonnet-4-6 = ["claude-sonnet-4-6", "", ""]
@@ -1703,7 +1705,7 @@ claude-sonnet-4-6 = ["claude-sonnet-4-6", "", ""]
 upstream_mode = "gemini-generatecontent"
 base_url = "https://api.example.com"
 api_key = "sk-gemini-key"
-gemini-* = ["gemini-*", "", ""]
+"gemini-*" = ["gemini-*", "", ""]
 gemini-3.0-flash-preview = ["gemini-3-flash-preview", "", ""]
 
 [models.free]
@@ -1718,12 +1720,19 @@ deepseek-v4 = ["deepseek-v4-flash", "", ""]
 upstream_mode = "openai-completions"
 base_url = "https://api.minimaxi.com"
 # Catch-all: routes any unmatched model to default config, preserving model name
-* = ["*", "", ""]
+"*" = ["*", "", ""]
 max-m3 = ["MiniMax-M3", "", ""]
 deepseek-v4-flash = ["deepseek-v4-flash", "https://api.deepseek.com", "sk-..."]
 ```
 
 **Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `token_limit` across all of its targets.
+
+**TOML syntax note (deviation from TOML 1.0 spec)**: The proxy parses TOML with a relaxed hand-rolled reader — examples above use two forms that are **not** valid TOML 1.0 but the proxy accepts:
+
+1. **Quoted wildcard keys** — `*` and `claude-*` / `gemini-*` cannot be TOML bare keys (bare keys are restricted to `[A-Za-z0-9_\-]`). They are written as `"*"`, `"claude-*"`, `"gemini-*"` in the examples above, which is the spec-compliant form.
+2. **JSON-style inline tables** — composite / fusion blocks use `:` as the key/value separator (e.g. `{"token_limit": {"num": 120000, "duration": "1d"}, "gpt-5.4-mini": {"share": 50}}`). This is JSON syntax; the TOML spec requires `=` (e.g. `{"token_limit" = {"num" = 120000, "duration" = "1d"}, "gpt-5.4-mini" = {"share" = 50}}`). The proxy accepts both forms; the TUI / dashboard write-back preserves the `:` form so existing configs don't churn on round-trip.
+
+If you want the README examples to parse with a strict spec parser (e.g. `toml` npm, Python `tomllib`, Go `BurntSushi/toml`), the wildcard keys above are already quoted. The composite / fusion blocks below will still fail on those parsers because of the `:`-separator form.
 
 ### Configuration Loading
 
