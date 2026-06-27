@@ -124,7 +124,7 @@ deepseek-v4-pro = ["deepseek-v4-pro", "https://api.deepseek.com", "sk-66c13986be
 # If a configured `api_key` exists (section-level or per-entry), it takes
 # priority over the caller's auth key. If no `api_key` is configured, the
 # caller's auth key is passed through to the upstream unchanged.
-upstream_mode = "anthropic-messages"
+upstream_mode = "openai-completions"
 base_url = "https://openrouter.ai/api"
 
 [composite]

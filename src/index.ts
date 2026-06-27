@@ -941,14 +941,17 @@ export default {
 
               let candidateAuthHeaders = transformAuthHeadersForUpstream(candidateRequest, route.upstreamMode, path, requestId, env as Record<string, unknown>);
 
-              if (route.upstreamMode === 'openai-completions') {
-                if (route.modelAlias && route.apiKey) {
+              // Only override with config api_key for free section; user key takes priority for paid sections
+              if (route.section === 'free' && route.apiKey) {
+                if (route.upstreamMode === 'openai-completions') {
+                  if (route.modelAlias) {
+                    const configHeaders = formatApiKeyForUpstream(route.apiKey, route.upstreamMode);
+                    candidateAuthHeaders = { ...candidateAuthHeaders, ...configHeaders };
+                  }
+                } else {
                   const configHeaders = formatApiKeyForUpstream(route.apiKey, route.upstreamMode);
                   candidateAuthHeaders = { ...candidateAuthHeaders, ...configHeaders };
                 }
-              } else if (route.apiKey) {
-                const configHeaders = formatApiKeyForUpstream(route.apiKey, route.upstreamMode);
-                candidateAuthHeaders = { ...candidateAuthHeaders, ...configHeaders };
               }
 
               const isNativeMode = route.upstreamMode === 'anthropic-messages' ||

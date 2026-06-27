@@ -119,6 +119,28 @@ upstream_mode = "openai-completions"
 
 **Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `token_limit` across all of its targets.
 
+#### API key priority (caller vs. config)
+
+When a per-model `api_key` is configured in the TOML, whether the proxy uses it or the caller's
+auth header depends on the **section** the model lives in. This is the rule the proxy enforces
+during dispatch:
+
+| Section | Caller header wins? | Config `api_key` usage |
+| --- | --- | --- |
+| `[models.free]` | **No** | Section-level and per-entry `api_key` override the caller's header. This is what enables the FREE tier — the proxy authenticates to the upstream on the caller's behalf, so users can hit these models without bringing their own upstream API key. |
+| `[models.default]` | **Yes** | Per-entry `api_key` is only a fallback when the caller did not supply `Authorization` / `x-api-key` / `x-goog-api-key`. Callers are expected to bring their own upstream credentials. |
+| `[models.claude]`, `[models.gemini]` | **Yes** | Same as `default` — caller's key passes through; config keys are fallbacks. |
+| `[models.embedding]` | **Yes** | Same — caller's key wins; configured `api_key` is the fallback. |
+
+The rule applies uniformly across direct routing, composite aliases, and fusion aliases — the
+fusion dispatch path and the non-fusion composite dispatch path both check `route.section === 'free'`
+before applying the config key.
+
+See the per-section comments in [`./proxy_config.toml_example`](./proxy_config.toml_example) for the
+full design notes on each section (model array format, `upstream_mode`, per-entry `base_url` /
+`api_key` overrides, wildcard patterns, fusion roles, and the explicit auth-priority rules per
+section).
+
 #### Global token limit
 
 A global token limit applies to **all requests** regardless of model. Configure it in the `[upstream]` section:

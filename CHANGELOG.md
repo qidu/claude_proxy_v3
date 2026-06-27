@@ -7,6 +7,27 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Bug fix: config `api_key` overrode caller key for `[models.default]` targets reached via composite / direct routing
+
+The non-fusion composite dispatch in `src/index.ts` (the `compositeAttempts.map` block) was applying
+the model's per-entry `api_key` from the config on top of the caller's auth headers unconditionally,
+for every section. This contradicted the documented rule in `proxy_config.toml_example`:
+
+> For the `[models.default]` tier, the auth key sent by the caller takes priority over ALL configured
+> `api_key` values, including per-entry overrides. The `api_key` field is intentionally left unset by
+> admins in practice — it only acts as a fallback when the caller did not supply an auth key.
+
+Effect: a request for a model like `max-m3` (whose entry in `[models.default]` declares a
+`sk-cp-p_i6lDK-...` key) would send the config key to the upstream, ignoring the caller's
+`Authorization` / `x-api-key` header. The fusion path was already correct (gated on
+`route.section === 'free'`), so the same target behaved differently depending on whether it was
+reached via a fusion alias or via composite / direct routing.
+
+Fix: align the inline composite-dispatch block with `buildRouteAttempt` — only override the caller's
+auth with the config `api_key` when `route.section === 'free'`. All non-`free` sections
+(`default`, `claude`, `gemini`, etc.) now pass the caller's key through unchanged. Affects
+`src/index.ts` only (one block, ~10 lines).
+
 ### Bug fixes: `/v1/responses` reasoning round-trip (DeepSeek thinking mode + Codex multi-turn)
 
 Four root causes behind the persistent `"reasoning_content must be passed back to the API"` error
