@@ -89,37 +89,35 @@ default_api_key = "your-api-key"
 upstream_mode = "anthropic-messages"
 base_url = "https://api.anthropic.com"
 api_key = "your-claude-key"
-"claude-*" = ["claude-*", "", ""]                    # Wildcard: catch-all for all claude-* models
-"claude-4.6-sonnet" = ["claude-opus-4-1-20250805-thinking", "", ""]  # Explicit override
+"claude-*" = {}                                                            # Wildcard: catch-all for all claude-* models
+"claude-4.6-sonnet" = {target = "claude-opus-4-1-20250805-thinking"}      # Explicit override
 
 # Gemini models with native API
 [models.gemini]
 upstream_mode = "gemini-generatecontent"
 base_url = "https://api.example.com"
 api_key = "your-gemini-key"
-"gemini-*" = ["gemini-*", "", ""]                      # Wildcard: catch-all for all gemini-* models
-"gemini-3.0-flash-preview" = ["gemini-3-flash-preview", "", ""]        # Explicit override
+"gemini-*" = {}                                                            # Wildcard: catch-all for all gemini-* models
+"gemini-3.0-flash-preview" = {target = "gemini-3-flash-preview"}          # Explicit override
 
 # OpenAI-compatible models (default category)
 [models.default]
 upstream_mode = "openai-completions"
 # Inherits base_url and api_key from [upstream]
-"*" = ["*", "", ""]                       # Catch-all: routes any unmatched model to default config
-"deepseek/deepseek-v3.2" = ["", "", ""]
-"gpt-oss-120b" = ["", "", ""]
+"*" = {}                                                       # Catch-all: routes any unmatched model to default config
+"deepseek/deepseek-v3.2" = {}
+"gpt-oss-120b" = {}
 ```
 
 **Configuration Structure**:
 - **Category-based**: Group models by provider (`[models.gemini]`, `[models.claude]`, `[models.default]`)
-- **Array format**: `["model-alias", "base-url", "api-key"]` - empty strings inherit from category
+- **Inline-table format**: `{target = "model-alias", base_url = "url-or-empty", api_key = "key-or-empty"}` — empty strings inherit from the category
 - **upstream_mode**: Explicit mode per category (`anthropic-messages`, `gemini-generatecontent`, `openai-completions`)
 - **Model names**: Preserve original names (no normalization) - `"deepseek/deepseek-v3.2"`, `"gemini-2.5-flash"`
-- **Inheritance chain**: Model array → Category defaults → [upstream] defaults
+- **Inheritance chain**: Model entry → Category defaults → [upstream] defaults
 - **Wildcard routing**: `prefix-*` patterns (e.g. `claude-*`, `gemini-*`) in `models.claude`/`models.gemini` catch unmatched models; `*` in `models.default` is the catch-all safety net. See [Model Routing Priority](#model-routing-priority) for full lookup order.
 
 **Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `token_limit` across all of its targets.
-
-**TOML syntax note**: The proxy parses TOML with a relaxed hand-rolled reader, not a spec-compliant one. Wildcard keys are quoted in the examples above (`"claude-*"`, `"gemini-*"`, `"*"`) so a spec parser like `toml` / `tomllib` will also accept them. The composite / fusion inline tables below use `:` as the separator (e.g. `{"key": value}`) — that is JSON syntax, not TOML; the spec form is `{key = value}`. The proxy accepts both, and the TUI / dashboard round-trip preserves the `:` form on write. See the deviation note at the end of the file for the full list of accepted non-spec forms.
 
 #### API key priority (caller vs. config)
 
@@ -168,9 +166,9 @@ The global limit is checked first on every request, before any alias-level `toke
 
 ```toml
 [composite]
-"gpt-all" = {"token_limit": {"num": 120000, "duration": "1d"}, "gpt-5.4-mini": {"share": 50}, "gpt-5-mini": {"share": 20}, "nvidia/nemotron-3-super-120b-a12b-free": {}}
-"gpt-5" = {"token_limit": {"num": 80000, "duration": "1h"}, "gpt-5.4-mini": {"fallback": 1}, "gpt-5-mini": {"primary": true}, "nvidia/nemotron-3-super-120b-a12b-free": {"fallback": 2}}
-"llama" = {"token_limit": {"num": 40000, "duration": "1w"}, "llama3": {}, "g5-mini": {}}
+"gpt-all" = {token_limit = {num = 120000, duration = "1d"}, "gpt-5.4-mini" = {share = 50}, "gpt-5-mini" = {share = 20}, "nvidia/nemotron-3-super-120b-a12b-free" = {}}
+"gpt-5" = {token_limit = {num = 80000, duration = "1h"}, "gpt-5.4-mini" = {fallback = 1}, "gpt-5-mini" = {primary = true}, "nvidia/nemotron-3-super-120b-a12b-free" = {fallback = 2}}
+"llama" = {token_limit = {num = 40000, duration = "1w"}, llama3 = {}, "g5-mini" = {}}
 ```
 
 Composite behavior:
@@ -187,7 +185,7 @@ Fusion is a composite mode that fans a single request out to multiple **panel** 
 
 ```toml
 [composite]
-"smart-answer" = {"opus46": {"fusion": 1}, "sonnet46": {"fusion": 1}, "max-m3": {"role": "judge"}, "max-m2.7-high": {"role": "synth"}, "fusion_options": {"min_panel": 1, "judge_required": false, "panel_timeout_ms": 30000}}
+"smart-answer" = {opus46 = {fusion = 1}, sonnet46 = {fusion = 1}, "max-m3" = {role = "judge"}, "max-m2.7-high" = {role = "synth"}, fusion_options = {min_panel = 1, judge_required = false, panel_timeout_ms = 30000}}
 ```
 
 Per-target fields:
@@ -409,7 +407,7 @@ upstream_mode = "openai-completions"
 api_key = "WELCOME_TO_USE"
 
 # Chatjimmy (default example)
-llama3 = ["llama3.1-8B", "sdk://chatjimmy.ai/api", "-"]
+llama3 = {target = "llama3.1-8B", base_url = "sdk://chatjimmy.ai/api", api_key = "-"}    # target != alias, overrides set → full form
 ```
 
 Leave the `api_key` slot empty to use the per-request `Authorization` /
@@ -1634,25 +1632,25 @@ default_api_key = "sk-your-api-key"
 upstream_mode = "gemini-generatecontent"
 base_url = "https://api.example.com"
 api_key = "sk-gemini-key"
-"gemini-2.5-flash" = ["", "", ""]
+"gemini-2.5-flash" = {}
 
 [models.claude]
 upstream_mode = "anthropic-messages"
 base_url = "https://api.anthropic.com"
 api_key = "sk-claude-key"
-"claude-4.6-sonnet" = ["claude-opus-4-1-20250805-thinking", "", ""]
+"claude-4.6-sonnet" = {target = "claude-opus-4-1-20250805-thinking"}
 
 [models.default]
 upstream_mode = "openai-completions"
-"deepseek/deepseek-v3.2" = ["", "", ""]
+"deepseek/deepseek-v3.2" = {}
 ```
 
 **Configuration Structure**:
 - **Category-based**: Group models by provider (`[models.gemini]`, `[models.claude]`, `[models.default]`)
-- **Array format**: `["model-alias", "base-url", "api-key"]` - empty strings inherit from category
+- **Inline-table format**: `{target = "model-alias", base_url = "url-or-empty", api_key = "key-or-empty"}` — empty strings inherit from the category
 - **upstream_mode**: Explicit mode per category (`anthropic-messages`, `gemini-generatecontent`, `gemini-interactions`, `openai-completions`)
 - **Model names**: Preserve original names (no normalization) - `"deepseek/deepseek-v3.2"`, `"gemini-2.5-flash"`
-- **Inheritance chain**: Model array → Category defaults → [upstream] defaults
+- **Inheritance chain**: Model entry → Category defaults → [upstream] defaults
 
 #### Model Routing Priority
 
@@ -1696,43 +1694,38 @@ upstream_mode = "anthropic-messages"
 base_url = "https://api.anthropic.com"
 api_key = "sk-claude-key"
 # Wildcard: catch-all for any claude-* model not explicitly listed below
-"claude-*" = ["claude-*", "", ""]
+"claude-*" = {}
 # Explicit overrides take priority over the wildcard above
-claude-opus-4-8 = ["claude-opus-4-8", "", ""]
-claude-sonnet-4-6 = ["claude-sonnet-4-6", "", ""]
+claude-opus-4-8 = {}
+claude-sonnet-4-6 = {}
 
 [models.gemini]
 upstream_mode = "gemini-generatecontent"
 base_url = "https://api.example.com"
 api_key = "sk-gemini-key"
-"gemini-*" = ["gemini-*", "", ""]
-gemini-3.0-flash-preview = ["gemini-3-flash-preview", "", ""]
+"gemini-*" = {}
+gemini-3.0-flash-preview = {target = "gemini-3-flash-preview"}
 
 [models.free]
 upstream_mode = "anthropic-messages"
 base_url = "http://localhost:3000"
 api_key = "invalid-sk-..."
 # Short aliases for composite configs (not wildcards)
-opus48 = ["claude-opus-4-8", "", ""]
-deepseek-v4 = ["deepseek-v4-flash", "", ""]
+opus48 = {target = "claude-opus-4-8"}
+deepseek-v4 = {target = "deepseek-v4-flash"}
 
 [models.default]
 upstream_mode = "openai-completions"
 base_url = "https://api.minimaxi.com"
 # Catch-all: routes any unmatched model to default config, preserving model name
-"*" = ["*", "", ""]
-max-m3 = ["MiniMax-M3", "", ""]
-deepseek-v4-flash = ["deepseek-v4-flash", "https://api.deepseek.com", "sk-..."]
+"*" = {}
+max-m3 = {target = "MiniMax-M3"}
+deepseek-v4-flash = {base_url = "https://api.deepseek.com", api_key = "sk-..."}
 ```
 
 **Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `token_limit` across all of its targets.
 
-**TOML syntax note (deviation from TOML 1.0 spec)**: The proxy parses TOML with a relaxed hand-rolled reader — examples above use two forms that are **not** valid TOML 1.0 but the proxy accepts:
-
-1. **Quoted wildcard keys** — `*` and `claude-*` / `gemini-*` cannot be TOML bare keys (bare keys are restricted to `[A-Za-z0-9_\-]`). They are written as `"*"`, `"claude-*"`, `"gemini-*"` in the examples above, which is the spec-compliant form.
-2. **JSON-style inline tables** — composite / fusion blocks use `:` as the key/value separator (e.g. `{"token_limit": {"num": 120000, "duration": "1d"}, "gpt-5.4-mini": {"share": 50}}`). This is JSON syntax; the TOML spec requires `=` (e.g. `{"token_limit" = {"num" = 120000, "duration" = "1d"}, "gpt-5.4-mini" = {"share" = 50}}`). The proxy accepts both forms; the TUI / dashboard write-back preserves the `:` form so existing configs don't churn on round-trip.
-
-If you want the README examples to parse with a strict spec parser (e.g. `toml` npm, Python `tomllib`, Go `BurntSushi/toml`), the wildcard keys above are already quoted. The composite / fusion blocks below will still fail on those parsers because of the `:`-separator form.
+**TOML syntax note**: All examples in this README are fully spec-compliant TOML 1.0. The proxy's hand-rolled parser also accepts two legacy forms for backward compatibility with existing configs: bare wildcard keys (`claude-*` instead of `"claude-*"`) and JSON-style `:` separators in composite inline tables (`{"share": 1}` instead of `{share = 1}`). New configs should use the spec forms shown above.
 
 ### Configuration Loading
 
@@ -1747,20 +1740,20 @@ Config is loaded on startup and validated against the schema. Errors are printed
 
 ##### Custom Model Entries (`[models.<category>.<model-id>]`)
 
-Must be either **1 element** or **exactly 3 elements**:
+Two forms are accepted:
 
 | Form | Example | base_url source | api_key source |
 |:-----|:--------|:----------------|:---------------|
-| 1 element | `gpt-5.4-mini = ["gpt-5.4-mini"]` | category `base_url` | category `api_key` |
-| 3 elements | `gpt-5.4-mini = ["gpt-5.4-mini", "https://...", "sk-..."]` | per-model `base_url` | per-model `api_key` |
+| alias self-route | `gpt-5.4-mini = {}` | category `base_url` | category `api_key` |
+| renamed target | `opus48 = {target = "claude-opus-4-8"}` | category `base_url` | category `api_key` |
+| with overrides | `max-m3 = {target = "MiniMax-M3", base_url = "https://...", api_key = "sk-..."}` | per-model `base_url` | per-model `api_key` |
+
+`{}` means "use the alias name as the upstream target and inherit everything from the category." Omit only the fields that should fall back to the category defaults. The old array forms `["gpt-5.4-mini"]` and `["gpt-5.4-mini", "https://...", "sk-..."]` are still accepted for backward compatibility.
 
 **Validation rules:**
-- `target` (element 1) cannot be empty — `*` is allowed for the catch-all pattern
-- If 1 element: **both** `base_url` **and** `api_key` must be set in the category (otherwise error)
-- If 3 elements: empty `base_url`/`api_key` falls back to category values
-- 2-element arrays are **not allowed** (error: `must be [target] or [target, base_url, api_key]`)
-- 4+ elements are **not allowed** (error: `must be [target] or [target, base_url, api_key] (got N elements)`)
-- Empty array `[]` is not allowed (error: `target cannot be empty`)
+- `target` cannot be empty — `*` is allowed for the catch-all pattern
+- Target-only form: **both** `base_url` **and** `api_key` must be set in the category (otherwise error)
+- Full form: empty `base_url`/`api_key` falls back to category values
 
 ##### Composite Alias Entries (`[composite.<alias>.<target-model>]`)
 

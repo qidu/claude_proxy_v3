@@ -670,7 +670,7 @@ function parseCompositeTargetConfig(value: string): CompositeTargetConfig {
       continue;
     }
 
-    const match = trimmed.match(/^"?([^"=]+)"?\s*:\s*(.+)$/);
+    const match = trimmed.match(/^"?([^"=]+)"?\s*[=:]\s*(.+)$/);
     if (!match) {
       continue;
     }
@@ -776,9 +776,9 @@ function parseCompositeModelConfig(rawValue: string): CompositeModelConfig {
   }
 
   for (const entry of entries) {
-    const match = entry.match(/^"([^"]+)"\s*:\s*(\{.*\})$/);
+    const match = entry.match(/^"?([^"=]+)"?\s*[=:]\s*(\{.*\})$/) || entry.match(/^"([^"]+)"\s*[=:]\s*(\{.*\})$/);
     if (match) {
-      if (match[1] === 'fusion_options') {
+      if (match[1].trim() === 'fusion_options') {
         // Parse fusion_options object: {min_panel, panel_timeout_ms, judge_required, expose_metadata, max_concurrent}
         try {
           const inner = match[2].trim().slice(1, -1);
@@ -805,7 +805,7 @@ function parseCompositeModelConfig(rawValue: string): CompositeModelConfig {
           }
           config.fusion_options = opts;
         } catch { /* ignore malformed fusion_options */ }
-      } else if (match[1] === 'token_limit') {
+      } else if (match[1].trim() === 'token_limit') {
         // Parse the nested token_limit object: {num = ..., duration = "..."} or {"num": ..., "duration": "..."}
         const inner = match[2].trim().slice(1, -1);
         const fields: string[] = [];
@@ -841,13 +841,13 @@ function parseCompositeModelConfig(rawValue: string): CompositeModelConfig {
           (config as any)._invalidLimit = true;
         }
       } else {
-        config[match[1]] = parseCompositeTargetConfig(match[2]);
+        config[match[1].trim()] = parseCompositeTargetConfig(match[2]);
       }
       continue;
     }
 
     // Backwards compatibility: parse old "total_token_limit" as number
-    const limitMatch = entry.match(/^"?(total_token_limit)"?\s*:\s*(.+)$/);
+    const limitMatch = entry.match(/^"?(total_token_limit)"?\s*[=:]\s*(.+)$/);
     if (limitMatch) {
       const numeric = Number(limitMatch[2].trim().replace(/,$/, ''));
       if (!Number.isNaN(numeric) && numeric >= 0) {
@@ -864,6 +864,11 @@ function parseCompositeModelConfig(rawValue: string): CompositeModelConfig {
 
 function quoteTomlString(value: string): string {
   return JSON.stringify(value);
+}
+
+/** Quote a TOML key if it contains characters outside the bare-key charset [A-Za-z0-9_-]. */
+function tomlKey(key: string): string {
+  return /^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key);
 }
 
 function serializeTomlValue(value: unknown): string {
@@ -883,50 +888,84 @@ function serializeTomlValue(value: unknown): string {
 }
 
 function serializeTomlSection(section: Record<string, unknown>): string[] {
-  return Object.entries(section).map(([key, value]) => `${key} = ${serializeTomlValue(value)}`);
+  return Object.entries(section).map(([key, value]) => `${tomlKey(key)} = ${serializeTomlValue(value)}`);
+}
+
+/**
+ * Serialize a model entry as the shortest valid TOML inline table.
+ * - `{}` when target equals the alias key and both overrides are empty
+ * - `{target = "..."}` when only the target differs from the alias key
+ * - `{target = "...", base_url = "...", api_key = "..."}` when any override is set
+ * The alias key is passed so target-equals-alias can be omitted entirely.
+ */
+function serializeModelEntry(entry: string[], aliasKey: string): string {
+  const [target = '', base_url = '', api_key = ''] = entry;
+  const hasOverrides = base_url !== '' || api_key !== '';
+  const targetIsAlias = target === aliasKey || target === '';
+  if (!hasOverrides && targetIsAlias) {
+    return `{}`;
+  }
+  if (!hasOverrides) {
+    return `{target = ${JSON.stringify(target)}}`;
+  }
+  if (targetIsAlias) {
+    return `{base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}}`;
+  }
+  return `{target = ${JSON.stringify(target)}, base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}}`;
+}
+
+/** Serialize a model category section, emitting model entries as inline tables. */
+function serializeModelCategorySection(section: Record<string, unknown>): string[] {
+  const reserved = new Set(['upstream_mode', 'base_url', 'api_key']);
+  return Object.entries(section).map(([key, value]) => {
+    if (!reserved.has(key) && Array.isArray(value)) {
+      return `${tomlKey(key)} = ${serializeModelEntry(value as string[], key)}`;
+    }
+    return `${tomlKey(key)} = ${serializeTomlValue(value)}`;
+  });
 }
 
 function serializeCompositeTargetConfig(config: CompositeTargetConfig): string {
   const fields: string[] = [];
   if (config.share !== undefined) {
-    fields.push(`"share": ${config.share}`);
+    fields.push(`share = ${config.share}`);
   }
   if (config.primary !== undefined) {
-    fields.push(`"primary": ${config.primary}`);
+    fields.push(`primary = ${config.primary}`);
   }
   if (config.fallback !== undefined) {
-    fields.push(`"fallback": ${config.fallback}`);
+    fields.push(`fallback = ${config.fallback}`);
   }
   if (config.fusion !== undefined) {
-    fields.push(`"fusion": ${config.fusion}`);
+    fields.push(`fusion = ${config.fusion}`);
   }
   if (config.role !== undefined) {
-    fields.push(`"role": "${config.role}"`);
+    fields.push(`role = "${config.role}"`);
   }
   return `{${fields.join(', ')}}`;
 }
 
 function serializeFusionOptions(opts: FusionOptions): string {
   const fields: string[] = [];
-  if (opts.min_panel !== undefined) fields.push(`"min_panel": ${opts.min_panel}`);
-  if (opts.panel_timeout_ms !== undefined) fields.push(`"panel_timeout_ms": ${opts.panel_timeout_ms}`);
-  if (opts.judge_required !== undefined) fields.push(`"judge_required": ${opts.judge_required}`);
-  if (opts.expose_metadata !== undefined) fields.push(`"expose_metadata": ${opts.expose_metadata}`);
-  if (opts.max_concurrent !== undefined) fields.push(`"max_concurrent": ${opts.max_concurrent}`);
+  if (opts.min_panel !== undefined) fields.push(`min_panel = ${opts.min_panel}`);
+  if (opts.panel_timeout_ms !== undefined) fields.push(`panel_timeout_ms = ${opts.panel_timeout_ms}`);
+  if (opts.judge_required !== undefined) fields.push(`judge_required = ${opts.judge_required}`);
+  if (opts.expose_metadata !== undefined) fields.push(`expose_metadata = ${opts.expose_metadata}`);
+  if (opts.max_concurrent !== undefined) fields.push(`max_concurrent = ${opts.max_concurrent}`);
   return `{${fields.join(', ')}}`;
 }
 
 function serializeCompositeModelConfig(config: CompositeModelConfig): string {
   const entries: string[] = [];
   if (config.token_limit && typeof config.token_limit === 'object') {
-    entries.push(`"token_limit": {num = ${config.token_limit.num}, duration = ${JSON.stringify(config.token_limit.duration)}}`);
+    entries.push(`token_limit = {num = ${config.token_limit.num}, duration = ${JSON.stringify(config.token_limit.duration)}}`);
   }
   if (config.fusion_options && typeof config.fusion_options === 'object') {
-    entries.push(`"fusion_options": ${serializeFusionOptions(config.fusion_options as FusionOptions)}`);
+    entries.push(`fusion_options = ${serializeFusionOptions(config.fusion_options as FusionOptions)}`);
   }
   for (const [modelName, targetConfig] of getCompositeTargetEntries(config)) {
     const serializedTarget = serializeCompositeTargetConfig((targetConfig || {}) as CompositeTargetConfig);
-    entries.push(`${JSON.stringify(modelName)}: ${serializedTarget}`);
+    entries.push(`${JSON.stringify(modelName)} = ${serializedTarget}`);
   }
   return `{${entries.join(', ')}}`;
 }
@@ -1050,7 +1089,7 @@ export function serializeProxyConfigToml(config: ProxyConfig): string {
 
       lines.push(`[models.${categoryName}]`);
       const { composite, ...categoryRest } = categoryConfig as Record<string, unknown>;
-      lines.push(...serializeTomlSection(categoryRest));
+      lines.push(...serializeModelCategorySection(categoryRest));
       if (composite && typeof composite === 'object' && !Array.isArray(composite)) {
         lines.push(`composite = ${serializeCompositeModelConfig(composite as CompositeModelConfig)}`);
       }
@@ -1276,6 +1315,28 @@ export function parseSimpleToml(content: string): ProxyConfig {
         (config.defaults as any)[cleanKey] = value;
       }
       continue;
+    }
+
+    // Handle model inline-table entries: "model-id" = {target="...", base_url="...", api_key="..."}
+    // This is the spec-compliant replacement for the old array form.
+    // Must be checked before compositeObjectMatch so [models.*] sections take priority.
+    if (currentSection === 'models' && currentCategory && config.models) {
+      const modelTableMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*(\{[^{}]*\})$/);
+      if (modelTableMatch) {
+        const cleanKey = modelTableMatch[1].trim().replace(/^"|"$/g, '');
+        const tableBody = modelTableMatch[2].slice(1, -1); // strip outer braces
+        const fields: Record<string, string> = {};
+        for (const field of tableBody.split(',')) {
+          const kv = field.trim().match(/^(\w+)\s*=\s*"([^"]*)"$/);
+          if (kv) fields[kv[1]] = kv[2];
+        }
+        // {} or {base_url=..., api_key=...} with no target: default target to the alias key.
+        const target = fields['target'] ?? cleanKey;
+        const entry: string[] = [target, fields['base_url'] ?? '', fields['api_key'] ?? ''];
+        const category = config.models[currentCategory] as ModelCategoryConfig;
+        category[cleanKey] = entry as [string, string, string];
+        continue;
+      }
     }
 
     // Handle composite inline object values: "alias" = {"m1": {...}, "m2": {...}}

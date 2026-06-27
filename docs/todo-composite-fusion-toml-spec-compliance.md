@@ -1,7 +1,7 @@
 # TODO: Make composite / fusion TOML blocks spec-compliant
 
 **Date**: 2026-06-27
-**Status**: Open
+**Status**: Done
 **Priority**: Low (proxy works fine; only affects external spec-parser users)
 
 ## Context
