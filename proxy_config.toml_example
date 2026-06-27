@@ -1,54 +1,178 @@
 [upstream]
 default_base_url = "https://api.qnaigc.com"
+# default_api_key = "-" # NEVER defined in production.
 budget_to_effort_low = 8000
 budget_to_effort_medium = 20000
 budget_to_effort_high = 0
 global_token_limit = "700M 1w"
 
 [models.claude]
+# For the `claude` model category:
+# Models in this section are routed to an Anthropic Messages-compatible upstream.
+# `upstream_mode` declares the native protocol used for every entry below.
+# `base_url` is the default endpoint; an empty `api_key` means the section inherits
+# the global key. Each model entry is a tuple of
+#   [upstream_model_name, override_base_url, override_api_key]
+# where empty override strings fall back to the section-level `base_url` / `api_key`.
+# - Exact-match entries (e.g. `claude-opus-4-8`) take priority and are used when
+#   the incoming model name matches the key exactly.
+# - The `claude-*` wildcard is the fallback for any other `claude-*` name that
+#   no specific entry covers. Upstream model name is rewritten via the pattern.
 upstream_mode = "anthropic-messages"
 base_url = "https://api.qnaigc.com"
+# Exact match: requests for `claude-fable-5` are rewritten to upstream `claude-fable-5`
+# and sent to the section's `base_url` using the inherited api_key.
 claude-fable-5 = ["claude-fable-5", "", ""]
 claude-opus-4-8 = ["claude-opus-4-8", "", ""]
 claude-opus-4-6 = ["claude-opus-4-6", "", ""]
 claude-sonnet-4-6 = ["claude-sonnet-4-6", "", ""]
-claude-* = ["claude-*", "", ""]
+# Wildcard fallback: catches any `claude-*` model not matched above. The `*` in the
+# upstream name is replaced with whatever suffix the incoming model carries.
+"claude-*" = ["claude-*", "", ""]
 
-[models.free]
-upstream_mode = "anthropic-messages"
-base_url = "http://localhost:3000"
-api_key = "invalid-sk-f92454"
-opus48 = ["claude-opus-4-8", "", ""]
-opus46 = ["claude-opus-4-6", "", ""]
-sonnet46 = ["claude-sonnet-4-6", "", ""]
-deepseek-v4 = ["deepseek-v4-flash", "https://anthropic.qnaigc.com", ""]
-minimax-m3 = ["MiniMax-M3", "https://api.minimaxi.com/anthropic", "sk-cp-p_i6lDK"]
 
 [models.gemini]
+# For `gemini` model category:
+# Models in this section are routed to a Gemini `generateContent`-compatible upstream.
+# `upstream_mode` selects the native protocol for all entries below.
+# `base_url` and `api_key` are the section-level defaults; each model entry is
+#   [upstream_model_name, override_base_url, override_api_key]
+# with empty override strings falling back to the section defaults.
+# - Exact-match entries (e.g. `gemini-3.0-flash-preview`) are used when the
+#   incoming model name matches the key exactly.
+# - The `gemini-*` wildcard is the fallback for any other `gemini-*` name and
+#   rewrites the upstream model name via the `*` substitution.
 upstream_mode = "gemini-generatecontent"
 base_url = "https://api.example.com"
 api_key = "sk-***"
+# Exact match: requests for `gemini-3.0-flash-preview` are rewritten to upstream
+# `gemini-3-flash-preview` and sent to the section's `base_url` with `api_key`.
 gemini-3.0-flash-preview = ["gemini-3-flash-preview", "", ""]
-gemini-* = ["gemini-*", "", ""]
+# Wildcard fallback: catches any `gemini-*` model not matched above.
+"gemini-*" = ["gemini-*", "", ""]
+
+[models.free]
+# For the `free` model category:
+# This section exposes a curated set of models that the proxy can serve to
+# callers without requiring them to supply their own upstream credentials.
+# Each specific model entry is routed using the section's configured
+# `upstream_mode`, `base_url`, and `api_key` (with each entry's empty override
+# strings falling back to those section defaults).
+#
+# The section-level `api_key` takes priority over any auth key sent by the
+# caller on the inbound request. Per-entry `api_key` overrides take priority
+# over both the section-level key and the caller's key. This is what enables
+# the **FREE** tier: the proxy authenticates to the upstream on the caller's
+# behalf, so users can hit these models without bringing their own upstream
+# API key.
+upstream_mode = "anthropic-messages"
+base_url = "http://localhost:3000"
+api_key = "invalid-sk-f92454"
+# Exact match. Inherits `upstream_mode` and `base_url` from the section, and
+# uses the section's configured `api_key` to authenticate to the upstream,
+# overriding any auth key the caller sent on the request.
+opus48 = ["claude-opus-4-8", "", ""]
+opus46 = ["claude-opus-4-6", "", ""]
+sonnet46 = ["claude-sonnet-4-6", "", ""]
+# Per-entry `base_url` override routes to a different upstream endpoint while
+# still authenticating with the section's configured `api_key` (which still
+# takes priority over the caller's auth key).
+deepseek-v4 = ["deepseek-v4-flash", "https://anthropic.qnaigc.com", ""]
+# Per-entry `api_key` override. The entry's own key wins over both the section
+# default and any auth key supplied by the caller, so this upstream is hit
+# with its dedicated credentials.
+minimax-m3 = ["MiniMax-M3", "https://api.minimaxi.com/anthropic", "sk-cp-p_i6lDK"]
+
 
 [models.default]
+# For the `default` model category (and the section's catch-all wildcard):
+# This is the default routing tier for any model that didn't match a more
+# specific section (e.g. `models.claude`, `models.free`, `models.gemini`).
+# Each specific model entry is routed using the section's configured
+# `upstream_mode` and `base_url`, with each entry's empty override strings
+# falling back to the section defaults.
+#
+# Unlike the `free` section, the auth key sent by the caller on the inbound
+# request takes priority over ALL configured `api_key` values on this tier,
+# including per-entry overrides. The `api_key` field is therefore
+# intentionally left unset by admins in practice — it only acts as a
+# fallback when the caller did not supply an auth key. Callers are expected
+# to bring their own upstream credentials and use the proxy to rewrite /
+# route the request to the right backend.
 upstream_mode = "openai-completions"
 base_url = "https://api.qnaigc.com"
-api_key = "sk-56db1e204bf459"
+# Placeholder value; in production this is typically left unset so the
+# caller's auth key is used. Kept here only as an example of the field shape.
+api_key = "sk-56db1e204bf459" # NEVER defined in production.
+# Exact matches. Each entry overrides `base_url` (and optionally `api_key`)
+# for its specific upstream. The caller's auth key from header wins over ALL
+# configured `api_key` values on this tier, including per-entry overrides —
+# unlike the `free` section where per-entry keys take priority over the caller.
 max-m3 = ["MiniMax-M3", "https://api.minimaxi.com", "sk-cp-p_i6lDK-pZdeY2CvwuT"]
 max-m2.7-high = ["MiniMax-M2.7-highspeed", "https://api.minimaxi.com", "sk-cp-p_i6lDK-pZdeY2CvwuT"]
 deepseek-v4-flash = ["deepseek-v4-flash", "https://api.deepseek.com", "sk-66c13986be87488"]
 deepseek-v4-pro = ["deepseek-v4-pro", "https://api.deepseek.com", "sk-66c13986be87488"]
-* = ["*", "", ""]
+# General wildcard fallback. Catches any model name that no specific section
+# (claude / free / gemini / etc.) and no entry above claimed. The `*` in the
+# upstream name is replaced with whatever model name the caller sent, so the
+# request is forwarded verbatim to the upstream named in the request, using
+# the section's `upstream_mode` and `base_url` and the caller's auth key.
+"*" = ["*", "", ""]
 
 [models.embedding]
+# For `embedding` models ONLY.
+# If a configured `api_key` exists (section-level or per-entry), it takes
+# priority over the caller's auth key. If no `api_key` is configured, the
+# caller's auth key is passed through to the upstream unchanged.
 upstream_mode = "anthropic-messages"
 base_url = "https://openrouter.ai/api"
 
 [composite]
+# For `composite`, `fusion`, and `alias` model definitions.
+#
+# This section ONLY defines how an alias / composite / fusion model is built
+# from one or more real target models. It does NOT define how those target
+# models themselves are routed to an upstream — every target is resolved
+# through the regular routing rules in the other `[models.*]` sections
+# (`models.claude`, `models.free`, `models.gemini`, `models.default`, etc.),
+# which still control its `upstream_mode`, `base_url`, `api_key`, and
+# auth-key priority.
+#
+# Two composition strategies are supported:
+#   - `composite` model: traffic is distributed across target models by the
+#     `share` ratio. Each target may also carry `primary: true` (only one
+#     allowed per alias, the default target) and a `fallback` flag, with
+#     multiple fallbacks consulted in the configured order if the primary
+#     fails.
+#   - `fusion` model: targets are orchestrated together to produce a single
+#     response. `fusion_options` configures the run (`min_panel` candidates
+#     required, `panel_timeout_ms` per-panel timeout, `judge_required`,
+#     `expose_metadata` to surface panel outputs to the caller, `max_concurrent`
+#     parallel panels). Each target carries a `role`: `panel` runs as a
+#     candidate, `synth` merges panel outputs into the final response, and
+#     `judge` scores/selects among them. Targets participating in the
+#     fusion run are marked with `fusion: 1`.
 "gpt-all" = {"nvidia/nemotron-3-super-120b-a12b-free": {"share": 40}}
+# Single-target alias. `llama` is a rename for `llama3`; the request is
+# forwarded via the routing rules for `llama3` in the other `[models.*]`
+# sections.
 "llama" = {"llama3": {"share": 20}}
+# Alias with a per-alias `token_limit` (consumed across all targets under
+# this alias within the given `duration`). The actual upstream call is
+# routed via the rules for `deepseek-v4-flash`.
 "claude-haiku-4-5-20251001" = {"token_limit": {num = 1000000, duration = "1d"}, "deepseek-v4-flash": {}}
+# Multi-target composite with a per-alias `token_limit`, weighted `share`
+# distribution, and a single `primary` target (`max-m3`). Remaining targets
+# with `fallback: 0` are not used as fallbacks; targets with `share: 0` are
+# disabled. Each target's request is then routed through its own
+# `[models.*]` section.
 "code-small" = {"token_limit": {num = 2000000000, duration = "1d"}, "max-m2.7-high": {"share": 100, "fallback": 0}, "max-m3": {"share": 100, "primary": true, "fallback": 0}, "opus48": {"share": 0, "fallback": 0}, "opus46": {"share": 0, "fallback": 0}, "sonnet46": {"share": 0}}
+# Simple weighted multi-target alias: requests are split between
+# `max-m2.7-high` and `max-m3` by their `share` weights. Each leg is then
+# routed via its own `[models.*]` section.
 "maxplan" = {"max-m2.7-high": {"share": 100}, "max-m3": {"share": 100}}
+# Fusion composite. `fusion_options` configures the orchestration run, and
+# each target carries a `role` (`panel` / `synth` / `judge`) and is marked
+# `fusion: 1` to indicate participation. The actual upstream call for each
+# role is routed via the target's own `[models.*]` section.
 "smarter" = {"fusion_options": {"min_panel": 2, "panel_timeout_ms": 300000, "judge_required": true, "expose_metadata": true, "max_concurrent": 2}, "deepseek-v4-flash": {"fusion": 1, "role": "panel"}, "max-m2.7-high": {"fusion": 1, "role": "panel"}, "max-m3": {"role": "synth"}, "deepseek-v4-pro": {"fusion": 1, "role": "judge"}}
