@@ -356,6 +356,11 @@ function getTodayDateStr(): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
 
+function getLocalDateStr(timestamp: number): string {
+  const d = new Date(timestamp);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function ensureTokenLogDir(filePath: string): void {
   const dir = dirname(filePath);
   if (!existsSync(dir)) {
@@ -387,8 +392,7 @@ function dumpDailyTokens(dateStr: string): void {
   const timestampSec = Math.floor(Date.now() / 1000);
   const cutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
   const recentEvents = tokenHeatmapEvents.filter((e) => {
-    const eventDate = new Date(e.timestamp).toISOString().slice(0, 10);
-    return eventDate === dateStr && e.timestamp >= cutoff;
+    return getLocalDateStr(e.timestamp) === dateStr && e.timestamp >= cutoff;
   });
 
   // Serialize composite limit windows (keyed by alias → plain object)
@@ -472,8 +476,7 @@ export function dumpTodayTokens(): void {
   // Collect heatmap events from today only, delta-only (after last dump)
   const cutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
   const deltaEvents = tokenHeatmapEvents.filter((e) => {
-    const eventDate = new Date(e.timestamp).toISOString().slice(0, 10);
-    return eventDate === today && e.timestamp > lastHeatmapDumpTs * 1000 && e.timestamp >= cutoff;
+    return getLocalDateStr(e.timestamp) === today && e.timestamp > lastHeatmapDumpTs * 1000 && e.timestamp >= cutoff;
   });
 
   const logLine = JSON.stringify({
@@ -569,7 +572,66 @@ export function loadTokenStatsFromLog(retentionDays = 30): void {
         };
         if (!lastNDays.has(record.date)) continue;
 
-        // Load model stats from the latest dump per date only
+        // Load heatmap events from ALL rows — deduplication prevents duplicates.
+        // This must come before the latest-only guard below so that a second
+        // proxy instance starting on a different port (and writing a new dump
+        // for today with an empty heatmap) does not cause earlier events from
+        // the first instance to be skipped because they no longer live in the
+        // "latest" dump for that date.
+        // Backward compat:
+        //   - missing / 0 lastDumpTs: include all events (old cumulative rows or new full snapshots)
+        //   - > 0 lastDumpTs: delta row, include only events newer than lastDumpTs
+        // The 30-day cutoff always applies.
+        // Two on-disk shapes are accepted:
+        //   - legacy: array of { timestamp, values, model }
+        //   - current: { models: { id: name }, sequences: [{ ts, values, id }] }
+        const rawEvents = record.heatmapEvents;
+        type NormEvent = { timestamp: number; values: number; id?: string };
+        const normalized: NormEvent[] = [];
+
+        if (Array.isArray(rawEvents)) {
+          for (const ev of rawEvents as Array<Record<string, unknown>>) {
+            if (typeof ev?.timestamp !== 'number' || typeof ev?.values !== 'number') continue;
+            const modelName = typeof ev.model === 'string' && ev.model ? ev.model : undefined;
+            const id = modelName ? getOrAssignModelId(modelName) : undefined;
+            normalized.push({ timestamp: ev.timestamp, values: ev.values, id });
+          }
+        } else if (rawEvents && typeof rawEvents === 'object' && Array.isArray((rawEvents as { sequences?: unknown }).sequences)) {
+          const dump = rawEvents as { models?: Record<string, string>; sequences: Array<Record<string, unknown>> };
+          const rowModels = dump.models ?? {};
+          for (const [id, name] of Object.entries(rowModels)) {
+            if (typeof id === 'string' && id && typeof name === 'string' && name) {
+              modelIdByName.set(name, id);
+              modelNameById.set(id, name);
+            }
+          }
+          for (const ev of dump.sequences) {
+            if (typeof ev?.ts !== 'number' || typeof ev?.values !== 'number') continue;
+            const id = typeof ev.id === 'string' && ev.id ? ev.id : undefined;
+            normalized.push({ timestamp: ev.ts, values: ev.values, id });
+          }
+        }
+
+        if (normalized.length > 0) {
+          // lastDumpTs was stored in ms (old data) or sec (new data); convert to sec for comparison
+          const rawLastDumpTs = record.lastDumpTs ?? 0;
+          const eventCutoffSec =
+            rawLastDumpTs > 1e11 // likely ms (e.g. 1781765466424) — convert to sec
+              ? Math.floor(rawLastDumpTs / 1000)
+              : rawLastDumpTs;
+          for (const event of normalized) {
+            if (event.timestamp < cutoffSec) continue;
+            if (eventCutoffSec > 0 && event.timestamp <= eventCutoffSec) continue;
+            const key = `${event.timestamp}:${event.values}:${event.id ?? ''}`;
+            if (seenHeatmap.has(key)) continue;
+            seenHeatmap.add(key);
+            tokenHeatmapEvents.push({ ...event, timestamp: event.timestamp * 1000 }); // sec → ms in memory
+          }
+        }
+
+        // Load model stats, tool stats, and composite limit windows from the
+        // latest dump per date only. These are cumulative snapshots; loading
+        // from an earlier dump would double-count.
         const latestTs = latestPerDate.get(record.date);
         const recTs =
           typeof record.timestamp === 'number'
@@ -578,6 +640,7 @@ export function loadTokenStatsFromLog(retentionDays = 30): void {
               ? Math.floor(new Date(record.timestamp).getTime() / 1000)
               : 0;
         if (recTs !== latestTs) continue; // not the latest dump for this date, skip
+
         const modelEntries = record.modelStats ?? record.entries ?? [];
         for (const entry of modelEntries) {
           dailyTokenStats.set(entry.model, entry);
@@ -630,58 +693,6 @@ export function loadTokenStatsFromLog(retentionDays = 30): void {
             if (len > 0) {
               toolRequestChars.set(`${name}\0${agent}`, len);
             }
-          }
-        }
-
-        // Load heatmap events from ALL rows — deduplication prevents duplicates.
-        // Backward compat:
-        //   - missing / 0 lastDumpTs: include all events (old cumulative rows or new full snapshots)
-        //   - > 0 lastDumpTs: delta row, include only events newer than lastDumpTs
-        // The 30-day cutoff always applies.
-        // Two on-disk shapes are accepted:
-        //   - legacy: array of { timestamp, values, model }
-        //   - current: { models: { id: name }, sequences: [{ ts, values, id }] }
-        const rawEvents = record.heatmapEvents;
-        type NormEvent = { timestamp: number; values: number; id?: string };
-        const normalized: NormEvent[] = [];
-
-        if (Array.isArray(rawEvents)) {
-          for (const ev of rawEvents as Array<Record<string, unknown>>) {
-            if (typeof ev?.timestamp !== 'number' || typeof ev?.values !== 'number') continue;
-            const modelName = typeof ev.model === 'string' && ev.model ? ev.model : undefined;
-            const id = modelName ? getOrAssignModelId(modelName) : undefined;
-            normalized.push({ timestamp: ev.timestamp, values: ev.values, id });
-          }
-        } else if (rawEvents && typeof rawEvents === 'object' && Array.isArray((rawEvents as { sequences?: unknown }).sequences)) {
-          const dump = rawEvents as { models?: Record<string, string>; sequences: Array<Record<string, unknown>> };
-          const rowModels = dump.models ?? {};
-          for (const [id, name] of Object.entries(rowModels)) {
-            if (typeof id === 'string' && id && typeof name === 'string' && name) {
-              modelIdByName.set(name, id);
-              modelNameById.set(id, name);
-            }
-          }
-          for (const ev of dump.sequences) {
-            if (typeof ev?.ts !== 'number' || typeof ev?.values !== 'number') continue;
-            const id = typeof ev.id === 'string' && ev.id ? ev.id : undefined;
-            normalized.push({ timestamp: ev.ts, values: ev.values, id });
-          }
-        }
-
-        if (normalized.length > 0) {
-          // lastDumpTs was stored in ms (old data) or sec (new data); convert to sec for comparison
-          const rawLastDumpTs = record.lastDumpTs ?? 0;
-          const eventCutoffSec =
-            rawLastDumpTs > 1e11 // likely ms (e.g. 1781765466424) — convert to sec
-              ? Math.floor(rawLastDumpTs / 1000)
-              : rawLastDumpTs;
-          for (const event of normalized) {
-            if (event.timestamp < cutoffSec) continue;
-            if (eventCutoffSec > 0 && event.timestamp <= eventCutoffSec) continue;
-            const key = `${event.timestamp}:${event.values}:${event.id ?? ''}`;
-            if (seenHeatmap.has(key)) continue;
-            seenHeatmap.add(key);
-            tokenHeatmapEvents.push({ ...event, timestamp: event.timestamp * 1000 }); // sec → ms in memory
           }
         }
 
