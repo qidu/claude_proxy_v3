@@ -853,28 +853,28 @@ These keys follow a valid `sk-` pattern with full hex payload. They should be **
 | 1 | `tests/multi-model/three-models.sh` | 7, 11, 15 | Three full keys in variables: `GEMINI_KEY`, `CLAUDE_KEY`, `OPENAI_KEY` used as inline auth headers |
 | 2 | `tests/multi-model/two-models.sh` | 45–105 | Same three keys repeated across 14 curl invocations |
 | 3 | `tests/multi-model/all-models.sh` | 11, 103 | `default_api_key` + `API_KEY` variable — two distinct full keys |
-| 4 | `tests/api/v1-messages.sh` | 15–16 | Line 15 is masked (`sk-d8d563******`) but line 16 immediately overwrites with the **full key** `sk-d8d563c410cd87a6c29dc81bf983aa935a16fe27166a8eb0444c1324ec15b854` |
+| 4 | `tests/api/v1-messages.sh` | 15–16 | Line 15 is masked (`sk-d8d563******`) but line 16 immediately overwrites with the **full key** `sk-d8d563c4***` |
 | 5 | `tests/providers/claude/modes.sh` | 16, 22, 86, 152, 227, 340–350 | Two distinct full keys used as `default_api_key` and per-model `api_key` in dynamically-generated configs |
 | 6 | `tests/providers/gemini/models.sh` | 138, 144, 227, 232 | Same two keys as claude/modes.sh |
 | 7 | `tests/providers/gemini/streaming.sh` | 69, 74 | Full key used as both `default_api_key` and per-model `api_key` |
 | 8 | `tests/providers/deepseek/models.sh` | 101 | Full key as `default_api_key` |
 | 9 | `tests/providers/minimax/basic.sh` | 17 | Full key as `default_api_key` |
 | 10 | `tests/providers/gemini/modes.sh` | 21 | Full key as `default_api_key` |
-| 11 | `tests/features/token-counting/sdk.ts` | 21 | Full key hard-coded as `const API_KEY = "sk-17ac71ed56aee29a57519861d09ab147..."` |
-| 12 | `tests/infra/shell.sh` | 54 | Full key in `x-goog-api-key` curl header: `sk-dacbaffa39360db740a9120cb2ba1590b89c4ffb687eddae43acfdb813e2594d` |
+| 11 | `tests/features/token-counting/sdk.ts` | 21 | Full key hard-coded as `const API_KEY = "sk-17ac71..."` |
+| 12 | `tests/infra/shell.sh` | 54 | Full key in `x-goog-api-key` curl header: `sk-dacbaff***` |
 | 13 | `tests/providers/glm/basic.sh` | 7, 12 | Key used as both `AUTH` variable and in generated config (partially masked? but the prefix matches a full key from all-models.sh) |
 
 **Unique full keys identified (6 distinct values):**
 
 ```
-sk-4d01851a07d9e51729be98f9427c7f4023a58f41494f530458253b7692961ddf
-sk-87abde0542f469130364cc3de48977a71883d8ec81987d3f7e46ee360985dd02
-sk-d8d563c410cd87a6c29dc81bf983aa935a16fe27166a8eb0444c1324ec15b854
-sk-dacbaffa39360db740a9120cb2ba1590b89c4ffb687eddae43acfdb813e2594d
-sk-17ac71ed56aee29a57519861d09ab147407fbe0ed010d3f48f9156ea8a9eb3c9
-sk-28f417e15b4643913bce23520d5948327c5986d4ca84647052703b2fa41af3dc
-sk-rFaHPAoJidbsN2BMeGcEe1bjIUeU7Nr2SKzbTY1ExOJHptP0
-sk-NzBalLnHTBdlL23pQHFSzRZXA36HRio3s666mOcLxFfdmAfK
+sk-4d01851a07***
+sk-87abde0542***
+sk-d8d563c410***
+sk-dacbaffa39***
+sk-17ac71ed56***
+sk-28f417e15b***
+sk-rFaHPAoJid***
+sk-NzBalLnHTa***
 ```
 
 ---
@@ -885,11 +885,11 @@ These show enough of the key to leak the prefix/suffix, or use reversible obfusc
 
 | File | Line(s) | Context |
 |---|---|---|
-| `tests/multi-model/failed.sh` | 22, 47, 60 | `sk-28f417e15b4643913bce23520d5948327c******` |
+| `tests/multi-model/failed.sh` | 22, 47, 60 | `sk-28f417e******` |
 | `tests/multi-model/oversea.sh` | 136 | Same masked key |
-| `tests/providers/claude/basic.sh` | 70, 75, 86 | Keys with `======` padding (e.g. `sk-28f417e15b4643913bce23520d5948327c======`, `sk-cJESnlELbBSsytvgIgCevJWqBYr======`) — likely base64-padded fake, but could be reversible |
+| `tests/providers/claude/basic.sh` | 70, 75, 86 | Keys with `======` padding (e.g. `sk-28f417e15b======`, `sk-cJESnl======`) — likely base64-padded fake, but could be reversible |
 | `tests/providers/gemini/basic.sh` | 78, 83, 94 | Same `======` pattern |
-| `tests/providers/gemini/modes.sh` | 125 | `sk-qeFSCTmVW61oSbOTFdrxi******` |
+| `tests/providers/gemini/modes.sh` | 125 | `sk-qeFSCTmVW61******` |
 
 ---
 
@@ -943,7 +943,7 @@ Example report format (if you share the files, I will produce a real one):
 
 ```
 File: ./tests/test_config.py
-Line 12: api_key = "sk_live_4eC39*****"
+Line 12: apixkey = "skxlivex4eC39*****"
 Severity: HIGH (real Stripe live key)
 Recommendation: Remove and use environment variable.
 
