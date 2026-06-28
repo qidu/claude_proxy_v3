@@ -549,39 +549,14 @@ pm2 start dist/server.js -i 4
 
 ### 5. Test
 
-```bash
-# Test specific provider
-./tests/test_claude.sh
-./tests/test_gemini.sh
-./tests/test_deepseek.sh
+#### Agent testing
+refer to [tests/multi-agents-test.t](tests/multi-agents-test.ts)
 
-# Test specific feature
-./tests/test_thinking.sh
-./tests/test_streaming.sh
+#### Test cases for coverage testing
+refer to [testcases/README.md](testcases/README.md)
 
-# Test all available models
-./tests/test_all.sh
-```
-
-**Test Configuration**: All tests use `TEST_CONFIG` and `proxy_config.toml` with category-based structure. See `docs/test_guideline.md` for details.
-
-### Test Scripts
-
-#### SSE Streaming Tests
-
-**`test_sse_streaming_comprehensive.sh`** - Full SSE streaming test suite
-- Tests 10 models across 4 endpoints:
-  - `/v1/messages` (x-api-key header)
-  - `/v1/chat/completions` (blocked - not allowed)
-  - `/v1beta/models/{model}:streamGenerateContent` (x-goog-api-key header)
-  - `/v1/interactions` (x-goog-api-key header)
-- Validates SSE event detection and streaming response format
-- Usage: `bash tests/test_sse_streaming_comprehensive.sh`
-
-**`test_sse_streaming_gemini_only.sh`** - Gemini CLI streaming test
-- Tests 9 models via Gemini CLI with streaming
-- Models: qwen3-32b, qwen-max, minimax-m2.1/m2.5, moonshotai/kimi-k2.5, deepseek-v3.2, gemini-2.5-flash, claude-4.5-sonnet, z-ai/glm-4.7
-- Usage: `bash tests/test_sse_streaming_gemini_only.sh`
+#### Other testing
+refer to files in `./tests`.
 
 ### 6. Docs
 - `docs/routing_refactor.md` - Routing architecture and implementation
@@ -1018,8 +993,6 @@ OpenAI Responses API support with format conversion to/from Chat Completions.
 upstream_mode = "openai-completions"  # Default: converts to chat completions
 # upstream_mode = "openai-responses"   # Alternative: pass through to Responses API
 ```
-
-**Test Results**: 5/6 models pass (83.3%) - see `tests/test_responses_both_sse_and_none.sh`
 
 ### Token Counting API
 
@@ -1916,12 +1889,6 @@ PORT=7799 TEST_CONFIG=test_ \
 165/165 cases pass — see
 `tests/test_results_at_2026-06-22_20-14-47.md`.
 
-### Test Multiple Models
-
-```bash
-bash tests/test_models.sh
-```
-
 ### Example Requests
 
 ```bash
@@ -1981,17 +1948,6 @@ See [CHANGELOG.md](./CHANGELOG.md) for historical changes.
 
 **Comprehensive Testing (2026-02-25):** ✅ Production Ready
 
-#### Models Tested: 50+ models across 9 providers
-- **DeepSeek:** v3.1, v3.2, R1, thinking variants
-- **Qwen:** Qwen3, Qwen-Max, thinking variants (9 models)
-- **Doubao:** Seed-1.6-Thinking, 1.5-Thinking-Pro
-- **MiniMax:** M2.1, M2.5
-- **GLM/Z-AI:** GLM-4.5, GLM-5
-- **Moonshot/Kimi:** K2.5, K2-Thinking
-- **Gemini:** 2.5-Flash, 2.0-Flash (native & OpenAI modes)
-- **Claude:** 4.5-Sonnet, 4.5-Haiku, 4.1-Opus (native & OpenAI modes)
-- **GPT-OSS:** 120B
-
 #### Endpoints Validated: All 3 endpoints (100% coverage)
 
 **1. `/v1/messages` - Claude API format**
@@ -2050,84 +2006,6 @@ See [CHANGELOG.md](./CHANGELOG.md) for historical changes.
 - ✅ Full SSE streaming support (all endpoints)
 - ✅ Consistent behavior across providers
 - ✅ Recommended for production
-
-#### Recent Test Results (2026-02-27)
-
-**Latest Consolidated Test Suite:** 6 comprehensive test scripts
-
-### Test Results Summary
-
-| Test Suite | Success Rate | Details |
-|------------|--------------|---------|
-| **test_streaming.sh** | 100% (12/12) | All SSE streaming endpoints working |
-| **test_all.sh** | 98.3% (59/60) | 30 models tested, only z-ai/glm-5 partial failure |
-| **test_gemini.sh** | **100% (18/18)** | All Gemini models, both modes ✅ |
-| **test_deepseek.sh** | 91.7% (11/12) | 4 DeepSeek models tested |
-| **test_claude.sh** | 66.7% (8/12) | Native & OpenAI modes |
-| **test_thinking.sh** | Partial | 10 thinking models (timeout at 240s) |
-
-### Gemini Models - 100% Success ✅
-
-**Native Mode (gemini-generatecontent): 9/9 passed**
-- ✅ gemini-3.1-pro-preview: All 3 endpoints working
-- ✅ gemini-3.0-flash-preview: All 3 endpoints working
-- ✅ gemini-2.5-flash: All 3 endpoints working
-
-**OpenAI-Compatible Mode: 9/9 passed**
-- ✅ gemini-3.1-pro-preview: All 3 endpoints working
-- ✅ gemini-3.0-flash-preview: All 3 endpoints working
-- ✅ gemini-2.5-flash: All 3 endpoints working
-
-**Bugs Fixed (2026-02-27):**
-1. Model alias not applied for generateContent endpoint
-2. URL path prefix issue (v1beta vs v1) in native mode
-
-### Claude Models - 66.7% Success
-
-**Native Mode (anthropic-messages): 2/3 passed**
-- ✅ claude-4.6-sonnet: /v1/messages working
-- ✅ claude-4.5-opus: /v1/messages working
-- ❌ claude-4.1-sonnet: Service error
-
-**OpenAI-Compatible Mode: 6/9 passed**
-- ✅ claude-4.6-sonnet: All 3 endpoints working
-- ✅ claude-4.5-opus: All 3 endpoints working
-- ❌ claude-haiku-4-5: Model not available on upstream
-
-### SSE Streaming - 100% Success
-
-**All 4 models tested:** deepseek/deepseek-v3.2, gemini-2.5-flash, claude-4.6-sonnet, qwen-max-2025-01-25
-- ✅ /v1/messages: 100% (4/4)
-- ✅ /v1/interactions: 100% (4/4)
-- ✅ /v1beta/models/{model}:streamGenerateContent: 100% (4/4)
-
-### All Models Test - 98.3% Success
-
-**30 models tested** from 6+ providers:
-- ✅ DeepSeek: 100% (5 models)
-- ✅ Moonshot/Kimi: 100% (2 models)
-- ✅ MiniMax: 100% (3 models)
-- ✅ Qwen: 93.3% (15 models, 14 passed)
-- ✅ GLM/Z-AI: 66.7% (3 models, 2 passed)
-
-**Key Achievements:** 
-- All streaming endpoints work with proper SSE format detection
-- Native mode routing fixed for Claude and Gemini models
-- Model alias feature working correctly
-- API key format parsing implemented
-- Gemini 3.x preview models now supported
-- 98.3% success rate across 30 models from 6+ providers
-
-#### Thinking/Reasoning Models: 15+ models tested
-
-**All thinking models:** ✅ 100% success rate with proper timeout settings (20s)
-
-**Tested models:**
-- DeepSeek: R1, R1-0528, V3.2-exp-thinking, V3.1-terminus-thinking
-- Qwen: 4 thinking variants (vl-30b, 30b-2507, next-80b, 235b-2507)
-- Doubao: seed-1.6-thinking, 1.5-thinking-pro
-- Moonshot: kimi-k2-thinking
-- Gemini: 3.1-pro-preview (includes reasoning_content)
 
 #### Features Validated
 
