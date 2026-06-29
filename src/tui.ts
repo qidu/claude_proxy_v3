@@ -758,7 +758,11 @@ class DashboardView implements Component {
     } else {
       configIndicator = snap.config.read_only ? yellow('(read-only)') : dim('(unchanged)');
     }
-    lines.push(`${dim('Config:')} ${dim(snap.config.config_path ?? 'memory')} ${configIndicator}${((snap.config as unknown as { config_errors?: unknown[] }).config_errors?.length ?? 0) > 0 ? red(` (${(snap.config as unknown as { config_errors: unknown[] }).config_errors.length} errors)`) : ''}`);
+    const cfgMeta = snap.config as unknown as { config_errors?: unknown[]; config_warnings?: unknown[] };
+    const errCount = cfgMeta.config_errors?.length ?? 0;
+    const warnCount = cfgMeta.config_warnings?.length ?? 0;
+    const cfgSuffix = errCount > 0 ? red(` (${errCount} errors)`) : warnCount > 0 ? yellow(` (${warnCount} warnings)`) : '';
+    lines.push(`${dim('Config:')} ${dim(snap.config.config_path ?? 'memory')} ${configIndicator}${cfgSuffix}`);
     const tokenHeatmap = buildHeatmap(snap.tokenHeatmap);
     const heatmapRowFilter = termRows < 40 ? [1, 3, 5] : undefined; // show Mon/Wed/Fri in small terminals
     const tokenHeatmapLines = renderHeatmapPanel(tokenHeatmap, { title: 'Tokens Panel', rowFilter: heatmapRowFilter }).split('\n');
@@ -971,7 +975,8 @@ class DashboardApp {
     try {
       const proxyConfig = await this.source.loadConfig(forceReload);
       this.proxyConfig = proxyConfig;
-      const validationErrors = (proxyConfig as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors;
+      const validationErrors = (proxyConfig as unknown as { _validationErrors?: ConfigValidationError[]; _validationWarnings?: ConfigValidationError[] })._validationErrors;
+      const validationWarnings = (proxyConfig as unknown as { _validationWarnings?: ConfigValidationError[] })._validationWarnings;
       const snapshot = getDashboardSnapshot(proxyConfig, this.source.env);
       this.lastRefreshTotalTokens = snapshot.modelStats.reduce((sum, m) => sum + m.total_tokens, 0);
       this.view.setSnapshot(snapshot);
@@ -986,6 +991,9 @@ class DashboardApp {
       } else if (validationErrors && validationErrors.length > 0) {
         const first = validationErrors[0];
         this.view.setMessage(`Config error: ${first.path} — ${first.message}`, 15000);
+      } else if (validationWarnings && validationWarnings.length > 0) {
+        const first = validationWarnings[0];
+        this.view.setMessage(`Config warning: ${first.path} — ${first.message}`, 8000);
       } else if (!this.view.shouldPreserveMessage()) {
         this.view.setMessage('Ready');
       }
@@ -1790,15 +1798,23 @@ class DashboardApp {
         // be tested directly via the proxy's /v1/messages endpoint.
         if (key === '*' || key.endsWith('-*')) continue;
         seenNames.add(key);
-        const modelUrl = Array.isArray(value) && value.length >= 2 && value[1]
-          ? value[1]
+        // Cast to string[] since runtime config may have 4 elements [target, base_url, api_key, mode]
+        // even though DashboardModelArrayConfig is typed as [string, string].
+        const arr = Array.isArray(value) ? value as string[] : null;
+        const modelUrl = arr && arr.length >= 2 && arr[1]
+          ? arr[1]
           : (categoryConfig.base_url || '-');
+        // Dashboard sanitized format: [target, base_url, mode] (3 elements, mode at index 2)
+        const modelMode = arr && arr.length >= 3 && arr[2]
+          ? arr[2]
+          : undefined;
+        const resolvedMode = modelMode || categoryConfig.upstream_mode || 'openai-completions';
         choices.push({
           category,
           modelId: key,
           value: key,
           label: key,
-          description: `${titleCase(category)} · ${stripCompletions(categoryConfig.upstream_mode || 'openai-completions')} · ${stripHttps(modelUrl)}`,
+          description: `${titleCase(category)} · ${stripCompletions(resolvedMode)} · ${stripHttps(modelUrl)}`,
         });
       }
     }
@@ -1888,12 +1904,14 @@ function resolveModelTestConfig(
       if (key === 'upstream_mode' || key === 'base_url' || key === 'api_key') continue;
       if (value === undefined) continue;
       if (key !== modelId) continue;
-      // Check for per-model URL override in tuple [target, baseUrl, apiKey]
+      // Check for per-model override in tuple [target, baseUrl, apiKey, mode]
       // (dashboard sanitizer strips 3rd element, so accept >= 2)
       if (Array.isArray(value) && value.length >= 2) {
         const modelBaseUrl = value[1] as string | undefined;
+        // Dashboard sanitized format: [target, base_url, mode] (3 elements, mode at index 2)
+        const modelMode = (value.length >= 3 ? value[2] : undefined) as string | undefined;
         return {
-          upstreamMode: categoryConfig.upstream_mode || config.upstream?.upstream_mode || 'openai-completions',
+          upstreamMode: modelMode || categoryConfig.upstream_mode || config.upstream?.upstream_mode || 'openai-completions',
           targetUrl: modelBaseUrl || categoryConfig.base_url || config.upstream?.default_base_url || 'https://api.qnaigc.com',
           apiKey: categoryConfig.api_key || config.upstream?.default_api_key,
         };

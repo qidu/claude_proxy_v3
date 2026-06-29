@@ -91,6 +91,7 @@ const suites = [
   '12_config_validation/config_validation.test.js',
   '13_fusion/fusion.test.js',
   '14_routing/routing.test.js',
+  '15_config_parse/config_parse.test.js',
 ];
 
 function replaceRequire(src, baseName, dstPath) {

@@ -75,6 +75,8 @@ TEST_TIMEOUT=60000 node testcases/04_models/models.test.js
 | `11_responses/` | Responses API coverage (input_tokens, compact, openai-responses mode, documented limitations) |
 | `12_config_validation/` | Config schema validation via PUT /dashboard/api/config |
 | `13_fusion/` | Fusion composite alias (parallel fan-out → judge → synthesis) |
+| `14_routing/` | Wildcard and catch-all routing priority (exact → prefix-* → bare *) |
+| `15_config_parse/` | Config parse / serialize / route-resolution unit tests (no proxy required) |
 | `utils/` | Shared test helpers |
 
 ## Test Files
@@ -135,6 +137,14 @@ TEST_TIMEOUT=60000 node testcases/04_models/models.test.js
 ### 13_fusion
 
 - `fusion.test.js` — Fusion composite alias: TC1301 alias discovery in dashboard, TC1302 non-streaming response shape (id/content/usage), TC1303 streaming SSE event sequence, TC1304 recursion guard (x-fusion-depth: 1 rejected), TC1305 min_panel enforcement (99 > actual panel size fails), TC1306 config round-trip (fusion_options + role survive PUT/GET), TC1307 no-judge degrade (judge_required: false proceeds to synth), TC1308 expose_metadata field present in non-streaming response
+
+### 14_routing
+
+- `routing.test.js` — Wildcard and catch-all routing priority: TC1401 exact match in models.free beats wildcard, TC1402 exact match in models.default, TC1403 `claude-*` wildcard routes to models.claude, TC1404 `gemini-*` wildcard routes to models.gemini, TC1405 bare `*` catch-all in models.default for unknown models, TC1406 exact key ≠ wildcard (different model names are not interchangeable)
+
+### 15_config_parse
+
+- `config_parse.test.js` — Config parse / serialize / route-resolution unit tests (no proxy required; imports `dist/utils/config-loader.js` directly): TC1501 `"*"={}` catch-all parses and routes unknown model as passthrough, TC1502 `"*"={target="*"}` is equivalent, TC1503 `"claude-*"={}` wildcard routes any `claude-X` model to itself, TC1504 `"claude-*"={target="claude-*"}` is equivalent, TC1505 rename alias (`claude-1-2={target="claude-4-5-haiku"}`) routes to different upstream model, TC1506–TC1508 round-trip (serialize → reparse) preserves all three forms, TC1509–TC1510 empty `{}` and explicit `{target=key}` produce identical parsed entries and routes
 
 ## Prerequisites
 
@@ -233,6 +243,12 @@ Tests run against a live proxy instance. The proxy must be started beforehand wi
 | File | Endpoints | Models Required | Features Required |
 |---|---|---|---|
 | `fusion.test.js` | `POST /v1/messages` (stream + non-stream), `GET /dashboard/api/config`, `PUT /dashboard/api/config` | `max-m3`, `max-m2.7-high` (or any two models available via the default upstream) | Fusion composite alias routing (fan-out, judge, synthesis), `fusion_options` config round-trip, recursion guard, `expose_metadata`, streaming SSE |
+
+#### `15_config_parse`
+
+| File | Endpoints | Models Required | Features Required |
+|---|---|---|---|
+| `config_parse.test.js` | none (unit tests; no proxy required) | none | `dist/utils/config-loader.js` must be built (`npm run build`) |
 
 ### Provider API Keys Required
 

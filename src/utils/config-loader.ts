@@ -168,7 +168,7 @@ function resolveModelRouteFromEntry(
                         proxyConfig.upstream?.default_api_key;
 
   if (Array.isArray(modelEntry)) {
-    const [modelAlias, modelBaseUrl, modelApiKey] = modelEntry;
+    const [modelAlias, modelBaseUrl, modelApiKey, modelMode] = modelEntry;
     let resolvedTarget = modelAlias;
 
     // Case 1: Prefix wildcard — e.g. "claude-*" matches "claude-sonnet-4-6"
@@ -187,10 +187,11 @@ function resolveModelRouteFromEntry(
       resolvedTarget = modelName;
     }
 
+    const resolvedMode = modelMode || categoryUpstreamMode;
     return {
       targetUrl: modelBaseUrl || categoryBaseUrl,
       apiKey: parseApiKey(modelApiKey || categoryApiKey),
-      upstreamMode: categoryUpstreamMode,
+      upstreamMode: resolvedMode,
       modelAlias: resolvedTarget || undefined,
       section: sectionName,
     };
@@ -893,14 +894,14 @@ function serializeTomlSection(section: Record<string, unknown>): string[] {
 
 /**
  * Serialize a model entry as the shortest valid TOML inline table.
- * - `{}` when target equals the alias key and both overrides are empty
+ * - `{}` when target equals the alias key and all overrides (base_url, api_key, mode) are empty
  * - `{target = "..."}` when only the target differs from the alias key
- * - `{target = "...", base_url = "...", api_key = "..."}` when any override is set
+ * - `{target = "...", base_url = "...", api_key = "...", mode = "..."}` when any override is set
  * The alias key is passed so target-equals-alias can be omitted entirely.
  */
 function serializeModelEntry(entry: string[], aliasKey: string): string {
-  const [target = '', base_url = '', api_key = ''] = entry;
-  const hasOverrides = base_url !== '' || api_key !== '';
+  const [target = '', base_url = '', api_key = '', mode = ''] = entry;
+  const hasOverrides = base_url !== '' || api_key !== '' || mode !== '';
   const targetIsAlias = target === aliasKey || target === '';
   if (!hasOverrides && targetIsAlias) {
     return `{}`;
@@ -909,7 +910,13 @@ function serializeModelEntry(entry: string[], aliasKey: string): string {
     return `{target = ${JSON.stringify(target)}}`;
   }
   if (targetIsAlias) {
+    if (mode !== '') {
+      return `{base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}, mode = ${JSON.stringify(mode)}}`;
+    }
     return `{base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}}`;
+  }
+  if (mode !== '') {
+    return `{target = ${JSON.stringify(target)}, base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}, mode = ${JSON.stringify(mode)}}`;
   }
   return `{target = ${JSON.stringify(target)}, base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}}`;
 }
@@ -980,11 +987,13 @@ export interface ConfigValidationError {
 
 export interface ValidationResult {
   errors: ConfigValidationError[];
+  warnings: ConfigValidationError[];
   valid: boolean;
 }
 
 export function validateProxyConfig(config: ProxyConfig): ValidationResult {
   const errors: ConfigValidationError[] = [];
+  const warnings: ConfigValidationError[] = [];
   const reservedKeys = new Set(['upstream_mode', 'base_url', 'api_key']);
 
   if (config.models) {
@@ -994,7 +1003,6 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
       }
       const typedCategory = categoryConfig as Record<string, unknown>;
       const categoryBaseUrl = typeof typedCategory.base_url === 'string' ? typedCategory.base_url : undefined;
-      const categoryApiKey = typeof typedCategory.api_key === 'string' ? typedCategory.api_key : undefined;
 
       for (const [key, value] of Object.entries(categoryConfig)) {
         if (reservedKeys.has(key)) continue;
@@ -1010,9 +1018,10 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
           if (typeof target !== 'string' || (target.trim() === '' && !String(target).includes('*'))) {
             errors.push({ path: `models.${categoryName}.${key}`, message: `target cannot be empty` });
           }
-          if (!categoryBaseUrl && !categoryApiKey) {
-            errors.push({ path: `models.${categoryName}.${key}`, message: `base_url and api_key must be set in category when target is the only element` });
+          if (!categoryBaseUrl) {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `base_url must be set in category when target is the only element` });
           }
+          // api_key absence is fine — proxy uses the caller's auth header
         } else if (value.length === 3) {
           // 3 elements = target + optional overrides (empty = use category fallback)
           const target = value[0] as unknown;
@@ -1029,11 +1038,32 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
           }
           if (typeof apiKey !== 'string') {
             errors.push({ path: `models.${categoryName}.${key}`, message: `api_key must be a string` });
-          } else if (apiKey.trim() === '' && !categoryApiKey && categoryName !== 'default') {
-            errors.push({ path: `models.${categoryName}.${key}`, message: `api_key is empty and not set in category` });
+          }
+          // Empty api_key is fine — proxy uses the caller's auth header
+        } else if (value.length === 4) {
+          // 4 elements = target + optional overrides + mode (empty = use category fallback)
+          const target = value[0] as unknown;
+          const baseUrl = value[1] as unknown;
+          const apiKey = value[2] as unknown;
+          const mode = value[3] as unknown;
+
+          if (typeof target !== 'string' || (target.trim() === '' && !String(target).includes('*'))) {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `target cannot be empty` });
+          }
+          if (typeof baseUrl !== 'string') {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `base_url must be a string` });
+          } else if (baseUrl.trim() === '' && !categoryBaseUrl) {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `base_url is empty and not set in category` });
+          }
+          if (typeof apiKey !== 'string') {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `api_key must be a string` });
+          }
+          // Empty api_key is fine — proxy uses the caller's auth header
+          if (typeof mode !== 'string') {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `mode must be a string` });
           }
         } else {
-          errors.push({ path: `models.${categoryName}.${key}`, message: `must be [target] or [target, base_url, api_key] (got ${value.length} elements)` });
+          errors.push({ path: `models.${categoryName}.${key}`, message: `must be [target] or [target, base_url, api_key] or [target, base_url, api_key, mode] (got ${value.length} elements)` });
         }
       }
     }
@@ -1069,7 +1099,7 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
     }
   }
 
-  return { errors, valid: errors.length === 0 };
+  return { errors, warnings, valid: errors.length === 0 };
 }
 
 export function serializeProxyConfigToml(config: ProxyConfig): string {
@@ -1220,7 +1250,11 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
       for (const err of validation.errors) {
         console.error(`[ERROR] ${err.path}: ${err.message}`);
       }
-      (config as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors = validation.errors;
+      for (const warn of validation.warnings) {
+        console.warn(`[WARN] ${warn.path}: ${warn.message}`);
+      }
+      (config as unknown as { _validationErrors?: ConfigValidationError[]; _validationWarnings?: ConfigValidationError[] })._validationErrors = validation.errors;
+      (config as unknown as { _validationWarnings?: ConfigValidationError[] })._validationWarnings = validation.warnings;
     } else if (configPath) {
       // Load from file - handle both Node.js and Cloudflare Workers environments
       let configContent: string;
@@ -1330,11 +1364,12 @@ export function parseSimpleToml(content: string): ProxyConfig {
           const kv = field.trim().match(/^(\w+)\s*=\s*"([^"]*)"$/);
           if (kv) fields[kv[1]] = kv[2];
         }
-        // {} or {base_url=..., api_key=...} with no target: default target to the alias key.
+        // {} or {base_url=..., api_key=..., mode=...} with no target: default target to the alias key.
         const target = fields['target'] ?? cleanKey;
-        const entry: string[] = [target, fields['base_url'] ?? '', fields['api_key'] ?? ''];
+        const mode = fields['mode'] ?? '';
+        const entry: string[] = [target, fields['base_url'] ?? '', fields['api_key'] ?? '', mode];
         const category = config.models[currentCategory] as ModelCategoryConfig;
-        category[cleanKey] = entry as [string, string, string];
+        category[cleanKey] = entry as [string, string, string, string];
         continue;
       }
     }
@@ -1378,8 +1413,8 @@ export function parseSimpleToml(content: string): ProxyConfig {
 
       if (currentSection === 'models' && currentCategory && config.models) {
         const category = config.models[currentCategory] as ModelCategoryConfig;
-        // Store raw array (1-3 elements), no padding
-        category[cleanKey] = elements as [string, string, string];
+        // Store raw array (1-4 elements: target, base_url, api_key, mode), no padding
+        category[cleanKey] = elements as [string, string, string, string];
       }
       continue;
     }
@@ -1405,12 +1440,16 @@ export function parseSimpleToml(content: string): ProxyConfig {
     }
   }
 
-  // Validate config and log errors
+  // Validate config and log errors/warnings
   const validation = validateProxyConfig(config);
   for (const err of validation.errors) {
     console.error(`[ERROR] ${err.path}: ${err.message}`);
   }
-  (config as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors = validation.errors;
+  for (const warn of validation.warnings) {
+    console.warn(`[WARN] ${warn.path}: ${warn.message}`);
+  }
+  (config as unknown as { _validationErrors?: ConfigValidationError[]; _validationWarnings?: ConfigValidationError[] })._validationErrors = validation.errors;
+  (config as unknown as { _validationWarnings?: ConfigValidationError[] })._validationWarnings = validation.warnings;
 
   return config;
 }
@@ -1489,19 +1528,19 @@ export function getModelConfig(config: ProxyConfig, modelName: string) {
 function findWildcardPatternMatch(
   categoryConfig: ModelCategoryConfig,
   modelName: string,
-): { entry: [string, string, string]; categoryConfig: ModelCategoryConfig } | undefined {
+): { entry: [string, string, string, string]; categoryConfig: ModelCategoryConfig } | undefined {
   for (const [key, value] of Object.entries(categoryConfig)) {
     if (key.endsWith('-*') && Array.isArray(value) && value.length >= 1) {
       const prefix = key.slice(0, -2); // strip "-*"
       if (modelName.startsWith(prefix)) {
-        return { entry: value as [string, string, string], categoryConfig };
+        return { entry: value as [string, string, string, string], categoryConfig };
       }
     }
   }
   return undefined;
 }
 
-export type DashboardModelArrayConfig = [string, string];
+export type DashboardModelArrayConfig = [string, string, string]; // [target, base_url, mode]
 
 export interface DashboardModelCategoryConfig {
   upstream_mode?: string;
@@ -1513,6 +1552,7 @@ export interface DashboardConfigPayload {
   models: Record<string, DashboardModelCategoryConfig>;
   composite: Record<string, CompositeModelConfig>;
   config_errors: ConfigValidationError[];
+  config_warnings: ConfigValidationError[];
   global_token_limit?: string;
 }
 
@@ -1525,7 +1565,7 @@ function sanitizeDashboardCategoryConfig(categoryConfig: ModelCategoryConfig): D
     }
 
     if (Array.isArray(value)) {
-      sanitized[key] = [value[0] || '', value[1] || ''];
+      sanitized[key] = [value[0] || '', value[1] || '', value[3] || ''];
     } else if (typeof value === 'string') {
       sanitized[key] = value;
     }
@@ -1621,16 +1661,16 @@ export function toDashboardConfigPayload(config: ProxyConfig): DashboardConfigPa
     models,
     composite: sanitizeCompositeConfig(config.composite),
     config_errors: (config as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors ?? [],
+    config_warnings: (config as unknown as { _validationWarnings?: ConfigValidationError[] })._validationWarnings ?? [],
     global_token_limit: config.upstream?.global_token_limit,
   };
 }
 
 function isSafeModelArray(value: unknown): value is DashboardModelArrayConfig {
-  // Accept 1 or 3 elements only. Dashboard GET returns 2-element arrays (api_key
-  // stripped), but PUT callers must normalize to 1 or 3 elements before sending
-  // (see TC1214 which does this explicitly). Rejecting 2-element arrays here
-  // ensures TC1204 passes and prevents ambiguous round-trips.
-  if (!Array.isArray(value) || (value.length !== 1 && value.length !== 3)) {
+  // Accept 1, 3, or 4 elements. Dashboard GET returns 3-element arrays (api_key
+  // stripped, mode preserved). PUT callers normalize to 1 or 3 elements before
+  // sending (see TC1214), and 4 elements when mode is included.
+  if (!Array.isArray(value) || (value.length !== 1 && value.length !== 3 && value.length !== 4)) {
     return false;
   }
   return typeof value[0] === 'string' && value[0].trim() !== '';
@@ -1771,9 +1811,9 @@ function validateAndNormalizeDashboardModels(payload: unknown): Record<string, D
       }
 
       if (isSafeModelArray(value)) {
-        // Pass through raw array (1-3 elements) so it gets re-validated
-        // but trimmed to 2 for display since api_key is hidden
-        category[key] = value.slice(0, 2) as DashboardModelArrayConfig;
+        // Pass through raw array (1-3 or 4 elements) so it gets re-validated
+        // but trimmed to 3 for display: api_key stripped, mode preserved
+        category[key] = value.slice(0, 3) as DashboardModelArrayConfig;
         continue;
       }
 
@@ -1829,7 +1869,8 @@ export function applyDashboardConfigUpdate(baseConfig: ProxyConfig, payload: unk
           ? undefined
           : existingCategory[key];
         const preservedModelApiKey = Array.isArray(existingEntry) ? (existingEntry[2] || '') : '';
-        rebuiltCategory[key] = [value[0] || '', value[1] || '', preservedModelApiKey];
+        const modelMode = value[2] || ''; // dashboard sends [target, base_url, mode]
+        rebuiltCategory[key] = [value[0] || '', value[1] || '', preservedModelApiKey, modelMode];
       }
     }
 

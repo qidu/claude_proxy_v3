@@ -977,12 +977,17 @@ export function handleDashboardPage(): Response {
         saveButton.disabled = isReadOnly;
         configPathHint = json.config.config_path ? ' (' + json.config.config_path + ')' : '';
 
-        // Display config validation errors
+        // Display config validation errors/warnings
         const configErrors = json.config.config_errors || [];
+        const configWarnings = json.config.config_warnings || [];
         if (configErrors.length > 0) {
           const errorList = configErrors.map((e) => e.path + ': ' + e.message).join('; ');
           configStatus.innerHTML = '<span style="color:#c62828;">Config errors: ' + escapeHtml(errorList) + '</span>';
           configStatus.className = 'error';
+        } else if (configWarnings.length > 0) {
+          const warnList = configWarnings.map((e) => e.path + ': ' + e.message).join('; ');
+          configStatus.innerHTML = '<span style="color:#e65100;">Config warnings: ' + escapeHtml(warnList) + '</span>';
+          configStatus.className = '';
         } else if (isReadOnly) {
           configStatus.textContent = 'Loaded (read-only: remote)' + configPathHint;
           configStatus.className = '';

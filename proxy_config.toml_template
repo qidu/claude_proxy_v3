@@ -1,0 +1,55 @@
+[upstream]
+default_base_url = "https://api.qnaigc.com"
+budget_to_effort_low = 8000
+budget_to_effort_medium = 20000
+budget_to_effort_high = 0
+global_token_limit = "700M 1w"
+
+[models.claude]
+upstream_mode = "anthropic-messages"
+base_url = "https://api.qnaigc.com"
+api_key = "sk-56db1e204bf4597e71bb921fc74f464bf771a009cb9971ba8fd2a2331ae13145"
+claude-* = ["claude-*", "", ""]
+claude-fable-5 = ["claude-fable-5", "", ""]
+claude-opus-4-8 = ["claude-opus-4-8", "", ""]
+claude-opus-4-6 = ["claude-opus-4-6", "", ""]
+claude-sonnet-4-6 = ["claude-sonnet-4-6", "", ""]
+
+[models.free]
+upstream_mode = "anthropic-messages"
+base_url = "http://localhost:3000"
+api_key = "invalid-sk-f924545e8c87b5c0323fef4373654737dc2a04835b9e028ceef2f8ac4d37096d"
+opus48 = ["claude-opus-4-8", "", ""]
+opus46 = ["claude-opus-4-6", "", ""]
+sonnet46 = ["claude-sonnet-4-6", "", ""]
+deepseek-v4 = ["deepseek-v4-flash", "https://anthropic.qnaigc.com", ""]
+minimax-m3 = ["MiniMax-M3", "https://api.minimaxi.com/anthropic", "sk-cp-p_i6lDK-pZdeY2CvwuT_za3tXWn3HouV7bwSqBiabj9kei4_ZiIlcQW90nsx4izHDX_t2pzIPTdaKy1nS7n-0XrAQMDd7ldP77te97nrV_xzjlhvQ0jblFw"]
+
+[models.gemini]
+upstream_mode = "gemini-generatecontent"
+base_url = "https://api.example.com"
+api_key = "sk-***"
+gemini-* = ["gemini-*", "", ""]
+gemini-3.0-flash-preview = ["gemini-3-flash-preview", "", ""]
+
+[models.default]
+upstream_mode = "openai-completions"
+base_url = "https://api.qnaigc.com"
+api_key = "sk-56db1e204bf4597e71bb921fc74f464bf771a009cb9971ba8fd2a2331ae13145"
+* = ["*", "", ""]
+max-m3 = ["MiniMax-M3", "https://api.minimaxi.com", "sk-cp-p_i6lDK-pZdeY2CvwuT_za3tXWn3HouV7bwSqBiabj9kei4_ZiIlcQW90nsx4izHDX_t2pzIPTdaKy1nS7n-0XrAQMDd7ldP77te97nrV_xzjlhvQ0jblFw"]
+max-m2.7-high = ["MiniMax-M2.7-highspeed", "https://api.minimaxi.com", "sk-cp-p_i6lDK-pZdeY2CvwuT_za3tXWn3HouV7bwSqBiabj9kei4_ZiIlcQW90nsx4izHDX_t2pzIPTdaKy1nS7n-0XrAQMDd7ldP77te97nrV_xzjlhvQ0jblFw"]
+deepseek-v4-flash = ["deepseek-v4-flash", "https://api.deepseek.com", "sk-66c13986be87488596c6a20179344894"]
+deepseek-v4-pro = ["deepseek-v4-pro", "https://api.deepseek.com", "sk-66c13986be87488596c6a20179344894"]
+
+[models.embedding]
+upstream_mode = "anthropic-messages"
+base_url = "https://openrouter.ai/api"
+
+[composite]
+"gpt-all" = {"nvidia/nemotron-3-super-120b-a12b-free": {"share": 40}}
+"llama" = {"llama3": {"share": 20}}
+"claude-haiku-4-5-20251001" = {"token_limit": {num = 1000000, duration = "1d"}, "deepseek-v4-flash": {}}
+"code-small" = {"token_limit": {num = 2000000000, duration = "1d"}, "max-m2.7-high": {"share": 100, "fallback": 0}, "max-m3": {"share": 100, "primary": true, "fallback": 0}, "opus48": {"share": 0, "fallback": 0}, "opus46": {"share": 0, "fallback": 0}, "sonnet46": {"share": 0}}
+"maxplan" = {"max-m2.7-high": {"share": 100}, "max-m3": {"share": 100}}
+"smarter" = {"fusion_options": {"min_panel": 2, "panel_timeout_ms": 300000, "judge_required": true, "expose_metadata": true, "max_concurrent": 2}, "deepseek-v4-flash": {"fusion": 1, "role": "panel"}, "max-m2.7-high": {"fusion": 1, "role": "panel"}, "max-m3": {"role": "synth"}, "deepseek-v4-pro": {"fusion": 1, "role": "judge"}}

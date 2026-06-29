@@ -3,11 +3,11 @@
  * Tests the documented config validation rules
  *
  * Coverage:
- * - TC1201: config_errors is a well-formed array in GET /dashboard/api/config
+ * - TC1201: config_errors and config_warnings are well-formed arrays in GET /dashboard/api/config
  * - TC1202: PUT with non-array target value is rejected
  * - TC1203: PUT with empty composite target array is rejected
  * - TC1204: PUT with 2-element model array is rejected
- * - TC1205: PUT with 4-element model array is rejected
+ * - TC1205: PUT with 4-element model array (with mode) is accepted
  * - TC1206: PUT with non-boolean primary is rejected
  * - TC1207: PUT with non-finite share is rejected
  * - TC1208: PUT with non-finite fallback is rejected
@@ -82,7 +82,7 @@ async function putConfig(payload) {
 }
 
 /**
- * TC1201: config_errors field shape in GET /dashboard/api/config
+ * TC1201: config_errors and config_warnings field shape in GET /dashboard/api/config
  */
 async function testConfigErrorsShape() {
   const res = await sendRequest({
@@ -100,6 +100,14 @@ async function testConfigErrorsShape() {
   for (const err of configErrors) {
     assert(typeof err.path === 'string', 'Each config_error should have a string path');
     assert(typeof err.message === 'string', 'Each config_error should have a string message');
+  }
+
+  const configWarnings = res.body.config.config_warnings;
+  assert(Array.isArray(configWarnings), `config_warnings should be an array, got ${typeof configWarnings}`);
+
+  for (const warn of configWarnings) {
+    assert(typeof warn.path === 'string', 'Each config_warning should have a string path');
+    assert(typeof warn.message === 'string', 'Each config_warning should have a string message');
   }
 }
 
@@ -156,7 +164,7 @@ async function testPutCompositeNonObjectTarget() {
 
 /**
  * TC1204: PUT — 2-element model array is rejected
- * Only 1 or 3 elements are valid.
+ * Valid element counts are: 1, 3 (target+base_url+api_key), or 4 (target+base_url+api_key+mode).
  */
 async function testPutTwoElementModelArray() {
   const models = await getLiveModels();
@@ -184,31 +192,52 @@ async function testPutTwoElementModelArray() {
 }
 
 /**
- * TC1205: PUT — 4-element model array is rejected
+ * TC1205: PUT — 4-element model array [target, base_url, api_key, mode] is accepted
+ * The 4th element is the per-model upstream_mode override (e.g. "anthropic-messages").
  */
 async function testPutFourElementModelArray() {
-  const models = await getLiveModels();
+  const rawModels = await getLiveModels();
   const composite = await getLiveComposite();
 
-  const firstCat = Object.keys(models)[0];
+  const firstCat = Object.keys(rawModels)[0];
   if (!firstCat) {
     console.log('    (skipped: no editable model categories found)');
     return;
   }
 
-  const badModels = {
+  // Normalize live 3-element GET arrays to valid PUT form before injecting our test entry
+  const models = {};
+  for (const [cat, cfg] of Object.entries(rawModels)) {
+    const catOut = {};
+    for (const [k, v] of Object.entries(cfg)) {
+      if (!Array.isArray(v)) {
+        catOut[k] = v;
+      } else if (v.length >= 2 && v[1]) {
+        catOut[k] = [v[0], v[1], ''];
+      } else {
+        catOut[k] = [v[0]];
+      }
+    }
+    models[cat] = catOut;
+  }
+
+  const goodModels = {
     ...models,
     [firstCat]: {
       ...models[firstCat],
-      '__test_4elem__': ['target', 'https://api.example.com', 'sk-key', 'extra']
+      '__test_4elem__': ['target', 'https://api.example.com', '', 'anthropic-messages']
     }
   };
 
-  const res = await putConfig({ models: badModels, composite });
+  const res = await putConfig({ models: goodModels, composite });
   assert(
-    res.status === 400 || (res.status === 200 && Array.isArray(res.body?.config?.config_errors) && res.body.config.config_errors.some(e => e.message?.includes('elements'))),
-    `PUT with 4-element array should return 400 or surface elements error (got ${res.status})`
+    res.status === 200,
+    `PUT with 4-element [target, base_url, api_key, mode] array should be accepted (got ${res.status}${res.status !== 200 ? ': ' + JSON.stringify(res.body?.error) : ''})`
   );
+
+  // Clean up
+  const restoreRes = await putConfig({ models, composite });
+  assert(restoreRes.status === 200, 'Config cleanup PUT should succeed');
 }
 
 /**
@@ -321,16 +350,17 @@ async function testPutCompositeTargetNotObject() {
  * TC1211: PUT — empty composite target {} is accepted
  * An empty target object {} is valid per README L1070.
  *
- * getLiveModels() returns 2-element arrays (api_key stripped) from the GET
- * response, but the PUT validator only accepts 1- or 3-element arrays.
- * Normalize here the same way TC1214 does so the models payload is valid
- * and this test isolates only the composite-target {} behaviour.
+ * getLiveModels() returns 3-element arrays [target, base_url, mode] (api_key stripped)
+ * from the GET response. Normalize to the PUT-accepted form (1 or 3 elements, with
+ * api_key as the 3rd) so the models payload is valid and this test isolates only the
+ * composite-target {} behaviour.
  */
 async function testPutEmptyCompositeTargetValid() {
   const rawModels = await getLiveModels();
   const composite = await getLiveComposite();
 
-  // Normalize 2-element arrays to 1 or 3 elements (see TC1214 for rationale)
+  // Normalize 3-element GET arrays [target, base_url, mode] to 1 or 3 element PUT form
+  // (see TC1214 for rationale)
   const models = {};
   for (const [cat, cfg] of Object.entries(rawModels)) {
     const catOut = {};
@@ -419,7 +449,7 @@ async function testPutBareStarTargetAccepted() {
   const rawModels = await getLiveModels();
   const composite = await getLiveComposite();
 
-  // Normalize to valid 1- or 3-element arrays (same normalization as TC1214)
+  // Normalize 3-element GET arrays to valid 1- or 3-element PUT form (same normalization as TC1214)
   const models = {};
   for (const [cat, cfg] of Object.entries(rawModels)) {
     const catOut = {};
@@ -455,9 +485,9 @@ async function testPutBareStarTargetAccepted() {
     `Bare '*' catch-all entry should survive the round-trip`
   );
 
-  // Clean up: restore the original config (normalize rawModels to valid arrays,
-  // same as TC1214 — the GET response returns 2-element arrays but the PUT
-  // validator only accepts 1- or 3-element arrays).
+  // Clean up: restore the original config (normalize rawModels to valid PUT arrays —
+  // the GET response returns 3-element [target, base_url, mode] but PUT expects 1- or 3-element
+  // with api_key at index 2).
   const restoreModels = {};
   for (const [cat, cfg] of Object.entries(rawModels)) {
     const catOut = {};
@@ -491,10 +521,9 @@ async function testPutBareStarTargetAccepted() {
 async function testPutEmptyCompositeAlias() {
   const composite = await getLiveComposite();
 
-  // getLiveModels() returns 2-element arrays (api_key stripped), which the PUT
-  // validator does not accept (only 1- or 3-element arrays are valid). Normalize
-  // every model array to a valid form so the models payload round-trips cleanly
-  // and this test isolates the composite-alias behaviour under test:
+  // getLiveModels() returns 3-element arrays [target, base_url, mode] (api_key stripped).
+  // Normalize every model array to a valid PUT form so the models payload round-trips
+  // cleanly and this test isolates the composite-alias behaviour under test:
   //   - if the model has its own base_url (element 1), send a 3-element array
   //     [model, url, ""]; the proxy preserves the existing api_key on PUT.
   //   - otherwise send a 1-element array [model] and rely on the category base_url.
@@ -563,7 +592,7 @@ if (require.main === module) {
     { name: 'TC1202: PUT non-array model value', fn: testPutNonArrayModelValue },
     { name: 'TC1203: PUT composite array target', fn: testPutCompositeNonObjectTarget },
     { name: 'TC1204: PUT 2-element model array', fn: testPutTwoElementModelArray },
-    { name: 'TC1205: PUT 4-element model array', fn: testPutFourElementModelArray },
+    { name: 'TC1205: PUT 4-element model array (mode) accepted', fn: testPutFourElementModelArray },
     { name: 'TC1206: PUT non-boolean primary', fn: testPutNonBooleanPrimary },
     { name: 'TC1207: PUT non-finite share', fn: testPutNonFiniteShare },
     { name: 'TC1208: PUT non-finite fallback', fn: testPutNonFiniteFallback },

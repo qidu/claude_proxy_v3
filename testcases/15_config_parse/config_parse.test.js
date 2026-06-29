@@ -1,0 +1,389 @@
+/**
+ * Config Parse / Serialize / Route-Resolution Unit Tests
+ * Tests parseSimpleToml, serializeProxyConfigToml, and getModelRouteConfig
+ * directly against dist/utils/config-loader.js — no running proxy required.
+ *
+ * Coverage:
+ * - TC1501: "* = {}" — empty inline-table catch-all parses + routes unknown model as passthrough
+ * - TC1502: "* = {target=\"*\"}" — explicit-star catch-all is equivalent to empty {}
+ * - TC1503: "claude-* = {}" — empty inline-table wildcard routes claude-X to claude-X
+ * - TC1504: "claude-* = {target=\"claude-*\"}" — explicit wildcard target is equivalent to empty {}
+ * - TC1505: 'key = {target="different"}' — rename/alias: key routes to a different upstream model
+ * - TC1506: catch-all round-trip — "* = {}" survives serialize → reparse without data loss
+ * - TC1507: wildcard round-trip — "claude-* = {}" survives serialize → reparse
+ * - TC1508: rename round-trip — 'claude-1-2 = {target="claude-4-5-haiku"}' survives serialize → reparse
+ * - TC1509: "* = {}" and "* = {target="*"}" produce identical parsed entry
+ * - TC1510: "claude-* = {}" and 'claude-* = {target="claude-*"}' produce identical parsed entry
+ *
+ * Reference: README §"Per-Model Configuration Array Format", §"Model Routing Priority"
+ */
+
+const path = require('path');
+const { assert, runTestSuite } = require('../utils/test_helpers');
+
+// Dynamic import of the ESM dist module — compatible with the CJS wrapper used
+// by run-tests.js.  All tests are collected after the module is loaded.
+let parseSimpleToml, serializeProxyConfigToml, getModelRouteConfig;
+
+async function loadModule() {
+  const mod = await import(path.join(process.cwd(), 'dist/utils/config-loader.js'));
+  parseSimpleToml = mod.parseSimpleToml;
+  serializeProxyConfigToml = mod.serializeProxyConfigToml;
+  getModelRouteConfig = mod.getModelRouteConfig;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a minimal ProxyConfig from a TOML snippet.
+ * Suppresses validation console output (expected for minimal test configs).
+ */
+function parse(toml) {
+  const saved = { error: console.error, warn: console.warn };
+  console.error = () => {};
+  console.warn = () => {};
+  try {
+    return parseSimpleToml(toml);
+  } finally {
+    console.error = saved.error;
+    console.warn = saved.warn;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// TC1501: "* = {}" — empty inline-table catch-all
+// ---------------------------------------------------------------------------
+async function testCatchAllEmpty() {
+  const cfg = parse(`
+[models.default]
+base_url = "https://api.example.com"
+"*" = {}
+`);
+
+  // Entry is stored as ["*", "", "", ""] internally
+  const entry = cfg.models?.default?.['*'];
+  assert(Array.isArray(entry), '"*" entry should be an array');
+  assert(entry[0] === '*', `entry[0] should be "*", got "${entry[0]}"`);
+
+  // Route resolution: any unknown model should passthrough as itself
+  const route = getModelRouteConfig('totally-unknown-xyz', cfg);
+  assert(route !== undefined, 'Route should be found for unknown model via catch-all');
+  assert(
+    route.modelAlias === 'totally-unknown-xyz',
+    `modelAlias should be "totally-unknown-xyz", got "${route.modelAlias}"`
+  );
+  assert(
+    route.targetUrl === 'https://api.example.com',
+    `targetUrl should be "https://api.example.com", got "${route.targetUrl}"`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC1502: "* = {target="*"}" — explicit star target
+// ---------------------------------------------------------------------------
+async function testCatchAllExplicitTarget() {
+  const cfg = parse(`
+[models.default]
+base_url = "https://api.example.com"
+"*" = {target = "*"}
+`);
+
+  const entry = cfg.models?.default?.['*'];
+  assert(Array.isArray(entry), '"*" entry should be an array');
+  assert(entry[0] === '*', `entry[0] should be "*", got "${entry[0]}"`);
+
+  const route = getModelRouteConfig('totally-unknown-xyz', cfg);
+  assert(route !== undefined, 'Route should be found for unknown model via catch-all');
+  assert(
+    route.modelAlias === 'totally-unknown-xyz',
+    `modelAlias should be "totally-unknown-xyz", got "${route.modelAlias}"`
+  );
+  assert(
+    route.targetUrl === 'https://api.example.com',
+    `targetUrl should be "https://api.example.com", got "${route.targetUrl}"`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC1503: "claude-* = {}" — empty inline-table prefix wildcard
+// ---------------------------------------------------------------------------
+async function testWildcardEmpty() {
+  const cfg = parse(`
+[models.claude]
+base_url = "https://api.anthropic.com"
+"claude-*" = {}
+`);
+
+  const entry = cfg.models?.claude?.['claude-*'];
+  assert(Array.isArray(entry), '"claude-*" entry should be an array');
+  assert(entry[0] === 'claude-*', `entry[0] should be "claude-*", got "${entry[0]}"`);
+
+  // Any claude-X model should resolve to itself via the wildcard
+  const route = getModelRouteConfig('claude-opus-4-6', cfg);
+  assert(route !== undefined, 'Route should be found for claude-opus-4-6 via claude-* wildcard');
+  assert(
+    route.modelAlias === 'claude-opus-4-6',
+    `modelAlias should be "claude-opus-4-6", got "${route.modelAlias}"`
+  );
+  assert(
+    route.targetUrl === 'https://api.anthropic.com',
+    `targetUrl should be "https://api.anthropic.com", got "${route.targetUrl}"`
+  );
+
+  // A different prefix should NOT match
+  const noRoute = getModelRouteConfig('gemini-2.0-flash', cfg);
+  assert(
+    noRoute === undefined || noRoute.targetUrl !== 'https://api.anthropic.com',
+    'gemini-2.0-flash should not match claude-* wildcard'
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC1504: "claude-* = {target="claude-*"}" — explicit wildcard target
+// ---------------------------------------------------------------------------
+async function testWildcardExplicitTarget() {
+  const cfg = parse(`
+[models.claude]
+base_url = "https://api.anthropic.com"
+"claude-*" = {target = "claude-*"}
+`);
+
+  const entry = cfg.models?.claude?.['claude-*'];
+  assert(Array.isArray(entry), '"claude-*" entry should be an array');
+  assert(entry[0] === 'claude-*', `entry[0] should be "claude-*", got "${entry[0]}"`);
+
+  const route = getModelRouteConfig('claude-haiku-4-5', cfg);
+  assert(route !== undefined, 'Route should be found for claude-haiku-4-5 via claude-* wildcard');
+  assert(
+    route.modelAlias === 'claude-haiku-4-5',
+    `modelAlias should be "claude-haiku-4-5" (passthrough), got "${route.modelAlias}"`
+  );
+  assert(
+    route.targetUrl === 'https://api.anthropic.com',
+    `targetUrl should be "https://api.anthropic.com", got "${route.targetUrl}"`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC1505: 'claude-1-2 = {target="claude-4-5-haiku"}' — rename / alias
+// ---------------------------------------------------------------------------
+async function testRenameAlias() {
+  const cfg = parse(`
+[models.claude]
+base_url = "https://api.anthropic.com"
+"claude-1-2" = {target = "claude-4-5-haiku"}
+`);
+
+  const entry = cfg.models?.claude?.['claude-1-2'];
+  assert(Array.isArray(entry), '"claude-1-2" entry should be an array');
+  assert(
+    entry[0] === 'claude-4-5-haiku',
+    `entry[0] should be "claude-4-5-haiku", got "${entry[0]}"`
+  );
+
+  const route = getModelRouteConfig('claude-1-2', cfg);
+  assert(route !== undefined, 'Route should be found for claude-1-2');
+  assert(
+    route.modelAlias === 'claude-4-5-haiku',
+    `modelAlias should be "claude-4-5-haiku" (renamed target), got "${route.modelAlias}"`
+  );
+  assert(
+    route.targetUrl === 'https://api.anthropic.com',
+    `targetUrl should be "https://api.anthropic.com", got "${route.targetUrl}"`
+  );
+
+  // The original model name (target) is NOT a key in the category and should not resolve
+  const noExact = cfg.models?.claude?.['claude-4-5-haiku'];
+  assert(
+    noExact === undefined,
+    '"claude-4-5-haiku" should not be a key in the category (only "claude-1-2" is)'
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC1506: catch-all "* = {}" round-trip
+// ---------------------------------------------------------------------------
+async function testCatchAllRoundTrip() {
+  const toml = `[models.default]
+base_url = "https://api.example.com"
+"*" = {}
+`;
+  const cfg = parse(toml);
+  const serialized = serializeProxyConfigToml(cfg);
+  const reparsed = parse(serialized);
+
+  const entry = reparsed.models?.default?.['*'];
+  assert(Array.isArray(entry), '"*" entry should survive round-trip as array');
+  assert(entry[0] === '*', `entry[0] should be "*" after round-trip, got "${entry[0]}"`);
+
+  const route = getModelRouteConfig('any-model-here', reparsed);
+  assert(route !== undefined, 'Catch-all route should survive round-trip');
+  assert(
+    route.modelAlias === 'any-model-here',
+    `modelAlias should be "any-model-here" after round-trip, got "${route.modelAlias}"`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC1507: wildcard "claude-* = {}" round-trip
+// ---------------------------------------------------------------------------
+async function testWildcardRoundTrip() {
+  const toml = `[models.claude]
+base_url = "https://api.anthropic.com"
+"claude-*" = {}
+`;
+  const cfg = parse(toml);
+  const serialized = serializeProxyConfigToml(cfg);
+  const reparsed = parse(serialized);
+
+  const entry = reparsed.models?.claude?.['claude-*'];
+  assert(Array.isArray(entry), '"claude-*" entry should survive round-trip as array');
+  assert(entry[0] === 'claude-*', `entry[0] should be "claude-*" after round-trip, got "${entry[0]}"`);
+
+  const route = getModelRouteConfig('claude-sonnet-4-6', reparsed);
+  assert(route !== undefined, 'Wildcard route should survive round-trip');
+  assert(
+    route.modelAlias === 'claude-sonnet-4-6',
+    `modelAlias should be "claude-sonnet-4-6" after round-trip, got "${route.modelAlias}"`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC1508: rename round-trip
+// ---------------------------------------------------------------------------
+async function testRenameRoundTrip() {
+  const toml = `[models.claude]
+base_url = "https://api.anthropic.com"
+"claude-1-2" = {target = "claude-4-5-haiku"}
+`;
+  const cfg = parse(toml);
+  const serialized = serializeProxyConfigToml(cfg);
+  const reparsed = parse(serialized);
+
+  const entry = reparsed.models?.claude?.['claude-1-2'];
+  assert(Array.isArray(entry), '"claude-1-2" entry should survive round-trip as array');
+  assert(
+    entry[0] === 'claude-4-5-haiku',
+    `entry[0] should be "claude-4-5-haiku" after round-trip, got "${entry[0]}"`
+  );
+
+  const route = getModelRouteConfig('claude-1-2', reparsed);
+  assert(route !== undefined, 'Rename route should survive round-trip');
+  assert(
+    route.modelAlias === 'claude-4-5-haiku',
+    `modelAlias should be "claude-4-5-haiku" after round-trip, got "${route.modelAlias}"`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC1509: "* = {}" and "* = {target="*"}" produce identical parsed entries
+// ---------------------------------------------------------------------------
+async function testCatchAllEquivalence() {
+  const cfgEmpty = parse(`
+[models.default]
+base_url = "https://api.example.com"
+"*" = {}
+`);
+  const cfgExplicit = parse(`
+[models.default]
+base_url = "https://api.example.com"
+"*" = {target = "*"}
+`);
+
+  const entryEmpty = cfgEmpty.models?.default?.['*'];
+  const entryExplicit = cfgExplicit.models?.default?.['*'];
+
+  assert(Array.isArray(entryEmpty) && Array.isArray(entryExplicit), 'Both entries should be arrays');
+  assert(
+    entryEmpty[0] === entryExplicit[0],
+    `entry[0] should be identical: "${entryEmpty[0]}" vs "${entryExplicit[0]}"`
+  );
+  assert(
+    entryEmpty[1] === entryExplicit[1],
+    `entry[1] should be identical: "${entryEmpty[1]}" vs "${entryExplicit[1]}"`
+  );
+
+  // Both should produce the same route for the same input
+  const routeEmpty = getModelRouteConfig('any-model', cfgEmpty);
+  const routeExplicit = getModelRouteConfig('any-model', cfgExplicit);
+  assert(
+    routeEmpty?.modelAlias === routeExplicit?.modelAlias,
+    `Both forms should resolve to same modelAlias: "${routeEmpty?.modelAlias}" vs "${routeExplicit?.modelAlias}"`
+  );
+  assert(
+    routeEmpty?.targetUrl === routeExplicit?.targetUrl,
+    `Both forms should resolve to same targetUrl`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC1510: "claude-* = {}" and "claude-* = {target="claude-*"}" are equivalent
+// ---------------------------------------------------------------------------
+async function testWildcardEquivalence() {
+  const cfgEmpty = parse(`
+[models.claude]
+base_url = "https://api.anthropic.com"
+"claude-*" = {}
+`);
+  const cfgExplicit = parse(`
+[models.claude]
+base_url = "https://api.anthropic.com"
+"claude-*" = {target = "claude-*"}
+`);
+
+  const entryEmpty = cfgEmpty.models?.claude?.['claude-*'];
+  const entryExplicit = cfgExplicit.models?.claude?.['claude-*'];
+
+  assert(Array.isArray(entryEmpty) && Array.isArray(entryExplicit), 'Both entries should be arrays');
+  assert(
+    entryEmpty[0] === entryExplicit[0],
+    `entry[0] should be identical: "${entryEmpty[0]}" vs "${entryExplicit[0]}"`
+  );
+
+  const routeEmpty = getModelRouteConfig('claude-opus-4-6', cfgEmpty);
+  const routeExplicit = getModelRouteConfig('claude-opus-4-6', cfgExplicit);
+  assert(
+    routeEmpty?.modelAlias === routeExplicit?.modelAlias,
+    `Both forms should resolve to same modelAlias: "${routeEmpty?.modelAlias}" vs "${routeExplicit?.modelAlias}"`
+  );
+  assert(
+    routeEmpty?.targetUrl === routeExplicit?.targetUrl,
+    `Both forms should resolve to same targetUrl`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Runner
+// ---------------------------------------------------------------------------
+
+const tests = [
+  { name: 'TC1501: "* = {}" catch-all parse + route', fn: testCatchAllEmpty },
+  { name: 'TC1502: "* = {target=\\"*\\"}" catch-all parse + route', fn: testCatchAllExplicitTarget },
+  { name: 'TC1503: "claude-* = {}" wildcard parse + route', fn: testWildcardEmpty },
+  { name: 'TC1504: "claude-* = {target=\\"claude-*\\"}" wildcard parse + route', fn: testWildcardExplicitTarget },
+  { name: 'TC1505: rename alias key → different target', fn: testRenameAlias },
+  { name: 'TC1506: "* = {}" catch-all round-trip', fn: testCatchAllRoundTrip },
+  { name: 'TC1507: "claude-* = {}" wildcard round-trip', fn: testWildcardRoundTrip },
+  { name: 'TC1508: rename round-trip', fn: testRenameRoundTrip },
+  { name: 'TC1509: "* = {}" ≡ "* = {target=\\"*\\"}"', fn: testCatchAllEquivalence },
+  { name: 'TC1510: "claude-* = {}" ≡ "claude-* = {target=\\"claude-*\\"}"', fn: testWildcardEquivalence },
+];
+
+module.exports = {
+  testCatchAllEmpty,
+  testCatchAllExplicitTarget,
+  testWildcardEmpty,
+  testWildcardExplicitTarget,
+  testRenameAlias,
+  testCatchAllRoundTrip,
+  testWildcardRoundTrip,
+  testRenameRoundTrip,
+  testCatchAllEquivalence,
+  testWildcardEquivalence,
+};
+
+if (require.main === module) {
+  loadModule().then(() => runTestSuite('Config Parse / Route-Resolution Tests', tests));
+}

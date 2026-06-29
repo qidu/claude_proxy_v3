@@ -7,6 +7,52 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Config validation warnings + relaxed `api_key` requirement
+
+`validateProxyConfig` now distinguishes **warnings** from **errors**. Situations that were previously
+hard errors but are valid in practice (e.g. missing `api_key` when the caller supplies their own
+auth header) are now surfaced as warnings and no longer block the config from loading.
+
+- `ValidationResult` gains a `warnings: ConfigValidationError[]` field (same shape as `errors`).
+- Dashboard GET `/dashboard/api/config` response includes `config_warnings` alongside `config_errors`.
+- Dashboard UI and TUI both display warnings in amber/yellow when there are no hard errors.
+- `api_key` absence is no longer an error for any section — the proxy forwards the caller's auth header.
+  Only `base_url` absence (when required) remains a hard error.
+
+**Files changed:** `src/utils/config-loader.ts`, `src/handlers/dashboard.ts`, `src/tui.ts`.
+
+### Per-model `mode` override in `models.*` entries
+
+Each model entry in a `[models.<section>]` block can now declare an explicit
+`mode` to override the section's `upstream_mode`. This allows a single
+category (e.g. `[models.free]`) to route different models to different
+API formats without needing separate sections.
+
+**Config syntax** (both forms supported):
+
+```toml
+[models.free]
+upstream_mode = "openai-completions"   # section default
+sonnet46 = {target = "claude-sonnet-4-6", base_url = "http://localhost:3000", api_key = "", mode = "anthropic-messages"}
+opus46   = ["claude-opus-4-6", "http://localhost:3000", "", "anthropic-messages"]
+```
+
+**Mode resolution chain**: `model entry mode` → `section upstream_mode` →
+`[upstream] upstream_mode` → `"openai-completions"`.
+
+**Files changed:**
+- `src/utils/config-loader.ts` — `resolveModelRouteFromEntry` extracts
+  `modelMode` from entry[3] and cascades it; inline-table and array
+  parsers handle `mode`; validation accepts 4-element arrays;
+  `sanitizeDashboardCategoryConfig` preserves mode at index 2 of the
+  3-element `[target, base_url, mode]` dashboard format;
+  `applyDashboardConfigUpdate` reconstructs the 4-element internal form
+  on PUT.
+- `src/tui.ts` — `modelChoices()` and `resolveModelTestConfig()` now read
+  mode from index 2 of the dashboard sanitized array (was incorrectly
+  reading index 3), so the Test Custom Model panel shows the correct
+  `anthropic-messages` / `completions` / `gemini` label per model.
+
 ### Bug fix: config `api_key` overrode caller key for `[models.default]` targets reached via composite / direct routing
 
 The non-fusion composite dispatch in `src/index.ts` (the `compositeAttempts.map` block) was applying

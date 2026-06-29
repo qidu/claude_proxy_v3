@@ -112,9 +112,10 @@ upstream_mode = "openai-completions"
 **Configuration Structure**:
 - **Category-based**: Group models by provider (`[models.gemini]`, `[models.claude]`, `[models.default]`)
 - **Inline-table format**: `{target = "model-alias", base_url = "url-or-empty", api_key = "key-or-empty"}` — empty strings inherit from the category
+- **Per-model `mode`**: add `mode = "anthropic-messages"` (or `"openai-completions"` / `"gemini-generatecontent"`) to any inline-table or array entry to override the section's `upstream_mode` for just that model. Array form: `["target", "base_url", "api_key", "mode"]`.
 - **upstream_mode**: Explicit mode per category (`anthropic-messages`, `gemini-generatecontent`, `openai-completions`)
 - **Model names**: Preserve original names (no normalization) - `"deepseek/deepseek-v3.2"`, `"gemini-2.5-flash"`
-- **Inheritance chain**: Model entry → Category defaults → [upstream] defaults
+- **Inheritance chain**: Model entry `mode` → Category `upstream_mode` → `[upstream] upstream_mode` → `"openai-completions"`
 - **Wildcard routing**: `prefix-*` patterns (e.g. `claude-*`, `gemini-*`) in `models.claude`/`models.gemini` catch unmatched models; `*` in `models.default` is the catch-all safety net. See [Model Routing Priority](#model-routing-priority) for full lookup order.
 
 **Note**: Each model supports one upstream. Composite aliases can route across multiple configured models, and a composite alias may also define a shared `token_limit` across all of its targets.
