@@ -39,8 +39,8 @@ api_key = "sk-56db1e204bf4597e71bb921fc74f464bf771a009cb9971ba8fd2a2331ae13145"
 * = ["*", "", ""]
 max-m3 = ["MiniMax-M3", "https://api.minimaxi.com", "sk-cp-p_i6lDK-pZdeY2CvwuT_za3tXWn3HouV7bwSqBiabj9kei4_ZiIlcQW90nsx4izHDX_t2pzIPTdaKy1nS7n-0XrAQMDd7ldP77te97nrV_xzjlhvQ0jblFw"]
 max-m2.7-high = ["MiniMax-M2.7-highspeed", "https://api.minimaxi.com", "sk-cp-p_i6lDK-pZdeY2CvwuT_za3tXWn3HouV7bwSqBiabj9kei4_ZiIlcQW90nsx4izHDX_t2pzIPTdaKy1nS7n-0XrAQMDd7ldP77te97nrV_xzjlhvQ0jblFw"]
-deepseek-v4-flash = ["deepseek-v4-flash", "https://api.deepseek.com", "sk-66c13986be87488596c6a20179344894"]
-deepseek-v4-pro = ["deepseek-v4-pro", "https://api.deepseek.com", "sk-66c13986be87488596c6a20179344894"]
+deepseek-v4-flash = ["deepseek-v4-flash", "https://api.deepseek.com", "sk-66c13986***"]
+deepseek-v4-pro = ["deepseek-v4-pro", "https://api.deepseek.com", "sk-66c13986***"]
 
 [models.embedding]
 upstream_mode = "anthropic-messages"
