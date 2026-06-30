@@ -9,22 +9,22 @@ response back. It also handles model aliasing, routing, fallback, and basic usag
 accounting out of the box.
 
 ```
-        Claude / Gemini / OpenAI client
-                     │
-                     ▼
-              ┌─────────────┐
-              │ Model Proxy │   ← routes by model name, converts formats
-              └─────────────┘
-                     │
-        ┌────────────┼────────────┐
-        ▼            ▼            ▼
-   Anthropic     Gemini      OpenAI-compatible
-   upstream     upstream     upstream(s)
+                  Claude / Gemini / OpenAI SDK
+                               │
+                               ▼
+                        ┌─────────────┐
+    sidecar plugins <-  │ Model Proxy │   ←  routes by model id or wildcard
+                        └─────────────┘
+                               │
+                  ┌────────────┼────────────┐
+                  ▼            ▼            ▼
+             Anthropic     Gemini      OpenAI-Compatible
+             upstream     upstream     upstream(s)
 ```
 
 ## Features
 
-- **Three API formats in, any provider out** — accept requests in any of these schemas:
+- **Four API formats in, any provider out** — accept requests in any of these schemas:
   - `/v1/messages` — Claude Messages API
   - `/v1beta/models/{model}:generateContent` — Gemini GenerateContent API
   - `/v1/interactions` — Gemini Interactions API
@@ -206,6 +206,12 @@ inheritance chain — anything left empty falls back to the level above:
 - The target-only form (`opus48 = {target = "..."}`) requires the section to define **both**
   `base_url` and `api_key`; the full form may leave either empty to inherit.
 
+> **Note:** the catch-all entry `"*" = {}` in `[models.default]` inherits the same chain —
+> `[upstream] default_base_url` **is** used for all unmatched models as long as
+> `[models.default]` does not define its own `base_url`. Then routing is:
+> per-entry `base_url` → `[models.default]`.`base_url` → `[upstream]`.`default_base_url` →  hardcoded fallback.
+
+
 **Who wins — caller's key vs. configured `api_key`** — this depends on the section:
 
 | Section | Caller's auth header | Configured `api_key` |
@@ -305,7 +311,7 @@ environment; on Cloudflare Workers they come from `[vars]` in `wrangler.toml`.
 | `UPSTREAM_BODY_TIMEOUT_MS` | `600000` | Upstream body timeout (also judge/synth timeout in fusion) |
 | `MODELS_CACHE_TTL` | unset | Seconds to cache the upstream `/v1/models` list |
 | `JSON_STRINGIFY_METHOD` | `json` | Serialization method for outgoing bodies |
-| `DEV_PASS_THROUGH` | `false` | `true` forwards `/v1/chat/completions` directly to the default upstream (skips model routing, applies validation only) |
+| `DEV_PASS_THROUGH` | `false` | `true` forwards `/v1/chat/completions` directly to the default upstream (`openai-completions` validation only) |
 | `CONVERSATION` | unset | `true` enables experimental in-process stateful conversation cache |
 | `IMAGE_BLOCK_DATA_MAX_SIZE` | `10485760` | Max inline image bytes accepted |
 | `ALLOWED_HOSTS` | `127.0.0.1,localhost` | SSRF allowlist for dynamic per-request upstream hosts |
