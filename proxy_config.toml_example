@@ -12,8 +12,10 @@ global_token_limit = "700M 1w"
 # `upstream_mode` declares the native protocol used for every entry below.
 # `base_url` is the default endpoint; an empty `api_key` means the section inherits
 # the global key. Each model entry is an inline table:
-#   {target = "upstream_model_name", base_url = "override_or_empty", api_key = "override_or_empty"}
-# where empty `base_url` / `api_key` strings fall back to the section-level defaults.
+#   {target = "upstream_model_name", base_url = "override_or_empty", api_key = "override_or_empty", mode = "override_or_empty"}
+# where empty strings fall back to the section-level defaults.
+# The optional `mode` field overrides `upstream_mode` for just that entry
+# (e.g. one entry in an `anthropic-messages` section can route to an OpenAI upstream).
 # - Exact-match entries (e.g. `claude-opus-4-8`) take priority and are used when
 #   the incoming model name matches the key exactly.
 # - The `claude-*` wildcard is the fallback for any other `claude-*` name that
@@ -36,8 +38,9 @@ claude-sonnet-4-6 = {}
 # Models in this section are routed to a Gemini `generateContent`-compatible upstream.
 # `upstream_mode` selects the native protocol for all entries below.
 # `base_url` and `api_key` are the section-level defaults; each model entry is:
-#   {target = "upstream_model_name", base_url = "override_or_empty", api_key = "override_or_empty"}
+#   {target = "upstream_model_name", base_url = "override_or_empty", api_key = "override_or_empty", mode = "override_or_empty"}
 # with empty override strings falling back to the section defaults.
+# The optional `mode` field overrides `upstream_mode` for just that entry.
 # - Exact-match entries (e.g. `gemini-3.0-flash-preview`) are used when the
 #   incoming model name matches the key exactly.
 # - The `gemini-*` wildcard is the fallback for any other `gemini-*` name and
@@ -57,7 +60,8 @@ gemini-3.0-flash-preview = {target = "gemini-3-flash-preview"}
 # callers without requiring them to supply their own upstream credentials.
 # Each specific model entry is routed using the section's configured
 # `upstream_mode`, `base_url`, and `api_key` (with each entry's empty override
-# strings falling back to those section defaults).
+# strings falling back to those section defaults). The optional per-entry `mode`
+# field overrides `upstream_mode` for just that entry.
 #
 # The section-level `api_key` takes priority over any auth key sent by the
 # caller on the inbound request. Per-entry `api_key` overrides take priority
@@ -77,11 +81,21 @@ sonnet46 = {target = "claude-sonnet-4-6"}
 # Per-entry `base_url` override routes to a different upstream endpoint while
 # still authenticating with the section's configured `api_key` (which still
 # takes priority over the caller's auth key).
-deepseek-v4 = {target = "deepseek-v4-flash", base_url = "https://anthropic.qnaigc.com", api_key = ""}
+deepseek-v4-flash = {target = "deepseek-v4-flash", base_url = "https://anthropic.qnaigc.com", api_key = "sk-cp-p_i6lDK"}
+deepseek-v4-pro = {target = "deepseek-v4-pro", base_url = "https://api.qnaigc.com", api_key = "sk-cp-p_i6lDK", mode = "openai-completions"}
 # Per-entry `api_key` override. The entry's own key wins over both the section
 # default and any auth key supplied by the caller, so this upstream is hit
 # with its dedicated credentials.
-minimax-m3 = {target = "MiniMax-M3", base_url = "https://api.minimaxi.com/anthropic", api_key = "sk-cp-p_i6lDK"}
+# `mode` overrides the section's `upstream_mode` for just this entry.
+minimax-m3 = {target = "MiniMax-M3", base_url = "https://api.minimaxi.com", api_key = "sk-cp-p_i6lDK", mode = "openai-completions"}
+minimax-m2.7 = {target = "MiniMax-M2.7-HighSpeed", base_url = "https://api.minimaxi.com/anthropic", api_key = "sk-cp-p_i6lDK"}
+# Reverse override: the section default is `anthropic-messages`, but these entries
+# target an OpenAI-completions upstream — per-entry `mode` switches protocol for
+# just these models while all other entries stay on the section default.
+# (If the section default were `openai-completions`, `mode = "anthropic-messages"`
+# lets individual Claude-API entries coexist in the same section.)
+# opus48 = {target = "claude-opus-4-8", base_url = "http://localhost:3000", api_key = "", mode = "anthropic-messages"}
+# sonnet46 = {target = "claude-sonnet-4-6", base_url = "http://localhost:3000", api_key = "", mode = "anthropic-messages"}
 
 
 [models.default]
@@ -89,8 +103,9 @@ minimax-m3 = {target = "MiniMax-M3", base_url = "https://api.minimaxi.com/anthro
 # This is the default routing tier for any model that didn't match a more
 # specific section (e.g. `models.claude`, `models.free`, `models.gemini`).
 # Each specific model entry uses the inline-table form:
-#   {target = "upstream_model_name", base_url = "override_or_empty", api_key = "override_or_empty"}
+#   {target = "upstream_model_name", base_url = "override_or_empty", api_key = "override_or_empty", mode = "override_or_empty"}
 # with empty override strings falling back to the section defaults.
+# The optional `mode` field overrides `upstream_mode` for just that entry.
 #
 # Unlike the `free` section, the auth key sent by the caller on the inbound
 # request takes priority over ALL configured `api_key` values on this tier,
