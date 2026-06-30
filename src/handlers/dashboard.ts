@@ -1501,19 +1501,11 @@ export async function handleDashboardTestModel(
       // call will use.
       testApiKey = proxyConfig.upstream?.default_api_key;
     } else {
-      // Check model configs (use unsanitized proxyConfig to access api_key)
-      for (const categoryConfig of Object.values(proxyConfig.models || {})) {
-        if (Array.isArray(categoryConfig)) continue;
-        for (const [key, value] of Object.entries(categoryConfig || {})) {
-          if (key === 'upstream_mode' || key === 'base_url' || key === 'api_key') continue;
-          if (value === undefined) continue;
-          if (key !== modelId) continue;
-          upstreamMode = categoryConfig.upstream_mode || 'openai-completions';
-          testApiKey = categoryConfig.api_key || proxyConfig.upstream?.default_api_key;
-          break;
-        }
-        if (testApiKey) break;
-      }
+      // Use getModelRouteConfig to correctly resolve the per-model mode (e.g. mode = "anthropic-messages"
+      // on an entry inside models.free which has upstream_mode = "openai-completions").
+      const route = getModelRouteConfig(modelId, proxyConfig);
+      upstreamMode = route.upstreamMode;
+      testApiKey = route.apiKey || proxyConfig.upstream?.default_api_key;
     }
 
     const requestBody = buildTestToolRequest(upstreamMode);
