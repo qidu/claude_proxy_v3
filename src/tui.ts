@@ -1871,6 +1871,7 @@ class DashboardApp {
     // Add composite aliases — if same name as a model, add with "[C]" suffix to differentiate
     if (snapshot.compositeResolved) {
       for (const alias of snapshot.compositeResolved) {
+        if (alias.targets.length === 0) continue;
         const isFusion = !!(snapshot.config.composite?.[alias.alias] as { fusion_options?: unknown } | undefined)?.fusion_options;
         const modeTag = isFusion ? '[F]' : '[C]';
         const isDuplicate = seenNames.has(alias.alias);

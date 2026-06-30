@@ -100,6 +100,16 @@ Key ideas:
   or `openai-completions`.
 - **Per-model overrides** use an inline table: `"my-model" = {target = "real-name", base_url = "...", api_key = "..."}`.
   Empty fields inherit from the category.
+
+> **Note — `anthropic-messages` and extended thinking:**
+> When `upstream_mode = "anthropic-messages"` is used with a third-party Anthropic-compatible
+> endpoint (e.g. MiniMax at `api.minimaxi.com/anthropic`), the proxy passes the client's
+> `thinking` field through as-is. If the client sends `{"type": "adaptive"}` the upstream
+> model will respond with thinking blocks; if the client omits `thinking` entirely, the proxy
+> injects `{"type": "disabled"}` as a safe default (needed for DeepSeek-compatible endpoints
+> that otherwise default to thinking mode). On a **fresh conversation** (no prior assistant
+> turns containing thinking blocks), a client-sent `{"type": "enabled"}` will be silently
+> dropped — use `"adaptive"` instead, which the model handles autonomously.
 - **Wildcards** (`claude-*`) and the **catch-all** (`*` in `[models.default]`) handle
   anything you don't list explicitly.
 
