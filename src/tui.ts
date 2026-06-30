@@ -305,13 +305,6 @@ type ModelChoice = SelectItem & {
   modelId: string;
 };
 
-type TestResult = {
-  success: boolean;
-  modelId: string;
-  status?: number;
-  error?: string;
-  responseBody?: string;
-};
 
 function fg(code: number, text: string): string {
   return `\u001b[${code}m${text}\u001b[0m`;
@@ -324,11 +317,9 @@ function dim(text: string): string { return fg(2, text); }
 function green(text: string): string { return fg(32, text); }
 function yellow(text: string): string { return fg(33, text); }
 function red(text: string): string { return fg(31, text); }
-function cyan(text: string): string { return fg(36, text); }
 function lightWhite(text: string): string { return fg(97, text); }
 function lightBlue(text: string): string { return rgbFg(144, 202, 249, text); }  // #90caf9
 function mediumBlue(text: string): string { return rgbFg(66, 165, 245, text); }   // #42a5f5
-function grey(text: string): string { return fg(90, text); }
 function clip(text: string, width: number): string {
   return width <= 0 ? '' : truncateToWidth(text, width, '');
 }
@@ -471,7 +462,6 @@ class CompositeAliasesOverlay implements Component, Focusable {
   focused = false;
   private snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
   private message = 'Ready';
-  private messageUntil = 0;
   private selectionIndex = 0;
   private scrollOffset = 0;
 
@@ -485,9 +475,8 @@ class CompositeAliasesOverlay implements Component, Focusable {
     }
   }
 
-  setMessage(message: string, holdMs = 0): void {
+  setMessage(message: string, _holdMs = 0): void {
     this.message = message;
-    this.messageUntil = holdMs > 0 ? Date.now() + holdMs : 0;
   }
 
   focusAlias(alias: string): void {
