@@ -295,7 +295,7 @@ environment; on Cloudflare Workers they come from `[vars]` in `wrangler.toml`.
 | `UPSTREAM_BODY_TIMEOUT_MS` | `600000` | Upstream body timeout (also judge/synth timeout in fusion) |
 | `MODELS_CACHE_TTL` | unset | Seconds to cache the upstream `/v1/models` list |
 | `JSON_STRINGIFY_METHOD` | `json` | Serialization method for outgoing bodies |
-| `DEV_PASS_THROUGH` | `false` | `true` forwards requests upstream unmodified |
+| `DEV_PASS_THROUGH` | `false` | `true` forwards `/v1/chat/completions` directly to the default upstream (skips model routing, applies validation only) |
 | `CONVERSATION` | unset | `true` enables experimental in-process stateful conversation cache |
 | `IMAGE_BLOCK_DATA_MAX_SIZE` | `10485760` | Max inline image bytes accepted |
 | `ALLOWED_HOSTS` | `127.0.0.1,localhost` | SSRF allowlist for dynamic per-request upstream hosts |
