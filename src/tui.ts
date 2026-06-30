@@ -473,6 +473,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
   private message = 'Ready';
   private messageUntil = 0;
   private selectionIndex = 0;
+  private scrollOffset = 0;
 
   constructor(private readonly app: DashboardApp) {}
 
@@ -577,18 +578,28 @@ class CompositeAliasesOverlay implements Component, Focusable {
 
   render(width: number): string[] {
     const snap = this.snapshot;
-    const lines: string[] = [];
-    lines.push(`Esc ${dim('hide panel')}  A ${dim('add alias')} L ${dim('token limit')}  F ${dim('fusion opts')}  M ${dim('add target')}  E ${dim('edit')}  D ${dim('delete')} ↑↓ ${dim('move')} `);
+    const toolbar = `A ${dim('add alias')} M ${dim('add target')} F ${dim('edit fusion')} E ${dim('edit composite')} L ${dim('limit')} D ${dim('del')} Esc ${dim('hide')} ↑↓ ${dim('move')} `;
 
     if (!snap) {
-      return frame('Edit Composite Aliases Config', [...lines, 'Loading…'], width).map((line) => clip(line, width));
+      return frame('Edit Composite Aliases Config', [toolbar, 'Loading…'], width).map((line) => clip(line, width));
     }
 
     const selections = this.selections();
     const selected = selections[this.selectionIndex] ?? null;
-    const composites = Object.entries(snap.config.composite).sort(([a], [b]) => a.localeCompare(b));
+    const composites = Object.entries(snap.config.composite).sort(([a, aTargets], [b, bTargets]) => {
+      const aEmpty = Object.entries(aTargets || {}).filter(([k]) => k !== 'token_limit' && k !== 'fusion_options').length === 0;
+      const bEmpty = Object.entries(bTargets || {}).filter(([k]) => k !== 'token_limit' && k !== 'fusion_options').length === 0;
+      if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+      return a.localeCompare(b);
+    });
     const modelTimingMap = new Map((snap.requestStats.model_timings || []).map((t) => [t.endpoint, t]));
-    if (!composites.length) lines.push(dim('  none'));
+
+    // Build full body lines (no toolbar/status yet — those are fixed outside the scroll window)
+    const bodyLines: string[] = [];
+    // Track which body line each selection item starts on, for scroll-follow
+    const selectionLineIndex: number[] = [];
+
+    if (!composites.length) bodyLines.push(dim('  none'));
     for (const [alias, targets] of composites) {
       const selectedAlias = selected?.kind === 'alias' && selected.alias === alias;
       const prefix = selectedAlias ? green('▶') : dim('│');
@@ -604,9 +615,11 @@ class CompositeAliasesOverlay implements Component, Focusable {
         ? ` ${dim(fmt(windowUsed))} ${dim('/')} ${dim('L')} ${dim(fmt(aliasLimit.num) + '/' + windowDuration)}`
         : '';
       const aliasTag = typedTargets?.fusion_options ? dim(' [F]') : dim(' [C]');
-      lines.push(`  ${prefix} ${bold(alias)}${aliasTag}${aliasSummary}`);
+      // Record this alias's line index for selections array
+      selectionLineIndex.push(bodyLines.length);
+      bodyLines.push(`  ${prefix} ${bold(alias)}${aliasTag}${aliasSummary}`);
       const entries = Object.entries(targets || {}).filter(([target]) => target !== 'token_limit' && target !== 'fusion_options');
-      if (!entries.length) lines.push(`    ${dim('(empty)')}`);
+      if (!entries.length) bodyLines.push(`    ${dim('(empty)')}`);
       const targetRouteModel = new Map<string, string | undefined>();
       const resolvedAlias = snap.compositeResolved.find((r) => r.alias === alias);
       if (resolvedAlias) {
@@ -625,22 +638,52 @@ class CompositeAliasesOverlay implements Component, Focusable {
         const timingKey = targetRouteModel.get(target) ?? target;
         const timing = modelTimingMap.get(timingKey);
         const timingStr = timing ? ` ${dim('[')}${dim(fmtSeconds(timing.min_time_ms))}${dim('/')}${dim(fmtSeconds(timing.avg_time_ms))}${dim('/')}${dim(fmtSeconds(timing.max_time_ms))}${dim('s]')}` : '';
-        lines.push(`  ${dim('│')} ${mark} ${clip(target, 22)} ${dim(summary)}${timingStr}`);
+        // Record this target's line index for selections array
+        selectionLineIndex.push(bodyLines.length);
+        bodyLines.push(`  ${dim('│')} ${mark} ${clip(target, 22)} ${dim(summary)}${timingStr}`);
       }
     }
 
-    lines.push('');
-    lines.push(this.message ? yellow(this.message) : dim('Ready'));
-    return frame('Edit Composite Aliases Config', lines, width).map((line) => clip(line, width));
+    // Fixed lines outside the scroll window: toolbar (top) + blank + status (bottom)
+    // frame() adds title + top border + bottom border = 3 extra lines
+    const fixedLines = 3 /* frame borders + title */ + 1 /* toolbar */ + 1 /* blank */ + 1 /* status */;
+    const termRows = this.app.getTerminalRows();
+    const maxHeight = Math.max(3, Math.floor(termRows * 0.7));
+    const viewportHeight = Math.max(1, maxHeight - fixedLines);
+
+    // Scroll to keep selected item visible
+    const selectedBodyLine = selectionLineIndex[this.selectionIndex] ?? 0;
+    if (selectedBodyLine < this.scrollOffset) {
+      this.scrollOffset = selectedBodyLine;
+    } else if (selectedBodyLine >= this.scrollOffset + viewportHeight) {
+      this.scrollOffset = selectedBodyLine - viewportHeight + 1;
+    }
+    this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, Math.max(0, bodyLines.length - viewportHeight)));
+
+    const visibleBody = bodyLines.slice(this.scrollOffset, this.scrollOffset + viewportHeight);
+    const scrollIndicator = bodyLines.length > viewportHeight
+      ? dim(` ${this.scrollOffset + 1}-${Math.min(this.scrollOffset + viewportHeight, bodyLines.length)}/${bodyLines.length}`)
+      : '';
+    const statusLine = (this.message ? yellow(this.message) : dim('Ready')) + scrollIndicator;
+
+    const allLines = [toolbar, ...visibleBody, '', statusLine];
+    return frame('Edit Composite Aliases Config', allLines, width).map((line) => clip(line, width));
   }
 
   private selections(): Selection[] {
     const snap = this.snapshot;
     if (!snap) return [];
     const out: Selection[] = [];
-    for (const alias of Object.keys(snap.config.composite).sort()) {
+    for (const alias of Object.keys(snap.config.composite).sort((a, b) => {
+      const aTargets = snap.config.composite[a];
+      const bTargets = snap.config.composite[b];
+      const aEmpty = Object.entries(aTargets || {}).filter(([k]) => k !== 'token_limit' && k !== 'fusion_options').length === 0;
+      const bEmpty = Object.entries(bTargets || {}).filter(([k]) => k !== 'token_limit' && k !== 'fusion_options').length === 0;
+      if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+      return a.localeCompare(b);
+    })) {
       out.push({ kind: 'alias', alias });
-      const targetEntries = Object.entries(snap.config.composite?.[alias] || {});
+      const targetEntries = Object.entries(snap.config.composite?.[alias] || {}).filter(([k]) => k !== 'token_limit' && k !== 'fusion_options');
       for (const [target] of targetEntries.sort(sortCompositeTargets)) {
         out.push({ kind: 'target', alias, target });
       }
@@ -869,8 +912,14 @@ class DashboardView implements Component {
       }
     }
 
-    // Sort by modelId so composites interleave, not float to the end
-    return models.sort((a, b) => a.modelId.localeCompare(b.modelId));
+    // Sort: composite/fusion first, then by modelId
+    return models.sort((a, b) => {
+      const aComposite = a.category === 'fusion' || a.category === 'composite';
+      const bComposite = b.category === 'fusion' || b.category === 'composite';
+      if (aComposite && !bComposite) return -1;
+      if (!aComposite && bComposite) return 1;
+      return a.modelId.localeCompare(b.modelId);
+    });
   }
 }
 
@@ -1848,8 +1897,12 @@ class DashboardApp {
       }
     }
 
-    // Sort by value (which is now unique) — "code-small" < "code-small [C]" since ' ' < '['
+    // Sort: composite/fusion first, then by value (which is now unique)
     return choices.sort((a, b) => {
+      const aComposite = a.category === 'fusion' || a.category === 'composite';
+      const bComposite = b.category === 'fusion' || b.category === 'composite';
+      if (aComposite && !bComposite) return -1;
+      if (!aComposite && bComposite) return 1;
       const cmp = a.value.localeCompare(b.value);
       return cmp !== 0 ? cmp : a.label.localeCompare(b.label);
     });
