@@ -241,8 +241,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
                       proxyConfig.upstream?.upstream_mode || 
                       'openai-completions';
   const defaultBaseUrl = defaultCategoryConfig?.base_url || 
-                        proxyConfig.upstream?.default_base_url || 
-                        'https://api.qnaigc.com';
+                        proxyConfig.upstream?.default_base_url;
 
   // 1. /v1/messages → multiple upstream modes
   if (path === '/v1/messages' || path.startsWith('/v1/messages?')) {
@@ -637,8 +636,7 @@ export default {
         const defaultCategory = proxyConfig.models?.default;
         const defaultCategoryConfig = defaultCategory && !Array.isArray(defaultCategory) ? defaultCategory : undefined;
         const healthBaseUrl = defaultCategoryConfig?.base_url ||
-                             proxyConfig.upstream?.default_base_url ||
-                             'https://api.qnaigc.com';
+                             proxyConfig.upstream?.default_base_url;
         const healthUrl = `${healthBaseUrl}/v1/models`;
         const healthAuth = extractAuthHeaders(request);
 

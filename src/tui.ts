@@ -1955,13 +1955,13 @@ function resolveModelTestConfig(
         const modelMode = (value.length >= 3 ? value[2] : undefined) as string | undefined;
         return {
           upstreamMode: modelMode || categoryConfig.upstream_mode || config.upstream?.upstream_mode || 'openai-completions',
-          targetUrl: modelBaseUrl || categoryConfig.base_url || config.upstream?.default_base_url || 'https://api.qnaigc.com',
+          targetUrl: modelBaseUrl || categoryConfig.base_url || config.upstream?.default_base_url || "http://localhost",
           apiKey: categoryConfig.api_key || config.upstream?.default_api_key,
         };
       }
       return {
         upstreamMode: categoryConfig.upstream_mode || config.upstream?.upstream_mode || 'openai-completions',
-        targetUrl: categoryConfig.base_url || config.upstream?.default_base_url || 'https://api.qnaigc.com',
+        targetUrl: categoryConfig.base_url || config.upstream?.default_base_url || "http://localhost",
         apiKey: categoryConfig.api_key || config.upstream?.default_api_key,
       };
     }

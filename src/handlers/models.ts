@@ -187,34 +187,38 @@ export async function handleModelsRequest(
   logger.debug(requestId, `Upstream request URL: ${targetApiUrl.toString()}`);
   logger.debug(requestId, `Has auth headers: ${!!authHeaders['Authorization'] || !!authHeaders['x-api-key']}`);
 
-  // Make request to target API
-  const response = await fetch(targetApiUrl.toString(), {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...addForwardedHeaders(authHeaders, request),
-    },
-    signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
-  });
+  let upstreamModels: ClaudeModelsResponse = { data: [], first_id: null, has_more: false, last_id: null };
 
-  // Handle target API errors
-  if (!response.ok) {
-    const upstreamErrorBody = await response.text();
-    handleTargetApiError(response, 'Models API', { url: targetApiUrl.toString(), upstreamBody: upstreamErrorBody });
+  try {
+    // Make request to target API
+    const response = await fetch(targetApiUrl.toString(), {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...addForwardedHeaders(authHeaders, request),
+      },
+      signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
+    });
+
+    // Handle target API errors
+    if (!response.ok) {
+      const upstreamErrorBody = await response.text();
+      handleTargetApiError(response, 'Models API', { url: targetApiUrl.toString(), upstreamBody: upstreamErrorBody });
+    }
+
+    // Parse target API response
+    const openaiResponse: OpenAIModelsResponse = JSON.parse(await response.text());
+    upstreamModels = convertOpenAIModelsToClaude(openaiResponse);
+
+    // Cache the response (only for non-paginated requests)
+    if (!afterId && !beforeId && !limit) {
+      setCachedModels(upstreamModels);
+    }
+  } catch (error) {
+    logger.warn(requestId, `Upstream models fetch failed, returning config-only models: ${(error as Error).message}`);
   }
 
-  // Parse target API response
-  const responseText = await response.text();
-
-  const openaiResponse: OpenAIModelsResponse = JSON.parse(responseText);
-
-  // Convert to Claude format and merge config-defined model IDs
-  const claudeResponse: ClaudeModelsResponse = convertOpenAIModelsToClaude(openaiResponse, extraModelIds);
-
-  // Cache the response (only for non-paginated requests)
-  if (!afterId && !beforeId && !limit) {
-    setCachedModels(claudeResponse);
-  }
+  const claudeResponse = mergeClaudeModelsResponse(upstreamModels, extraModelIds);
 
   // Return response with Claude headers
   return new Response(JSON.stringify(claudeResponse), {

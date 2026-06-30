@@ -163,7 +163,8 @@ function resolveModelRouteFromEntry(
                                'openai-completions';
   const categoryBaseUrl = categoryConfig.base_url ||
                           proxyConfig.upstream?.default_base_url ||
-                          'https://api.qnaigc.com';
+                          'http://localhost';
+
   const categoryApiKey = categoryConfig.api_key ||
                         proxyConfig.upstream?.default_api_key;
 
@@ -354,7 +355,8 @@ function getDefaultModelRoute(proxyConfig: ProxyConfig): ModelRouteConfig {
                      'openai-completions';
   const defaultBaseUrl = defaultCategoryConfig?.base_url ||
                         proxyConfig.upstream?.default_base_url ||
-                        'https://api.qnaigc.com';
+                        'http://localhost';
+
   const defaultApiKey = defaultCategoryConfig?.api_key ||
                        proxyConfig.upstream?.default_api_key;
 
@@ -1163,6 +1165,13 @@ export function getConfiguredModelIds(config: ProxyConfig): string[] {
       if (value !== undefined) {
         ids.add(key);
       }
+    }
+  }
+
+  // Include composite alias names
+  if (config.composite) {
+    for (const alias of Object.keys(config.composite)) {
+      ids.add(alias);
     }
   }
 

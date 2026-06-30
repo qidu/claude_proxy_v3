@@ -24,7 +24,7 @@ const env: NodeEnv = {
   VERSION: process.env.VERSION || 'dev',
   ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS || '*',
   LOCAL_TIKTOKEN: process.env.LOCAL_TIKTOKEN || 'false',
-  ALLOWED_HOSTS: process.env.ALLOWED_HOSTS || '127.0.0.1,localhost,api.qnaigc.com',
+  ALLOWED_HOSTS: process.env.ALLOWED_HOSTS || '127.0.0.1,localhost',
   IMAGE_BLOCK_DATA_MAX_SIZE: process.env.IMAGE_BLOCK_DATA_MAX_SIZE || '10485760',
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
   GEMINI_API_VERSION: process.env.GEMINI_API_VERSION || 'v1beta',
