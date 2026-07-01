@@ -126,9 +126,9 @@ export async function handleOpenAIRequest(
     const authTokenIn = request.headers.get('Authorization') || '';
     const apiKey = request.headers.get('x-api-key') || '';
     const googApiKey = request.headers.get('x-goog-api-key') || '';
-    activeLogger.debug(requestId, `Authorization: ${authTokenIn.substring(64)} at endpoint`);
-    activeLogger.debug(requestId, `x-api-key: ${apiKey.substring(32)}`);
-    activeLogger.debug(requestId, `x-goog-api-key: ${googApiKey.substring(32)}`);
+    activeLogger.debug(requestId, `Authorization: ${authTokenIn.substring(0, 16)}... at endpoint`);
+    activeLogger.debug(requestId, `x-api-key: ${apiKey.substring(0, 16)}...`);
+    activeLogger.debug(requestId, `x-goog-api-key: ${googApiKey.substring(0, 16)}...`);
 
     // This handler always targets an OpenAI-compatible upstream (openai-completions),
     // which expects `Authorization: Bearer <key>` regardless of the incoming endpoint
@@ -194,7 +194,7 @@ export async function handleOpenAIRequest(
     activeLogger.debug(requestId, `OpenAI upstream url: ${targetUrl}`);
     activeLogger.debug(requestId, `Model: ${openaiRequest.model}, stream=${isStreaming}`);
     const authBaerer = authHeaders['Authorization'] || '';
-    activeLogger.debug(requestId, `Authorization: ${authBaerer.substring(64)} upstream`);
+    activeLogger.debug(requestId, `Authorization: ${authBaerer.substring(0, 16)}... upstream`);
 
     // Prepare headers
     const headers: Record<string, string> = {

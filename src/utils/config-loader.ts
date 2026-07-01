@@ -1689,6 +1689,21 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+// Denylist for keys copied from untrusted request-body payloads into plain
+// objects via bracket assignment (obj[key] = value). JSON.parse makes
+// "__proto__" an own, non-magic property, so this isn't currently
+// exploitable — but assigning through a variable key (rather than a literal)
+// still invokes the Object.prototype.__proto__ setter and could reintroduce
+// pollution if this code is ever refactored into a generic/recursive merge.
+// Reject these keys explicitly as defense in depth.
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function assertSafeKey(key: string, context: string): void {
+  if (DANGEROUS_KEYS.has(key)) {
+    throw new Error(`Invalid key '${key}' in ${context}`);
+  }
+}
+
 function validateAndNormalizeComposite(payload: unknown): Record<string, CompositeModelConfig> {
   if (!isPlainObject(payload)) {
     throw new Error('Invalid composite payload');
@@ -1696,12 +1711,14 @@ function validateAndNormalizeComposite(payload: unknown): Record<string, Composi
 
   const result: Record<string, CompositeModelConfig> = {};
   for (const [alias, targetValue] of Object.entries(payload)) {
+    assertSafeKey(alias, 'composite alias');
     if (!isPlainObject(targetValue)) {
       throw new Error(`Invalid composite targets for alias: ${alias}`);
     }
 
     const targetConfig: CompositeModelConfig = {};
     for (const [key, rawValue] of Object.entries(targetValue)) {
+      assertSafeKey(key, `composite.${alias}`);
       if (key === 'fusion_options') {
         if (!isPlainObject(rawValue)) throw new Error(`Invalid fusion_options for alias: ${alias}`);
         const fo = rawValue as Record<string, unknown>;
@@ -1796,12 +1813,14 @@ function validateAndNormalizeDashboardModels(payload: unknown): Record<string, D
   const result: Record<string, DashboardModelCategoryConfig> = {};
 
   for (const [categoryName, rawCategory] of Object.entries(payload)) {
+    assertSafeKey(categoryName, 'models category');
     if (!isPlainObject(rawCategory)) {
       throw new Error(`Invalid models category: ${categoryName}`);
     }
 
     const category: DashboardModelCategoryConfig = {};
     for (const [key, value] of Object.entries(rawCategory)) {
+      assertSafeKey(key, `models.${categoryName}`);
       if (key === 'api_key') {
         throw new Error(`api_key is not editable in dashboard (${categoryName})`);
       }
@@ -1867,6 +1886,7 @@ export function applyDashboardConfigUpdate(baseConfig: ProxyConfig, payload: unk
     }
 
     for (const [key, value] of Object.entries(dashboardCategory)) {
+      assertSafeKey(key, `models.${categoryName}`);
       if (key === 'upstream_mode' || key === 'base_url') {
         continue;
       }
