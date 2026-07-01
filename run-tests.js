@@ -92,6 +92,12 @@ const suites = [
   '13_fusion/fusion.test.js',
   '14_routing/routing.test.js',
   '15_config_parse/config_parse.test.js',
+  '16_security/ssrf_dynamic_route.test.js',
+  '16_security/privacy_filter.test.js',
+  '16_security/kompress.test.js',
+  '16_security/conversation_store.test.js',
+  '16_security/free_fanout.test.js',
+  '16_security/config_loader_pollution.test.js',
 ];
 
 function replaceRequire(src, baseName, dstPath) {
