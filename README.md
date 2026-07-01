@@ -35,6 +35,9 @@ accounting out of the box.
   primary/fallback, or automatic retry-on-failure routing.
 - **Fusion mode** — fan one request out to multiple models in parallel, then have a
   "synth" model write the final answer.
+- **Schedule aliases** — timetable-based routing: pick which model (or composite)
+  serves a request based on server-local hour-of-day and day-of-week, with a
+  fallback target for any time outside the configured windows.
 - **Extended thinking / reasoning** — Claude-style thinking blocks, with conversion to
   OpenAI `reasoning_effort` for upstreams that need it.
 - **Usage accounting** — per-model token and request stats, viewable in a web dashboard
@@ -148,8 +151,9 @@ TUI=true npm run server
 ```
 
 You get a live view of configured models, token usage, response times, and tool stats.
-Press `c` to edit composite aliases, `t` to send a test request, `r` to reload config,
-`Ctrl+C` to quit. A web dashboard is also available at `GET /dashboard`.
+Press `c` to edit composite aliases, `s` to edit schedule aliases, `t` to send a test
+request, `r` to reload config, `Ctrl+C` to quit. A web dashboard is also available at
+`GET /dashboard`.
 
 ## API Endpoints
 
@@ -166,6 +170,26 @@ Press `c` to edit composite aliases, `t` to send a test request, `r` to reload c
 
 A Gemini `/v1/models/{model}:...` variant exists for each `/v1beta/models/{model}:...`
 endpoint. Full request/response examples live in the [API reference docs](#documentation).
+
+### Dashboard API
+
+The `/dashboard` web UI is driven by a small JSON API. All routes require a
+`Bearer <API_KEY>` header (where `API_KEY` is the proxy's configured auth key).
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /dashboard/api/config` | Read current config snapshot; `?reload=1` re-reads the TOML file |
+| `PUT /dashboard/api/config` | Replace the whole config snapshot (also auto-saves the TOML) |
+| `POST /dashboard/api/global-token-limit` | Set / update the global rolling-window token cap |
+| `POST /dashboard/api/schedule/alias` | Add a new `[schedule]` alias (body: `{alias: string}`) |
+| `DELETE /dashboard/api/schedule/alias/:alias` | Remove a `[schedule]` alias |
+| `POST /dashboard/api/schedule/alias/:alias/target` | Upsert a target's window list (body: `{target, windows}`) |
+| `DELETE /dashboard/api/schedule/alias/:alias/target/:target` | Remove a target from an alias |
+| `POST /dashboard/api/test-model` | Send a test request through a configured model |
+| `GET /dashboard/api/stats` | Per-model token and request stats |
+
+The four `schedule/*` routes are the dedicated CRUD for `[schedule]` aliases;
+mutations also round-trip through the TOML file so the change persists across restarts.
 
 ## Model Routing
 
@@ -252,6 +276,152 @@ optional "judge" and a required "synth" model that writes the final answer:
 
 For the full set of composite/fusion options and the TUI editor workflow, see
 [`docs/design_fusion_composite_alias.md`](./docs/design_fusion_composite_alias.md).
+
+## Schedule Aliases
+
+A `[schedule]` alias is the **top-most layer**: it picks *one* target for the request
+based on a timetable (server-local hour-of-day and day-of-week), then hands that target
+down to whatever routing rule resolves it (`[models.*]` or another `[composite]`).
+There is no weighting or fan-out here — exactly one target is selected per request.
+
+```toml
+[schedule]
+"saver" = {
+  "maxplan"        = [{from = 9, to = 12}, {from = 14, to = 18}],
+  "code-small"     = [{from = 0, to = 9, days = "weekday"}],
+  "max-m3"         = [{days = "weekend"}],
+  "max-m2.7-high"  = []
+}
+```
+
+In the example above, on weekday mornings `code-small` serves, on weekday office
+hours `maxplan` serves, on weekends `max-m3` serves, and `max-m2.7-high` (the
+**fallback** with an empty `[]` window list) handles anything that falls between
+the configured windows.
+
+**Window syntax — every entry is `{from?, to?, days?}`:**
+
+| Field | Range | Default | Meaning |
+|---|---|---|---|
+| `from` | `0..24` (inclusive of start) | `0` | Hour-of-day the window opens (server-local time). |
+| `to`   | `0..24` (exclusive of end) | `24` | Hour-of-day the window closes. `24` is a legal value (end-of-day). |
+| `days` | `"weekday"`, `"weekend"`, or `[mon, tue, ...]` | every day | When the window applies, evaluated against server-local day-of-week. |
+
+A target with **`windows = []`** is the **fallback**: it serves when no other target
+matches the current time. Each alias may have **at most one fallback** target.
+If no fallback exists and no window matches, the alias resolves to `undefined` and the
+client receives `404 model not found`.
+
+**Selection rules (in order, first match wins):**
+
+1. The current `(hour, day-of-week)` matches one of the target's `windows` → that target.
+2. Otherwise, the target with `windows = []` (the fallback) → that target.
+3. Otherwise, the alias resolves to `undefined` (no such model right now).
+
+**Windows are unioned across the alias**, not per-target: a single window belongs to
+exactly one target. If two targets cover overlapping hours, the *first one listed*
+in the TOML wins for the overlap.
+
+**A schedule target is itself routed through the rest of the config** — `maxplan`,
+`code-small`, `max-m3`, `max-m2.7-high` above are ordinary `[composite]` or
+`[models.*]` entries. Schedule is *transparent composition*: it doesn't replace
+composite/fusion/models, it just decides which of them serves this request at this
+moment.
+
+**Manage via the dashboard / TUI:**
+
+- Web UI: open `GET /dashboard`, scroll to the **Schedule** section, edit aliases and
+  their window lists inline. Save persists to `proxy_config.toml`.
+- TUI: press `s` to open `ScheduleAliasesOverlay` (mirror of the composite editor
+  at `c`). `a` adds an alias, `t` adds a target under the selected alias, `d`
+  deletes, `e` edits the selected target's windows, arrow keys navigate, `Esc` closes.
+- HTTP: the four `/dashboard/api/schedule/*` routes listed in [Dashboard API](#dashboard-api).
+
+**Auth / section flag:** schedule targets inherit whatever `route.section === 'free'`
+or "caller's key wins" rule their underlying `[models.*]` section imposes — schedule
+selects the target, but the target's section still governs upstream auth.
+
+## Routing Hierarchy (Logic Levels)
+
+The proxy has **three logic levels**, stacked bottom-up. Each level chooses *which
+level below* gets to serve this request:
+
+```
+                        ┌────────────────────────────────┐
+   Level 3 (top)        │  [schedule]                   │  ← timetable (hour-of-day, day-of-week)
+                        │  "what should serve *now*?"   │
+                        ├────────────────────────────────┤
+   Level 2 (middle)     │  [composite]                  │  ← share / primary+fallback / fusion fan-out
+                        │  "split across N targets?"    │
+                        ├────────────────────────────────┤
+   Level 1 (base)       │  [models.*]                   │  ← exact name / prefix-* wildcard / * catch-all
+                        │  "which upstream?"             │
+                        └────────────────────────────────┘
+```
+
+### Level 1 — `[models.*]` custom / target models
+
+Direct routing to an upstream. Three lookup modes, tried in priority order:
+
+- **Exact key** — `"claude-sonnet-4-6" = {...}` resolves only that exact name.
+- **Prefix wildcard** — `"claude-*" = {...}` resolves any `claude-*` and substitutes
+  the `*` with the real suffix.
+- **`*` catch-all** — `"*" = {}` (typically in `[models.default]`) resolves anything
+  that wasn't claimed by an earlier mode, preserving the original model name.
+
+Each entry picks its `upstream_mode` / `base_url` / `api_key` from an inheritance
+chain (per-entry → section → `[upstream]` defaults). Custom/target models are the
+*only* level that actually talks to an upstream — Levels 2 and 3 must always
+resolve down to a Level-1 entry before a single byte is sent.
+
+### Level 2 — `[composite]` aliases (share or fan-out)
+
+Logical grouping of two or more Level-1 entries under one name. Two strategies:
+
+- **`share`-weighted distribution** — `{"max-m2.7-high" = {share = 100}, "max-m3" = {share = 100}}`
+  splits each request randomly across targets by weight. One or more may be marked
+  `primary` (the default target) or `fallback` (consulted in order if the primary fails).
+  This is one request → one target.
+- **`fusion` fan-out** — every target with `fusion = 1, role = "panel"` runs in parallel
+  against the same request; an optional `role = "judge"` scores them; and a required
+  `role = "synth"` merges them into one final response. `fusion_options` configures
+  `min_panel`, `panel_timeout_ms`, `judge_required`, `expose_metadata`, `max_concurrent`.
+  This is one request → many targets → one response.
+
+A composite alias **does not route directly**. Each target it names is resolved
+through its own `[models.*]` section, so per-target `base_url`, `api_key`, and
+section-based auth rules all still apply. Section flag `route.section === 'free'`
+is computed per-target, so a composite made of free-tier targets stays free-tier end-to-end.
+
+### Level 3 — `[schedule]` timetable
+
+The highest layer. Each request asks: *given the current server-local hour and
+day-of-week, which [composite] or [models.*] entry should serve me right now?*
+The chosen target then flows through Levels 2 → 1 exactly as if the caller had
+asked for that target by name. Schedule is **transparent**: it adds *when* without
+overriding *how*.
+
+| Level | Section | Selects by | Cardinality | Re-routes to |
+|:-----:|:--------|:-----------|:------------|:-------------|
+| 3 | `[schedule]` | Timetable windows | 1 → 1 (one target picked per request) | Level 2 or 1 |
+| 2 | `[composite]` (share / primary+fallback) | Weighted random or fallback order | 1 → 1 | Level 1 |
+| 2 | `[composite]` (fusion) | Role + `fusion_options` | 1 → N → 1 (panel×N + judge + synth) | Level 1 |
+| 1 | `[models.*]` | Exact / `prefix-*` / `*` catch-all | 1 → 1 (one upstream) | — (sends) |
+
+Three concrete examples of the same caller request resolving differently per layer:
+
+- **Level 1 only** — `model: "claude-sonnet-4-6"` → matched exactly in `[models.claude]`
+  → sent to `api.anthropic.com`.
+- **Level 2 (share)** — `model: "maxplan"` → `[composite].maxplan` picks
+  `max-m2.7-high` or `max-m3` by weight → that target resolved in `[models.*]`
+  → sent to its upstream.
+- **Level 2 (fusion)** — `model: "smarter"` → `[composite].smarter` fans out to
+  three panel targets in parallel, judges them, and a `synth` target merges the
+  result → each leg resolved in its own `[models.*]`.
+- **Level 3 (schedule)** — `model: "saver"` at 10 AM Tuesday → `[schedule].saver`
+  picks the `maxplan` target (its `from = 9, to = 12` window matches) →
+  `[composite].maxplan` picks one of its targets by weight → that target resolved
+  in `[models.*]` → sent.
 
 ## Deployment
 

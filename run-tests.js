@@ -98,6 +98,7 @@ const suites = [
   '16_security/conversation_store.test.js',
   '16_security/free_fanout.test.js',
   '16_security/config_loader_pollution.test.js',
+  '16_security/schedule_routing.test.js',
 ];
 
 function replaceRequire(src, baseName, dstPath) {

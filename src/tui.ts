@@ -15,13 +15,18 @@ import {
 } from '@earendil-works/pi-tui';
 import {
   addCompositeAliasFromDashboard,
+  addScheduleAliasFromDashboard,
   getDashboardSnapshot,
   removeCompositeTargetFromDashboard,
+  removeScheduleAliasFromDashboard,
+  removeScheduleTargetFromDashboard,
   upsertCompositeAliasLimitFromDashboard,
   upsertCompositeTargetFromDashboard,
   upsertFusionOptionsFromDashboard,
   upsertGlobalTokenLimitFromDashboard,
+  upsertScheduleTargetFromDashboard,
 } from './handlers/dashboard.js';
+import { getConfiguredModelIds, type ScheduleWindow } from './utils/config-loader.js';
 import { buildHeatmap, renderHeatmapPanel } from './heatmap.js';
 import { dumpTodayTokens, TOKEN_LOG_FILE, getActiveRequestCount, getTokensInWindow, blockTool, unblockTool, isToolBlocked } from './utils/dashboard-stats.js';
 import type { Env } from './types/shared.js';
@@ -685,6 +690,190 @@ class CompositeAliasesOverlay implements Component, Focusable {
   }
 }
 
+class ScheduleAliasesOverlay implements Component, Focusable {
+  focused = false;
+  private snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
+  private message = 'Ready';
+  private selectionIndex = 0;
+  private scrollOffset = 0;
+
+  constructor(private readonly app: DashboardApp) {}
+
+  setSnapshot(snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null): void {
+    this.snapshot = snapshot;
+    const total = this.selectionCount();
+    if (this.selectionIndex >= total) {
+      this.selectionIndex = Math.max(0, total - 1);
+    }
+  }
+
+  setMessage(message: string, _holdMs = 0): void {
+    this.message = message;
+  }
+
+  focusAlias(alias: string): void {
+    const index = this.selections().findIndex((selection) => selection?.kind === 'alias' && selection.alias === alias);
+    if (index >= 0) {
+      this.selectionIndex = index;
+    }
+  }
+
+  bumpSelection(delta: number): void {
+    const total = this.selectionCount();
+    if (total === 0) return;
+    this.selectionIndex = Math.max(0, Math.min(total - 1, this.selectionIndex + delta));
+  }
+
+  selectCurrent(): Selection {
+    return this.selections()[this.selectionIndex] ?? null;
+  }
+
+  invalidate(): void {}
+
+  handleInput(data: string): void {
+    if (matchesKey(data, 'escape')) {
+      this.app.closeOverlay();
+      return;
+    }
+    if (matchesKey(data, 'ctrl+c')) {
+      this.app.stopAndExit();
+      return;
+    }
+    if (matchesKey(data, 'ctrl+u')) {
+      this.app.dumpTokens();
+      return;
+    }
+    if (matchesKey(data, 'r')) {
+      void this.app.refresh(false, true);
+      return;
+    }
+    if (matchesKey(data, 'down') || matchesKey(data, 'j')) {
+      this.bumpSelection(1);
+      this.app.requestRender();
+      return;
+    }
+    if (matchesKey(data, 'up') || matchesKey(data, 'k')) {
+      this.bumpSelection(-1);
+      this.app.requestRender();
+      return;
+    }
+
+    const selected = this.selectCurrent();
+    if (matchesKey(data, 'a')) {
+      this.app.openAddScheduleAliasPrompt();
+      return;
+    }
+    if (matchesKey(data, 't') && selected?.kind === 'alias') {
+      this.app.openAddScheduleTargetPrompt(selected.alias);
+      return;
+    }
+    if (matchesKey(data, 'e') && selected?.kind === 'target') {
+      this.app.openEditScheduleWindowsPrompt(selected.alias, selected.target);
+      return;
+    }
+    if (matchesKey(data, 'd')) {
+      if (selected?.kind === 'target') {
+        this.app.openDeleteScheduleTargetConfirm(selected.alias, selected.target);
+      } else if (selected?.kind === 'alias') {
+        this.app.openDeleteScheduleAliasConfirm(selected.alias);
+      } else {
+        this.setMessage('Select an alias or target first');
+        this.app.requestRender();
+      }
+      return;
+    }
+    if (matchesKey(data, 'enter') || matchesKey(data, 'return')) {
+      this.setMessage(selected ? `${selected.kind} selected` : '');
+      this.app.requestRender();
+      return;
+    }
+  }
+
+  render(width: number): string[] {
+    const snap = this.snapshot;
+    const toolbar = `A ${dim('add alias')} T ${dim('add target')} E ${dim('edit windows')} D ${dim('del')} Esc ${dim('hide')} ↑↓ ${dim('move')} `;
+
+    if (!snap) {
+      return frame('Edit Schedule Aliases Config', [toolbar, 'Loading…'], width).map((line) => clip(line, width));
+    }
+
+    const selections = this.selections();
+    const selected = selections[this.selectionIndex] ?? null;
+    const scheduleMap = (snap.config.schedule || {}) as Record<string, Record<string, ScheduleWindow[]>>;
+    const schedules = Object.keys(scheduleMap).sort();
+
+    const bodyLines: string[] = [];
+    const selectionLineIndex: number[] = [];
+
+    if (!schedules.length) bodyLines.push(dim('  none'));
+    for (const alias of schedules) {
+      const targets = scheduleMap[alias] || {};
+      const selectedAlias = selected?.kind === 'alias' && selected.alias === alias;
+      const prefix = selectedAlias ? green('▶') : dim('│');
+      selectionLineIndex.push(bodyLines.length);
+      bodyLines.push(`  ${prefix} ${bold(alias)}`);
+      const targetNames = Object.keys(targets).sort();
+      if (targetNames.length === 0) bodyLines.push(`    ${dim('(empty)')}`);
+      for (const target of targetNames) {
+        const selectedTarget = selected?.kind === 'target' && selected.alias === alias && selected.target === target;
+        const mark = selectedTarget ? green('▶') : dim('·');
+        const windows = Array.isArray(targets[target]) ? targets[target] : [];
+        const summary = windows.length === 0
+          ? dim('fallback')
+          : windows.map((w) => {
+              const from = typeof w?.from === 'number' ? w.from : 0;
+              const to = typeof w?.to === 'number' ? w.to : 24;
+              const days = Array.isArray(w?.days) && w.days.length > 0 ? `[${w.days.join(',')}]` : '';
+              return `${from}-${to}${days}`;
+            }).join(' ');
+        selectionLineIndex.push(bodyLines.length);
+        bodyLines.push(`  ${dim('│')} ${mark} ${clip(target, 26)} ${dim(summary)}`);
+      }
+    }
+
+    const fixedLines = 3 /* frame borders + title */ + 1 /* toolbar */ + 1 /* blank */ + 1 /* status */;
+    const termRows = this.app.getTerminalRows();
+    const maxHeight = Math.max(3, Math.floor(termRows * 0.7));
+    const viewportHeight = Math.max(1, maxHeight - fixedLines);
+
+    const selectedBodyLine = selectionLineIndex[this.selectionIndex] ?? 0;
+    if (selectedBodyLine < this.scrollOffset) {
+      this.scrollOffset = selectedBodyLine;
+    } else if (selectedBodyLine >= this.scrollOffset + viewportHeight) {
+      this.scrollOffset = selectedBodyLine - viewportHeight + 1;
+    }
+    this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, Math.max(0, bodyLines.length - viewportHeight)));
+
+    const visibleBody = bodyLines.slice(this.scrollOffset, this.scrollOffset + viewportHeight);
+    const scrollIndicator = bodyLines.length > viewportHeight
+      ? dim(` ${this.scrollOffset + 1}-${Math.min(this.scrollOffset + viewportHeight, bodyLines.length)}/${bodyLines.length}`)
+      : '';
+    const statusLine = (this.message ? yellow(this.message) : dim('Ready')) + scrollIndicator;
+
+    const allLines = [toolbar, ...visibleBody, '', statusLine];
+    return frame('Edit Schedule Aliases Config', allLines, width).map((line) => clip(line, width));
+  }
+
+  private selections(): Selection[] {
+    const snap = this.snapshot;
+    if (!snap) return [];
+    const scheduleMap = (snap.config.schedule || {}) as Record<string, Record<string, unknown>>;
+    const out: Selection[] = [];
+    for (const alias of Object.keys(scheduleMap).sort()) {
+      out.push({ kind: 'alias', alias });
+      const targets = scheduleMap[alias] || {};
+      for (const target of Object.keys(targets).sort()) {
+        out.push({ kind: 'target', alias, target });
+      }
+    }
+    return out;
+  }
+
+  private selectionCount(): number {
+    return this.selections().length;
+  }
+}
+
 class DashboardView implements Component {
   private snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
   private message = 'Ready';
@@ -744,6 +933,10 @@ class DashboardView implements Component {
     }
     if (matchesKey(data, 'shift+c') || matchesKey(data, 'c')) {
       this.app.openCompositeAliasesOverlay();
+      return;
+    }
+    if (matchesKey(data, 'shift+s') || matchesKey(data, 's')) {
+      this.app.openScheduleAliasesOverlay();
       return;
     }
     if (matchesKey(data, 'l')) {
@@ -919,6 +1112,7 @@ class DashboardApp {
   private readonly view = new DashboardView(this, () => this.scheduleRender());
   private overlay: OverlayHandle | null = null;
   private compositeOverlay: CompositeAliasesOverlay | null = null;
+  private scheduleOverlay: ScheduleAliasesOverlay | null = null;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
   private hourlyDumpTimer: ReturnType<typeof setInterval> | null = null;
   private modelTestTimer: ReturnType<typeof setInterval> | null = null;
@@ -1020,6 +1214,7 @@ class DashboardApp {
       this.lastRefreshTotalTokens = snapshot.modelStats.reduce((sum, m) => sum + m.total_tokens, 0);
       this.view.setSnapshot(snapshot);
       this.compositeOverlay?.setSnapshot(snapshot);
+      this.scheduleOverlay?.setSnapshot(snapshot);
       if (fromMutation) this.view.setConfigStatus('saved');
       // When this refresh is triggered by a save action, don't override the
       // success message the save flow sets right after this returns. The
@@ -1073,6 +1268,27 @@ class DashboardApp {
     this.closeOverlay();
     const overlay = new CompositeAliasesOverlay(this);
     this.compositeOverlay = overlay;
+    this.overlay = this.tui.showOverlay(overlay, { width: '80%', maxHeight: '70%', anchor: 'center' });
+    overlay.setSnapshot(this.viewSnapshot());
+    this.tui.setFocus(overlay);
+    this.requestRender();
+  }
+
+  openScheduleAliasesOverlay(): void {
+    if (this.scheduleOverlay) {
+      if (this.overlay) {
+        this.closeOverlay();
+      } else {
+        this.overlay = this.tui.showOverlay(this.scheduleOverlay, { width: '80%', maxHeight: '70%', anchor: 'center' });
+        this.scheduleOverlay.setSnapshot(this.viewSnapshot());
+        this.tui.setFocus(this.scheduleOverlay);
+        this.requestRender();
+      }
+      return;
+    }
+    this.closeOverlay();
+    const overlay = new ScheduleAliasesOverlay(this);
+    this.scheduleOverlay = overlay;
     this.overlay = this.tui.showOverlay(overlay, { width: '80%', maxHeight: '70%', anchor: 'center' });
     overlay.setSnapshot(this.viewSnapshot());
     this.tui.setFocus(overlay);
@@ -1733,6 +1949,195 @@ class DashboardApp {
     this.overlay.focus();
   }
 
+  openAddScheduleAliasPrompt(): void {
+    this.openPrompt('Add schedule alias', 'Alias name:', '', async (value) => {
+      const trimmed = value.trim();
+      if (!trimmed) return;
+      try {
+        addScheduleAliasFromDashboard(this.source.env, trimmed);
+        await this.refresh(true);
+        this.scheduleOverlay?.focusAlias(trimmed);
+        this.view.setMessage(`added schedule alias ${trimmed}`);
+      } catch (error) {
+        this.view.setMessage((error as Error).message);
+        await this.refresh();
+        this.scheduleOverlay?.focusAlias(trimmed);
+      }
+    });
+  }
+
+  openAddScheduleTargetPrompt(alias: string): void {
+    // Schedule targets must be concrete upstream model ids (the resolver picks
+    // one of them based on the time-of-day window), not composite aliases —
+    // so we build a minimal picker from `getConfiguredModelIds` rather than
+    // reusing `modelChoices()` (which includes aliases).
+    const snapshot = this.viewSnapshot();
+    if (!snapshot || !this.proxyConfig) return;
+    const configuredIds = getConfiguredModelIds(this.proxyConfig);
+    const existing = new Set(Object.keys(((snapshot.config.schedule || {}) as Record<string, Record<string, unknown>>)[alias] || {}));
+    const choices: SelectItem[] = configuredIds
+      .filter((id) => !existing.has(id))
+      .sort()
+      .map((id) => ({ value: id, label: id }));
+
+    if (choices.length === 0) {
+      this.view.setMessage('No additional configured models available');
+      this.requestRender();
+      return;
+    }
+
+    this.hideOverlay();
+    const overlay = new ListOverlay(
+      `Add target to ${bold(alias)}`,
+      `↑/↓ ${dim('move')}  Enter ${dim('select')}  Esc ${dim('cancel')}`,
+      choices,
+      (item) => {
+        this.hideOverlay();
+        // Default to one full-day window; user can edit afterwards with `e`.
+        void (async () => {
+          try {
+            upsertScheduleTargetFromDashboard(this.source.env, alias, item.value, [{ from: 0, to: 24 }]);
+            await this.refresh(true);
+            this.scheduleOverlay?.focusAlias(alias);
+            this.view.setMessage(`added ${item.value} to ${alias}`);
+          } catch (error) {
+            this.view.setMessage((error as Error).message);
+            await this.refresh();
+            this.scheduleOverlay?.focusAlias(alias);
+          }
+        })();
+      },
+      () => {
+        this.hideOverlay();
+        this.showScheduleOverlay();
+        this.requestRender();
+      },
+      8,
+    );
+    this.overlay = this.tui.showOverlay(overlay, { width: '60%', maxHeight: '40%', anchor: 'center' });
+    this.overlay.focus();
+  }
+
+  openEditScheduleWindowsPrompt(alias: string, target: string): void {
+    const snapshot = this.viewSnapshot();
+    const current = ((snapshot?.config.schedule || {}) as Record<string, Record<string, ScheduleWindow[]>>)[alias]?.[target] ?? [];
+    const isFallback = current.length === 0;
+    const defaultValue = isFallback ? '[]' : JSON.stringify(current);
+    this.openPrompt(
+      `Windows for ${bold(alias)}.${target}`,
+      'JSON array of {from, to, days?}  from/to in 0..24  days optional  [] = fallback',
+      defaultValue,
+      async (value) => {
+        const trimmed = value.trim();
+        if (!trimmed) return;
+        let windows: ScheduleWindow[];
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (!Array.isArray(parsed)) {
+            this.view.setMessage('Must be a JSON array');
+            await this.refresh();
+            this.scheduleOverlay?.focusAlias(alias);
+            return;
+          }
+          windows = parsed as ScheduleWindow[];
+        } catch (error) {
+          this.view.setMessage(`Invalid JSON: ${(error as Error).message}`);
+          await this.refresh();
+          this.scheduleOverlay?.focusAlias(alias);
+          return;
+        }
+        try {
+          upsertScheduleTargetFromDashboard(this.source.env, alias, target, windows);
+          await this.refresh(true);
+          this.scheduleOverlay?.focusAlias(alias);
+          this.view.setMessage(windows.length === 0 ? `${alias}.${target} = fallback` : `updated ${alias}.${target} windows`);
+        } catch (error) {
+          this.view.setMessage((error as Error).message);
+          await this.refresh();
+          this.scheduleOverlay?.focusAlias(alias);
+        }
+      },
+    );
+  }
+
+  openDeleteScheduleAliasConfirm(alias: string): void {
+    const scheduleToRestore = this.scheduleOverlay;
+    this.closeOverlay();
+    const overlay = new ListOverlay(
+      `Delete schedule.${alias}?`,
+      'Enter confirm  Esc cancel',
+      [
+        { value: 'yes', label: 'Yes', description: 'Delete alias' },
+        { value: 'no', label: 'No', description: 'Cancel' },
+      ],
+      (item) => {
+        this.closeOverlay();
+        if (item.value === 'yes') {
+          try {
+            removeScheduleAliasFromDashboard(this.source.env, alias);
+            this.view.setMessage(`deleted schedule.${alias}`);
+            void this.refresh(true);
+          } catch (error) {
+            this.view.setMessage((error as Error).message);
+            void this.refresh();
+          }
+        } else {
+          this.view.setMessage('delete cancelled');
+          void this.refresh();
+        }
+        if (scheduleToRestore) this.showScheduleOverlayInstance(scheduleToRestore);
+      },
+      () => {
+        this.closeOverlay();
+        this.view.setMessage('delete cancelled');
+        if (scheduleToRestore) this.showScheduleOverlayInstance(scheduleToRestore);
+        this.requestRender();
+      },
+      2,
+    );
+    this.overlay = this.tui.showOverlay(overlay, { width: '50%', maxHeight: '30%', anchor: 'center' });
+    this.overlay.focus();
+  }
+
+  openDeleteScheduleTargetConfirm(alias: string, target: string): void {
+    const scheduleToRestore = this.scheduleOverlay;
+    this.closeOverlay();
+    const overlay = new ListOverlay(
+      `Delete schedule.${alias}.${target}?`,
+      'Enter confirm  Esc cancel',
+      [
+        { value: 'yes', label: 'Yes', description: 'Delete target' },
+        { value: 'no', label: 'No', description: 'Cancel' },
+      ],
+      (item) => {
+        this.closeOverlay();
+        if (item.value === 'yes') {
+          try {
+            removeScheduleTargetFromDashboard(this.source.env, alias, target);
+            this.view.setMessage(`deleted schedule.${alias}.${target}`);
+            void this.refresh(true);
+          } catch (error) {
+            this.view.setMessage((error as Error).message);
+            void this.refresh();
+          }
+        } else {
+          this.view.setMessage('delete cancelled');
+          void this.refresh();
+        }
+        if (scheduleToRestore) this.showScheduleOverlayInstance(scheduleToRestore);
+      },
+      () => {
+        this.closeOverlay();
+        this.view.setMessage('delete cancelled');
+        if (scheduleToRestore) this.showScheduleOverlayInstance(scheduleToRestore);
+        this.requestRender();
+      },
+      2,
+    );
+    this.overlay = this.tui.showOverlay(overlay, { width: '50%', maxHeight: '30%', anchor: 'center' });
+    this.overlay.focus();
+  }
+
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
@@ -1759,6 +2164,7 @@ class DashboardApp {
     this.overlay?.hide();
     this.overlay = null;
     this.compositeOverlay = null;
+    this.scheduleOverlay = null;
     this.tui.setFocus(this.view);
   }
 
@@ -1782,6 +2188,20 @@ class DashboardApp {
     this.tui.setFocus(overlay);
   }
 
+  private showScheduleOverlay(): void {
+    if (this.scheduleOverlay) this.showScheduleOverlayInstance(this.scheduleOverlay);
+  }
+
+  // Re-show a previously-captured schedule overlay instance. Used by callbacks
+  // that need to restore the panel after closeOverlay() has nulled the field.
+  private showScheduleOverlayInstance(overlay: ScheduleAliasesOverlay): void {
+    if (this.overlay) return;
+    this.overlay = this.tui.showOverlay(overlay, { width: '80%', maxHeight: '70%', anchor: 'center' });
+    overlay.setSnapshot(this.viewSnapshot());
+    this.scheduleOverlay = overlay;
+    this.tui.setFocus(overlay);
+  }
+
   private openPrompt(
     title: string,
     prompt: string,
@@ -1789,6 +2209,7 @@ class DashboardApp {
     onSubmit: (value: string) => Promise<void> | void,
   ): void {
     const restoreCompositeOverlay = this.compositeOverlay !== null;
+    const restoreScheduleOverlay = this.scheduleOverlay !== null;
     this.hideOverlay();
     const overlay = new PromptOverlay(
       title,
@@ -1802,6 +2223,9 @@ class DashboardApp {
             if (restoreCompositeOverlay) {
               this.showCompositeOverlay();
             }
+            if (restoreScheduleOverlay) {
+              this.showScheduleOverlay();
+            }
             this.requestRender();
           } catch (error) {
             this.view.setMessage((error as Error).message);
@@ -1813,6 +2237,9 @@ class DashboardApp {
         this.hideOverlay();
         if (restoreCompositeOverlay) {
           this.showCompositeOverlay();
+        }
+        if (restoreScheduleOverlay) {
+          this.showScheduleOverlay();
         }
         this.view.setMessage('cancelled');
         this.requestRender();

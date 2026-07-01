@@ -20,17 +20,21 @@ import { handleEmbeddingsRequest } from './handlers/embeddings.js';
 import { handleChatCompletionsPassthrough } from './handlers/chat-completions.js';
 import {
   handleDashboardAgentStats,
+  handleDashboardAddScheduleAlias,
   handleDashboardGetConfig,
   handleDashboardGlobalTokenLimit,
   handleDashboardModelStats,
   handleDashboardPage,
   handleDashboardPutConfig,
+  handleDashboardRemoveScheduleAlias,
+  handleDashboardRemoveScheduleTarget,
   handleDashboardRequestStats,
   handleDashboardTestModel,
   handleDashboardToggleToolBlock,
   handleDashboardToolBlocklist,
+  handleDashboardUpsertScheduleTarget,
 } from './handlers/dashboard.js';
-import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, getCompositeAliasMode, resolveFusionPlan, FusionPlan, ModelRouteConfig, ProxyConfig, parseHumanTokenLimit, getAllowedHostsFromConfig } from './utils/config-loader.js';
+import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, getCompositeAliasMode, resolveFusionPlan, FusionPlan, ModelRouteConfig, ProxyConfig, parseHumanTokenLimit, getAllowedHostsFromConfig, resolveScheduleTarget } from './utils/config-loader.js';
 import {
   extractToolNamesFromBody,
   extractToolRequestCharLengthsFromBody,
@@ -626,6 +630,41 @@ export default {
         return applyCorsHeaders(response, request, env);
       }
 
+      if (path === '/dashboard/api/schedule/alias' && request.method === 'POST') {
+        const response = await handleDashboardAddScheduleAlias(request, env);
+        return applyCorsHeaders(response, request, env);
+      }
+
+      {
+        const aliasMatch = path.match(/^\/dashboard\/api\/schedule\/alias\/([^/]+)$/);
+        if (aliasMatch && request.method === 'DELETE') {
+          const alias = decodeURIComponent(aliasMatch[1]);
+          const response = handleDashboardRemoveScheduleAlias(env, alias);
+          return applyCorsHeaders(response, request, env);
+        }
+      }
+
+      {
+        const targetMatch = path.match(/^\/dashboard\/api\/schedule\/alias\/([^/]+)\/target$/);
+        if (targetMatch && request.method === 'POST') {
+          const alias = decodeURIComponent(targetMatch[1]);
+          const response = await handleDashboardUpsertScheduleTarget(request, env, alias);
+          return applyCorsHeaders(response, request, env);
+        }
+      }
+
+      {
+        const targetDeleteMatch = path.match(
+          /^\/dashboard\/api\/schedule\/alias\/([^/]+)\/target\/([^/]+)$/,
+        );
+        if (targetDeleteMatch && request.method === 'DELETE') {
+          const alias = decodeURIComponent(targetDeleteMatch[1]);
+          const target = decodeURIComponent(targetDeleteMatch[2]);
+          const response = handleDashboardRemoveScheduleTarget(env, alias, target);
+          return applyCorsHeaders(response, request, env);
+        }
+      }
+
       // Skip favicon requests
       if (path === '/favicon.ico') {
         return new Response(null, { status: 204 });
@@ -764,6 +803,7 @@ export default {
       };
       let compositeAttempts: RouteAttempt[] | undefined;
       let compositeAliasName: string | undefined;
+      let scheduleAliasName: string | undefined;
 
       // Privacy filter: sentinel -> original mapping for this request, restored
       // on the client-facing response. Empty unless redaction actually runs.
@@ -839,6 +879,20 @@ export default {
             const modelMatch = path.match(/\/(v1beta|v1)\/models\/([^:?]+):(stream)?(?:generateContent|streamGenerateContent|countTokens)/);
             if (modelMatch) {
               modelName = decodeURIComponent(modelMatch[2]);
+            }
+          }
+
+          // Schedule resolution: a schedule alias picks one of its listed target
+          // aliases based on server-local time-of-day/day-of-week, then delegates
+          // to the normal composite/fusion/plain routing logic for that target.
+          // Single-hop only — if the resolved target is itself a schedule alias,
+          // it is treated as a literal name rather than re-resolved.
+          if (modelName) {
+            const scheduledTarget = resolveScheduleTarget(modelName, proxyConfig);
+            if (scheduledTarget) {
+              scheduleAliasName = modelName;
+              logger.debug(requestId, `Schedule routing: ${modelName} -> ${scheduledTarget}`);
+              modelName = scheduledTarget;
             }
           }
 
@@ -1736,7 +1790,7 @@ export default {
         for (let i = 0; i < compositeAttempts.length; i++) {
           const attempt = compositeAttempts[i];
           try {
-            logger.info(requestId, `${new URL(attempt.request.url).pathname} for ${compositeAliasName ?? attempt.modelId} to ${attempt.targetUrl} (${attempt.upstreamMode})`);
+            logger.info(requestId, `${new URL(attempt.request.url).pathname} for ${scheduleAliasName ?? compositeAliasName ?? attempt.modelId} to ${attempt.targetUrl} (${attempt.upstreamMode})`);
             const response = await runAttempt(attempt);
             recordRequestTiming(path, Date.now() - requestStartTime);
             return applyCorsHeaders(await restorePrivacyResponse(response, piiMapping), attempt.request, env);

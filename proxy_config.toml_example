@@ -191,3 +191,12 @@ base_url = "https://openrouter.ai/api"
 # `fusion = 1` to indicate participation. The actual upstream call for each
 # role is routed via the target's own `[models.*]` section.
 "smarter" = {fusion_options = {min_panel = 2, panel_timeout_ms = 300000, judge_required = true, expose_metadata = true, max_concurrent = 2}, "deepseek-v4-flash" = {fusion = 1, role = "panel"}, "max-m2.7-high" = {fusion = 1, role = "panel"}, "max-m3" = {role = "synth"}, "deepseek-v4-pro" = {fusion = 1, role = "judge"}}
+# Schedule is higher level definition than composite (fusion) and custom models.
+# It defines how to plan or arrange several aliases or models in a timetable.
+# for example, a `saver` plan could be: 
+# - "maxplan" serves every day from 9 - 12 and 14 - 18.
+# - "code-small" serves just weekdays from 0 to 9.
+# - "max-m3" serves just weekends.
+# - "max-m2.7-high serves all else time cause it has no specific arrange. So it's a fallback model alias in this schedule.
+[schedule]
+"saver" = {"maxplan" = [{from = 9, to = 12}, {from = 14, to = 18}], "code-small" = [{from = 0, to = 9, days="weekday"}], "max-m3" = [{days = "weekend"}], "max-m2.7-high" = []}

@@ -26,6 +26,7 @@ export interface ProxyConfig {
   };
   models?: Record<string, ModelCategoryConfig | ModelArrayConfig>;
   composite?: Record<string, CompositeModelConfig>;
+  schedule?: Record<string, ScheduleConfig>;
   defaults?: {
     upstream_mode?: string;
   };
@@ -113,6 +114,20 @@ export interface FusionPlan {
   synth: { modelName: string; route: ModelRouteConfig };
   options: Required<FusionOptions>;
 }
+
+// 'weekday' = Mon-Fri (day 1-5), 'weekend' = Sat/Sun (day 0,6), string[] = lowercase 3-letter day
+// names (e.g. ['mon','tue']). Default (undefined) = every day.
+export type ScheduleDaysSpec = 'weekday' | 'weekend' | string[];
+
+export interface ScheduleWindow {
+  from?: number; // hour 0-24, default 0
+  to?: number;   // hour 0-24, default 24
+  days?: ScheduleDaysSpec;
+}
+
+// alias -> target model/alias name -> list of windows. Empty array = fallback
+// (always eligible, used when no other target's windows match "now").
+export type ScheduleConfig = Record<string, ScheduleWindow[]>;
 
 const COMPOSITE_META_KEYS = new Set(['token_limit', 'fusion_options']);
 
@@ -471,6 +486,70 @@ export function resolveFusionPlan(
   return { alias: modelName, panel, judge, synth, options };
 }
 
+export function isScheduleAlias(modelName: string, proxyConfig: ProxyConfig): boolean {
+  return !!proxyConfig.schedule?.[modelName];
+}
+
+function windowMatches(window: ScheduleWindow, hour: number, day: number): boolean {
+  const from = window.from ?? 0;
+  const to = window.to ?? 24;
+  if (!(hour >= from && hour < to)) {
+    return false;
+  }
+
+  const days = window.days;
+  if (days === undefined) {
+    return true;
+  }
+  if (days === 'weekday') {
+    return day >= 1 && day <= 5;
+  }
+  if (days === 'weekend') {
+    return day === 0 || day === 6;
+  }
+  if (Array.isArray(days)) {
+    const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const todayName = dayNames[day];
+    return days.some((d) => typeof d === 'string' && d.toLowerCase().slice(0, 3) === todayName);
+  }
+  return true;
+}
+
+/**
+ * Resolve a schedule alias to the concrete target alias/model name that should
+ * serve "now" (server-local time). Returns undefined if `modelName` is not a
+ * schedule alias, or if no window matched and no fallback (empty-window) target
+ * is configured — callers should fall through to normal/default routing.
+ */
+export function resolveScheduleTarget(
+  modelName: string,
+  proxyConfig: ProxyConfig,
+  now: Date = new Date()
+): string | undefined {
+  const scheduleConfig = proxyConfig.schedule?.[modelName];
+  if (!scheduleConfig) {
+    return undefined;
+  }
+
+  const hour = now.getHours();
+  const day = now.getDay();
+  let fallback: string | undefined;
+
+  for (const [target, windows] of Object.entries(scheduleConfig)) {
+    if (!windows || windows.length === 0) {
+      if (fallback === undefined) {
+        fallback = target;
+      }
+      continue;
+    }
+    if (windows.some((w) => windowMatches(w, hour, day))) {
+      return target;
+    }
+  }
+
+  return fallback;
+}
+
 export function getModelRouteConfig(
   modelName: string,
   proxyConfig: ProxyConfig
@@ -479,12 +558,17 @@ export function getModelRouteConfig(
     return getDefaultModelRoute(proxyConfig);
   }
 
-  const compositeRoute = resolveCompositeModelRoute(modelName, proxyConfig);
+  // Schedule resolves to another alias name (single hop; if the resolved name
+  // is itself a schedule alias it is treated as a literal name, not re-resolved).
+  const scheduledTarget = resolveScheduleTarget(modelName, proxyConfig);
+  const effectiveName = scheduledTarget ?? modelName;
+
+  const compositeRoute = resolveCompositeModelRoute(effectiveName, proxyConfig);
   if (compositeRoute) {
     return compositeRoute.route;
   }
 
-  const directRoute = resolveModelRouteFromConfig(modelName, proxyConfig);
+  const directRoute = resolveModelRouteFromConfig(effectiveName, proxyConfig);
   if (directRoute) {
     return directRoute;
   }
@@ -865,6 +949,123 @@ function parseCompositeModelConfig(rawValue: string): CompositeModelConfig {
   return config;
 }
 
+/**
+ * Split a string on top-level commas, respecting quotes and {}/[] nesting depth.
+ * Used for both composite-style and schedule-style inline structures.
+ */
+function splitTopLevel(input: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let depth = 0;
+  let inQuotes = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      current += char;
+      continue;
+    }
+
+    if (!inQuotes) {
+      if (char === '{' || char === '[') {
+        depth += 1;
+      } else if (char === '}' || char === ']') {
+        depth -= 1;
+      } else if (char === ',' && depth === 0) {
+        if (current.trim()) {
+          parts.push(current.trim());
+        }
+        current = '';
+        continue;
+      }
+    }
+
+    current += char;
+  }
+
+  if (current.trim()) {
+    parts.push(current.trim());
+  }
+
+  return parts;
+}
+
+function parseScheduleWindow(value: string): ScheduleWindow {
+  const window: ScheduleWindow = {};
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+    return window;
+  }
+
+  const inner = trimmed.slice(1, -1);
+  const fields = splitTopLevel(inner);
+
+  for (const field of fields) {
+    const match = field.match(/^"?(\w+)"?\s*[=:]\s*(.+)$/);
+    if (!match) continue;
+    const key = match[1];
+    const rawValue = match[2].trim().replace(/,$/, '');
+
+    if (key === 'from' || key === 'to') {
+      const numeric = Number(rawValue);
+      if (Number.isFinite(numeric) && numeric >= 0 && numeric <= 24) {
+        window[key] = numeric;
+      }
+      continue;
+    }
+
+    if (key === 'days') {
+      if (rawValue.startsWith('[') && rawValue.endsWith(']')) {
+        const arrayInner = rawValue.slice(1, -1);
+        const dayValues = splitTopLevel(arrayInner).map((d) => d.trim().replace(/^"|"$/g, ''));
+        window.days = dayValues;
+      } else {
+        const v = rawValue.replace(/^"|"$/g, '');
+        if (v === 'weekday' || v === 'weekend') {
+          window.days = v;
+        }
+      }
+      continue;
+    }
+  }
+
+  return window;
+}
+
+/**
+ * Parse a `[schedule]` alias value: an inline table mapping each target name
+ * to an array of window inline-tables, e.g.
+ * {"maxplan" = [{from=9,to=12}], "code-small" = [{from=0,to=9,days="weekday"}], "fallback" = []}
+ */
+function parseScheduleConfig(rawValue: string): ScheduleConfig {
+  const config: ScheduleConfig = {};
+  const trimmed = rawValue.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+    return config;
+  }
+
+  const inner = trimmed.slice(1, -1);
+  const entries = splitTopLevel(inner);
+
+  for (const entry of entries) {
+    const match = entry.match(/^"?([^"=]+)"?\s*[=:]\s*(\[.*\])$/);
+    if (!match) continue;
+
+    const targetName = match[1].trim().replace(/^"|"$/g, '');
+    const arrayContent = match[2].trim();
+    const arrayInner = arrayContent.slice(1, -1);
+    const windowEntries = splitTopLevel(arrayInner);
+    const windows = windowEntries
+      .filter((w) => w.trim().startsWith('{'))
+      .map((w) => parseScheduleWindow(w));
+
+    config[targetName] = windows;
+  }
+
+  return config;
+}
+
 function quoteTomlString(value: string): string {
   return JSON.stringify(value);
 }
@@ -976,6 +1177,32 @@ function serializeCompositeModelConfig(config: CompositeModelConfig): string {
     const serializedTarget = serializeCompositeTargetConfig((targetConfig || {}) as CompositeTargetConfig);
     entries.push(`${JSON.stringify(modelName)} = ${serializedTarget}`);
   }
+  return `{${entries.join(', ')}}`;
+}
+
+function serializeScheduleWindow(window: ScheduleWindow): string {
+  const fields: string[] = [];
+  if (window.from !== undefined) {
+    fields.push(`from = ${window.from}`);
+  }
+  if (window.to !== undefined) {
+    fields.push(`to = ${window.to}`);
+  }
+  if (window.days !== undefined) {
+    if (Array.isArray(window.days)) {
+      fields.push(`days = [${window.days.map((d) => JSON.stringify(d)).join(', ')}]`);
+    } else {
+      fields.push(`days = ${JSON.stringify(window.days)}`);
+    }
+  }
+  return `{${fields.join(', ')}}`;
+}
+
+function serializeScheduleConfig(config: ScheduleConfig): string {
+  const entries = Object.entries(config).map(([target, windows]) => {
+    const serializedWindows = (windows || []).map((w) => serializeScheduleWindow(w));
+    return `${JSON.stringify(target)} = [${serializedWindows.join(', ')}]`;
+  });
   return `{${entries.join(', ')}}`;
 }
 
@@ -1101,6 +1328,60 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
     }
   }
 
+  if (config.schedule) {
+    for (const [alias, scheduleConfig] of Object.entries(config.schedule)) {
+      if (!scheduleConfig || typeof scheduleConfig !== 'object') {
+        errors.push({ path: `schedule.${alias}`, message: `invalid schedule config` });
+        continue;
+      }
+      let hasFallback = false;
+      for (const [target, windows] of Object.entries(scheduleConfig)) {
+        if (!Array.isArray(windows)) {
+          errors.push({ path: `schedule.${alias}.${target}`, message: `must be an array of windows` });
+          continue;
+        }
+        if (windows.length === 0) {
+          hasFallback = true;
+          continue;
+        }
+        for (let i = 0; i < windows.length; i++) {
+          const window = windows[i];
+          const windowPath = `schedule.${alias}.${target}[${i}]`;
+          if (!window || typeof window !== 'object') {
+            errors.push({ path: windowPath, message: `invalid window` });
+            continue;
+          }
+          const from = window.from ?? 0;
+          const to = window.to ?? 24;
+          if (typeof from !== 'number' || from < 0 || from > 24) {
+            errors.push({ path: windowPath, message: `from must be between 0 and 24` });
+          }
+          if (typeof to !== 'number' || to < 0 || to > 24) {
+            errors.push({ path: windowPath, message: `to must be between 0 and 24` });
+          }
+          if (typeof from === 'number' && typeof to === 'number' && from >= to) {
+            errors.push({ path: windowPath, message: `from must be less than to` });
+          }
+          if (window.days !== undefined) {
+            if (Array.isArray(window.days)) {
+              const validDays = new Set(['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']);
+              for (const d of window.days) {
+                if (typeof d !== 'string' || !validDays.has(d.toLowerCase().slice(0, 3))) {
+                  errors.push({ path: windowPath, message: `invalid day name "${d}"` });
+                }
+              }
+            } else if (window.days !== 'weekday' && window.days !== 'weekend') {
+              errors.push({ path: windowPath, message: `days must be "weekday", "weekend", or an array of day names` });
+            }
+          }
+        }
+      }
+      if (!hasFallback && Object.keys(scheduleConfig).length > 0) {
+        warnings.push({ path: `schedule.${alias}`, message: `no fallback target (empty window list) configured — requests outside all windows will fall through to default routing` });
+      }
+    }
+  }
+
   return { errors, warnings, valid: errors.length === 0 };
 }
 
@@ -1132,6 +1413,12 @@ export function serializeProxyConfigToml(config: ProxyConfig): string {
   if (config.composite) {
     lines.push('[composite]');
     lines.push(...Object.entries(config.composite).map(([modelName, targetConfig]) => `${JSON.stringify(modelName)} = ${serializeCompositeModelConfig(targetConfig)}`));
+    lines.push('');
+  }
+
+  if (config.schedule) {
+    lines.push('[schedule]');
+    lines.push(...Object.entries(config.schedule).map(([alias, scheduleConfig]) => `${JSON.stringify(alias)} = ${serializeScheduleConfig(scheduleConfig)}`));
     lines.push('');
   }
 
@@ -1171,6 +1458,13 @@ export function getConfiguredModelIds(config: ProxyConfig): string[] {
   // Include composite alias names
   if (config.composite) {
     for (const alias of Object.keys(config.composite)) {
+      ids.add(alias);
+    }
+  }
+
+  // Include schedule alias names
+  if (config.schedule) {
+    for (const alias of Object.keys(config.schedule)) {
       ids.add(alias);
     }
   }
@@ -1330,6 +1624,10 @@ export function parseSimpleToml(content: string): ProxyConfig {
         currentSection = 'composite';
         currentCategory = null;
         config.composite = {};
+      } else if (parts[0] === 'schedule') {
+        currentSection = 'schedule';
+        currentCategory = null;
+        config.schedule = {};
       } else if (parts[0] === 'defaults') {
         currentSection = 'defaults';
         currentCategory = null;
@@ -1391,6 +1689,15 @@ export function parseSimpleToml(content: string): ProxyConfig {
       const [, key, value] = compositeObjectMatch;
       const cleanKey = key.trim().replace(/^"|"$/g, '');
       config.composite[cleanKey] = parseCompositeModelConfig(value.trim());
+      continue;
+    }
+
+    // Handle schedule inline object values: "saver" = {"target1" = [{from=..,to=..}], "target2" = []}
+    const scheduleObjectMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*(\{.*\})$/);
+    if (scheduleObjectMatch && currentSection === 'schedule' && config.schedule) {
+      const [, key, value] = scheduleObjectMatch;
+      const cleanKey = key.trim().replace(/^"|"$/g, '');
+      config.schedule[cleanKey] = parseScheduleConfig(value.trim());
       continue;
     }
 
@@ -1560,6 +1867,7 @@ export interface DashboardModelCategoryConfig {
 export interface DashboardConfigPayload {
   models: Record<string, DashboardModelCategoryConfig>;
   composite: Record<string, CompositeModelConfig>;
+  schedule: Record<string, ScheduleConfig>;
   config_errors: ConfigValidationError[];
   config_warnings: ConfigValidationError[];
   global_token_limit?: string;
@@ -1654,6 +1962,39 @@ function sanitizeCompositeConfig(composite: ProxyConfig['composite']): Record<st
   return result;
 }
 
+function sanitizeScheduleConfig(schedule: ProxyConfig['schedule']): Record<string, ScheduleConfig> {
+  if (!schedule) {
+    return {};
+  }
+
+  const result: Record<string, ScheduleConfig> = {};
+  for (const [alias, targets] of Object.entries(schedule)) {
+    const safeTargets: ScheduleConfig = {};
+    for (const [target, windows] of Object.entries(targets || {})) {
+      if (!Array.isArray(windows)) {
+        continue;
+      }
+      safeTargets[target] = windows.map((w) => {
+        const safeWindow: ScheduleWindow = {};
+        if (typeof w?.from === 'number' && Number.isFinite(w.from)) {
+          safeWindow.from = w.from;
+        }
+        if (typeof w?.to === 'number' && Number.isFinite(w.to)) {
+          safeWindow.to = w.to;
+        }
+        if (w?.days === 'weekday' || w?.days === 'weekend') {
+          safeWindow.days = w.days;
+        } else if (Array.isArray(w?.days)) {
+          safeWindow.days = w.days.filter((d): d is string => typeof d === 'string');
+        }
+        return safeWindow;
+      });
+    }
+    result[alias] = safeTargets;
+  }
+  return result;
+}
+
 export function toDashboardConfigPayload(config: ProxyConfig): DashboardConfigPayload {
   const models: Record<string, DashboardModelCategoryConfig> = {};
 
@@ -1669,6 +2010,7 @@ export function toDashboardConfigPayload(config: ProxyConfig): DashboardConfigPa
   return {
     models,
     composite: sanitizeCompositeConfig(config.composite),
+    schedule: sanitizeScheduleConfig(config.schedule),
     config_errors: (config as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors ?? [],
     config_warnings: (config as unknown as { _validationWarnings?: ConfigValidationError[] })._validationWarnings ?? [],
     global_token_limit: config.upstream?.global_token_limit,
@@ -1805,6 +2147,70 @@ function validateAndNormalizeComposite(payload: unknown): Record<string, Composi
   return result;
 }
 
+function validateAndNormalizeScheduleWindow(rawValue: unknown, context: string): ScheduleWindow {
+  if (!isPlainObject(rawValue)) {
+    throw new Error(`Invalid schedule window for: ${context}`);
+  }
+
+  const window: ScheduleWindow = {};
+  if ('from' in rawValue) {
+    if (typeof rawValue.from !== 'number' || !Number.isFinite(rawValue.from) || rawValue.from < 0 || rawValue.from > 24) {
+      throw new Error(`Invalid from for: ${context} — must be between 0 and 24`);
+    }
+    window.from = rawValue.from;
+  }
+  if ('to' in rawValue) {
+    if (typeof rawValue.to !== 'number' || !Number.isFinite(rawValue.to) || rawValue.to < 0 || rawValue.to > 24) {
+      throw new Error(`Invalid to for: ${context} — must be between 0 and 24`);
+    }
+    window.to = rawValue.to;
+  }
+  if (window.from !== undefined && window.to !== undefined && window.from >= window.to) {
+    throw new Error(`Invalid window for: ${context} — from must be less than to`);
+  }
+  if ('days' in rawValue) {
+    const days = rawValue.days;
+    if (days === 'weekday' || days === 'weekend') {
+      window.days = days;
+    } else if (Array.isArray(days) && days.every((d) => typeof d === 'string')) {
+      window.days = days as string[];
+    } else {
+      throw new Error(`Invalid days for: ${context} — must be "weekday", "weekend", or an array of day names`);
+    }
+  }
+
+  return window;
+}
+
+function validateAndNormalizeSchedule(payload: unknown): Record<string, ScheduleConfig> {
+  if (!isPlainObject(payload)) {
+    throw new Error('Invalid schedule payload');
+  }
+
+  const result: Record<string, ScheduleConfig> = {};
+  for (const [alias, targetsValue] of Object.entries(payload)) {
+    assertSafeKey(alias, 'schedule alias');
+    if (!isPlainObject(targetsValue)) {
+      throw new Error(`Invalid schedule targets for alias: ${alias}`);
+    }
+
+    const scheduleConfig: ScheduleConfig = {};
+    for (const [targetName, windowsValue] of Object.entries(targetsValue)) {
+      assertSafeKey(targetName, `schedule.${alias}`);
+      if (!Array.isArray(windowsValue)) {
+        throw new Error(`Invalid windows for: ${alias}.${targetName} — must be an array`);
+      }
+      scheduleConfig[targetName] = windowsValue.map((w, i) =>
+        validateAndNormalizeScheduleWindow(w, `${alias}.${targetName}[${i}]`)
+      );
+    }
+
+    result[alias] = scheduleConfig;
+  }
+
+  return result;
+}
+
 function validateAndNormalizeDashboardModels(payload: unknown): Record<string, DashboardModelCategoryConfig> {
   if (!isPlainObject(payload)) {
     throw new Error('Invalid models payload');
@@ -1861,11 +2267,15 @@ export function applyDashboardConfigUpdate(baseConfig: ProxyConfig, payload: unk
 
   const modelsPayload = validateAndNormalizeDashboardModels(payload.models);
   const compositePayload = validateAndNormalizeComposite(payload.composite ?? {});
+  const schedulePayload = validateAndNormalizeSchedule(payload.schedule ?? {});
 
   const nextConfig: ProxyConfig = {
     ...baseConfig,
     models: { ...(baseConfig.models || {}) },
     composite: compositePayload,
+    schedule: payload.schedule === undefined
+      ? cloneScheduleConfig(baseConfig.schedule)
+      : schedulePayload,
   };
 
   for (const [categoryName, dashboardCategory] of Object.entries(modelsPayload)) {
@@ -2200,6 +2610,127 @@ export function removeCompositeTarget(baseConfig: ProxyConfig, alias: string, ta
   return nextConfig;
 }
 
+function cloneScheduleConfig(schedule: ProxyConfig['schedule']): Record<string, ScheduleConfig> {
+  const nextSchedule: Record<string, ScheduleConfig> = {};
+
+  for (const [alias, targets] of Object.entries(schedule || {})) {
+    const nextTargets: ScheduleConfig = {};
+    for (const [targetName, windows] of Object.entries(targets || {})) {
+      if (Array.isArray(windows)) {
+        nextTargets[targetName] = windows.map((w) => ({ ...w }));
+      }
+    }
+    nextSchedule[alias] = nextTargets;
+  }
+
+  return nextSchedule;
+}
+
+function assertNonEmptyScheduleName(kind: 'alias' | 'target', value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`schedule ${kind} is required`);
+  }
+  return trimmed;
+}
+
+export function addScheduleAlias(baseConfig: ProxyConfig, alias: string): ProxyConfig {
+  const aliasName = assertNonEmptyScheduleName('alias', alias);
+  const nextConfig: ProxyConfig = {
+    ...baseConfig,
+    schedule: cloneScheduleConfig(baseConfig.schedule),
+  };
+
+  if (nextConfig.schedule?.[aliasName]) {
+    throw new Error(`Schedule alias already exists: ${aliasName}`);
+  }
+
+  nextConfig.schedule ??= {};
+  nextConfig.schedule[aliasName] = {};
+  return nextConfig;
+}
+
+export function removeScheduleAlias(baseConfig: ProxyConfig, alias: string): ProxyConfig {
+  const aliasName = assertNonEmptyScheduleName('alias', alias);
+  const nextConfig: ProxyConfig = {
+    ...baseConfig,
+    schedule: cloneScheduleConfig(baseConfig.schedule),
+  };
+
+  if (!nextConfig.schedule?.[aliasName]) {
+    throw new Error(`Schedule alias not found: ${aliasName}`);
+  }
+
+  delete nextConfig.schedule[aliasName];
+  return nextConfig;
+}
+
+/**
+ * Add or replace the full window list for a target within a schedule alias.
+ * Pass an empty array to mark the target as the fallback (always-eligible)
+ * entry, matching the `[]` convention used in the TOML config.
+ */
+export function upsertScheduleWindow(
+  baseConfig: ProxyConfig,
+  alias: string,
+  targetModel: string,
+  windows: ScheduleWindow[],
+  configuredModelIds: string[] = [],
+): ProxyConfig {
+  const aliasName = assertNonEmptyScheduleName('alias', alias);
+  const targetName = assertNonEmptyScheduleName('target', targetModel);
+  const nextConfig: ProxyConfig = {
+    ...baseConfig,
+    schedule: cloneScheduleConfig(baseConfig.schedule),
+  };
+
+  nextConfig.schedule ??= {};
+  const existingTargets = nextConfig.schedule[aliasName] ?? {};
+  const targetExists = !!existingTargets[targetName];
+  if (!targetExists && configuredModelIds.length > 0 && !configuredModelIds.includes(targetName)) {
+    throw new Error(`Unknown target model: ${targetName}`);
+  }
+
+  if (!Array.isArray(windows)) {
+    throw new Error(`Invalid windows for ${aliasName}.${targetName}`);
+  }
+  for (const w of windows) {
+    if (w.from !== undefined && (!Number.isFinite(w.from) || w.from < 0 || w.from > 24)) {
+      throw new Error(`Invalid from for ${aliasName}.${targetName}`);
+    }
+    if (w.to !== undefined && (!Number.isFinite(w.to) || w.to < 0 || w.to > 24)) {
+      throw new Error(`Invalid to for ${aliasName}.${targetName}`);
+    }
+    if (w.from !== undefined && w.to !== undefined && w.from >= w.to) {
+      throw new Error(`Invalid window for ${aliasName}.${targetName} — from must be less than to`);
+    }
+  }
+
+  existingTargets[targetName] = windows.map((w) => ({ ...w }));
+  nextConfig.schedule[aliasName] = existingTargets;
+  return nextConfig;
+}
+
+export function removeScheduleTarget(baseConfig: ProxyConfig, alias: string, targetModel: string): ProxyConfig {
+  const aliasName = assertNonEmptyScheduleName('alias', alias);
+  const targetName = assertNonEmptyScheduleName('target', targetModel);
+  const nextConfig: ProxyConfig = {
+    ...baseConfig,
+    schedule: cloneScheduleConfig(baseConfig.schedule),
+  };
+
+  const existingTargets = nextConfig.schedule?.[aliasName];
+  if (!existingTargets) {
+    throw new Error(`Schedule alias not found: ${aliasName}`);
+  }
+  if (!existingTargets[targetName]) {
+    throw new Error(`Schedule target not found: ${aliasName}.${targetName}`);
+  }
+
+  delete existingTargets[targetName];
+  return nextConfig;
+}
+
 export function persistProxyConfigToPath(configPath: string, config: ProxyConfig): void {
   const serialized = serializeProxyConfigToml(config);
 
@@ -2214,6 +2745,16 @@ export function persistProxyConfigToPath(configPath: string, config: ProxyConfig
     throw new Error(
       `Config serialization integrity check failed: composite aliases changed on round-trip ` +
       `(expected [${expectedComposite.join(', ')}], got [${actualComposite.join(', ')}])`
+    );
+  }
+
+  const expectedSchedule = Object.keys(config.schedule || {}).sort();
+  const actualSchedule = Object.keys(reparsed.schedule || {}).sort();
+  if (expectedSchedule.length !== actualSchedule.length ||
+      expectedSchedule.some((k, i) => k !== actualSchedule[i])) {
+    throw new Error(
+      `Config serialization integrity check failed: schedule aliases changed on round-trip ` +
+      `(expected [${expectedSchedule.join(', ')}], got [${actualSchedule.join(', ')}])`
     );
   }
 

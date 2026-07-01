@@ -22,6 +22,12 @@ import {
   formatTokenLimit,
   validateProxyConfig,
   upsertGlobalTokenLimit,
+  addScheduleAlias,
+  removeScheduleAlias,
+  upsertScheduleWindow,
+  removeScheduleTarget,
+  resolveScheduleTarget,
+  ScheduleWindow,
 } from '../utils/config-loader.js';
 import {
   getAgentStatsDesc,
@@ -95,6 +101,14 @@ export interface DashboardSnapshot {
       targetUrl: string;
     }>;
   }>;
+  scheduleResolved: Array<{
+    alias: string;
+    activeTarget: string | undefined;
+    targets: Array<{
+      model: string;
+      windows: ScheduleWindow[];
+    }>;
+  }>;
 }
 
 export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): DashboardSnapshot {
@@ -121,6 +135,17 @@ export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): Dashbo
         }),
     }));
 
+  const scheduleResolved = Object.keys(config.schedule)
+    .sort((a, b) => a.localeCompare(b))
+    .map((alias) => ({
+      alias,
+      activeTarget: resolveScheduleTarget(alias, proxyConfig),
+      targets: Object.entries(proxyConfig.schedule?.[alias] || {}).map(([model, windows]) => ({
+        model,
+        windows: windows || [],
+      })),
+    }));
+
   return {
     config,
     modelStats: getModelStatsDesc(),
@@ -139,6 +164,7 @@ export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): Dashbo
     tokenHeatmap: getTokenHeatmapStatsDesc(),
     compositeLimitWindows: getCompositeLimitWindowsSnapshot(),
     compositeResolved,
+    scheduleResolved,
   };
 }
 
@@ -213,6 +239,88 @@ export function removeCompositeTargetFromDashboard(
   targetModel: string,
 ): ReturnType<typeof toDashboardConfigPayload> {
   return saveConfigMutation(env, (baseConfig) => removeCompositeTarget(baseConfig, alias, targetModel));
+}
+
+export function addScheduleAliasFromDashboard(env: Env, alias: string): ReturnType<typeof toDashboardConfigPayload> {
+  return saveConfigMutation(env, (baseConfig) => addScheduleAlias(baseConfig, alias));
+}
+
+export function removeScheduleAliasFromDashboard(env: Env, alias: string): ReturnType<typeof toDashboardConfigPayload> {
+  return saveConfigMutation(env, (baseConfig) => removeScheduleAlias(baseConfig, alias));
+}
+
+export function upsertScheduleTargetFromDashboard(
+  env: Env,
+  alias: string,
+  targetModel: string,
+  windows: ScheduleWindow[],
+): ReturnType<typeof toDashboardConfigPayload> {
+  return saveConfigMutation(env, (baseConfig) =>
+    upsertScheduleWindow(baseConfig, alias, targetModel, windows, getConfiguredModelIds(baseConfig)),
+  );
+}
+
+export function removeScheduleTargetFromDashboard(
+  env: Env,
+  alias: string,
+  targetModel: string,
+): ReturnType<typeof toDashboardConfigPayload> {
+  return saveConfigMutation(env, (baseConfig) => removeScheduleTarget(baseConfig, alias, targetModel));
+}
+
+export async function handleDashboardAddScheduleAlias(request: Request, env: Env): Promise<Response> {
+  try {
+    const body = await request.json() as { alias?: unknown };
+    if (typeof body.alias !== 'string' || !body.alias.trim()) {
+      return jsonResponse({ error: 'alias is required' }, 400);
+    }
+    const payload = addScheduleAliasFromDashboard(env, body.alias.trim());
+    return jsonResponse(payload);
+  } catch (error) {
+    return jsonResponse({ error: (error as Error).message }, 400);
+  }
+}
+
+export function handleDashboardRemoveScheduleAlias(env: Env, alias: string): Response {
+  try {
+    const payload = removeScheduleAliasFromDashboard(env, alias);
+    return jsonResponse(payload);
+  } catch (error) {
+    return jsonResponse({ error: (error as Error).message }, 400);
+  }
+}
+
+export async function handleDashboardUpsertScheduleTarget(
+  request: Request,
+  env: Env,
+  alias: string,
+): Promise<Response> {
+  try {
+    const body = await request.json() as { target?: unknown; windows?: unknown };
+    if (typeof body.target !== 'string' || !body.target.trim()) {
+      return jsonResponse({ error: 'target is required' }, 400);
+    }
+    if (!Array.isArray(body.windows)) {
+      return jsonResponse({ error: 'windows must be an array' }, 400);
+    }
+    const payload = upsertScheduleTargetFromDashboard(env, alias, body.target.trim(), body.windows as ScheduleWindow[]);
+    return jsonResponse(payload);
+  } catch (error) {
+    return jsonResponse({ error: (error as Error).message }, 400);
+  }
+}
+
+export function handleDashboardRemoveScheduleTarget(
+  env: Env,
+  alias: string,
+  target: string,
+): Response {
+  try {
+    const payload = removeScheduleTargetFromDashboard(env, alias, target);
+    return jsonResponse(payload);
+  } catch (error) {
+    return jsonResponse({ error: (error as Error).message }, 400);
+  }
 }
 
 export function handleDashboardPage(): Response {
@@ -435,7 +543,7 @@ export function handleDashboardPage(): Response {
       const globalTokenLimitNum = document.getElementById('globalTokenLimitNum');
       const globalTokenLimitDuration = document.getElementById('globalTokenLimitDuration');
       const globalLimitStatus = document.getElementById('globalLimitStatus');
-      let currentConfig = { models: {}, composite: {} };
+      let currentConfig = { models: {}, composite: {}, schedule: {} };
       let isReadOnly = false;
       let configPathHint = '';
       let compositeResolved = [];
@@ -622,6 +730,42 @@ export function handleDashboardPage(): Response {
         })).join('');
       }
 
+      function scheduleAliasRows(aliasName, targets) {
+        const disabledAttr = isReadOnly ? ' disabled' : '';
+        const keys = Object.keys(targets || {}).filter((k) => !k.startsWith('_'));
+        if (keys.length === 0) {
+          return '<div class="config-row"><label>' + escapeHtml(aliasName) + '</label><div class="wide">(empty)</div></div>';
+        }
+        return keys.map((targetName) => {
+          const windows = Array.isArray(targets[targetName]) ? targets[targetName] : [];
+          const isFallback = windows.length === 0;
+          const windowRows = windows.map((w, idx) => {
+            const fromVal = (w && typeof w.from === 'number') ? w.from : '';
+            const toVal = (w && typeof w.to === 'number') ? w.to : '';
+            const daysVal = Array.isArray(w && w.days) ? w.days.join(',') : '';
+            return '<div class="config-row nested">'
+              + '<label>window ' + (idx + 1) + '</label>'
+              + '<span style="font-size:12px;color:#666;margin-right:4px;">from</span>'
+              + '<input type="number" min="0" max="24" step="0.25" data-kind="sched-window-from" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" data-index="' + idx + '" value="' + escapeHtml(fromVal) + '" placeholder="0" style="width:60px;"' + disabledAttr + ' />'
+              + '<span style="font-size:12px;color:#666;margin-left:8px;margin-right:4px;">to</span>'
+              + '<input type="number" min="0" max="24" step="0.25" data-kind="sched-window-to" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" data-index="' + idx + '" value="' + escapeHtml(toVal) + '" placeholder="24" style="width:60px;"' + disabledAttr + ' />'
+              + '<span style="font-size:12px;color:#666;margin-left:8px;margin-right:4px;">days</span>'
+              + '<input type="text" data-kind="sched-window-days" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" data-index="' + idx + '" value="' + escapeHtml(daysVal) + '" placeholder="mon,tue,wed,..." style="width:160px;"' + disabledAttr + ' />'
+              + '<button type="button" class="mini-btn danger" data-action="remove-schedule-window" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" data-index="' + idx + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
+              + '</div>';
+          }).join('');
+          const fallbackBadge = isFallback ? '<span class="badge" style="background:#90a4ae;">fallback</span>' : '';
+          return '<div class="config-row">'
+            + '<label>' + escapeHtml(targetName) + ' ' + fallbackBadge + '</label>'
+            + '<div class="row-actions">'
+            + '<button type="button" class="mini-btn" data-action="add-schedule-window" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + (isReadOnly ? ' disabled' : '') + '>Add window</button>'
+            + '<button type="button" class="mini-btn danger" data-action="remove-schedule-target" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
+            + '</div>'
+            + '</div>'
+            + windowRows;
+        }).join('');
+      }
+
       function renderConfigForm(config) {
         const modelBlocks = Object.entries(config.models || {}).map(([categoryName, category]) => {
           const disabledAttr = isReadOnly ? ' disabled' : '';
@@ -649,11 +793,24 @@ export function handleDashboardPage(): Response {
 
         const compositeGlobalActions = '<div class="section-actions"><button type="button" class="mini-btn" data-action="add-composite-alias"' + (isReadOnly ? ' disabled' : '') + '>Add composite alias</button></div>';
 
-        configForm.innerHTML = modelBlocks + '<div class="config-divider"></div>' + compositeBlocks + compositeGlobalActions;
+        const scheduleBlocks = Object.entries(config.schedule || {}).map(([aliasName, targets]) => {
+          const rows = scheduleAliasRows(aliasName, targets);
+          return '<div class="config-block"><h3>schedule.' + escapeHtml(aliasName) + '</h3>' + rows
+            + '<div class="section-actions">'
+            + '<button type="button" class="mini-btn" data-action="add-schedule-target" data-alias="' + escapeHtml(aliasName) + '"' + (isReadOnly ? ' disabled' : '') + '>Add target</button>'
+            + ' <button type="button" class="mini-btn danger" data-action="remove-schedule-alias" data-alias="' + escapeHtml(aliasName) + '"' + (isReadOnly ? ' disabled' : '') + '>Remove alias</button>'
+            + '</div></div>';
+        }).join('');
+
+        const scheduleGlobalActions = '<div class="section-actions"><button type="button" class="mini-btn" data-action="add-schedule-alias"' + (isReadOnly ? ' disabled' : '') + '>Add schedule alias</button></div>';
+
+        configForm.innerHTML = modelBlocks
+          + '<div class="config-divider"></div>' + compositeBlocks + compositeGlobalActions
+          + '<div class="config-divider"></div>' + scheduleBlocks + scheduleGlobalActions;
       }
 
       function collectConfigPayload() {
-        const payload = { models: {}, composite: {} };
+        const payload = { models: {}, composite: {}, schedule: {} };
 
         Object.keys(currentConfig.models || {}).forEach((categoryName) => {
           payload.models[categoryName] = {};
@@ -743,6 +900,35 @@ export function handleDashboardPage(): Response {
             if (primaryEl && primaryEl.checked) entry.primary = true;
             if (selectedPrimaryByAlias[aliasName] === targetName) entry.primary = true;
             payload.composite[aliasName][targetName] = entry;
+          });
+        });
+
+        Object.entries(currentConfig.schedule || {}).forEach(([aliasName, targets]) => {
+          payload.schedule[aliasName] = {};
+          Object.keys(targets || {}).forEach((targetName) => {
+            if (targetName.startsWith('_')) return;
+            const fromEls = document.querySelectorAll('[data-kind="sched-window-from"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
+            const toEls = document.querySelectorAll('[data-kind="sched-window-to"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
+            const daysEls = document.querySelectorAll('[data-kind="sched-window-days"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
+            const count = fromEls.length;
+            if (count === 0) {
+              payload.schedule[aliasName][targetName] = [];
+              return;
+            }
+            const windows = [];
+            for (let i = 0; i < count; i++) {
+              const fromVal = fromEls[i].value.trim();
+              const toVal = toEls[i].value.trim();
+              const daysRaw = daysEls[i] ? daysEls[i].value.trim() : '';
+              const entry = {};
+              if (fromVal !== '') entry.from = Number(fromVal);
+              if (toVal !== '') entry.to = Number(toVal);
+              if (daysRaw !== '') {
+                entry.days = daysRaw.split(',').map((d) => d.trim()).filter((d) => d !== '');
+              }
+              windows.push(entry);
+            }
+            payload.schedule[aliasName][targetName] = windows;
           });
         });
 
@@ -955,6 +1141,89 @@ export function handleDashboardPage(): Response {
           saveConfig();
           return;
         }
+
+        if (action === 'add-schedule-alias') {
+          const alias = window.prompt('New schedule alias (e.g. day-shift):');
+          if (!alias) return;
+          if (currentConfig.schedule[alias]) {
+            window.alert('Schedule alias already exists');
+            return;
+          }
+          currentConfig.schedule[alias] = {};
+          renderConfigForm(currentConfig);
+          saveConfig();
+          return;
+        }
+
+        if (action === 'remove-schedule-alias') {
+          const alias = target.dataset.alias;
+          if (!alias) return;
+          if (!window.confirm('Remove schedule.' + alias + '?')) return;
+          delete currentConfig.schedule[alias];
+          renderConfigForm(currentConfig);
+          saveConfig();
+          return;
+        }
+
+        if (action === 'add-schedule-target') {
+          const alias = target.dataset.alias;
+          if (!alias) return;
+          const targetModel = window.prompt('New target model for schedule.' + alias + ' (must match an existing model id):');
+          if (!targetModel) return;
+          if (!currentConfig.schedule[alias]) {
+            currentConfig.schedule[alias] = {};
+          }
+          if (currentConfig.schedule[alias][targetModel]) {
+            window.alert('Schedule target already exists');
+            return;
+          }
+          currentConfig.schedule[alias][targetModel] = [];
+          renderConfigForm(currentConfig);
+          saveConfig();
+          return;
+        }
+
+        if (action === 'remove-schedule-target') {
+          const alias = target.dataset.alias;
+          const targetModel = target.dataset.target;
+          if (!alias || !targetModel) return;
+          if (!window.confirm('Remove schedule target ' + alias + ' -> ' + targetModel + '?')) return;
+          if (currentConfig.schedule[alias]) {
+            delete currentConfig.schedule[alias][targetModel];
+          }
+          renderConfigForm(currentConfig);
+          saveConfig();
+          return;
+        }
+
+        if (action === 'add-schedule-window') {
+          const alias = target.dataset.alias;
+          const targetModel = target.dataset.target;
+          if (!alias || !targetModel) return;
+          const windows = currentConfig.schedule[alias]?.[targetModel];
+          if (!Array.isArray(windows)) {
+            currentConfig.schedule[alias][targetModel] = [];
+          }
+          currentConfig.schedule[alias][targetModel].push({ from: 0, to: 24 });
+          renderConfigForm(currentConfig);
+          saveConfig();
+          return;
+        }
+
+        if (action === 'remove-schedule-window') {
+          const alias = target.dataset.alias;
+          const targetModel = target.dataset.target;
+          const idx = Number(target.dataset.index);
+          if (!alias || !targetModel || isNaN(idx)) return;
+          const windows = currentConfig.schedule[alias]?.[targetModel];
+          if (Array.isArray(windows) && idx >= 0 && idx < windows.length) {
+            windows.splice(idx, 1);
+            currentConfig.schedule[alias][targetModel] = windows;
+          }
+          renderConfigForm(currentConfig);
+          saveConfig();
+          return;
+        }
       }
 
       async function loadConfig(forceReload) {
@@ -965,6 +1234,7 @@ export function handleDashboardPage(): Response {
         currentConfig = {
           models: json.config.models || {},
           composite: json.config.composite || {},
+          schedule: json.config.schedule || {},
         };
         compositeResolved = json.compositeResolved || [];
         modelStats = json.modelStats || [];
