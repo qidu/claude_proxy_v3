@@ -98,14 +98,9 @@ Net effect: a regression that flips a 200 to a 400 (or vice versa) will pass mos
 - For `responses_api.test.js`: TC1304 (image inputs), TC1305 (developer role), TC1306 (stateful fields dropped) are explicitly documented as "may be passed through or rejected" — narrow to the union `[200, 400, 422]` instead of the open `>= 400`.
 - For regression TC811 (`streaming_empty_content`) and TC814–TC816: assert `=== 200` if the intent is "doesn't crash on a malformed input"; the proxy is *expected* to handle them gracefully.
 
-### 2. TC-ID collisions (already flagged in prior gaps doc §1)
+### 2. TC-ID collisions — RESOLVED 2026-07-01
 
-- `10_auth/auth_headers.test.js` uses TC1401–TC1408.
-- `12_config_validation/config_validation.test.js` uses TC1201–TC1214.
-- `11_responses/responses_api.test.js` uses TC1301–TC1309.
-- `13_fusion/fusion.test.js` uses TC1301–TC1308.
-
-The `13_fusion` ↔ `11_responses` and `12_config_validation` ↔ `10_auth` overlap breaks log correlation and reporting. The renumber recommendation in the prior gaps doc (shift `13_fusion` to TC14xx and `12_config_validation` to TC15xx) is the right call.
+All five colliding pairs (the two originally flagged here, plus three more found during the fix pass: `generateContent.test.js` ↔ `validation.test.js`, `thinking.test.js` ↔ `models.test.js`, `image_input.test.js` ↔ `integration.test.js`) have been renumbered. See `gaps-of-testcases-konwn.md` §"Test quality issues" item 1 for the full before/after mapping. No known TC-ID collisions remain.
 
 ### 3. `fusion_metadata` vs `expose_metadata` naming mismatch (already flagged)
 

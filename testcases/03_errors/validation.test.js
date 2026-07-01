@@ -29,7 +29,7 @@ async function testMissingModel() {
     }
   });
 
-  assert(response.status >= 400, `Expected error, got ${response.status}`);
+  assert(response.status === 400, `Expected 400 (ValidationError), got ${response.status}`);
   assert(response.body?.error, 'Should have error object');
 }
 
@@ -99,7 +99,13 @@ async function testTemperatureOutOfRange() {
     }
   });
 
-  // Should either reject or clamp
+  // src/utils/validation.ts validateClaudeMessagesRequest requires
+  // 0 <= temperature <= 1 for Claude-format requests and throws
+  // ValidationError (400) otherwise. This request has no system/thinking/
+  // stop_sequences/content-blocks, so it is classified as OpenAI format
+  // (src/handlers/messages.ts isOpenAIFormat) and the Claude range check
+  // is bypassed entirely — it's forwarded upstream unvalidated (OpenAI's
+  // own temperature range is 0-2). So the outcome is upstream-dependent.
   assert(
     response.status === 200 || response.status >= 400,
     'Temperature should be validated'
@@ -121,8 +127,8 @@ async function testMissingAuth() {
     })
   });
 
-  // Should require auth
-  assert(response.status >= 401, `Expected auth error, got ${response.status}`);
+  // Should require auth (proxy's hasAuth check returns exactly 401, see src/index.ts)
+  assert(response.status === 401, `Expected 401, got ${response.status}`);
 }
 
 /**
@@ -139,7 +145,7 @@ async function testInvalidJSON() {
     body: '{ invalid json }'
   });
 
-  assert(response.status >= 400, `Expected error, got ${response.status}`);
+  assert(response.status === 400, `Expected 400 (JSON.parse failure -> "Invalid request body"), got ${response.status}`);
 }
 
 /**
@@ -160,8 +166,12 @@ async function testWrongContentType() {
     })
   });
 
-  // Should handle gracefully
-  assert(response.status >= 400 || response.status === 200);
+  // The proxy never inspects Content-Type before JSON.parse()-ing the body
+  // (see src/index.ts request.text() + JSON.parse()), so a text/plain header
+  // with a valid JSON body must NOT be rejected as unsupported media type.
+  // The exact status still depends on upstream/model behavior, but 415 would
+  // indicate a content-type-specific rejection that the source doesn't implement.
+  assert(response.status !== 415, `Content-Type is not enforced by the proxy; got unexpected 415`);
 }
 
 /**
@@ -179,8 +189,11 @@ async function testInvalidStopSequences() {
     }
   });
 
-  assert(response.status >= 400 || response.status === 200,
-    'Stop sequences should be validated');
+  // stop_sequences being present routes this to the Claude-format validation
+  // path (src/utils/validation.ts validateClaudeMessagesRequest), which
+  // requires every stop_sequences[i] to be a string and throws ValidationError
+  // (400) otherwise.
+  assert(response.status === 400, `Expected 400 (stop_sequences[i] must be a string), got ${response.status}`);
 }
 
 /**
@@ -201,6 +214,14 @@ async function testInvalidTool() {
     }
   });
 
+  // src/utils/validation.ts has no tool-shape validation at all, and this
+  // request (no system/thinking/stop_sequences, string content) is detected
+  // as OpenAI format by src/handlers/messages.ts (isOpenAIFormat=true), and
+  // the malformed tool (missing input_schema) fails the Claude-tools-format
+  // sniff (`firstTool.input_schema` check) so it's forwarded upstream as-is,
+  // unvalidated. The outcome is genuinely upstream-dependent (200 or upstream
+  // 4xx/5xx passed through via handleTargetApiError), so the union is correct
+  // here — this is not a "doesn't crash" placeholder.
   assert(response.status >= 400 || response.status === 200,
     'Tool definitions should be validated');
 }
@@ -223,11 +244,17 @@ async function testChatCompletionsBlocked() {
     })
   });
 
-  // Should be blocked with error message
+  // Blocked path: src/index.ts parseFixedRoute() throws a plain `Error`
+  // (not a ClaudeProxyError) when DEV_PASS_THROUGH is disabled. The
+  // top-level catch (src/index.ts createErrorResponse(error, requestId))
+  // is called with no customStatus, which defaults to 500
+  // (src/utils/errors.ts: `let responseStatus = customStatus ?? 500;`).
+  // This is a known gap (README documents this as "blocked" but the actual
+  // status is a 500, not a 4xx) — asserted here to catch regressions/fixes.
   const text = await response.text();
   assert(
-    response.status >= 400 || text.toLowerCase().includes('not allowed'),
-    'Chat completions should be blocked'
+    response.status === 500 && text.toLowerCase().includes('not allowed'),
+    `Expected 500 with "not allowed" message, got ${response.status}: ${text}`
   );
 }
 

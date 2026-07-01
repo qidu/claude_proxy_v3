@@ -203,7 +203,10 @@ async function testMalformedJsonBody() {
     body: '{ invalid json }'
   });
 
-  assert(response.status >= 400, 'Should reject malformed JSON');
+  // JSON.parse() failure in the routing block (src/index.ts) is caught and
+  // mapped to createErrorResponse(new Error('Invalid request body'), requestId, 400) —
+  // an explicit customStatus of 400, deterministic regardless of upstream.
+  assert(response.status === 400, `Should reject malformed JSON with 400, got ${response.status}`);
 }
 
 /**
@@ -355,9 +358,14 @@ async function testMixedContentBlocks() {
     }
   });
 
+  // First content part has type:'text', so hasClaudeContentBlocks=true and
+  // this is routed through the Claude-format validation path
+  // (validateClaudeContentBlock, src/utils/validation.ts:182), which requires
+  // every content array entry to be an object — a bare string entry throws
+  // ValidationError (400) deterministically before any upstream call.
   assert(
-    response.status === 200 || response.status >= 400,
-    'Should handle mixed content blocks'
+    response.status === 400,
+    `Should reject mixed string+object content blocks with 400, got ${response.status}`
   );
 }
 
@@ -477,6 +485,13 @@ async function testUnknownBetaHeader() {
     })
   });
 
+  // Confirmed via src/utils/beta-features.ts validateBetaFeatures(): unknown
+  // beta values are silently dropped (not forwarded upstream) and the
+  // function never throws — parse failures return null rather than
+  // rejecting the request. So an unrecognised anthropic-beta value can
+  // never itself cause the proxy to reject with 400; only genuinely-open
+  // union remains because the *rest* of the request could still fail
+  // upstream for unrelated reasons.
   assert(
     response.status === 200 || response.status >= 400,
     `Unknown anthropic-beta header should not crash (got ${response.status})`

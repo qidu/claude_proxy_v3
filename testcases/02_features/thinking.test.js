@@ -23,7 +23,7 @@ const {
 const { THINKING_MODELS } = require('../utils/model_config');
 
 /**
- * TC401: Thinking Enabled with Budget
+ * TC1701: Thinking Enabled with Budget
  * Tests thinking with token budget
  */
 async function testThinkingEnabled() {
@@ -59,7 +59,7 @@ async function testThinkingEnabled() {
 }
 
 /**
- * TC402: Thinking Disabled
+ * TC1702: Thinking Disabled
  * Tests explicit thinking disabled
  */
 async function testThinkingDisabled() {
@@ -82,7 +82,7 @@ async function testThinkingDisabled() {
 }
 
 /**
- * TC403: Boolean Thinking Format
+ * TC1703: Boolean Thinking Format
  * Tests boolean thinking type (true/false)
  */
 async function testBooleanThinking() {
@@ -106,7 +106,7 @@ async function testBooleanThinking() {
 }
 
 /**
- * TC404: Adaptive Thinking
+ * TC1704: Adaptive Thinking
  * Tests adaptive thinking type
  */
 async function testAdaptiveThinking() {
@@ -129,7 +129,7 @@ async function testAdaptiveThinking() {
 }
 
 /**
- * TC405: reasoning_effort Parameter
+ * TC1705: reasoning_effort Parameter
  * Tests reasoning_effort for OpenAI-compatible models
  */
 async function testReasoningEffort() {
@@ -150,7 +150,7 @@ async function testReasoningEffort() {
 }
 
 /**
- * TC406: output_config.effort
+ * TC1706: output_config.effort
  * Tests output_config.effort parameter
  */
 async function testOutputConfigEffort() {
@@ -173,7 +173,7 @@ async function testOutputConfigEffort() {
 }
 
 /**
- * TC407: Low Budget Thinking
+ * TC1707: Low Budget Thinking
  * Tests thinking with low token budget
  */
 async function testLowBudgetThinking() {
@@ -197,7 +197,7 @@ async function testLowBudgetThinking() {
 }
 
 /**
- * TC408: Streaming with Thinking
+ * TC1708: Streaming with Thinking
  * Tests SSE streaming with thinking enabled
  */
 async function testStreamingWithThinking() {
@@ -244,7 +244,7 @@ async function testStreamingWithThinking() {
 }
 
 /**
- * TC409: thinking disabled via false
+ * TC1709: thinking disabled via false
  * Tests thinking: { type: false }
  */
 async function testThinkingFalse() {
@@ -267,7 +267,7 @@ async function testThinkingFalse() {
 }
 
 /**
- * TC410: Budget to Effort Mapping
+ * TC1710: Budget to Effort Mapping
  * Tests automatic budget to reasoning_effort conversion
  */
 async function testBudgetToEffortMapping() {
@@ -303,7 +303,7 @@ async function testBudgetToEffortMapping() {
 }
 
 /**
- * TC411: output_config.task_budget.total
+ * TC1711: output_config.task_budget.total
  * Tests that output_config.task_budget.total can supply the thinking budget
  * when budget_tokens is omitted (per README thinking config section)
  */
@@ -324,7 +324,7 @@ async function testTaskBudgetTotal() {
 }
 
 /**
- * TC412: xhigh Effort Normalization
+ * TC1712: xhigh Effort Normalization
  * Tests that non-standard "xhigh" output_config.effort is normalized to "max"
  * and does not cause a proxy internal error (500). The proxy should either
  * accept it (normalize → max, return 200) or reject it with a structured
@@ -355,7 +355,7 @@ async function testXhighEffort() {
 }
 
 /**
- * TC413: OpenAI Thinking Format
+ * TC1713: OpenAI Thinking Format
  * Tests that thinking: { enabled: true, budget_tokens: N } is accepted
  * (OpenAI passthrough format, normalized to Claude format).
  *
@@ -380,7 +380,7 @@ async function testOpenAITThinkingFormat() {
 }
 
 /**
- * TC414: Signature Delta Events
+ * TC1714: Signature Delta Events
  * Tests that streaming thinking produces signature_delta events
  * (per README "Signature Accumulation" section)
  */
@@ -422,7 +422,7 @@ async function testSignatureDeltaStreaming() {
 }
 
 /**
- * TC415: Custom Budget Thresholds
+ * TC1715: Custom Budget Thresholds
  * Tests that custom budget_to_effort_* thresholds are honored
  * (proxy_config.toml has: budget_to_effort_low=8000, medium=20000, high=0)
  */
@@ -447,7 +447,7 @@ async function testCustomBudgetThresholds() {
 }
 
 /**
- * TC416: Thinking Disabled Stripping
+ * TC1716: Thinking Disabled Stripping
  * Tests that thinking: { type: "disabled" } is stripped for openai-completions upstream
  * (per README Known Limitations #3)
  */
@@ -489,19 +489,19 @@ module.exports = {
 
 if (require.main === module) {
   runTestSuite('Thinking Tests', [
-    { name: 'TC401: Thinking Enabled', fn: testThinkingEnabled },
-    { name: 'TC402: Thinking Disabled', fn: testThinkingDisabled },
-    { name: 'TC403: Boolean Format', fn: testBooleanThinking },
-    { name: 'TC404: Adaptive Thinking', fn: testAdaptiveThinking },
-    { name: 'TC405: reasoning_effort', fn: testReasoningEffort },
-    { name: 'TC406: output_config.effort', fn: testOutputConfigEffort },
-    { name: 'TC407: Low Budget', fn: testLowBudgetThinking },
-    { name: 'TC408: Streaming', fn: testStreamingWithThinking },
-    { name: 'TC411: task_budget.total', fn: testTaskBudgetTotal },
-    { name: 'TC412: xhigh Effort', fn: testXhighEffort },
-    { name: 'TC413: OpenAI Format', fn: testOpenAITThinkingFormat },
-    { name: 'TC414: Signature Delta', fn: testSignatureDeltaStreaming },
-    { name: 'TC415: Custom Thresholds', fn: testCustomBudgetThresholds },
-    { name: 'TC416: Disabled Stripped', fn: testThinkingDisabledStripped }
+    { name: 'TC1701: Thinking Enabled', fn: testThinkingEnabled },
+    { name: 'TC1702: Thinking Disabled', fn: testThinkingDisabled },
+    { name: 'TC1703: Boolean Format', fn: testBooleanThinking },
+    { name: 'TC1704: Adaptive Thinking', fn: testAdaptiveThinking },
+    { name: 'TC1705: reasoning_effort', fn: testReasoningEffort },
+    { name: 'TC1706: output_config.effort', fn: testOutputConfigEffort },
+    { name: 'TC1707: Low Budget', fn: testLowBudgetThinking },
+    { name: 'TC1708: Streaming', fn: testStreamingWithThinking },
+    { name: 'TC1711: task_budget.total', fn: testTaskBudgetTotal },
+    { name: 'TC1712: xhigh Effort', fn: testXhighEffort },
+    { name: 'TC1713: OpenAI Format', fn: testOpenAITThinkingFormat },
+    { name: 'TC1714: Signature Delta', fn: testSignatureDeltaStreaming },
+    { name: 'TC1715: Custom Thresholds', fn: testCustomBudgetThresholds },
+    { name: 'TC1716: Disabled Stripped', fn: testThinkingDisabledStripped }
   ]);
 }

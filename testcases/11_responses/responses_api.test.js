@@ -29,7 +29,7 @@ const PROXY_URL = process.env.PROXY_URL || 'http://localhost:8788';
 const API_KEY = process.env.API_KEY || 'sk-test-key';
 
 /**
- * TC1301: /v1/responses Basic
+ * TC1901: /v1/responses Basic
  * Tests that /v1/responses accepts a basic Responses API request
  * and returns a Responses-shaped response (or chat completions shape
  * when converted)
@@ -66,7 +66,7 @@ async function testResponsesBasic() {
 }
 
 /**
- * TC1302: /v1/responses/input_tokens
+ * TC1902: /v1/responses/input_tokens
  * Tests POST /v1/responses/input_tokens — count input tokens for a
  * Responses API request
  */
@@ -94,7 +94,7 @@ async function testResponsesInputTokens() {
 }
 
 /**
- * TC1303: /v1/responses/compact
+ * TC1903: /v1/responses/compact
  * Tests POST /v1/responses/compact — returns response.compaction object
  * (per README)
  */
@@ -125,7 +125,7 @@ async function testResponsesCompact() {
 }
 
 /**
- * TC1304: Image Inputs Dropped Limitation
+ * TC1904: Image Inputs Dropped Limitation
  * Per README Known Limitations #1:
  * "Image inputs dropped: `input_image` content parts are converted to
  * a `[Image input]` string placeholder rather than forwarded as multipart
@@ -156,14 +156,19 @@ async function testResponsesImageInput() {
     }
   });
 
+  // Per README, input_image is always converted to a placeholder string
+  // before forwarding — this is accepted proxy-side unconditionally (no
+  // proxy-side validation of image content), so any failure is an upstream
+  // 4xx passed through via handleTargetApiError. Narrowed to the realistic
+  // outcome set rather than the fully open >=400.
   assert(
-    response.status === 200 || response.status >= 400,
-    'Image input should be handled (converted to placeholder or accepted)'
+    [200, 400, 422].includes(response.status),
+    `Image input should be handled (converted to placeholder or accepted); got ${response.status}`
   );
 }
 
 /**
- * TC1305: developer Role Limitation
+ * TC1905: developer Role Limitation
  * Per README Known Limitations #3:
  * "`developer` role may cause upstream errors: The `developer` role is
  * passed through as-is; most OpenAI-compatible upstreams do not support
@@ -184,15 +189,18 @@ async function testResponsesDeveloperRole() {
     }
   });
 
-  // developer role is passed through; upstreams may accept or reject
+  // developer role is passed through as-is with no proxy-side validation
+  // (src/utils/validation.ts has no Responses-API-specific role check);
+  // the documented outcome is an upstream validation error, which surfaces
+  // as 400/422 via handleTargetApiError, or 200 if the upstream accepts it.
   assert(
-    response.status === 200 || response.status >= 400,
-    'developer role should be handled (passed through or rejected by upstream)'
+    [200, 400, 422].includes(response.status),
+    `developer role should be handled (passed through or rejected by upstream); got ${response.status}`
   );
 }
 
 /**
- * TC1306: stateful Conversation Fields Dropped
+ * TC1906: stateful Conversation Fields Dropped
  * Per README Known Limitations #4:
  * "Stateful conversation not supported (`previous_response_id`, `conversation`, `store`)...
  * `previous_response_id` is silently dropped; the upstream receives only the
@@ -215,14 +223,17 @@ async function testResponsesStatefulFieldsDropped() {
     }
   });
 
+  // These fields have no proxy-side validation (silently ignored per README);
+  // the request either succeeds (fields dropped) or fails upstream for
+  // unrelated reasons — narrowed to the realistic response set.
   assert(
-    response.status === 200 || response.status >= 400,
-    'Stateful fields should be silently dropped or accepted as no-ops'
+    [200, 400, 422].includes(response.status),
+    `Stateful fields should be silently dropped or accepted as no-ops; got ${response.status}`
   );
 }
 
 /**
- * TC1307: /v1/responses Streaming
+ * TC1907: /v1/responses Streaming
  * Tests streaming variant of /v1/responses
  * Per README, streaming uses SSE with response.output_item.added events
  */
@@ -236,6 +247,8 @@ async function testResponsesStreaming() {
     }
   });
 
+  // No proxy-side validation gates this basic streaming request; the outcome
+  // (200 with SSE events, or an upstream 4xx/5xx) is fully upstream-dependent.
   assert(
     response.status === 200 || response.status >= 400,
     'Should respond to streaming /v1/responses'
@@ -247,7 +260,7 @@ async function testResponsesStreaming() {
 }
 
 /**
- * TC1308: Tool Use in /v1/responses
+ * TC1908: Tool Use in /v1/responses
  * Tests function tool definitions in Responses API format
  * Per README: "Tool call turns use `function_call` / `function_call_output`
  * items in the same array"
@@ -282,7 +295,7 @@ async function testResponsesToolUse() {
 }
 
 /**
- * TC1309: /v1/responses Required Client-Side Fix
+ * TC1909: /v1/responses Required Client-Side Fix
  * Per README §"Required client-side fix":
  * "set `store: false` and pass the full conversation history in `input` on
  * every request. This is the correct stateless usage pattern"
@@ -324,14 +337,14 @@ module.exports = {
 
 if (require.main === module) {
   runTestSuite('Responses API Tests', [
-    { name: 'TC1301: /v1/responses Basic', fn: testResponsesBasic },
-    { name: 'TC1302: /v1/responses/input_tokens', fn: testResponsesInputTokens },
-    { name: 'TC1303: /v1/responses/compact', fn: testResponsesCompact },
-    { name: 'TC1304: Image input', fn: testResponsesImageInput },
-    { name: 'TC1305: developer role', fn: testResponsesDeveloperRole },
-    { name: 'TC1306: stateful fields dropped', fn: testResponsesStatefulFieldsDropped },
-    { name: 'TC1307: streaming', fn: testResponsesStreaming },
-    { name: 'TC1308: tool use', fn: testResponsesToolUse },
-    { name: 'TC1309: stateless usage', fn: testResponsesStatelessUsage }
+    { name: 'TC1901: /v1/responses Basic', fn: testResponsesBasic },
+    { name: 'TC1902: /v1/responses/input_tokens', fn: testResponsesInputTokens },
+    { name: 'TC1903: /v1/responses/compact', fn: testResponsesCompact },
+    { name: 'TC1904: Image input', fn: testResponsesImageInput },
+    { name: 'TC1905: developer role', fn: testResponsesDeveloperRole },
+    { name: 'TC1906: stateful fields dropped', fn: testResponsesStatefulFieldsDropped },
+    { name: 'TC1907: streaming', fn: testResponsesStreaming },
+    { name: 'TC1908: tool use', fn: testResponsesToolUse },
+    { name: 'TC1909: stateless usage', fn: testResponsesStatelessUsage }
   ]);
 }

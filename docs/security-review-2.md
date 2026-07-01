@@ -72,3 +72,6 @@ Security Review — src/
   - CORS: not reachable from the files reviewed for this pass — flagging as unverified rather than safe (would need a follow-up pass on server.ts/index.ts CORS branch
   specifically if that's a priority).
 
+----
+reviewed and partialy fixed by `sonnet-5`
+on Jul 1

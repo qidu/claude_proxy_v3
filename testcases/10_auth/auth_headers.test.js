@@ -23,7 +23,7 @@ const PROXY_URL = process.env.PROXY_URL || 'http://localhost:8788';
 const API_KEY = process.env.API_KEY || 'sk-test-key';
 
 /**
- * TC1401: x-api-key Header for /v1/messages
+ * TC1001: x-api-key Header for /v1/messages
  * Tests that the proxy accepts x-api-key as the auth header for /v1/messages
  * (per README §"Authentications" — `x-api-key` for `/v1/messages`)
  */
@@ -42,14 +42,18 @@ async function testXApiKeyHeader() {
     })
   });
 
+  // x-api-key is a first-class auth header for /v1/messages (extractAuthHeaders,
+  // src/utils/routing.ts), so a valid key should never hit the proxy's own
+  // 401 "missing auth" path. Any failure here is upstream-side, not a proxy
+  // auth-header rejection.
   assert(
-    response.status === 200 || response.status >= 400,
-    'Should respond (x-api-key may be ignored if proxy expects Bearer)'
+    response.status !== 401,
+    `x-api-key should satisfy the proxy's own auth check; got ${response.status}`
   );
 }
 
 /**
- * TC1402: x-goog-api-key for /v1/interactions
+ * TC1002: x-goog-api-key for /v1/interactions
  * Tests that the proxy accepts x-goog-api-key for /v1/interactions
  * (per README §"Authentications" — `x-goog-api-key` for `/v1/interactions`)
  */
@@ -66,14 +70,16 @@ async function testXGoogApiKeyForInteractions() {
     })
   });
 
+  // x-goog-api-key satisfies the proxy's own hasAuth check (src/index.ts),
+  // so it must not produce the proxy's own 401.
   assert(
-    response.status === 200 || response.status >= 400,
-    'Should respond (x-goog-api-key may be ignored if proxy expects Bearer)'
+    response.status !== 401,
+    `x-goog-api-key should satisfy the proxy's own auth check; got ${response.status}`
   );
 }
 
 /**
- * TC1403: x-goog-api-key for /v1beta/...:generateContent
+ * TC1003: x-goog-api-key for /v1beta/...:generateContent
  * Tests that the proxy accepts x-goog-api-key for the Gemini generateContent endpoint
  */
 async function testXGoogApiKeyForGenerateContent() {
@@ -89,13 +95,13 @@ async function testXGoogApiKeyForGenerateContent() {
   });
 
   assert(
-    response.status === 200 || response.status >= 400,
-    'Should respond (x-goog-api-key may be ignored if proxy expects Bearer)'
+    response.status !== 401,
+    `x-goog-api-key should satisfy the proxy's own auth check; got ${response.status}`
   );
 }
 
 /**
- * TC1404: Authorization: Bearer for /v1/messages
+ * TC1004: Authorization: Bearer for /v1/messages
  * Tests that the universal Authorization: Bearer header works on /v1/messages
  * (per README — `Authorization: Bearer` is the universal fallback)
  */
@@ -110,13 +116,13 @@ async function testBearerAuthForMessages() {
   });
 
   assert(
-    response.status === 200 || response.status >= 400,
-    'Bearer auth should work universally'
+    response.status !== 401,
+    `Authorization: Bearer should satisfy the proxy's own auth check; got ${response.status}`
   );
 }
 
 /**
- * TC1405: API Key Priority (Config over Headers for openai-completions)
+ * TC1005: API Key Priority (Config over Headers for openai-completions)
  * Per README §"API Key Priority":
  * - For openai-completions: Configuration API keys take priority over client-provided headers
  * - This ensures compatibility with OpenAI-compatible APIs when clients send
@@ -155,7 +161,7 @@ async function testApiKeyPriorityConfig() {
 }
 
 /**
- * TC1406: x-api-key as Bearer for openai-completions Upstream
+ * TC1006: x-api-key as Bearer for openai-completions Upstream
  * Per README §"Authentications":
  * - using `x-api-key` from `/v1/messages` as `Authorization: Bearer` for `openai-completions` upstream
  * - using `x-goog-api-key` from `/v1beta/...` and `/v1/interactions` as `Authorization: Bearer` for `openai-completions` upstream
@@ -179,15 +185,15 @@ async function testXApiKeyAsBearerForOpenAI() {
   });
 
   assert(
-    response.status === 200 || response.status >= 400,
-    'x-api-key should be accepted (and mapped to Bearer for openai-completions upstream)'
+    response.status !== 401,
+    `x-api-key should be accepted (and mapped to Bearer for openai-completions upstream); got ${response.status}`
   );
 }
 
 /**
- * TC1407: Missing Authentication Returns 401
+ * TC1007: Missing Authentication Returns 401
  * Per README §"Authentications" — all endpoints require auth
- * This is similar to validation.test.js TC706 but covers multiple endpoints
+ * This is similar to validation.test.js TC306 but covers multiple endpoints
  */
 async function testMissingAuthReturns401() {
   const endpoints = [
@@ -217,7 +223,7 @@ async function testMissingAuthReturns401() {
 }
 
 /**
- * TC1408: x-api-key Takes Priority Over Authorization for Messages
+ * TC1008: x-api-key Takes Priority Over Authorization for Messages
  * Per the routing refactor, /v1/messages uses x-api-key as the first
  * auth header (over Authorization: Bearer). This test sends both with
  * different values and verifies the proxy works (the actual priority
@@ -239,8 +245,8 @@ async function testXApiKeyTakesPriorityOverBearer() {
   });
 
   assert(
-    response.status === 200 || response.status >= 400,
-    'x-api-key + Authorization should work; x-api-key should be the primary'
+    response.status !== 401,
+    `x-api-key + Authorization should satisfy the proxy's own auth check; got ${response.status}`
   );
 }
 
@@ -257,13 +263,13 @@ module.exports = {
 
 if (require.main === module) {
   runTestSuite('Auth Header Tests', [
-    { name: 'TC1401: x-api-key for /v1/messages', fn: testXApiKeyHeader },
-    { name: 'TC1402: x-goog-api-key for /v1/interactions', fn: testXGoogApiKeyForInteractions },
-    { name: 'TC1403: x-goog-api-key for generateContent', fn: testXGoogApiKeyForGenerateContent },
-    { name: 'TC1404: Bearer for /v1/messages', fn: testBearerAuthForMessages },
-    { name: 'TC1405: Config API key priority', fn: testApiKeyPriorityConfig },
-    { name: 'TC1406: x-api-key as Bearer for openai', fn: testXApiKeyAsBearerForOpenAI },
-    { name: 'TC1407: Missing auth 401', fn: testMissingAuthReturns401 },
-    { name: 'TC1408: x-api-key over Authorization', fn: testXApiKeyTakesPriorityOverBearer }
+    { name: 'TC1001: x-api-key for /v1/messages', fn: testXApiKeyHeader },
+    { name: 'TC1002: x-goog-api-key for /v1/interactions', fn: testXGoogApiKeyForInteractions },
+    { name: 'TC1003: x-goog-api-key for generateContent', fn: testXGoogApiKeyForGenerateContent },
+    { name: 'TC1004: Bearer for /v1/messages', fn: testBearerAuthForMessages },
+    { name: 'TC1005: Config API key priority', fn: testApiKeyPriorityConfig },
+    { name: 'TC1006: x-api-key as Bearer for openai', fn: testXApiKeyAsBearerForOpenAI },
+    { name: 'TC1007: Missing auth 401', fn: testMissingAuthReturns401 },
+    { name: 'TC1008: x-api-key over Authorization', fn: testXApiKeyTakesPriorityOverBearer }
   ]);
 }

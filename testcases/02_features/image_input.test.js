@@ -24,7 +24,7 @@ const {
 const SAMPLE_BASE64_IMAGE = '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv8ABAEGBQEBAQAAAAAAAAAAAAEAAgMEBQYH/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBEQCEAwEPwABfwAB/9k=';
 
 /**
- * TC601: Base64 Image Input
+ * TC1801: Base64 Image Input
  * Tests image sent as base64
  */
 async function testBase64Image() {
@@ -54,7 +54,7 @@ async function testBase64Image() {
 }
 
 /**
- * TC602: Image URL
+ * TC1802: Image URL
  * Tests image from URL
  */
 async function testImageURL() {
@@ -87,7 +87,7 @@ async function testImageURL() {
 }
 
 /**
- * TC603: Image with Text Message
+ * TC1803: Image with Text Message
  * Tests text+image in same message
  */
 async function testImageWithText() {
@@ -117,7 +117,7 @@ async function testImageWithText() {
 }
 
 /**
- * TC604: Multiple Images
+ * TC1804: Multiple Images
  * Tests message with multiple images
  */
 async function testMultipleImages() {
@@ -155,7 +155,7 @@ async function testMultipleImages() {
 }
 
 /**
- * TC605: PNG Image
+ * TC1805: PNG Image
  * Tests PNG format image
  */
 async function testPNGImage() {
@@ -185,7 +185,7 @@ async function testPNGImage() {
 }
 
 /**
- * TC606: WebP Image
+ * TC1806: WebP Image
  * Tests WebP format image
  */
 async function testWebPImage() {
@@ -226,10 +226,10 @@ module.exports = {
 
 if (require.main === module) {
   runTestSuite('Image Input Tests', [
-    { name: 'TC601: Base64 Image', fn: testBase64Image },
-    { name: 'TC602: Image URL', fn: testImageURL },
-    { name: 'TC603: Image with Text', fn: testImageWithText },
-    { name: 'TC604: Multiple Images', fn: testMultipleImages },
-    { name: 'TC605: PNG Image', fn: testPNGImage }
+    { name: 'TC1801: Base64 Image', fn: testBase64Image },
+    { name: 'TC1802: Image URL', fn: testImageURL },
+    { name: 'TC1803: Image with Text', fn: testImageWithText },
+    { name: 'TC1804: Multiple Images', fn: testMultipleImages },
+    { name: 'TC1805: PNG Image', fn: testPNGImage }
   ]);
 }

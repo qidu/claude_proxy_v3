@@ -18,7 +18,7 @@ const {
 } = require('../utils/test_helpers');
 
 /**
- * TC301: Basic Text Generation
+ * TC1601: Basic Text Generation
  * Tests simple text generation
  */
 async function testBasicGenerateContent() {
@@ -37,7 +37,7 @@ async function testBasicGenerateContent() {
 }
 
 /**
- * TC302: Generation Config
+ * TC1602: Generation Config
  * Tests generation parameters
  */
 async function testGenerateContentWithConfig() {
@@ -60,7 +60,7 @@ async function testGenerateContentWithConfig() {
 }
 
 /**
- * TC303: Safety Settings
+ * TC1603: Safety Settings
  * Tests safety settings configuration
  */
 async function testGenerateContentWithSafety() {
@@ -84,7 +84,7 @@ async function testGenerateContentWithSafety() {
 }
 
 /**
- * TC304: System Instruction
+ * TC1604: System Instruction
  * Tests system instruction
  */
 async function testGenerateContentWithSystemInstruction() {
@@ -105,7 +105,7 @@ async function testGenerateContentWithSystemInstruction() {
 }
 
 /**
- * TC305: Tools in GenerateContent
+ * TC1605: Tools in GenerateContent
  * Tests function declarations
  */
 async function testGenerateContentWithTools() {
@@ -135,7 +135,7 @@ async function testGenerateContentWithTools() {
 }
 
 /**
- * TC306: Streaming GenerateContent
+ * TC1606: Streaming GenerateContent
  * Tests streaming response
  */
 async function testStreamingGenerateContent() {
@@ -153,7 +153,7 @@ async function testStreamingGenerateContent() {
 }
 
 /**
- * TC307: Multi-turn in GenerateContent
+ * TC1607: Multi-turn in GenerateContent
  * Tests conversation history
  */
 async function testMultiTurnGenerateContent() {
@@ -183,7 +183,7 @@ async function testMultiTurnGenerateContent() {
 }
 
 /**
- * TC308: v1 Endpoint (not v1beta)
+ * TC1608: v1 Endpoint (not v1beta)
  * Tests alternative endpoint path
  */
 async function testV1Endpoint() {
@@ -201,9 +201,9 @@ async function testV1Endpoint() {
 }
 
 /**
- * TC309: v1beta streamGenerateContent with SSE validation
+ * TC1609: v1beta streamGenerateContent with SSE validation
  * Tests that /v1beta/models/{model}:streamGenerateContent actually streams SSE events
- * (regression for TC306 which only used sendRequest, never validated the stream)
+ * (regression for TC1606 which only used sendRequest, never validated the stream)
  */
 async function testV1BetaStreamGenerateContentStreaming() {
   const response = await sendStreamingRequest({
@@ -234,7 +234,7 @@ async function testV1BetaStreamGenerateContentStreaming() {
 }
 
 /**
- * TC310: v1 streamGenerateContent with SSE validation
+ * TC1610: v1 streamGenerateContent with SSE validation
  * Tests the alternative /v1/models/{model}:streamGenerateContent endpoint
  */
 async function testV1StreamGenerateContentStreaming() {
@@ -258,7 +258,7 @@ async function testV1StreamGenerateContentStreaming() {
 }
 
 /**
- * TC311: Token counting endpoint
+ * TC1611: Token counting endpoint
  *
  * The proxy exposes count tokens via /v1/messages/count_tokens (Claude format).
  * It internally rewrites to /v1/chat/completions for OpenAI-compatible
@@ -282,7 +282,7 @@ async function testV1BetaCountTokens() {
 }
 
 /**
- * TC312: Token counting endpoint (v1 alias)
+ * TC1612: Token counting endpoint (v1 alias)
  */
 async function testV1CountTokens() {
   const response = await sendRequest({
@@ -313,15 +313,15 @@ module.exports = {
 
 if (require.main === module) {
   runTestSuite('GenerateContent API', [
-    { name: 'TC301: Basic Generation', fn: testBasicGenerateContent },
-    { name: 'TC302: Generation Config', fn: testGenerateContentWithConfig },
-    { name: 'TC303: Safety Settings', fn: testGenerateContentWithSafety },
-    { name: 'TC304: System Instruction', fn: testGenerateContentWithSystemInstruction },
-    { name: 'TC305: With Tools', fn: testGenerateContentWithTools },
-    { name: 'TC307: Multi-turn', fn: testMultiTurnGenerateContent },
-    { name: 'TC308: v1 Endpoint', fn: testV1Endpoint },
-    { name: 'TC309: v1beta streamGenerateContent (SSE)', fn: testV1BetaStreamGenerateContentStreaming },
-    { name: 'TC310: v1 streamGenerateContent (SSE)', fn: testV1StreamGenerateContentStreaming },
-    { name: 'TC311: :countTokens', fn: testV1BetaCountTokens }
+    { name: 'TC1601: Basic Generation', fn: testBasicGenerateContent },
+    { name: 'TC1602: Generation Config', fn: testGenerateContentWithConfig },
+    { name: 'TC1603: Safety Settings', fn: testGenerateContentWithSafety },
+    { name: 'TC1604: System Instruction', fn: testGenerateContentWithSystemInstruction },
+    { name: 'TC1605: With Tools', fn: testGenerateContentWithTools },
+    { name: 'TC1607: Multi-turn', fn: testMultiTurnGenerateContent },
+    { name: 'TC1608: v1 Endpoint', fn: testV1Endpoint },
+    { name: 'TC1609: v1beta streamGenerateContent (SSE)', fn: testV1BetaStreamGenerateContentStreaming },
+    { name: 'TC1610: v1 streamGenerateContent (SSE)', fn: testV1StreamGenerateContentStreaming },
+    { name: 'TC1611: :countTokens', fn: testV1BetaCountTokens }
   ]);
 }

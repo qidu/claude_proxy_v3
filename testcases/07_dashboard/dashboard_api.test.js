@@ -9,6 +9,9 @@
  * - GET /dashboard/api/stats/agents
  * - GET /dashboard/api/stats/requests
  * - POST /dashboard/api/test-model
+ * - GET /dashboard/api/tools/blocklist
+ * - POST /dashboard/api/tools/toggle-block
+ * - POST /dashboard/api/global-token-limit
  */
 
 const {
@@ -199,6 +202,195 @@ async function testDashboardHtmlPage() {
   assert(text.includes('<html'), 'Should be valid HTML');
 }
 
+/**
+ * TC712: Get Tool Blocklist
+ * Tests GET /dashboard/api/tools/blocklist returns rows + blockedTools
+ * (per src/handlers/dashboard.ts handleDashboardToolBlocklist)
+ */
+async function testGetToolBlocklist() {
+  const response = await sendRequest({
+    method: 'GET',
+    endpoint: '/dashboard/api/tools/blocklist',
+    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
+  });
+
+  assert(response.status === 200, `Expected 200, got ${response.status}`);
+  assert(Array.isArray(response.body?.rows), 'Should have rows array');
+  assert(Array.isArray(response.body?.blockedTools), 'Should have blockedTools array');
+}
+
+/**
+ * TC713: Toggle Tool Block On, Reflected in Blocklist
+ * Tests POST /dashboard/api/tools/toggle-block with blocked:true, then
+ * verifies the tool appears in a follow-up GET /dashboard/api/tools/blocklist.
+ * The blocklist is in-memory only (src/utils/dashboard-stats.ts blockedTools
+ * Set) — not persisted across restarts, per docs/README_DETAILS.md.
+ */
+async function testToggleToolBlockOn() {
+  const toolName = `test_tool_${Date.now()}`;
+
+  const toggleRes = await sendRequest({
+    method: 'POST',
+    endpoint: '/dashboard/api/tools/toggle-block',
+    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    body: { tool_name: toolName, blocked: true }
+  });
+
+  assert(toggleRes.status === 200, `Expected 200, got ${toggleRes.status}`);
+  assert(toggleRes.body?.ok === true, 'Should return ok:true');
+  assert(toggleRes.body?.tool_name === toolName, 'Should echo tool_name');
+  assert(toggleRes.body?.blocked === true, 'Should echo blocked:true');
+
+  const blocklistRes = await sendRequest({
+    method: 'GET',
+    endpoint: '/dashboard/api/tools/blocklist',
+    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
+  });
+
+  assert(
+    blocklistRes.body?.blockedTools?.includes(toolName),
+    'Blocked tool should appear in blockedTools after toggle-block(blocked:true)'
+  );
+
+  // Cleanup: unblock so this test doesn't leak state into other tests/runs
+  await sendRequest({
+    method: 'POST',
+    endpoint: '/dashboard/api/tools/toggle-block',
+    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    body: { tool_name: toolName, blocked: false }
+  });
+}
+
+/**
+ * TC714: Toggle Tool Block Off, Removed from Blocklist
+ * Tests that POST toggle-block with blocked:false removes a previously
+ * blocked tool from the blockedTools set.
+ */
+async function testToggleToolBlockOff() {
+  const toolName = `test_tool_off_${Date.now()}`;
+
+  // Block first
+  await sendRequest({
+    method: 'POST',
+    endpoint: '/dashboard/api/tools/toggle-block',
+    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    body: { tool_name: toolName, blocked: true }
+  });
+
+  // Then unblock
+  const unblockRes = await sendRequest({
+    method: 'POST',
+    endpoint: '/dashboard/api/tools/toggle-block',
+    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    body: { tool_name: toolName, blocked: false }
+  });
+
+  assert(unblockRes.status === 200, `Expected 200, got ${unblockRes.status}`);
+  assert(unblockRes.body?.blocked === false, 'Should echo blocked:false');
+
+  const blocklistRes = await sendRequest({
+    method: 'GET',
+    endpoint: '/dashboard/api/tools/blocklist',
+    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
+  });
+
+  assert(
+    !blocklistRes.body?.blockedTools?.includes(toolName),
+    'Unblocked tool should not appear in blockedTools after toggle-block(blocked:false)'
+  );
+}
+
+/**
+ * TC715: Toggle Tool Block Missing tool_name
+ * Per src/handlers/dashboard.ts handleDashboardToggleToolBlock — an empty
+ * or missing tool_name (after trim) returns 400 with a specific error message.
+ */
+async function testToggleToolBlockMissingName() {
+  const response = await sendRequest({
+    method: 'POST',
+    endpoint: '/dashboard/api/tools/toggle-block',
+    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    body: { blocked: true }
+  });
+
+  assert(response.status === 400, `Expected 400, got ${response.status}`);
+  assert(
+    response.body?.error === 'tool_name is required',
+    `Expected error 'tool_name is required', got ${JSON.stringify(response.body)}`
+  );
+}
+
+/**
+ * TC716: Toggle Tool Block Whitespace-only tool_name
+ * tool_name is trimmed server-side before the empty check
+ * (`typeof body.tool_name === 'string' ? body.tool_name.trim() : ''`),
+ * so a whitespace-only name must also be rejected with 400.
+ */
+async function testToggleToolBlockWhitespaceName() {
+  const response = await sendRequest({
+    method: 'POST',
+    endpoint: '/dashboard/api/tools/toggle-block',
+    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    body: { tool_name: '   ', blocked: true }
+  });
+
+  assert(response.status === 400, `Expected 400, got ${response.status}`);
+  assert(
+    response.body?.error === 'tool_name is required',
+    `Expected error 'tool_name is required', got ${JSON.stringify(response.body)}`
+  );
+}
+
+/**
+ * TC717: Global Token Limit — Set Valid Value
+ * Tests POST /dashboard/api/global-token-limit with a value string
+ * (per src/handlers/dashboard.ts handleDashboardGlobalTokenLimit ->
+ * upsertGlobalTokenLimitFromDashboard)
+ */
+async function testSetGlobalTokenLimit() {
+  const response = await sendRequest({
+    method: 'POST',
+    endpoint: '/dashboard/api/global-token-limit',
+    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    body: { value: '1000000/day' }
+  });
+
+  // Outcome depends on upsertGlobalTokenLimitFromDashboard's own validation
+  // (not inspected here) — assert the two documented outcomes: success, or
+  // a 400 with an error message from the catch block.
+  assert(
+    response.status === 200 || response.status === 400,
+    `Expected 200 or 400, got ${response.status}`
+  );
+  if (response.status === 200) {
+    assert(response.body?.ok === true, 'Should return ok:true');
+  } else {
+    assert(response.body?.error, '400 response should include an error message');
+  }
+}
+
+/**
+ * TC718: Global Token Limit — Clear with null
+ * Per src/handlers/dashboard.ts: `upsertGlobalTokenLimitFromDashboard(env, value ?? null)`
+ * — sending value:null should be accepted as a "clear the limit" no-op, not rejected.
+ */
+async function testClearGlobalTokenLimit() {
+  const response = await sendRequest({
+    method: 'POST',
+    endpoint: '/dashboard/api/global-token-limit',
+    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    body: { value: null }
+  });
+
+  assert(
+    response.status === 200 || response.status === 400,
+    `Expected 200 or 400, got ${response.status}`
+  );
+  if (response.status === 200) {
+    assert(response.body?.ok === true, 'Should return ok:true');
+  }
+}
+
 module.exports = {
   testGetDashboardConfig,
   testGetDashboardConfigAuth,
@@ -208,7 +400,14 @@ module.exports = {
   testDashboardTestModel,
   testDashboardTestModelMissingId,
   testDashboardTestCompositeModel,
-  testDashboardHtmlPage
+  testDashboardHtmlPage,
+  testGetToolBlocklist,
+  testToggleToolBlockOn,
+  testToggleToolBlockOff,
+  testToggleToolBlockMissingName,
+  testToggleToolBlockWhitespaceName,
+  testSetGlobalTokenLimit,
+  testClearGlobalTokenLimit
 };
 
 if (require.main === module) {
@@ -220,6 +419,13 @@ if (require.main === module) {
     { name: 'TC707: Request Stats', fn: testGetRequestStats },
     { name: 'TC708: Test Model', fn: testDashboardTestModel },
     { name: 'TC709: Test Model (no modelId)', fn: testDashboardTestModelMissingId },
-    { name: 'TC711: HTML Page', fn: testDashboardHtmlPage }
+    { name: 'TC711: HTML Page', fn: testDashboardHtmlPage },
+    { name: 'TC712: Get Tool Blocklist', fn: testGetToolBlocklist },
+    { name: 'TC713: Toggle Tool Block On', fn: testToggleToolBlockOn },
+    { name: 'TC714: Toggle Tool Block Off', fn: testToggleToolBlockOff },
+    { name: 'TC715: Toggle Block Missing tool_name', fn: testToggleToolBlockMissingName },
+    { name: 'TC716: Toggle Block Whitespace tool_name', fn: testToggleToolBlockWhitespaceName },
+    { name: 'TC717: Set Global Token Limit', fn: testSetGlobalTokenLimit },
+    { name: 'TC718: Clear Global Token Limit', fn: testClearGlobalTokenLimit }
   ]);
 }
