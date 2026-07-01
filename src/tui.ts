@@ -874,11 +874,11 @@ class DashboardView implements Component {
     return lines.map((line) => clip(line, width));
   }
 
-  private customModels(): Array<{ category: string; modelId: string; description?: string; routeModel?: string }> {
+  private customModels(): Array<{ category: string; modelId: string; description?: string; routeModel?: string; empty?: boolean }> {
     const snap = this.snapshot;
     if (!snap) return [];
     const seen = new Set<string>();
-    const models: Array<{ category: string; modelId: string; description?: string; routeModel?: string }> = [];
+    const models: Array<{ category: string; modelId: string; description?: string; routeModel?: string; empty?: boolean }> = [];
 
     for (const [category, categoryConfig] of Object.entries(snap.config.models)) {
       for (const [key, value] of Object.entries(categoryConfig || {})) {
@@ -897,16 +897,17 @@ class DashboardView implements Component {
         seen.add(alias.alias);
         const targets = alias.targets.map((t) => t.model || t.routeModel || '?').join(' · ');
         const isFusion = !!(snap.config.composite?.[alias.alias] as { fusion_options?: unknown } | undefined)?.fusion_options;
-        models.push({ category: isFusion ? 'fusion' : 'composite', modelId: alias.alias, description: `(${targets})` });
+        models.push({ category: isFusion ? 'fusion' : 'composite', modelId: alias.alias, description: `(${targets})`, empty: alias.targets.length === 0 });
       }
     }
 
-    // Sort: composite/fusion first, then by modelId
+    // Sort: non-empty composite/fusion first; empty composite/fusion and other
+    // (specific or wildcard) models sink to the bottom, both groups alphabetical.
     return models.sort((a, b) => {
-      const aComposite = a.category === 'fusion' || a.category === 'composite';
-      const bComposite = b.category === 'fusion' || b.category === 'composite';
-      if (aComposite && !bComposite) return -1;
-      if (!aComposite && bComposite) return 1;
+      const aTop = (a.category === 'fusion' || a.category === 'composite') && !a.empty;
+      const bTop = (b.category === 'fusion' || b.category === 'composite') && !b.empty;
+      if (aTop && !bTop) return -1;
+      if (!aTop && bTop) return 1;
       return a.modelId.localeCompare(b.modelId);
     });
   }
