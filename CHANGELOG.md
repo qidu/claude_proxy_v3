@@ -7,6 +7,77 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Test runner: `TEST_CONFIG` default is now force-set on `process.env`
+
+- **Fixed silent isolation bypass**: `run-tests.js` and `testcases/utils/test_helpers.js`
+  each computed a local `TEST_CONFIG` constant as `process.env.TEST_CONFIG || 'test_'`,
+  but never wrote that default back to `process.env.TEST_CONFIG`. Any code path
+  that read `process.env.TEST_CONFIG` directly (e.g. the proxy process itself,
+  when started independently of `run-tests.js`) would see it unset and fall back
+  to `./proxy_config.toml` instead of the isolated `./test_proxy_config.toml`,
+  letting config-mutating test suites (composite/fusion/schedule PUTs, tool
+  blocklist, global token limit) write into the real config file.
+- Both files now do `if (!process.env.TEST_CONFIG) process.env.TEST_CONFIG = 'test_';`
+  before reading it, so `TEST_CONFIG` is always defined for every child process
+  and for `src/server.ts`'s own `PROXY_CONFIG_PATH` resolution, regardless of
+  whether it arrived empty, unset, or already set by the caller.
+
+**Files changed:** `run-tests.js`, `testcases/utils/test_helpers.js`.
+
+### Schedule window editor: friendly `days` input (weekdays/weekend/everyday) in TUI and dashboard
+
+- **Simplified `days` semantics**: schedule windows now accept `"weekday"`/`"weekdays"`
+  and `"weekend"`/`"weekends"` in any casing; any other string value normalizes
+  to "every day" instead of throwing a validation error. Explicit day-name
+  arrays (e.g. `["mon","tue"]`) are still honored for hand-edited TOML. Added
+  a shared `normalizeScheduleDays()` helper in `src/utils/config-loader.ts`
+  used by the TOML parser, the dashboard JSON-payload validator
+  (`validateAndNormalizeScheduleWindow`), and `upsertScheduleWindow` (the
+  function both the TUI and the dashboard HTTP route call), so all three
+  input paths agree.
+- **TUI**: replaced the single JSON-array text prompt for editing a schedule
+  target's windows with a step wizard — `from` (number prompt) → `to` (number
+  prompt) → **days** (a 3-way picker: Every day / Weekdays / Weekend), with an
+  "add another window" loop, or "Set as fallback" to clear the window list in
+  one step. Also fixed the alias panel's per-target summary line, which
+  previously silently dropped `days: "weekday"`/`"weekend"` (it only rendered
+  array-style day lists).
+- **Dashboard**: the schedule window's `days` free-text input (which could
+  only ever produce a custom day array, never the special weekday/weekend
+  values) is now a `<select>` dropdown with the same three options, matching
+  the TUI.
+
+**Files changed:** `src/utils/config-loader.ts` (`normalizeScheduleDays`,
+`parseScheduleWindow`, `validateAndNormalizeScheduleWindow`,
+`upsertScheduleWindow`), `src/tui.ts` (`openEditScheduleWindowsPrompt`,
+`ScheduleAliasesOverlay.render`), `src/handlers/dashboard.ts`
+(`scheduleAliasRows`, `collectConfigPayload`).
+
+### Schedule Aliases panel: target-add UX fixes, target scope, and test-isolation path bug
+
+- **Enter no longer dismisses the "Add target" list** — selecting a target in the
+  "Adding target to *alias*" picker now returns to the Schedule Aliases panel
+  (matching Esc/cancel behavior), instead of leaving no overlay open.
+- **Key rebind**: adding a schedule target is now `M` (was `T`), for consistency
+  with the Composite Aliases panel's `M add target` binding.
+- **Target picker no longer offers invalid candidates**: wildcard routing patterns
+  (`*`, `claude-*`, etc.) and the schedule alias itself (self-reference) are
+  excluded from the "Adding target to *alias*" list.
+- **Schedule targets can now be composite/fusion aliases**, not just concrete
+  custom models — the picker already sourced candidates from
+  `getConfiguredModelIds()` (which includes composite alias names), so this
+  was a filtering/doc fix rather than a resolver change.
+- **Fixed test-config isolation path bug**: `src/server.ts` computed the
+  `TEST_CONFIG`-isolated config path as `` ./${TEST_CONFIG}_proxy_config.toml ``
+  (extra underscore), while `run-tests.js` copies the developer config to
+  `` ./${TEST_CONFIG}proxy_config.toml `` (no extra underscore). Because the two
+  paths didn't match, a running test suite's `PUT /dashboard/api/config` calls
+  could end up mutating a config path outside the isolation the test runner set
+  up. Removed the extra underscore so the server reads/writes the exact path
+  `run-tests.js` isolates.
+
+**Files changed:** `src/tui.ts` (`ScheduleAliasesOverlay`, `openAddScheduleTargetPrompt`), `src/server.ts`.
+
 ### Config validation warnings + relaxed `api_key` requirement
 
 `validateProxyConfig` now distinguishes **warnings** from **errors**. Situations that were previously

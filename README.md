@@ -305,7 +305,7 @@ the configured windows.
 |---|---|---|---|
 | `from` | `0..24` (inclusive of start) | `0` | Hour-of-day the window opens (server-local time). |
 | `to`   | `0..24` (exclusive of end) | `24` | Hour-of-day the window closes. `24` is a legal value (end-of-day). |
-| `days` | `"weekday"`, `"weekend"`, or `[mon, tue, ...]` | every day | When the window applies, evaluated against server-local day-of-week. |
+| `days` | `"weekday"`/`"weekdays"`, `"weekend"`/`"weekends"` (any casing), or `[mon, tue, ...]` | every day | When the window applies, evaluated against server-local day-of-week. Any other string (including hand-typed typos) normalizes to "every day" rather than raising an error. |
 
 A target with **`windows = []`** is the **fallback**: it serves when no other target
 matches the current time. Each alias may have **at most one fallback** target.
@@ -331,10 +331,15 @@ moment.
 **Manage via the dashboard / TUI:**
 
 - Web UI: open `GET /dashboard`, scroll to the **Schedule** section, edit aliases and
-  their window lists inline. Save persists to `proxy_config.toml`.
+  their window lists inline — each window has `from`/`to` number inputs and a
+  **days dropdown** (Every day / Weekdays / Weekend). Save persists to `proxy_config.toml`.
 - TUI: press `s` to open `ScheduleAliasesOverlay` (mirror of the composite editor
-  at `c`). `a` adds an alias, `t` adds a target under the selected alias, `d`
-  deletes, `e` edits the selected target's windows, arrow keys navigate, `Esc` closes.
+  at `c`). `a` adds an alias, `m` adds a target under the selected alias (a
+  concrete `[models.*]` entry or another composite/fusion alias — wildcard
+  patterns like `*`/`claude-*` and the alias itself are excluded from the
+  picker), `d` deletes, `e` opens a step-by-step window editor (from → to → a
+  Every day/Weekdays/Weekend picker, repeat to add more windows, or choose
+  "Set as fallback" to clear all windows), arrow keys navigate, `Esc` closes.
 - HTTP: the four `/dashboard/api/schedule/*` routes listed in [Dashboard API](#dashboard-api).
 
 **Auth / section flag:** schedule targets inherit whatever `route.section === 'free'`

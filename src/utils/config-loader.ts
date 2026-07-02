@@ -1021,10 +1021,13 @@ function parseScheduleWindow(value: string): ScheduleWindow {
         const dayValues = splitTopLevel(arrayInner).map((d) => d.trim().replace(/^"|"$/g, ''));
         window.days = dayValues;
       } else {
-        const v = rawValue.replace(/^"|"$/g, '');
-        if (v === 'weekday' || v === 'weekend') {
-          window.days = v;
+        const v = rawValue.replace(/^"|"$/g, '').trim().toLowerCase();
+        if (v === 'weekday' || v === 'weekdays') {
+          window.days = 'weekday';
+        } else if (v === 'weekend' || v === 'weekends') {
+          window.days = 'weekend';
         }
+        // else: leave window.days unset (everyday)
       }
       continue;
     }
@@ -1373,6 +1376,9 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
             } else if (window.days !== 'weekday' && window.days !== 'weekend') {
               errors.push({ path: windowPath, message: `days must be "weekday", "weekend", or an array of day names` });
             }
+          }
+          if (from === 0 and to === 0 && window.days === undefined) {
+            hasFallback = true; // '{from = 0, to = 24}' equals to 'fallback'
           }
         }
       }
@@ -2147,6 +2153,29 @@ function validateAndNormalizeComposite(payload: unknown): Record<string, Composi
   return result;
 }
 
+/**
+ * Normalize a raw `days` value into a ScheduleDaysSpec, or undefined for
+ * "everyday". Accepts "weekday"/"weekdays" and "weekend"/"weekends" in any
+ * casing, or an explicit array of day-name strings (for hand-edited configs).
+ * Any other value (including unrecognized strings) normalizes to undefined
+ * ("everyday") rather than rejecting the update — this keeps the friendly
+ * TUI/dashboard editors (which only offer weekdays/weekend/everyday) simple
+ * while still round-tripping custom day arrays typed directly into TOML.
+ */
+function normalizeScheduleDays(days: unknown): ScheduleDaysSpec | undefined {
+  const normalized = typeof days === 'string' ? days.trim().toLowerCase() : undefined;
+  if (normalized === 'weekday' || normalized === 'weekdays') {
+    return 'weekday';
+  }
+  if (normalized === 'weekend' || normalized === 'weekends') {
+    return 'weekend';
+  }
+  if (Array.isArray(days) && days.every((d) => typeof d === 'string')) {
+    return days as string[];
+  }
+  return undefined;
+}
+
 function validateAndNormalizeScheduleWindow(rawValue: unknown, context: string): ScheduleWindow {
   if (!isPlainObject(rawValue)) {
     throw new Error(`Invalid schedule window for: ${context}`);
@@ -2169,14 +2198,11 @@ function validateAndNormalizeScheduleWindow(rawValue: unknown, context: string):
     throw new Error(`Invalid window for: ${context} — from must be less than to`);
   }
   if ('days' in rawValue) {
-    const days = rawValue.days;
-    if (days === 'weekday' || days === 'weekend') {
-      window.days = days;
-    } else if (Array.isArray(days) && days.every((d) => typeof d === 'string')) {
-      window.days = days as string[];
-    } else {
-      throw new Error(`Invalid days for: ${context} — must be "weekday", "weekend", or an array of day names`);
+    const normalizedDays = normalizeScheduleDays(rawValue.days);
+    if (normalizedDays !== undefined) {
+      window.days = normalizedDays;
     }
+    // else: leave window.days unset (everyday)
   }
 
   return window;
@@ -2706,7 +2732,18 @@ export function upsertScheduleWindow(
     }
   }
 
-  existingTargets[targetName] = windows.map((w) => ({ ...w }));
+  existingTargets[targetName] = windows.map((w) => {
+    const normalized: ScheduleWindow = { ...w };
+    if ('days' in w) {
+      const normalizedDays = normalizeScheduleDays(w.days);
+      if (normalizedDays !== undefined) {
+        normalized.days = normalizedDays;
+      } else {
+        delete normalized.days;
+      }
+    }
+    return normalized;
+  });
   nextConfig.schedule[aliasName] = existingTargets;
   return nextConfig;
 }

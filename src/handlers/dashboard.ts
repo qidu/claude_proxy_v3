@@ -736,13 +736,25 @@ export function handleDashboardPage(): Response {
         if (keys.length === 0) {
           return '<div class="config-row"><label>' + escapeHtml(aliasName) + '</label><div class="wide">(empty)</div></div>';
         }
+        const daysOptions = [
+          { value: '', label: 'Every day' },
+          { value: 'weekday', label: 'Weekdays' },
+          { value: 'weekend', label: 'Weekend' },
+        ];
         return keys.map((targetName) => {
           const windows = Array.isArray(targets[targetName]) ? targets[targetName] : [];
           const isFallback = windows.length === 0;
           const windowRows = windows.map((w, idx) => {
             const fromVal = (w && typeof w.from === 'number') ? w.from : '';
             const toVal = (w && typeof w.to === 'number') ? w.to : '';
-            const daysVal = Array.isArray(w && w.days) ? w.days.join(',') : '';
+            // Only "weekday"/"weekend" are offered by the dropdown; a custom day
+            // array (from hand-edited TOML) has no dropdown option, so it renders
+            // as "Every day" here — saving the form will normalize it away. This
+            // matches the TUI editor, which also only offers the 3-way choice.
+            const daysVal = w && (w.days === 'weekday' || w.days === 'weekend') ? w.days : '';
+            const daysOptionsHtml = daysOptions.map((o) =>
+              '<option value="' + o.value + '"' + (daysVal === o.value ? ' selected' : '') + '>' + o.label + '</option>'
+            ).join('');
             return '<div class="config-row nested">'
               + '<label>window ' + (idx + 1) + '</label>'
               + '<span style="font-size:12px;color:#666;margin-right:4px;">from</span>'
@@ -750,7 +762,7 @@ export function handleDashboardPage(): Response {
               + '<span style="font-size:12px;color:#666;margin-left:8px;margin-right:4px;">to</span>'
               + '<input type="number" min="0" max="24" step="0.25" data-kind="sched-window-to" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" data-index="' + idx + '" value="' + escapeHtml(toVal) + '" placeholder="24" style="width:60px;"' + disabledAttr + ' />'
               + '<span style="font-size:12px;color:#666;margin-left:8px;margin-right:4px;">days</span>'
-              + '<input type="text" data-kind="sched-window-days" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" data-index="' + idx + '" value="' + escapeHtml(daysVal) + '" placeholder="mon,tue,wed,..." style="width:160px;"' + disabledAttr + ' />'
+              + '<select data-kind="sched-window-days" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" data-index="' + idx + '"' + disabledAttr + '>' + daysOptionsHtml + '</select>'
               + '<button type="button" class="mini-btn danger" data-action="remove-schedule-window" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" data-index="' + idx + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
               + '</div>';
           }).join('');
@@ -919,12 +931,13 @@ export function handleDashboardPage(): Response {
             for (let i = 0; i < count; i++) {
               const fromVal = fromEls[i].value.trim();
               const toVal = toEls[i].value.trim();
-              const daysRaw = daysEls[i] ? daysEls[i].value.trim() : '';
+              // days dropdown value is "", "weekday", or "weekend" — "" (Every day) omits the field.
+              const daysVal = daysEls[i] ? daysEls[i].value.trim() : '';
               const entry = {};
               if (fromVal !== '') entry.from = Number(fromVal);
               if (toVal !== '') entry.to = Number(toVal);
-              if (daysRaw !== '') {
-                entry.days = daysRaw.split(',').map((d) => d.trim()).filter((d) => d !== '');
+              if (daysVal === 'weekday' || daysVal === 'weekend') {
+                entry.days = daysVal;
               }
               windows.push(entry);
             }

@@ -26,7 +26,7 @@ import {
   upsertGlobalTokenLimitFromDashboard,
   upsertScheduleTargetFromDashboard,
 } from './handlers/dashboard.js';
-import { getConfiguredModelIds, type ScheduleWindow } from './utils/config-loader.js';
+import { getConfiguredModelIds, type ScheduleWindow, type ScheduleDaysSpec } from './utils/config-loader.js';
 import { buildHeatmap, renderHeatmapPanel } from './heatmap.js';
 import { dumpTodayTokens, TOKEN_LOG_FILE, getActiveRequestCount, getTokensInWindow, blockTool, unblockTool, isToolBlocked } from './utils/dashboard-stats.js';
 import type { Env } from './types/shared.js';
@@ -90,8 +90,8 @@ function formatTestResultDetail(responseBody: unknown): string {
 type CompositeTargetConfig = { share?: number; primary?: boolean; fallback?: number; fusion?: number; role?: FusionRole };
 
 function sortCompositeTargets([aKey, aCfg]: [string, unknown], [bKey, bCfg]: [string, unknown]): number {
-  const a = aCfg as CompositeTargetConfig;
-  const b = bCfg as CompositeTargetConfig;
+  const a = (aCfg ?? {}) as CompositeTargetConfig;
+  const b = (bCfg ?? {}) as CompositeTargetConfig;
   if (a.primary && !b.primary) return -1;
   if (!a.primary && b.primary) return 1;
   const shareA = a.share ?? 1;
@@ -101,6 +101,32 @@ function sortCompositeTargets([aKey, aCfg]: [string, unknown], [bKey, bCfg]: [st
     return (a.fallback ?? 0) - (b.fallback ?? 0);
   }
   return aKey.localeCompare(bKey);
+}
+
+// Fixed pipeline order for fusion target descriptions: synth -> judge -> panel.
+// Targets with no explicit role (or fusion weight only) are treated as panel members.
+function fusionRolePriority(cfg: CompositeTargetConfig | undefined): number {
+  if (cfg?.role === 'synth') return 0;
+  if (cfg?.role === 'judge') return 1;
+  return 2; // panel, or default/no role
+}
+
+// Orders resolved composite/fusion targets for display in description strings:
+// - composite: primary first, then share desc, then fallback asc (ties alphabetical)
+// - fusion: synth, then judge, then panel
+function orderCompositeTargetsForDisplay<T extends { model: string }>(
+  targets: T[],
+  aliasConfig: Record<string, unknown> | undefined,
+  isFusion: boolean,
+): T[] {
+  if (!aliasConfig) return targets;
+  const sorted = [...targets];
+  if (isFusion) {
+    sorted.sort((a, b) => fusionRolePriority(aliasConfig[a.model] as CompositeTargetConfig | undefined) - fusionRolePriority(aliasConfig[b.model] as CompositeTargetConfig | undefined));
+  } else {
+    sorted.sort((a, b) => sortCompositeTargets([a.model, aliasConfig[a.model]], [b.model, aliasConfig[b.model]]));
+  }
+  return sorted;
 }
 
 
@@ -763,7 +789,7 @@ class ScheduleAliasesOverlay implements Component, Focusable {
       this.app.openAddScheduleAliasPrompt();
       return;
     }
-    if (matchesKey(data, 't') && selected?.kind === 'alias') {
+    if (matchesKey(data, 'm') && selected?.kind === 'alias') {
       this.app.openAddScheduleTargetPrompt(selected.alias);
       return;
     }
@@ -791,7 +817,7 @@ class ScheduleAliasesOverlay implements Component, Focusable {
 
   render(width: number): string[] {
     const snap = this.snapshot;
-    const toolbar = `A ${dim('add alias')} T ${dim('add target')} E ${dim('edit windows')} D ${dim('del')} Esc ${dim('hide')} ↑↓ ${dim('move')} `;
+    const toolbar = `A ${dim('add alias')} M ${dim('add target')} E ${dim('edit windows')} D ${dim('del')} Esc ${dim('hide')} ↑↓ ${dim('move')} `;
 
     if (!snap) {
       return frame('Edit Schedule Aliases Config', [toolbar, 'Loading…'], width).map((line) => clip(line, width));
@@ -823,7 +849,9 @@ class ScheduleAliasesOverlay implements Component, Focusable {
           : windows.map((w) => {
               const from = typeof w?.from === 'number' ? w.from : 0;
               const to = typeof w?.to === 'number' ? w.to : 24;
-              const days = Array.isArray(w?.days) && w.days.length > 0 ? `[${w.days.join(',')}]` : '';
+              const days = w?.days === 'weekday' ? '[weekdays]'
+                : w?.days === 'weekend' ? '[weekend]'
+                : Array.isArray(w?.days) && w.days.length > 0 ? `[${w.days.join(',')}]` : '';
               return `${from}-${to}${days}`;
             }).join(' ');
         selectionLineIndex.push(bodyLines.length);
@@ -1061,7 +1089,7 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(`C ${dim('edit composite')}  T ${dim('test models')}  R ${dim('reload config')}  L ${dim('token limit')}  P ${dim('tool blocklist')}  Ctrl+U ${dim('dump usage')}  Ctrl+C ${dim('quit')}`);
+    lines.push(`C ${dim('composite & fusion')}  S ${dim('schedule')}  T ${dim('test')}  R ${dim('reload')}  L ${dim('token limit')}  P ${dim('tool block')}  Ctrl+U ${dim('dump usage')}  Ctrl+C ${dim('quit')}`);
     lines.push(this.message ? yellow(this.message) : dim('Ready'));
 
     return lines.map((line) => clip(line, width));
@@ -1088,8 +1116,10 @@ class DashboardView implements Component {
       for (const alias of snap.compositeResolved) {
         if (seen.has(alias.alias)) continue; // model with same name already added
         seen.add(alias.alias);
-        const targets = alias.targets.map((t) => t.model || t.routeModel || '?').join(' · ');
         const isFusion = !!(snap.config.composite?.[alias.alias] as { fusion_options?: unknown } | undefined)?.fusion_options;
+        const aliasConfig = snap.config.composite?.[alias.alias] as Record<string, unknown> | undefined;
+        const orderedTargets = orderCompositeTargetsForDisplay(alias.targets, aliasConfig, isFusion);
+        const targets = orderedTargets.map((t) => t.model || t.routeModel || '?').join(' · ');
         models.push({ category: isFusion ? 'fusion' : 'composite', modelId: alias.alias, description: `(${targets})`, empty: alias.targets.length === 0 });
       }
     }
@@ -1967,16 +1997,16 @@ class DashboardApp {
   }
 
   openAddScheduleTargetPrompt(alias: string): void {
-    // Schedule targets must be concrete upstream model ids (the resolver picks
-    // one of them based on the time-of-day window), not composite aliases —
-    // so we build a minimal picker from `getConfiguredModelIds` rather than
-    // reusing `modelChoices()` (which includes aliases).
+    // Schedule targets pick a resolved model by time-of-day window; the target
+    // can be a concrete custom model or a composite alias (both are returned by
+    // `getConfiguredModelIds`), but not a wildcard routing pattern (e.g. "*",
+    // "claude-*") or the schedule alias itself (self-reference).
     const snapshot = this.viewSnapshot();
     if (!snapshot || !this.proxyConfig) return;
     const configuredIds = getConfiguredModelIds(this.proxyConfig);
     const existing = new Set(Object.keys(((snapshot.config.schedule || {}) as Record<string, Record<string, unknown>>)[alias] || {}));
     const choices: SelectItem[] = configuredIds
-      .filter((id) => !existing.has(id))
+      .filter((id) => !existing.has(id) && id !== alias && id !== '*' && !id.endsWith('-*'))
       .sort()
       .map((id) => ({ value: id, label: id }));
 
@@ -1998,13 +2028,16 @@ class DashboardApp {
           try {
             upsertScheduleTargetFromDashboard(this.source.env, alias, item.value, [{ from: 0, to: 24 }]);
             await this.refresh(true);
+            this.showScheduleOverlay();
             this.scheduleOverlay?.focusAlias(alias);
             this.view.setMessage(`added ${item.value} to ${alias}`);
           } catch (error) {
             this.view.setMessage((error as Error).message);
             await this.refresh();
+            this.showScheduleOverlay();
             this.scheduleOverlay?.focusAlias(alias);
           }
+          this.requestRender();
         })();
       },
       () => {
@@ -2018,46 +2051,179 @@ class DashboardApp {
     this.overlay.focus();
   }
 
+  // Step wizard for editing a schedule target's window list, one window at a
+  // time (from -> to -> days), instead of a single JSON-blob prompt. Days is a
+  // 3-way pick (Weekdays / Weekend / Every day) rather than free text — any
+  // day value other than "weekday"/"weekend" is normalized to "every day" by
+  // the config layer, so the editor doesn't offer anything else to keep it simple.
+  // Editing always replaces the whole window list, matching prior JSON-prompt behavior.
   openEditScheduleWindowsPrompt(alias: string, target: string): void {
     const snapshot = this.viewSnapshot();
-    const current = ((snapshot?.config.schedule || {}) as Record<string, Record<string, ScheduleWindow[]>>)[alias]?.[target] ?? [];
-    const isFallback = current.length === 0;
-    const defaultValue = isFallback ? '[]' : JSON.stringify(current);
-    this.openPrompt(
-      `Windows for ${bold(alias)}.${target}`,
-      'JSON array of {from, to, days?}  from/to in 0..24  days optional  [] = fallback',
-      defaultValue,
-      async (value) => {
-        const trimmed = value.trim();
-        if (!trimmed) return;
-        let windows: ScheduleWindow[];
-        try {
-          const parsed = JSON.parse(trimmed);
-          if (!Array.isArray(parsed)) {
-            this.view.setMessage('Must be a JSON array');
-            await this.refresh();
-            this.scheduleOverlay?.focusAlias(alias);
-            return;
+    const existing = ((snapshot?.config.schedule || {}) as Record<string, Record<string, ScheduleWindow[]>>)[alias]?.[target] ?? [];
+    const existingSummary = existing.length === 0
+      ? 'currently: fallback'
+      : `currently: ${existing.map((w) => {
+          const from = typeof w?.from === 'number' ? w.from : 0;
+          const to = typeof w?.to === 'number' ? w.to : 24;
+          const days = w?.days === 'weekday' ? ' weekdays' : w?.days === 'weekend' ? ' weekend' : '';
+          return `${from}-${to}${days}`;
+        }).join(', ')}`;
+    const windows: ScheduleWindow[] = [];
+
+    const finish = async () => {
+      this.hideOverlay();
+      try {
+        upsertScheduleTargetFromDashboard(this.source.env, alias, target, windows);
+        await this.refresh(true);
+        this.view.setMessage(windows.length === 0 ? `${alias}.${target} = fallback` : `updated ${alias}.${target} (${windows.length} window${windows.length === 1 ? '' : 's'})`);
+      } catch (error) {
+        this.view.setMessage((error as Error).message);
+        await this.refresh();
+      }
+      this.showScheduleOverlay();
+      this.scheduleOverlay?.focusAlias(alias);
+      this.requestRender();
+    };
+
+    const cancel = () => {
+      this.hideOverlay();
+      this.showScheduleOverlay();
+      this.scheduleOverlay?.focusAlias(alias);
+      this.view.setMessage('edit cancelled');
+      this.requestRender();
+    };
+
+    const askAddAnother = (windowNum: number) => {
+      this.hideOverlay();
+      const overlay = new ListOverlay(
+        `${alias}.${target} — window ${windowNum} saved`,
+        `${windows.length} window${windows.length === 1 ? '' : 's'} configured so far`,
+        [
+          { value: 'add', label: 'Add another window' },
+          { value: 'save', label: 'Save and close' },
+        ],
+        (item) => {
+          if (item.value === 'add') {
+            collectFrom(windowNum + 1);
+          } else {
+            void finish();
           }
-          windows = parsed as ScheduleWindow[];
-        } catch (error) {
-          this.view.setMessage(`Invalid JSON: ${(error as Error).message}`);
-          await this.refresh();
-          this.scheduleOverlay?.focusAlias(alias);
-          return;
-        }
-        try {
-          upsertScheduleTargetFromDashboard(this.source.env, alias, target, windows);
-          await this.refresh(true);
-          this.scheduleOverlay?.focusAlias(alias);
-          this.view.setMessage(windows.length === 0 ? `${alias}.${target} = fallback` : `updated ${alias}.${target} windows`);
-        } catch (error) {
-          this.view.setMessage((error as Error).message);
-          await this.refresh();
-          this.scheduleOverlay?.focusAlias(alias);
+        },
+        () => void finish(),
+        2,
+      );
+      this.overlay = this.tui.showOverlay(overlay, { width: '50%', maxHeight: '30%', anchor: 'center' });
+      this.overlay.focus();
+    };
+
+    const collectDays = (windowNum: number, from: number | undefined, to: number | undefined) => {
+      this.hideOverlay();
+      const overlay = new ListOverlay(
+        `Window ${windowNum} for ${bold(alias)}.${target} — days`,
+        `↑/↓ ${dim('move')}  Enter ${dim('select')}  Esc ${dim('every day')}`,
+        [
+          { value: 'everyday', label: 'Every day', description: 'default — no days restriction' },
+          { value: 'weekday', label: 'Weekdays', description: 'Mon-Fri' },
+          { value: 'weekend', label: 'Weekend', description: 'Sat-Sun' },
+        ],
+        (item) => {
+          const window: ScheduleWindow = {};
+          if (from !== undefined) window.from = from;
+          if (to !== undefined) window.to = to;
+          if (item.value === 'weekday' || item.value === 'weekend') window.days = item.value as ScheduleDaysSpec;
+          windows.push(window);
+          askAddAnother(windowNum);
+        },
+        () => {
+          const window: ScheduleWindow = {};
+          if (from !== undefined) window.from = from;
+          if (to !== undefined) window.to = to;
+          windows.push(window);
+          askAddAnother(windowNum);
+        },
+        3,
+      );
+      this.overlay = this.tui.showOverlay(overlay, { width: '50%', maxHeight: '30%', anchor: 'center' });
+      this.overlay.focus();
+    };
+
+    const collectTo = (windowNum: number, from: number | undefined) => {
+      this.hideOverlay();
+      const overlay = new PromptOverlay(
+        `Window ${windowNum} for ${bold(alias)}.${target}`,
+        'to (hour 0-24, blank = 24)',
+        '',
+        (value) => {
+          const t = value.trim();
+          let to: number | undefined;
+          if (t !== '') {
+            const n = Number(t);
+            if (!Number.isFinite(n) || n < 0 || n > 24) {
+              this.view.setMessage('to must be between 0 and 24');
+              cancel();
+              return;
+            }
+            if (from !== undefined && n <= from) {
+              this.view.setMessage('to must be greater than from');
+              cancel();
+              return;
+            }
+            to = n;
+          }
+          collectDays(windowNum, from, to);
+        },
+        cancel,
+      );
+      this.overlay = this.tui.showOverlay(overlay, { width: '60%', maxHeight: '40%', anchor: 'center' });
+      this.overlay.focus();
+    };
+
+    const collectFrom = (windowNum: number) => {
+      this.hideOverlay();
+      const overlay = new PromptOverlay(
+        `Window ${windowNum} for ${bold(alias)}.${target}`,
+        'from (hour 0-24, blank = 0)',
+        '',
+        (value) => {
+          const t = value.trim();
+          let from: number | undefined;
+          if (t !== '') {
+            const n = Number(t);
+            if (!Number.isFinite(n) || n < 0 || n > 24) {
+              this.view.setMessage('from must be between 0 and 24');
+              cancel();
+              return;
+            }
+            from = n;
+          }
+          collectTo(windowNum, from);
+        },
+        cancel,
+      );
+      this.overlay = this.tui.showOverlay(overlay, { width: '60%', maxHeight: '40%', anchor: 'center' });
+      this.overlay.focus();
+    };
+
+    this.hideOverlay();
+    const overlay = new ListOverlay(
+      `Edit ${bold(alias)}.${target}`,
+      `${dim(existingSummary)}  Enter ${dim('select')}  Esc ${dim('cancel')}`,
+      [
+        { value: 'windows', label: 'Configure time windows', description: 'add one or more from/to/days windows' },
+        { value: 'fallback', label: 'Set as fallback', description: 'always eligible when no window matches (empty window list)' },
+      ],
+      (item) => {
+        if (item.value === 'fallback') {
+          void finish();
+        } else {
+          collectFrom(1);
         }
       },
+      cancel,
+      2,
     );
+    this.overlay = this.tui.showOverlay(overlay, { width: '60%', maxHeight: '30%', anchor: 'center' });
+    this.overlay.focus();
   }
 
   openDeleteScheduleAliasConfirm(alias: string): void {
@@ -2292,7 +2458,9 @@ class DashboardApp {
         const isFusion = !!(snapshot.config.composite?.[alias.alias] as { fusion_options?: unknown } | undefined)?.fusion_options;
         const modeTag = isFusion ? '[F]' : '[C]';
         const isDuplicate = seenNames.has(alias.alias);
-        const targets = alias.targets.map((t) => t.model || t.routeModel || '?').join('· ');
+        const aliasConfig = snapshot.config.composite?.[alias.alias] as Record<string, unknown> | undefined;
+        const orderedTargets = orderCompositeTargetsForDisplay(alias.targets, aliasConfig, isFusion);
+        const targets = orderedTargets.map((t) => t.model || t.routeModel || '?').join(' · ');
         if (isDuplicate) {
           // Same name already added as a model — add composite with [C] suffix to make value unique
           choices.push({
