@@ -1377,7 +1377,7 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
               errors.push({ path: windowPath, message: `days must be "weekday", "weekend", or an array of day names` });
             }
           }
-          if (from === 0 and to === 0 && window.days === undefined) {
+          if (from === 0 && to === 24 && window.days === undefined) {
             hasFallback = true; // '{from = 0, to = 24}' equals to 'fallback'
           }
         }

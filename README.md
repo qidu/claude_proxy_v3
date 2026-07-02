@@ -191,6 +191,16 @@ The `/dashboard` web UI is driven by a small JSON API. All routes require a
 The four `schedule/*` routes are the dedicated CRUD for `[schedule]` aliases;
 mutations also round-trip through the TOML file so the change persists across restarts.
 
+**Stats are keyed by resolved upstream model id, not the alias/target key.**
+A `[models.*]` entry like `max-m3 = {target = "MiniMax-M3", ...}` is looked up
+under the key `max-m3`, but every request routed through it — including
+`requests`/`failed_requests` counts and all token counters — is recorded
+against `MiniMax-M3` (the resolved `target`), because that's the model id
+actually sent upstream. If a `[models.*]` entry has no explicit `target`
+(so key == resolved model id), this distinction doesn't matter. But when
+`target` differs from the key, check stats under the `target` value, not
+the alias key, if a row looks stuck at zero requests/tokens despite live traffic.
+
 ## Model Routing
 
 ### Category lookup priority

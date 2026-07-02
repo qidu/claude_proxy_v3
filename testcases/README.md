@@ -11,7 +11,7 @@ Two runner scripts live at the project root:
 
 ```bash
 # Start testing proxy server WITH PORT=7777
-# DO NOT use 'pkill -f "node dist/server.js"' , use 'lsof -ni:7777' to find process id (pid), and use 'kill -p ${pid}'
+# NEVER use 'pkill -f "node dist/server.js"' , use 'lsof -ni:7777' to find process id (pid), and use 'kill -p ${pid}'
 # DO NOT modeify `proxy_config.toml`, modify the testing config at `${TEST_CONFIG}proxy_config.toml`
 
 # Single pass

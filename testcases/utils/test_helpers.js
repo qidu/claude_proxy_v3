@@ -8,7 +8,11 @@ const API_KEY = process.env.API_KEY || 'sk-test-key';
 const TIMEOUT = parseInt(process.env.TEST_TIMEOUT || '30000', 10);
 // TEST_CONFIG prefix for the isolated test config file.
 // The proxy loads ./${TEST_CONFIG}proxy_config.toml when this is set.
-const TEST_CONFIG = process.env.TEST_CONFIG || 'test_';
+// Always force it into process.env so a directly-invoked test file
+// (node testcases/.../foo.test.js) never silently targets the real
+// proxy_config.toml just because TEST_CONFIG was unset/empty.
+if (!process.env.TEST_CONFIG) process.env.TEST_CONFIG = 'test_';
+const TEST_CONFIG = process.env.TEST_CONFIG;
 
 /**
  * Send HTTP request with retry logic

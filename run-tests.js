@@ -12,7 +12,10 @@ const TEST_TIMEOUT = process.env.TEST_TIMEOUT || '30000';
 // TEST_CONFIG is the prefix for the isolated test config file.
 // The proxy (src/server.ts:34) reads this env var and loads
 // ./${TEST_CONFIG}proxy_config.toml instead of ./proxy_config.toml.
-const TEST_CONFIG = process.env.TEST_CONFIG || 'test_';
+// Always force it into process.env so every spawned child (proxy + test
+// suites) sees the same isolated prefix, even if it was unset/empty.
+if (!process.env.TEST_CONFIG) process.env.TEST_CONFIG = 'test_';
+const TEST_CONFIG = process.env.TEST_CONFIG;
 const CONFIG_PATH = `./${TEST_CONFIG}proxy_config.toml`;
 const NORMAL_CONFIG_PATH = './proxy_config.toml';
 const TEST_DIR = './testcases';
