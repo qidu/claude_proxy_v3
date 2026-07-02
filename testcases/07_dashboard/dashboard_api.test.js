@@ -191,7 +191,7 @@ async function testDashboardTestCompositeModel() {
  * Tests GET /dashboard returns HTML page
  */
 async function testDashboardHtmlPage() {
-  const response = await fetch('http://localhost:8788/dashboard', {
+  const response = await fetch('http://localhost:7777/dashboard', {
     headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
   });
 

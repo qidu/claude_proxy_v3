@@ -316,7 +316,7 @@ async function testCompositeSameNameAsModel() {
   }
 }
 
-const PROXY_URL_COMPOSITE = process.env.PROXY_URL || 'http://localhost:8788';
+const PROXY_URL_COMPOSITE = process.env.PROXY_URL || 'http://localhost:7777';
 const API_KEY_COMPOSITE = process.env.API_KEY || 'sk-test-key';
 
 async function putCompositeConfig(models, composite) {

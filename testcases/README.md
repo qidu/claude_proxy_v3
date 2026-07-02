@@ -11,7 +11,8 @@ Two runner scripts live at the project root:
 
 ```bash
 # Start testing proxy server WITH PORT=7777
-# DO NOT use 'pkill -f "node dist/server.js"' , use 'lsof -ni 77777' to find process id, and kill the pid
+# DO NOT use 'pkill -f "node dist/server.js"' , use 'lsof -ni:7777' to find process id (pid), and use 'kill -p ${pid}'
+# DO NOT modeify `proxy_config.toml`, modify the testing config at `${TEST_CONFIG}proxy_config.toml`
 
 # Single pass
 node run-tests.js
@@ -20,23 +21,23 @@ node run-tests.js
 node run-tests-loop-wrapper.js
 
 # With custom proxy URL and API key
-PROXY_URL=http://localhost:8788 API_KEY=sk-test node run-tests.js
+PROXY_URL=http://localhost:7777 API_KEY=sk-test node run-tests.js
 ```
 
 ### Config Isolation
 
-The runners automatically isolate the proxy config so tests never modify `proxy_config.toml`:
+The runners automatically isolate the proxy config so tests NEVER modify `proxy_config.toml`:
 
 1. At startup, `proxy_config.toml` is **copied** to `test_proxy_config.toml`.
 2. `TEST_CONFIG=test_` is passed to the proxy and to all child test processes, directing the proxy to load `test_proxy_config.toml`.
 3. Any `PUT /dashboard/api/config` mutations during the run target only the test file.
 4. At exit (including Ctrl-C and crashes), `test_proxy_config.toml` is **deleted**.
 
-The proxy must be started with `TEST_CONFIG=test_` for this to work:
+The proxy must be started with `TEST_CONFIG=test_` and `PORT=7777` for this to work:
 
 ```bash
-# Terminal 1 — proxy pointed at the test config
-TEST_CONFIG=test_ node src/server.ts
+# Terminal 1 — proxy pointed at the test config and starting at testing port `PORT=7777`
+TEST_CONFIG=test_ PORT=7777 node src/server.ts
 
 # Terminal 2 — run tests (creates/manages test_proxy_config.toml)
 node run-tests.js
@@ -49,7 +50,7 @@ node run-tests.js
 node testcases/01_endpoints/messages.test.js
 
 # With custom proxy URL
-PROXY_URL=http://localhost:8788 node testcases/01_endpoints/messages.test.js
+PROXY_URL=http://localhost:7777 node testcases/01_endpoints/messages.test.js
 
 # With custom API key
 API_KEY=your-key node testcases/01_endpoints/messages.test.js
@@ -164,7 +165,7 @@ Tests run against a live proxy instance. The proxy must be started beforehand wi
 
 | Variable | Default | Description |
 |---|---|---|
-| `PROXY_URL` | `http://localhost:8788` | Proxy base URL |
+| `PROXY_URL` | `http://localhost:7777` | Proxy base URL |
 | `API_KEY` | `sk-test-key` | Bearer token sent in `Authorization` header |
 | `TEST_TIMEOUT` | `30000` | Per-request timeout in milliseconds |
 | `TEST_CONFIG` | _(set by runner)_ | Config file prefix; proxy loads `./${TEST_CONFIG}proxy_config.toml`. Set to `test_` by the runners automatically. |
@@ -297,9 +298,13 @@ The proxy configuration must have upstream API keys for all of the following pro
 
 ## Notes
 
-- Tests hit `localhost:8788` by default (configurable via `PROXY_URL`)
+- Tests hit `localhost:7777` by default (configurable via `PROXY_URL`)
 - Tests are sequential — no parallelization or test isolation
 - Some tests accept both 200 and >=400 as valid (graceful degradation)
 - Composite tests discover aliases dynamically from the live config; no alias names are hard-coded
 - Config-mutating tests (09_composite TC1110, 12_config_validation) restore original state after each test case
 - TUI interactive features are tested via the dashboard API they call; interactive TTY testing requires manual testing or a terminal automation tool
+
+## Logs
+
+- Record testing results in file `test_results_at_<date>-<time>.md` to directory `./tests/logs/results/`.

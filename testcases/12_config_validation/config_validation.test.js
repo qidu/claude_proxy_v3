@@ -29,7 +29,7 @@ const {
   runTestSuite
 } = require('../utils/test_helpers');
 
-const PROXY_URL = process.env.PROXY_URL || 'http://localhost:8788';
+const PROXY_URL = process.env.PROXY_URL || 'http://localhost:7777';
 const API_KEY = process.env.API_KEY || 'sk-test-key';
 
 // Minimal valid models/composite payload that mirrors the live config,

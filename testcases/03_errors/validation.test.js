@@ -117,7 +117,7 @@ async function testTemperatureOutOfRange() {
  * Tests error for missing API key
  */
 async function testMissingAuth() {
-  const response = await fetch('http://localhost:8788/v1/messages', {
+  const response = await fetch('http://localhost:7777/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -136,7 +136,7 @@ async function testMissingAuth() {
  * Tests error for malformed JSON
  */
 async function testInvalidJSON() {
-  const response = await fetch('http://localhost:8788/v1/messages', {
+  const response = await fetch('http://localhost:7777/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -153,7 +153,7 @@ async function testInvalidJSON() {
  * Tests error for wrong content type
  */
 async function testWrongContentType() {
-  const response = await fetch('http://localhost:8788/v1/messages', {
+  const response = await fetch('http://localhost:7777/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'text/plain',
@@ -231,7 +231,7 @@ async function testInvalidTool() {
  * Tests /v1/chat/completions returns error
  */
 async function testChatCompletionsBlocked() {
-  const response = await fetch('http://localhost:8788/v1/chat/completions', {
+  const response = await fetch('http://localhost:7777/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

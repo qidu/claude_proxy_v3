@@ -25,7 +25,7 @@ const {
   runTestSuite
 } = require('../utils/test_helpers');
 
-const PROXY_URL_FUSION = process.env.PROXY_URL || 'http://localhost:8788';
+const PROXY_URL_FUSION = process.env.PROXY_URL || 'http://localhost:7777';
 const API_KEY_FUSION = process.env.API_KEY || 'sk-test-key';
 
 // ---- Config helpers ----

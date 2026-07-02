@@ -157,7 +157,7 @@ async function testTokenCountEndpoint() {
  * Tests that long-running requests can timeout
  */
 async function testRequestTimeout() {
-  const PROXY_URL = process.env.PROXY_URL || 'http://localhost:8788';
+  const PROXY_URL = process.env.PROXY_URL || 'http://localhost:7777';
 
   // Send a request with short timeout
   const controller = new AbortController();
@@ -362,7 +362,7 @@ async function testApiKeyRedaction() {
  */
 async function testCORSHeadersPresent() {
   // Send an OPTIONS preflight to test CORS headers explicitly
-  const PROXY_URL = process.env.PROXY_URL || 'http://localhost:8788';
+  const PROXY_URL = process.env.PROXY_URL || 'http://localhost:7777';
   const optionsRes = await fetch(`${PROXY_URL}/v1/messages`, {
     method: 'OPTIONS',
     headers: {

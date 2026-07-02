@@ -241,7 +241,7 @@ async function testLivePutProtoAliasRejected() {
   // JSON key. A JS object literal { __proto__: x } uses the setter path and
   // JSON.stringify drops it — creating an empty composite the server accepts.
   // This matches how real HTTP request bodies arrive (runtime JSON.parses them).
-  const url = `${process.env.PROXY_URL || 'http://localhost:8788'}/dashboard/api/config`;
+  const url = `${process.env.PROXY_URL || 'http://localhost:7777'}/dashboard/api/config`;
   const response = await fetch(url, {
     method: 'PUT',
     headers: {
@@ -257,7 +257,7 @@ async function testLivePutProtoAliasRejected() {
 }
 
 async function testLivePutModelsCategoryProtoRejected() {
-  const url = `${process.env.PROXY_URL || 'http://localhost:8788'}/dashboard/api/config`;
+  const url = `${process.env.PROXY_URL || 'http://localhost:7777'}/dashboard/api/config`;
   const response = await fetch(url, {
     method: 'PUT',
     headers: {

@@ -2,53 +2,50 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+
 // Start testing proxy server WITH PORT=7777
-// DO NOT use 'pkill -f "node dist/server.js"' , use 'lsof -ni 77777' to find process id, and kill the pid
-const TEST_DIR = './testcases';
+// NEVER use 'pkill', use 'lsof -ni :7777' alternatively to find the process id (pid), then use 'kill -p ${pid}'
 const PROXY_URL = process.env.PROXY_URL || 'http://localhost:7777';
-const API_KEY = process.env.API_KEY || 'sk-test-key';
+const API_KEY = process.env.API_KEY || 'sk-***13145'; // set a testing api_key for models at `default_base_url`
 const TEST_TIMEOUT = process.env.TEST_TIMEOUT || '30000';
 
-// Always use an isolated test config so PUT mutations during the run never
-// touch the developer's proxy_config.toml.  The prefix is fixed to 'test_'
-// so the proxy resolves the path as ./test_proxy_config.toml when it sees
-// TEST_CONFIG=test_ in its environment.
+// TEST_CONFIG is the prefix for the isolated test config file.
+// The proxy (src/server.ts:34) reads this env var and loads
+// ./${TEST_CONFIG}proxy_config.toml instead of ./proxy_config.toml.
 const TEST_CONFIG = process.env.TEST_CONFIG || 'test_';
-const NORMAL_CONFIG_PATH = './proxy_config.toml';
 const CONFIG_PATH = `./${TEST_CONFIG}proxy_config.toml`;
+const NORMAL_CONFIG_PATH = './proxy_config.toml';
+const TEST_DIR = './testcases';
 
-// Copy the normal config into the test config file at startup so the proxy
-// gets a valid, complete config to work with.
+// -------------------------------------------------------------------
+// Config isolation
+// -------------------------------------------------------------------
+// Copy the developer's config into the test config slot at startup.
+// PUT mutations during the run stay in the test config; the original
+// proxy_config.toml is never touched.
 if (fs.existsSync(NORMAL_CONFIG_PATH)) {
   fs.copyFileSync(NORMAL_CONFIG_PATH, CONFIG_PATH);
-  console.log(`[isolation] Copied ${NORMAL_CONFIG_PATH} → ${CONFIG_PATH}`);
+  console.log(`[isolation] ${NORMAL_CONFIG_PATH} → ${CONFIG_PATH}`);
 } else {
-  console.warn(`[isolation] Normal config not found at ${NORMAL_CONFIG_PATH}; ${CONFIG_PATH} may be stale`);
+  console.warn(`[isolation] ${NORMAL_CONFIG_PATH} not found; ${CONFIG_PATH} may be stale`);
 }
 
-// Snapshot the test config so any PUT mutations during the run can be rolled
-// back at the end.  Normal config is never read or written here.
 let configBackup = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH) : null;
 
-let configRestored = false;
 function restoreConfig() {
-  if (configRestored) return;
-  configRestored = true;
-  // Restore test config to its pre-run state (copy of normal config).
   if (configBackup !== null) {
     try {
       fs.writeFileSync(CONFIG_PATH, configBackup);
       console.log(`[isolation] Restored ${CONFIG_PATH}`);
     } catch (err) {
-      console.error(`[isolation] Failed to restore ${CONFIG_PATH}: ${err.message}`);
+      console.error(`[isolation] Failed to restore: ${err.message}`);
     }
   }
-  // Remove the test config file — it was created by this runner, not by the user.
   try {
     fs.rmSync(CONFIG_PATH, { force: true });
     console.log(`[isolation] Removed ${CONFIG_PATH}`);
   } catch (err) {
-    console.error(`[isolation] Failed to remove ${CONFIG_PATH}: ${err.message}`);
+    console.error(`[isolation] Failed to remove: ${err.message}`);
   }
 }
 process.on('exit', restoreConfig);
@@ -56,10 +53,75 @@ process.on('SIGINT', () => { restoreConfig(); process.exit(130); });
 process.on('SIGTERM', () => { restoreConfig(); process.exit(143); });
 process.on('uncaughtException', (err) => { console.error(err); restoreConfig(); process.exit(1); });
 
-// Create temp directory
+// -------------------------------------------------------------------
+// Spawn the proxy server with TEST_CONFIG so it loads the isolated config
+// -------------------------------------------------------------------
+console.log('[proxy] Starting proxy server...');
+const proxyEnv = {
+  ...process.env,
+  TEST_CONFIG,
+  PORT: '7777',
+  PROXY_URL,
+  API_KEY,
+  TEST_TIMEOUT,
+};
+
+const proxy = spawn('node', ['dist/server.js'], {
+  env: proxyEnv,
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+
+let proxyReady = false;
+let proxyFailed = false;
+
+// Pipe proxy stdout/stderr to this process so the user can see startup logs
+proxy.stdout.on('data', (d) => process.stdout.write(d));
+proxy.stderr.on('data', (d) => process.stderr.write(d));
+
+proxy.on('error', (err) => {
+  console.error(`[proxy] Failed to start: ${err.message}`);
+  proxyFailed = true;
+});
+
+proxy.on('close', (code) => {
+  if (code !== 0 && !proxyReady) {
+    console.error(`[proxy] Exited unexpectedly with code ${code} before tests ran`);
+    proxyFailed = true;
+  }
+});
+
+// Poll until the proxy is ready (HTTP 200 on /v1/models or /dashboard/api/config)
+async function waitForProxy(maxAttempts = 30, interval = 1000) {
+  for (let i = 1; i <= maxAttempts; i++) {
+    try {
+      const res = await fetch(`${PROXY_URL}/v1/models`, {
+        headers: { 'Authorization': `Bearer ${API_KEY}` },
+        signal: AbortSignal.timeout(3000),
+      });
+      if (res.ok) {
+        console.log(`[proxy] Ready after ${i} attempt(s) (${PROXY_URL})`);
+        return true;
+      }
+    } catch {}
+    if (i < maxAttempts) await new Promise(r => setTimeout(r, interval));
+  }
+  return false;
+}
+
+const proxyUp = await waitForProxy();
+if (!proxyUp) {
+  console.error('[proxy] Timed out waiting for proxy to start');
+  proxy.kill();
+  restoreConfig();
+  process.exit(1);
+}
+proxyReady = true;
+
+// -------------------------------------------------------------------
+// Set up temp directory and helpers
+// -------------------------------------------------------------------
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-proxy-tests-'));
 
-// Copy and convert helper files to .cjs
 const helperFiles = ['test_helpers.js', 'model_config.js'];
 const helperPaths = {};
 for (const hf of helperFiles) {
@@ -102,8 +164,6 @@ const suites = [
 ];
 
 function replaceRequire(src, baseName, dstPath) {
-  // Replace require('../utils/test_helpers') with require('/tmp/.../test_helpers.cjs')
-  // Handle both single and double quotes
   const escaped = dstPath.replace(/\\/g, '\\\\');
   src = src.split(`require('../utils/${baseName}')`).join(`require('${escaped}')`);
   src = src.split(`require("../utils/${baseName}")`).join(`require('${escaped}')`);
@@ -136,23 +196,39 @@ for (const suite of suites) {
   }));
 }
 
-// Clean up temp directory
+// -------------------------------------------------------------------
+// Tear down
+// -------------------------------------------------------------------
 try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
 
-// Restore and remove the test config file, then trigger a proxy reload so its
-// in-memory state no longer reflects test mutations.  The proxy was started
-// with TEST_CONFIG pointing at the test file; after removal it will fall back
-// to the normal config on next reload/restart.
-restoreConfig();
+// Trigger a config reload in the proxy so its in-memory state clears
+// test mutations, then stop the proxy.
 try {
   await fetch(`${PROXY_URL}/dashboard/api/config?reload=1`, {
     headers: { 'Authorization': `Bearer ${API_KEY}` },
   });
-  console.log('[isolation] Triggered live proxy config reload');
+  console.log('[proxy] Triggered config reload');
 } catch (err) {
-  console.error(`[isolation] Could not reload live proxy config: ${err.message}`);
+  console.error(`[proxy] Could not reload: ${err.message}`);
 }
+
+console.log('[proxy] Stopping proxy server...');
+proxy.kill('SIGTERM');
+
+// Wait up to 5s for the proxy to exit cleanly
+await new Promise((resolve) => {
+  const timer = setTimeout(resolve, 5000);
+  proxy.once('close', () => { clearTimeout(timer); resolve(); });
+});
+
+// Restore / remove the test config file.
+restoreConfig();
 
 console.log(`\n${'='.repeat(60)}`);
 console.log(`Total: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
+
+// -------------------------------------------------------------------
+// Logs
+// -------------------------------------------------------------------
+// Record testing results in file `test_results_at_<date>-<time>.md` to directory `./tests/logs/results/`.

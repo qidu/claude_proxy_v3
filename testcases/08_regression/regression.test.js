@@ -192,7 +192,7 @@ async function testHeatmapDataStructure() {
  * Tests graceful handling of malformed JSON
  */
 async function testMalformedJsonBody() {
-  const PROXY_URL = process.env.PROXY_URL || 'http://localhost:8788';
+  const PROXY_URL = process.env.PROXY_URL || 'http://localhost:7777';
 
   const response = await fetch(`${PROXY_URL}/v1/messages`, {
     method: 'POST',
@@ -399,7 +399,7 @@ async function testZeroMaxTokens() {
  * Reference: README L1117
  */
 async function testClientIpHeaderForwarding() {
-  const PROXY_URL_LOCAL = process.env.PROXY_URL || 'http://localhost:8788';
+  const PROXY_URL_LOCAL = process.env.PROXY_URL || 'http://localhost:7777';
   const API_KEY_LOCAL = process.env.API_KEY || 'sk-test-key';
 
   const ipHeaders = [
@@ -468,7 +468,7 @@ async function testDefaultMaxTokensApplied() {
  * Reference: README §"Beta feature validation" (src/utils/beta-features.ts)
  */
 async function testUnknownBetaHeader() {
-  const PROXY_URL_LOCAL = process.env.PROXY_URL || 'http://localhost:8788';
+  const PROXY_URL_LOCAL = process.env.PROXY_URL || 'http://localhost:7777';
   const API_KEY_LOCAL = process.env.API_KEY || 'sk-test-key';
 
   const response = await fetch(`${PROXY_URL_LOCAL}/v1/messages`, {

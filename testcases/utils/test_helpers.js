@@ -3,9 +3,12 @@
  * Common functions for all test cases
  */
 
-const PROXY_URL = process.env.PROXY_URL || 'http://localhost:8788';
+const PROXY_URL = process.env.PROXY_URL || 'http://localhost:7777';
 const API_KEY = process.env.API_KEY || 'sk-test-key';
 const TIMEOUT = parseInt(process.env.TEST_TIMEOUT || '30000', 10);
+// TEST_CONFIG prefix for the isolated test config file.
+// The proxy loads ./${TEST_CONFIG}proxy_config.toml when this is set.
+const TEST_CONFIG = process.env.TEST_CONFIG || 'test_';
 
 /**
  * Send HTTP request with retry logic
@@ -309,6 +312,7 @@ module.exports = {
   PROXY_URL,
   API_KEY,
   TIMEOUT,
+  TEST_CONFIG,
   sendRequest,
   sendStreamingRequest,
   assert,
