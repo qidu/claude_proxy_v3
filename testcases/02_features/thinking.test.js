@@ -97,7 +97,7 @@ async function testBooleanThinking() {
       max_tokens: 200,
       thinking: {
         type: true,
-        budget_tokens: 1000
+        budget_tokens: 1024
       }
     }
   });
@@ -188,7 +188,7 @@ async function testLowBudgetThinking() {
       max_tokens: 100,
       thinking: {
         type: 'enabled',
-        budget_tokens: 512
+        budget_tokens: 1024
       }
     }
   });
@@ -212,7 +212,7 @@ async function testStreamingWithThinking() {
       max_tokens: 300,
       thinking: {
         type: 'enabled',
-        budget_tokens: 1000
+        budget_tokens: 1024
       },
       stream: true
     }
@@ -295,7 +295,7 @@ async function testBudgetToEffortMapping() {
       max_tokens: 100,
       thinking: {
         type: 'enabled',
-        budget_tokens: 1000
+        budget_tokens: 1024
       }
     }
   });

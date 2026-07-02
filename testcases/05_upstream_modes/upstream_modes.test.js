@@ -206,7 +206,7 @@ async function testThinkingModeConversion() {
       max_tokens: 50,
       thinking: {
         type: 'enabled',
-        budget_tokens: 1000
+        budget_tokens: 1024
       }
     }
   });

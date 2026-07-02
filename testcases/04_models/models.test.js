@@ -132,7 +132,7 @@ async function testThinkingModels() {
         max_tokens: 200,
         thinking: {
           type: 'enabled',
-          budget_tokens: 1000
+          budget_tokens: 1024
         }
       }
     });

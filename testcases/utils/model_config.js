@@ -12,30 +12,19 @@ const OPENAI_COMPLETIONS_MODELS = [
   'deepseek/deepseek-v3.2',
   'deepseek/deepseek-v3.1',
   'deepseek/deepseek-v3.2-exp',
-  'deepseek-v3-0324',
   'deepseek/deepseek-v3.2-251201',
-  'deepseek-r1',
   'deepseek-r1-0528',
+  'deepseek/deepseek-v4-flash',
+  'deepseek/deepseek-v4-pro',
 
   // Qwen
-  'qwen3-32b',
-  'qwen3-30b-a3b',
-  'qwen3-30b-a3b-instruct-2507',
-  'qwen3-30b-a3b-thinking-2507',
   'qwen3-235b-a22b',
   'qwen3-235b-a22b-thinking-2507',
-  'qwen3-next-80b-a3b-thinking',
-  'qwen3-vl-30b-a3b-thinking',
-  'qwen3-max-preview',
-  'qwen3-coder-480b-a35b-instruct',
-  'qwen-max-2025-01-25',
-  'qwen-vl-max-2025-01-25',
-  'qwen2.5-vl-72b-instruct',
-  'qwen2.5-vl-7b-instruct',
-  'qwen-turbo',
+  'qwen/qwen3.5-plus',
+  'qwen/qwen3.6-plus',
+  'qwen/qwen3.7-max',
 
   // MiniMax
-  'minimax/minimax-m2.1',
   'minimax/minimax-m2.5',
   'minimax/minimax-m2.7',
   'MiniMax-M1',
@@ -43,19 +32,16 @@ const OPENAI_COMPLETIONS_MODELS = [
   // Moonshot/Kimi
   'moonshotai/kimi-k2.5',
   'moonshotai/kimi-k2.6',
-  'moonshotai/kimi-k2-0905',
-  'moonshotai/kimi-k2-thinking',
+  'moonshotai/kimi-k2.7',
 
   // GLM/Z-AI
-  'z-ai/glm-4.7',
-  'glm-4.5',
-  'glm-4.5-air',
   'z-ai/glm-5',
+  'z-ai/glm-5.1',
+  'z-ai/glm-5.2',
 
   // Gemini (via OpenAI-completions)
   'gemini-2.5-flash',
   'gemini-3.0-flash-preview',
-  'gemini-3.1-pro-preview'
 ];
 
 /**
