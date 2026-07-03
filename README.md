@@ -68,7 +68,9 @@ cp proxy_config.toml_example proxy_config.toml
 A minimal `proxy_config.toml` looks like this:
 
 ```toml
-# Default upstream — used by any model that doesn't override it
+# Global upstream defaults — applied ONLY to models that are NOT claimed by
+# any `[models.*]` category section below. A model name that falls through
+# every section's exact / wildcard / catch-all lookup gets routed here.
 [upstream]
 upstream_mode = "openai-completions"
 default_base_url = "https://api.your-provider.com"
@@ -88,10 +90,13 @@ base_url = "https://generativelanguage.googleapis.com"
 api_key = "your-gemini-key"
 "gemini-*" = {}
 
-# Everything else goes here (OpenAI-compatible)
+# Everything else goes here (OpenAI-compatible). Each `[models.*]` section must
+# define its own `base_url` — `[upstream] default_base_url` does NOT fall through
+# to fill in a missing section base_url.
 [models.default]
 upstream_mode = "openai-completions"
-"*" = {}                                     # final catch-all
+base_url = "https://api.your-provider.com"   # section base_url is required; not inherited from [upstream]
+"*" = {}                                     # final catch-all for this section
 "deepseek/deepseek-v3.2" = {}
 ```
 
@@ -233,17 +238,25 @@ resolved against the configured sections in three priority levels (highest first
 Each model entry is an inline table `{target, base_url, api_key}`. Resolution walks an
 inheritance chain — anything left empty falls back to the level above:
 
-- **`base_url`**: per-entry override → section `base_url` → `[upstream] default_base_url`.
+- **`base_url`**: per-entry override → section `base_url`. **That's it — `[upstream] default_base_url`
+  is NOT a fallback for any category.** Each `[models.*]` section must define its own
+  `base_url` (section-level), or every model entry in that section must define its own
+  per-entry `base_url`. A section that does neither will fail to resolve at routing time
+  rather than silently inheriting from `[upstream] default_base_url`.
 - **`api_key`**: per-entry override → section `api_key` → `[upstream] default_api_key`.
 - **`upstream_mode`**: per-entry `mode` → section `upstream_mode` → `[upstream] upstream_mode`
   → `"openai-completions"`.
 - The target-only form (`opus48 = {target = "..."}`) requires the section to define **both**
   `base_url` and `api_key`; the full form may leave either empty to inherit.
 
-> **Note:** the catch-all entry `"*" = {}` in `[models.default]` inherits the same chain —
-> `[upstream] default_base_url` **is** used for all unmatched models as long as
-> `[models.default]` does not define its own `base_url`. Then routing is:
-> per-entry `base_url` → `[models.default]`.`base_url` → `[upstream]`.`default_base_url` →  hardcoded fallback.
+> **What `[upstream] default_base_url` is for:** it is the *global* upstream endpoint
+> applied **only** to models that are **not claimed by any `[models.*]` category section** —
+> i.e. a model name that falls through every section's exact / wildcard / catch-all lookup
+> gets routed to `default_base_url`. It is intentionally **not** a chain link that
+> individual sections fall through to: a missing section-level `base_url` (or per-entry
+> `base_url` for an entry that omits one) is a configuration error, not something to mask
+> with the global default. Always configure `base_url` at the section level (recommended)
+> or per-entry.
 
 
 **Who wins — caller's key vs. configured `api_key`** — this depends on the section:
