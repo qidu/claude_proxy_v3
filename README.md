@@ -176,6 +176,26 @@ request, `r` to reload config, `Ctrl+C` to quit. A web dashboard is also availab
 A Gemini `/v1/models/{model}:...` variant exists for each `/v1beta/models/{model}:...`
 endpoint. Full request/response examples live in the [API reference docs](#documentation).
 
+### Supported `upstream_mode`
+
+Each endpoint can be routed to one or more upstream API families (`upstream_mode`).
+The mode is selected by the route's `defaultMode` / model config:
+
+| Endpoints | `upstream_mode` Values |
+|---|---|
+| `POST /v1/messages` | `anthropic-messages`, `claude-messages`, `openai-completions` (passthrough when input is already OpenAI-formatted) |
+| `POST /v1/responses` | `openai-responses` (passthrough), `openai-completions` (convert) |
+| `POST /v1/chat/completions` | `openai-completions` (only when `DEV_PASS_THROUGH=true`; otherwise rejected) |
+| `POST /v1beta/models/{model}:generateContent` / `:streamGenerateContent` | `gemini-generatecontent`, `gemini-interactions`, `openai-completions` |
+| `POST /v1/interactions` | `anthropic-messages`, `claude-messages`, `openai-completions` |
+| `GET /v1/models` | (passthrough; no `upstreamMode` set) |
+| `POST /v1/embeddings` | `openai-completions` (only) |
+
+Notes:
+- `/v1/responses*` only support the OpenAI upstream family — no `anthropic-messages`, `claude-messages`, or Gemini mode.
+- `/v1/messages` is the only endpoint that supports `anthropic-messages` (native Anthropic SDK passthrough).
+- `/v1/embeddings` is locked to `openai-completions`; no Gemini/Anthropic embedding path.
+
 ### Dashboard API
 
 The `/dashboard` web UI is driven by a small JSON API. All routes require a
