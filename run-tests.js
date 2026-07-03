@@ -1,10 +1,26 @@
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
+import net from 'net';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import readline from 'readline';
+
+// -------------------------------------------------------------------
+// Required environment variables
+// -------------------------------------------------------------------
+// PORT=7777        — bind the proxy to port 7777 (the test convention).
+// TEST_CONFIG=test_— prefix the isolated test config file; the proxy
+//                    loads ./${TEST_CONFIG}proxy_config.toml instead of
+//                    ./proxy_config.toml (see src/server.ts).
+// API_KEY=xxx      — bearer token the test runner uses to talk to the
+//                    proxy (matches the API_KEY the proxy is started with,
+//                    typically the one configured at `default_base_url`).
+// These three are ALWAYS required when running tests in testcases/.
+// PROXY_URL / TEST_TIMEOUT have sensible defaults below.
+// -------------------------------------------------------------------
 
 // Start testing proxy server WITH PORT=7777
-// NEVER use 'pkill', use 'lsof -ni :7777' alternatively to find the process id (pid), then use 'kill -p ${pid}'
+// NEVER use 'pkill', use 'lsof -ni :7777' alternatively to find the process id (pid), then use 'kill -p ${pid}`
 const PROXY_URL = process.env.PROXY_URL || 'http://localhost:7777';
 const API_KEY = process.env.API_KEY || 'sk-***13145'; // set a testing api_key for models at `default_base_url`
 const TEST_TIMEOUT = process.env.TEST_TIMEOUT || '30000';
@@ -19,6 +35,60 @@ const TEST_CONFIG = process.env.TEST_CONFIG;
 const CONFIG_PATH = `./${TEST_CONFIG}proxy_config.toml`;
 const NORMAL_CONFIG_PATH = './proxy_config.toml';
 const TEST_DIR = './testcases';
+
+// -------------------------------------------------------------------
+// Test suite registry + CLI: --list / -l
+// -------------------------------------------------------------------
+// Defined up here so `--list` can print and exit *before* we copy the
+// test config or spawn the proxy. Otherwise running `node run-tests.js
+// -l` on a stale port-7777 would crash with EADDRINUSE.
+const suites = [
+  '01_endpoints/messages.test.js',
+  '01_endpoints/messages_streaming.test.js',
+  '01_endpoints/interactions.test.js',
+  '01_endpoints/generateContent.test.js',
+  '02_features/thinking.test.js',
+  '02_features/tool_use.test.js',
+  '02_features/image_input.test.js',
+  '03_errors/validation.test.js',
+  '04_models/models.test.js',
+  '05_upstream_modes/upstream_modes.test.js',
+  '06_integration/integration.test.js',
+  '07_dashboard/dashboard_api.test.js',
+  '08_regression/regression.test.js',
+  '09_composite/composite.test.js',
+  '10_auth/auth_headers.test.js',
+  '11_responses/responses_api.test.js',
+  '12_config_validation/config_validation.test.js',
+  '13_fusion/fusion.test.js',
+  '14_routing/routing.test.js',
+  '15_config_parse/config_parse.test.js',
+  '16_security/ssrf_dynamic_route.test.js',
+  '16_security/privacy_filter.test.js',
+  '16_security/kompress.test.js',
+  '16_security/conversation_store.test.js',
+  '16_security/free_fanout.test.js',
+  '16_security/config_loader_pollution.test.js',
+  '16_security/schedule_routing.test.js',
+];
+
+// Parse CLI:
+//   node run-tests.js            → all suites
+//   node run-tests.js 5          → only suites[5]
+//   node run-tests.js 0,3,7      → suites[0], suites[3], suites[7]
+//   node run-tests.js --list     → print each suite's index + path, then exit
+//   node run-tests.js -l         → shorthand for --list
+if (process.argv.includes('--list') || process.argv.includes('-l')) {
+  console.log('[cli] Available suites:');
+  const pad = String(suites.length - 1).length;
+  suites.forEach((p, i) => console.log(`  ${String(i).padStart(pad, ' ')}  ${p}`));
+  console.log('');
+  console.log('[cli] Examples:');
+  console.log('  node run-tests.js          # run all suites');
+  console.log('  node run-tests.js 5        # only suites[5]');
+  console.log('  node run-tests.js 0,3      # suites[0] and suites[3]');
+  process.exit(0);
+}
 
 // -------------------------------------------------------------------
 // Config isolation
@@ -59,66 +129,178 @@ process.on('uncaughtException', (err) => { console.error(err); restoreConfig(); 
 // -------------------------------------------------------------------
 // Spawn the proxy server with TEST_CONFIG so it loads the isolated config
 // -------------------------------------------------------------------
-console.log('[proxy] Starting proxy server...');
-const proxyEnv = {
-  ...process.env,
-  TEST_CONFIG,
-  PORT: '7777',
-  PROXY_URL,
-  API_KEY,
-  TEST_TIMEOUT,
-};
+// Pre-flight: if port 7777 is already taken, the spawned child crashes
+// with EADDRINUSE *inside its own process* — the parent's `child.on('error')`
+// is never called, so we have to detect the busy port ourselves before
+// spawning. We then prompt the user (10s timeout, default = reuse).
+function isPortBusy(port, host = '0.0.0.0') {
+  return new Promise((resolve) => {
+    const tester = net.createServer()
+      .once('error', (err) => resolve(err.code === 'EADDRINUSE'))
+      .once('listening', () => tester.close(() => resolve(false)))
+      .listen(port, host);
+  });
+}
 
-const proxy = spawn('node', ['dist/server.js'], {
-  env: proxyEnv,
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+// Ask the user a question on stdin. Falls back to `defaultChoice` after
+// `timeoutMs` (or immediately if stdin is not a TTY, e.g. CI).
+async function promptUser(question, defaultChoice, timeoutMs) {
+  if (!process.stdin.isTTY) return defaultChoice;
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    let answered = false;
+    const finish = (value) => {
+      if (answered) return;
+      answered = true;
+      clearTimeout(timer);
+      rl.close();
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      console.log(`\n[proxy] No response after ${timeoutMs / 1000}s — defaulting to '${defaultChoice}'`);
+      finish(defaultChoice);
+    }, timeoutMs);
+    rl.question(question, (answer) => {
+      finish(answer.trim().toLowerCase() || defaultChoice);
+    });
+  });
+}
 
+// Find pids listening on `port` via lsof and SIGTERM them. Waits up to
+// 5s for the port to free. Returns true on success. Per project rules we
+// use `lsof -ni` + `kill`, never `pkill`.
+async function killProcessOnPort(port) {
+  let pids;
+  try {
+    const out = execSync(`lsof -ni :${port} -t`, {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    pids = out.split('\n').map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isInteger(n) && n > 0);
+  } catch (err) {
+    console.error(`[proxy] lsof failed: ${err.message}`);
+    return false;
+  }
+  if (pids.length === 0) return !(await isPortBusy(port));
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 'SIGTERM');
+      console.error(`[proxy] Sent SIGTERM to pid ${pid}`);
+    } catch (err) {
+      console.error(`[proxy] kill failed for pid ${pid}: ${err.message}`);
+    }
+  }
+  for (let i = 0; i < 10; i++) {
+    if (!(await isPortBusy(port))) return true;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return !(await isPortBusy(port));
+}
+
+let proxy = null;
 let proxyReady = false;
 let proxyFailed = false;
+// True when we reuse a pre-existing proxy on :7777 instead of spawning
+// our own. Teardown checks this to skip reload + kill (we don't own it).
+let proxyReused = false;
 
-// Pipe proxy stdout/stderr to this process so the user can see startup logs
-proxy.stdout.on('data', (d) => process.stdout.write(d));
-proxy.stderr.on('data', (d) => process.stderr.write(d));
-
-proxy.on('error', (err) => {
-  console.error(`[proxy] Failed to start: ${err.message}`);
-  proxyFailed = true;
-});
-
-proxy.on('close', (code) => {
-  if (code !== 0 && !proxyReady) {
-    console.error(`[proxy] Exited unexpectedly with code ${code} before tests ran`);
-    proxyFailed = true;
-  }
-});
-
-// Poll until the proxy is ready (HTTP 200 on /v1/models or /dashboard/api/config)
-async function waitForProxy(maxAttempts = 30, interval = 1000) {
+// Poll /v1/models for up to maxAttempts × interval ms.
+// Returns true as soon as the proxy responds with 200 + a valid API_KEY.
+async function waitForProxy(maxAttempts, interval = 1000) {
   for (let i = 1; i <= maxAttempts; i++) {
+    if (proxyFailed) return false;
     try {
       const res = await fetch(`${PROXY_URL}/v1/models`, {
         headers: { 'Authorization': `Bearer ${API_KEY}` },
         signal: AbortSignal.timeout(3000),
       });
-      if (res.ok) {
-        console.log(`[proxy] Ready after ${i} attempt(s) (${PROXY_URL})`);
-        return true;
-      }
+      if (res.ok) return true;
     } catch {}
-    if (i < maxAttempts) await new Promise(r => setTimeout(r, interval));
+    if (i < maxAttempts) await new Promise((r) => setTimeout(r, interval));
   }
   return false;
 }
 
-const proxyUp = await waitForProxy();
-if (!proxyUp) {
-  console.error('[proxy] Timed out waiting for proxy to start');
-  proxy.kill();
-  restoreConfig();
-  process.exit(1);
+// If port 7777 is busy, ask the user: reuse (default after 10s) or kill.
+// Returns true if we should proceed to spawn (i.e. port is free or was
+// just freed by killing); sets `proxyReused`/`proxyReady` if we reused.
+async function resolvePortConflict() {
+  if (!(await isPortBusy(7777))) return true; // port free, proceed to spawn
+  console.error('[proxy] Port 7777 is already in use.');
+  console.error('[proxy] To inspect: lsof -ni :7777');
+  console.error('[proxy] (NEVER use `pkill` per project rules)');
+  const choice = await promptUser(
+    '[proxy] [U]se existing proxy / [k]ill existing process? ',
+    'u',
+    10000, // 10s timeout — defaults to 'use'
+  );
+  if (choice === 'k') {
+    console.error('[proxy] Killing process on port 7777...');
+    const freed = await killProcessOnPort(7777);
+    if (!freed) {
+      console.error('[proxy] Failed to free port 7777; aborting.');
+      console.error('[proxy] Try manually: lsof -ni :7777 → kill <pid>');
+      return false;
+    }
+    console.error('[proxy] Port 7777 freed; will spawn a fresh proxy.');
+    return true; // proceed to spawn
+  }
+  // 'u' (or default): try to reuse the existing process
+  console.error('[proxy] Checking if existing process is a usable proxy (max 10s)...');
+  const reusable = await waitForProxy(10, 1000);
+  if (reusable) {
+    proxyReused = true;
+    proxyReady = true;
+    console.log(`[proxy] Reusing existing proxy at ${PROXY_URL}`);
+    return false; // no need to spawn
+  }
+  console.error('[proxy] Existing process on :7777 is not responding to /v1/models.');
+  console.error('[proxy] Re-run and choose [k] to free the port, or manually:');
+  console.error('[proxy]   lsof -ni :7777 → kill <pid>');
+  return false;
 }
-proxyReady = true;
+
+if (await resolvePortConflict()) {
+  console.log('[proxy] Starting proxy server...');
+  const proxyEnv = {
+    ...process.env,
+    TEST_CONFIG,
+    PORT: '7777',
+    PROXY_URL,
+    API_KEY,
+    TEST_TIMEOUT,
+  };
+
+  proxy = spawn('node', ['dist/server.js'], {
+    env: proxyEnv,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  // Pipe proxy stdout/stderr to this process so the user can see startup logs
+  proxy.stdout.on('data', (d) => process.stdout.write(d));
+  proxy.stderr.on('data', (d) => process.stderr.write(d));
+
+  proxy.on('error', (err) => {
+    console.error(`[proxy] Failed to start: ${err.message}`);
+    proxyFailed = true;
+  });
+
+  proxy.on('close', (code) => {
+    if (code !== 0 && !proxyReady) {
+      console.error(`[proxy] Exited unexpectedly with code ${code} before tests ran`);
+      proxyFailed = true;
+    }
+  });
+
+  const proxyUp = await waitForProxy(30, 1000); // 30s for normal cold start
+  if (!proxyUp) {
+    console.error('[proxy] Timed out waiting for proxy to start');
+    proxy.kill();
+    restoreConfig();
+    process.exit(1);
+  }
+  proxyReady = true;
+}
 
 // -------------------------------------------------------------------
 // Set up temp directory and helpers
@@ -136,36 +318,6 @@ for (const hf of helperFiles) {
   }
 }
 
-const suites = [
-  '01_endpoints/messages.test.js',
-  '01_endpoints/messages_streaming.test.js',
-  '01_endpoints/interactions.test.js',
-  '01_endpoints/generateContent.test.js',
-  '02_features/thinking.test.js',
-  '02_features/tool_use.test.js',
-  '02_features/image_input.test.js',
-  '03_errors/validation.test.js',
-  '04_models/models.test.js',
-  '05_upstream_modes/upstream_modes.test.js',
-  '06_integration/integration.test.js',
-  '07_dashboard/dashboard_api.test.js',
-  '08_regression/regression.test.js',
-  '09_composite/composite.test.js',
-  '10_auth/auth_headers.test.js',
-  '11_responses/responses_api.test.js',
-  '12_config_validation/config_validation.test.js',
-  '13_fusion/fusion.test.js',
-  '14_routing/routing.test.js',
-  '15_config_parse/config_parse.test.js',
-  '16_security/ssrf_dynamic_route.test.js',
-  '16_security/privacy_filter.test.js',
-  '16_security/kompress.test.js',
-  '16_security/conversation_store.test.js',
-  '16_security/free_fanout.test.js',
-  '16_security/config_loader_pollution.test.js',
-  '16_security/schedule_routing.test.js',
-];
-
 function replaceRequire(src, baseName, dstPath) {
   const escaped = dstPath.replace(/\\/g, '\\\\');
   src = src.split(`require('../utils/${baseName}')`).join(`require('${escaped}')`);
@@ -173,9 +325,28 @@ function replaceRequire(src, baseName, dstPath) {
   return src;
 }
 
+const cliArg = process.argv[2];
+let selectedIndices = null;
+if (cliArg !== undefined) {
+  selectedIndices = cliArg.split(',').map((s) => {
+    const n = Number(s.trim());
+    if (!Number.isInteger(n) || n < 0 || n >= suites.length) {
+      console.error(`[cli] Invalid suite index: "${s.trim()}". Valid range: 0..${suites.length - 1}`);
+      console.error('[cli] Available suites:');
+      suites.forEach((p, i) => console.error(`  ${i}: ${p}`));
+      restoreConfig();
+      process.exit(2);
+    }
+    return n;
+  });
+  console.log(`[cli] Running ${selectedIndices.length} suite(s) by index: ${selectedIndices.join(', ')}`);
+}
+
 let passed = 0, failed = 0;
 
-for (const suite of suites) {
+for (let i = 0; i < suites.length; i++) {
+  if (selectedIndices && !selectedIndices.includes(i)) continue;
+  const suite = suites[i];
   const src = fs.readFileSync(path.join(TEST_DIR, suite), 'utf8');
 
   let adjusted = src;
@@ -204,25 +375,31 @@ for (const suite of suites) {
 // -------------------------------------------------------------------
 try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
 
-// Trigger a config reload in the proxy so its in-memory state clears
-// test mutations, then stop the proxy.
-try {
-  await fetch(`${PROXY_URL}/dashboard/api/config?reload=1`, {
-    headers: { 'Authorization': `Bearer ${API_KEY}` },
+if (proxyReused) {
+  // The proxy on :7777 belongs to another process; do not reload its
+  // config or kill it. We still restore our own test_config.toml below.
+  console.log('[proxy] Skipping reload/stop — reused existing proxy at :7777');
+} else {
+  // Trigger a config reload in the proxy so its in-memory state clears
+  // test mutations, then stop the proxy.
+  try {
+    await fetch(`${PROXY_URL}/dashboard/api/config?reload=1`, {
+      headers: { 'Authorization': `Bearer ${API_KEY}` },
+    });
+    console.log('[proxy] Triggered config reload');
+  } catch (err) {
+    console.error(`[proxy] Could not reload: ${err.message}`);
+  }
+
+  console.log('[proxy] Stopping proxy server...');
+  proxy.kill('SIGTERM');
+
+  // Wait up to 5s for the proxy to exit cleanly
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, 5000);
+    proxy.once('close', () => { clearTimeout(timer); resolve(); });
   });
-  console.log('[proxy] Triggered config reload');
-} catch (err) {
-  console.error(`[proxy] Could not reload: ${err.message}`);
 }
-
-console.log('[proxy] Stopping proxy server...');
-proxy.kill('SIGTERM');
-
-// Wait up to 5s for the proxy to exit cleanly
-await new Promise((resolve) => {
-  const timer = setTimeout(resolve, 5000);
-  proxy.once('close', () => { clearTimeout(timer); resolve(); });
-});
 
 // Restore / remove the test config file.
 restoreConfig();

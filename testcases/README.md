@@ -1,63 +1,89 @@
 # Test Suite
 
-Custom lightweight test runner — no Jest/Mocha. Tests are plain async functions in `.test.js` files, run directly with `node`. Shared helpers live in `utils/`.
+## Test runner: custom lightweight
+
+This suite uses a **custom lightweight test runner — no Jest/Mocha/Vitest.** Tests are plain async functions exported from `.test.js` files; the runner at `run-tests.js` walks the `testcases/` tree, spawns each file as a child `node` process, and aggregates pass/fail counts. Shared helpers live in `testcases/utils/`.
+
+Why custom: the suite is integration-heavy (talks to a live proxy over HTTP), needs config isolation (copy `proxy_config.toml` → `test_proxy_config.toml` and clean it up on exit), and does not benefit from Jest/Vitest features (no mocking, no fixtures, no DOM). A bespoke runner keeps the test files dependency-free and trivial to run individually.
 
 ## Running All Tests
 
-Two runner scripts live at the project root:
-
-- **`run-tests.js`** — single pass, prints results to stdout
-- **`run-tests-loop-wrapper.js`** — repeating loop, writes a timestamped Markdown report to `./tests/`
+The single entry point is **`run-tests.js`** at the project root — it spawns the proxy, isolates the config, runs every `*.test.js` under `testcases/`, and tears everything down on exit.
 
 ```bash
 # Start testing proxy server WITH PORT=7777
-# NEVER use 'pkill -f "node dist/server.js"' , use 'lsof -ni:7777' to find process id (pid), and use 'kill -p ${pid}'
-# DO NOT modeify `proxy_config.toml`, modify the testing config at `${TEST_CONFIG}proxy_config.toml`
+# NEVER use 'pkill -f "node dist/server.js"' , use 'lsof -ni:7777' to find process id (pid), and use 'kill -p ${pid}`
+# DO NOT modify `proxy_config.toml`, modify the testing config at `${TEST_CONFIG}proxy_config.toml`
 
-# Single pass
+# Single pass (all suites)
 node run-tests.js
-
-# Loop (repeats until interrupted)
-node run-tests-loop-wrapper.js
 
 # With custom proxy URL and API key
 PROXY_URL=http://localhost:7777 API_KEY=sk-test node run-tests.js
 ```
 
+### Running a subset by index
+
+Pass one or more comma-separated indices as the first positional argument to run only those suites (by their position in the `suites` array in `run-tests.js`). Useful for fast iteration on a single file without editing source.
+
+```bash
+# Run only suites[5]
+node run-tests.js 5
+
+# Run suites[0], suites[3], suites[7]
+node run-tests.js 0,3,7
+
+# An invalid index prints the full list and exits with code 2
+node run-tests.js 99
+# [cli] Invalid suite index: "99". Valid range: 0..26
+# [cli] Available suites:
+#   0: 01_endpoints/messages.test.js
+#   1: 01_endpoints/messages_streaming.test.js
+#   ...
+```
+
+The proxy still spawns, config isolation still applies, and teardown still runs — only the set of suites that get executed is filtered.
+
 ### Config Isolation
 
-The runners automatically isolate the proxy config so tests NEVER modify `proxy_config.toml`:
+The runner automatically isolates the proxy config so tests NEVER modify `proxy_config.toml`:
 
 1. At startup, `proxy_config.toml` is **copied** to `test_proxy_config.toml`.
 2. `TEST_CONFIG=test_` is passed to the proxy and to all child test processes, directing the proxy to load `test_proxy_config.toml`.
 3. Any `PUT /dashboard/api/config` mutations during the run target only the test file.
 4. At exit (including Ctrl-C and crashes), `test_proxy_config.toml` is **deleted**.
 
-The proxy must be started with `TEST_CONFIG=test_` and `PORT=7777` for this to work:
+The proxy is started by the runner itself with `TEST_CONFIG=test_` and `PORT=7777`. You do **not** need to launch it manually — `run-tests.js` does that and pipes its logs to your terminal.
 
 ```bash
-# Terminal 1 — proxy pointed at the test config and starting at testing port `PORT=7777`
-TEST_CONFIG=test_ PORT=7777 node src/server.ts
-
-# Terminal 2 — run tests (creates/manages test_proxy_config.toml)
+# Single command — runner spawns the proxy, runs all suites, restores config
 node run-tests.js
 ```
 
 ## Running Tests Individually
 
+Use the index flag on `run-tests.js` (see [Running a subset by index](#running-a-subset-by-index) above). The runner spawns the proxy, copies `proxy_config.toml` → `test_proxy_config.toml` for isolation, runs the selected suites sequentially, and restores the config on exit — so individual runs get the same lifecycle as the full pass.
+
 ```bash
-# Run a single test file
-node testcases/01_endpoints/messages.test.js
+# Just suite 0
+node run-tests.js 0
 
-# With custom proxy URL
-PROXY_URL=http://localhost:7777 node testcases/01_endpoints/messages.test.js
+# A handful of suites by index
+node run-tests.js 0,7,12
 
-# With custom API key
-API_KEY=your-key node testcases/01_endpoints/messages.test.js
-
-# Adjust timeout (default 30s)
-TEST_TIMEOUT=60000 node testcases/04_models/models.test.js
+# With custom proxy URL / API key
+PROXY_URL=http://localhost:7777 API_KEY=sk-test node run-tests.js 0
 ```
+
+**Why you can't just `node testcases/.../X.test.js`:** the project root `package.json` declares `"type": "module"`, so plain `node` treats `.js` as ESM and the test files (which use `require()`) would throw `ReferenceError: require is not defined`. The runner works around this by copying each test file into a temp directory with a `.test.cjs` extension and rewriting its `require('../utils/...')` paths to absolute temp-dir paths before spawning it — so it only runs correctly when launched through `run-tests.js` (or with a similar `.cjs` copy step).
+
+Environment variables honored by the runner:
+
+| Variable | Default | Description |
+|---|---|---|
+| `PROXY_URL` | `http://localhost:7777` | Proxy base URL |
+| `API_KEY` | `sk-test-key` | Bearer token sent in `Authorization` header |
+| `TEST_TIMEOUT` | `30000` | Per-request timeout in milliseconds |
 
 ## Structure
 

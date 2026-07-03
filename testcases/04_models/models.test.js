@@ -99,7 +99,7 @@ async function testMiniMaxModels() {
  * Tests Moonshot AI Kimi models
  */
 async function testMoonshotModels() {
-  const models = ['moonshotai/kimi-k2.5', 'moonshotai/kimi-k2-0905'];
+  const models = ['moonshotai/kimi-k2.6', 'moonshotai/kimi-k2.7-code'];
 
   for (const model of models) {
     const response = await sendRequest({

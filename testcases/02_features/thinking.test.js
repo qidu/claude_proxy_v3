@@ -393,7 +393,7 @@ async function testSignatureDeltaStreaming() {
       max_tokens: 300,
       thinking: {
         type: 'enabled',
-        budget_tokens: 1000
+        budget_tokens: 1024
       }
     }
   });

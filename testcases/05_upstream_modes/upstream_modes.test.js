@@ -267,8 +267,12 @@ async function testResponsesCompact() {
   );
 
   if (response.status === 200) {
-    assert('compaction' in response.body || 'response' in response.body,
-      'Should return compaction or response object');
+    assert(typeof response.body?.id === 'string',
+      'Compacted response should have id (string)');
+    assert(response.body?.object === 'response.compaction',
+      'Compacted response should have object: "response.compaction"');
+    assert(Array.isArray(response.body?.output),
+      'Compacted response should have output array');
   }
 }
 
