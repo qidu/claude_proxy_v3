@@ -1,0 +1,51 @@
+services:
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: model-proxy-v3:latest
+    # No `ports:` — nginx reaches the replicas via the internal network on 8788.
+    # Each replica's port stays unexposed on the host.
+    expose:
+      - "8788"
+    # Read-only config shared across all replicas.
+    volumes:
+      - ./proxy_config.toml:/app/proxy_config.toml:ro
+    # TUI and DUMP are intentionally unset: in a scaled deployment N workers
+    # would race to append to model_proxy_tokens.jsonl. Stats live in memory
+    # only (30d retention), which is the right default for prod anyway.
+    environment:
+      NODE_ENV: production
+      PORT: "8788"
+      LOG_LEVEL: info
+      # If you prefer remote config over the file mount, set:
+      # PROXY_CONFIG_URL: https://consul.internal/v1/kv/proxy/config.toml
+      LOCAL_TIKTOKEN: "true"
+      TIKTOKEN_MODEL: o200k_base
+      ALLOWED_HOSTS: "127.0.0.1,localhost,nginx"
+    restart: unless-stopped
+    healthcheck:
+      # The Workers fetch handler responds at the root with a 404 from the
+      # router, which is still a live HTTP response — good enough as a probe.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8788/"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    # Cap a single replica so a runaway request doesn't take the whole box.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      proxy:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
