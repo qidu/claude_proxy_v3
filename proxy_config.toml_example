@@ -1,4 +1,12 @@
 [upstream]
+# `default_base_url` is the *global* upstream endpoint applied **only** to models
+# that are NOT claimed by any `[models.*]` category section — i.e. a model name
+# that falls through every section's exact / wildcard / catch-all lookup gets
+# routed here. It is **NOT** a fallback chain link for any category. Every
+# `[models.*]` section must define its own `base_url` (section-level), or every
+# entry in that section must define its own per-entry `base_url`. A section that
+# does neither will fail to resolve at routing time rather than silently
+# inheriting from this global default.
 default_base_url = "https://api.qnaigc.com"
 # default_api_key = "-" # NEVER defined in production.
 budget_to_effort_low = 8000
