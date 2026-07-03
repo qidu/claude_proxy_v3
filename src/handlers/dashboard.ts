@@ -381,7 +381,7 @@ export function handleDashboardPage(): Response {
       }
       .config-row .wide { grid-column: 2 / span 2; }
       .row-actions { display: flex; gap: 8px; align-items: center; }
-      .mini-btn { padding: 4px 8px; font-size: 12px; }
+      .mini-btn { padding: 4px 8px; font-size: 12px; justify-self: start; width: auto; }
       .test-btn { padding: 4px 8px; font-size: 12px; background: #e8f5e9; border: 1px solid #a5d6a7; color: #2e7d32; }
       .test-btn:hover { background: #c8e6c9; }
       .test-btn.testing { background: #fff9c4; border-color: #fff176; color: #f57f17; }
