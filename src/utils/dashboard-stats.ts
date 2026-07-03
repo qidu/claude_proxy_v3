@@ -803,6 +803,129 @@ function extractSystemText(body: Record<string, unknown>): string {
   return '';
 }
 
+/**
+ * Summarise a request body to a stable agent name by taking a short prefix of
+ * the `system` content. The system prompt is the closest thing to a stable,
+ * human-meaningful identifier across providers — different clients
+ * (Cline/Continue/Roo/etc.) ship distinctive system prompts, so a 16-char
+ * prefix is enough to tell them apart while staying compact for stat keys.
+ *
+ * Returns 'unknown' when the system content is missing or empty so callers
+ * always have a non-empty key for the stats map.
+ */
+export function extractSystemAgentName(body: Record<string, unknown> | undefined, prefixLength: number = 16): string {
+  if (!body) {
+    return 'unknown';
+  }
+  const systemText = extractSystemText(body);
+  // Collapse internal whitespace so a 16-char slice doesn't land mid-token
+  // and so multi-line system prompts reduce to a meaningful leading fragment.
+  const normalized = systemText.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return 'unknown';
+  }
+  return normalized.slice(0, prefixLength);
+}
+
+/**
+ * Map a system-content prefix to a stable, human-friendly agent identifier.
+ * The raw prefix is too noisy to display ("You are Herm..."), so we match
+ * leading fragments against known client system prompts and return a tag
+ * like "openclaw/hermes" when a match hits.
+ *
+ * Each matcher is `(prefix) => matched | null`. Order matters — first hit wins.
+ * Unrecognised prefixes fall through to the User-Agent prefix (and finally
+ * to the raw system prefix as a last resort) so we never lose information.
+ */
+type SystemPrefixMatcher = (prefix: string) => string | null;
+
+const SYSTEM_AGENT_MATCHERS: SystemPrefixMatcher[] = [
+  // OpenClaw framework — "openclaw" anywhere in the prefix.
+  (prefix) => (prefix.toLowerCase().includes('openclaw') ? 'openclaw' : null),
+  // Hermes client — "hermes" anywhere in the prefix.
+  (prefix) => (prefix.toLowerCase().includes('hermes') ? 'hermes' : null),
+  // Add more known clients here. Each matcher returns a stable tag.
+  (prefix) => (prefix.toLowerCase().includes('opencode') ? 'opencode' : null),
+  (prefix) => (prefix.toLowerCase().includes('deepcode') ? 'deepcode' : null),
+  (prefix) => (prefix.toLowerCase().includes('nanobot') ? 'nanobot' : null),
+  (prefix) => (prefix.toLowerCase().includes('pi') ? 'pi' : null),
+  (prefix) => (prefix.toLowerCase().includes('omp') ? 'omp' : null),
+  (prefix) => (prefix.toLowerCase().includes('buddy') ? 'buddy' : null),
+];
+
+/**
+ * Resolved agent identifier split into its two contributing pieces so callers
+ * can display them separately (e.g. "<prefix>/<ua>" in the TUI Tool Blocklist)
+ * or aggregate by either dimension.
+ *
+ * - `prefix` is the matched client tag from the system-content matchers
+ *   (`openclaw`, `hermes`, ...). Falls back to the raw 16-char system
+ *   fragment, then to the User-Agent prefix. Always non-empty.
+ * - `ua` is the User-Agent prefix from the request headers. May be
+ *   `'unknown'` when no User-Agent was sent.
+ */
+export type ResolvedAgent = {
+  prefix: string;
+  ua: string;
+};
+
+/**
+ * Render a {@link ResolvedAgent} as `"<prefix>/<ua>"`. Empty / `unknown`
+ * halves are dropped so we don't show `"unknown/unknown"` or `"openclaw/"`
+ * for requests missing one side.
+ */
+export function formatAgentLabel(agent: ResolvedAgent): string {
+  const { prefix, ua } = agent;
+  const p = prefix && prefix !== 'unknown' ? prefix : '';
+  const u = ua && ua !== 'unknown' ? ua : '';
+  if (p && u) return `${p}/${u}`;
+  return p || u || 'unknown';
+}
+
+/**
+ * Coerce either a {@link ResolvedAgent} or a legacy single-string agent into
+ * the `{ prefix, ua }` shape. Legacy strings (older callers, on-disk dumps
+ * restored from before the split) are treated as the `prefix` half with
+ * `ua: 'unknown'`. Used by the record* helpers to keep the public API
+ * backwards-compatible while the new code paths pass the structured form.
+ */
+export function normaliseAgent(agent: ResolvedAgent | string): ResolvedAgent {
+  if (typeof agent === 'string') {
+    return { prefix: agent || 'unknown', ua: 'unknown' };
+  }
+  return {
+    prefix: agent.prefix || 'unknown',
+    ua: agent.ua || 'unknown',
+  };
+}
+
+export function resolveAgentName(
+  body: Record<string, unknown> | undefined,
+  userAgentPrefix: string,
+  prefixLength: number = 16,
+): ResolvedAgent {
+  const systemPrefix = extractSystemAgentName(body, prefixLength);
+  const ua = userAgentPrefix && userAgentPrefix !== 'unknown' ? userAgentPrefix : 'unknown';
+
+  if (systemPrefix !== 'unknown') {
+    for (const matcher of SYSTEM_AGENT_MATCHERS) {
+      const tag = matcher(systemPrefix);
+      if (tag) {
+        return { prefix: tag, ua };
+      }
+    }
+  }
+
+  // No system-content match — fall back to the User-Agent prefix on the
+  // prefix side so we still have a meaningful tag, and keep the UA on `ua`.
+  if (ua !== 'unknown') {
+    return { prefix: ua, ua };
+  }
+
+  // Last resort: the raw system prefix is still more informative than nothing.
+  return { prefix: systemPrefix, ua: 'unknown' };
+}
+
 export function extractToolRequestCharLengthsFromBody(body: Record<string, unknown> | undefined): Array<{ tool_name: string; request_chars: number }> {
   if (!body) {
     return [];
@@ -1149,23 +1272,30 @@ export function recordModelUsage(model: string | undefined, usage?: UsageStats):
   recordDailyToken(normalizedModel, usage);
 }
 
-export function recordAgentStat(userAgentPrefix: string, toolNames: string[]): void {
-  const ua = userAgentPrefix || 'unknown';
+export function recordAgentStat(agent: ResolvedAgent | string, toolNames: string[]): void {
+  const { prefix, ua } = normaliseAgent(agent);
   const effectiveTools = toolNames.length > 0 ? toolNames : ['none'];
 
   for (const toolName of effectiveTools) {
     if (blockedTools.has(toolName)) continue;
-    const key = `${ua} / ${toolName}`;
+    // \0 separator keeps prefix and ua independently recoverable from the key.
+    const key = `${prefix}\0${ua} / ${toolName}`;
     const current = agentStats.get(key) || { key, uses: 0 };
     current.uses += 1;
     agentStats.set(key, current);
   }
 }
 
-export function recordToolRequestChars(toolChars: Array<{ tool_name: string; request_chars: number }>, agent: string = ''): void {
+export function recordToolRequestChars(
+  toolChars: Array<{ tool_name: string; request_chars: number }>,
+  agent: ResolvedAgent | string = { prefix: '', ua: '' },
+): void {
   if (!Array.isArray(toolChars) || toolChars.length === 0) {
     return;
   }
+
+  const { prefix, ua } = normaliseAgent(agent);
+  const agentPart = prefix || ua ? `\0${prefix}\0${ua}` : '';
 
   for (const entry of toolChars) {
     if (!entry || typeof entry.tool_name !== 'string' || !entry.tool_name.trim()) {
@@ -1174,7 +1304,7 @@ export function recordToolRequestChars(toolChars: Array<{ tool_name: string; req
     const toolName = entry.tool_name.trim();
     if (blockedTools.has(toolName)) continue;
     const requestChars = Number.isFinite(entry.request_chars) ? Math.max(0, Math.floor(entry.request_chars)) : 0;
-    const key = agent ? `${toolName}\0${agent}` : toolName;
+    const key = agentPart ? `${toolName}${agentPart}` : toolName;
     toolRequestChars.set(key, (toolRequestChars.get(key) ?? 0) + requestChars);
   }
 }
@@ -1507,14 +1637,20 @@ export function recordResponseStatusCodeFromUpstream(statusCode: number): void {
   requestStatusCodeFromUpstreamStats.set(statusCode, current);
 }
 
-export function recordUpstreamResponseToolNames(toolNames: string[], agent: string = 'all'): void {
+export function recordUpstreamResponseToolNames(
+  toolNames: string[],
+  agent: ResolvedAgent | string = { prefix: 'all', ua: 'unknown' },
+): void {
   if (!Array.isArray(toolNames) || toolNames.length === 0) {
     return;
   }
 
+  const { prefix, ua } = normaliseAgent(agent);
+  const agentPart = prefix || ua ? `\0${prefix}\0${ua}` : '';
+
   for (const toolName of toolNames) {
     if (blockedTools.has(toolName)) continue;
-    const key = agent ? `${toolName}\0${agent}` : toolName;
+    const key = agentPart ? `${toolName}${agentPart}` : toolName;
     const current = upstreamResponseToolStats.get(key) || { tool_name: toolName, tools: 0 };
     current.tools += 1;
     upstreamResponseToolStats.set(key, current);
@@ -1537,54 +1673,92 @@ export function getAgentStatsDesc(): AgentStatsEntry[] {
 
 type AgentToolPanelEntry = {
   tool_name: string;
+  /** Combined display label `"<prefix>/<ua>"`. Kept for backwards-compat
+   *  with the dashboard HTML which renders this directly. */
   agent: string;
+  /** Matched client tag from system-content (e.g. `openclaw`, `hermes`). */
+  agent_prefix: string;
+  /** User-Agent prefix from the request header (e.g. `cline`). */
+  agent_ua: string;
   in_requests: number;
   in_responses: number;
   in_request_chars: number;
 };
 
+/**
+ * Parse a `${prefix}\0${ua} / ${tool}` key back into its parts. The `\0`
+ * separator is intentional — neither prefix nor ua should ever contain it
+ * for real requests. Falls back to treating the whole agent half as a
+ * legacy prefix when no `\0` is present (old keys from before the split).
+ */
+function parseAgentKey(agentHalf: string): { prefix: string; ua: string } {
+  const sepIdx = agentHalf.indexOf('\0');
+  if (sepIdx < 0) {
+    return { prefix: agentHalf, ua: 'unknown' };
+  }
+  return {
+    prefix: agentHalf.slice(0, sepIdx),
+    ua: agentHalf.slice(sepIdx + 1),
+  };
+}
+
 export function getAgentToolPanelStats(): AgentToolPanelEntry[] {
   // Build per-(tool, agent) entries from agentStats + toolRequestChars + upstreamResponseToolStats
-  // agentStats key = "${agent} / ${tool}"
+  // agentStats key = "${prefix}\0${ua} / ${tool}"
+  // toolRequestChars / upstreamResponseToolStats key = "${tool}\0${prefix}\0${ua}"
   const combined = new Map<string, AgentToolPanelEntry>();
 
   for (const entry of agentStats.values()) {
     const sepIdx = entry.key.lastIndexOf(' / ');
     if (sepIdx < 0) continue;
-    const agent = entry.key.slice(0, sepIdx);
+    const { prefix, ua } = parseAgentKey(entry.key.slice(0, sepIdx));
     const tool_name = entry.key.slice(sepIdx + 3);
-    const key = `${tool_name}\0${agent}`;
-    const current = combined.get(key) || { tool_name, agent, in_requests: 0, in_responses: 0, in_request_chars: 0 };
+    const rowKey = `${tool_name}\0${prefix}\0${ua}`;
+    const agent = formatAgentLabel({ prefix, ua });
+    const current = combined.get(rowKey) || { tool_name, agent, agent_prefix: prefix, agent_ua: ua, in_requests: 0, in_responses: 0, in_request_chars: 0 };
     current.in_requests += entry.uses;
-    combined.set(key, current);
+    combined.set(rowKey, current);
   }
 
-  // request chars are keyed by `${tool}\0${agent}` (or plain `tool` for legacy)
+  // request chars are keyed by `${tool}\0${prefix}\0${ua}` (or plain `tool` for legacy)
   for (const [key, request_chars] of toolRequestChars.entries()) {
     let tool_name = key;
-    let agent = 'all';
-    const sepIdx = key.indexOf('\0');
-    if (sepIdx >= 0) {
-      tool_name = key.slice(0, sepIdx);
-      agent = key.slice(sepIdx + 1);
+    let prefix = 'all';
+    let ua = 'unknown';
+    // Find the first \0 — everything before is tool_name, the rest is the
+    // agent half. handle both legacy `${tool}\0${prefix}` and new
+    // `${tool}\0${prefix}\0${ua}` forms.
+    const firstSep = key.indexOf('\0');
+    if (firstSep >= 0) {
+      tool_name = key.slice(0, firstSep);
+      const agentHalf = key.slice(firstSep + 1);
+      const parsed = parseAgentKey(agentHalf);
+      prefix = parsed.prefix;
+      ua = parsed.ua;
     }
-    const rowKey = `${tool_name}\0${agent}`;
-    const current = combined.get(rowKey) || { tool_name, agent, in_requests: 0, in_responses: 0, in_request_chars: 0 };
+    const rowKey = `${tool_name}\0${prefix}\0${ua}`;
+    const agent = formatAgentLabel({ prefix, ua });
+    const current = combined.get(rowKey) || { tool_name, agent, agent_prefix: prefix, agent_ua: ua, in_requests: 0, in_responses: 0, in_request_chars: 0 };
     current.in_request_chars += request_chars;
     combined.set(rowKey, current);
   }
 
-  // upstream response tools are keyed by `${tool}\0${agent}` (or plain `tool` for legacy)
+  // upstream response tools are keyed by `${tool}\0${prefix}\0${ua}` (or plain `tool` for legacy)
   for (const [key, entry] of upstreamResponseToolStats.entries()) {
     let tool_name = entry.tool_name;
-    let agent = 'all';
-    const sepIdx = key.indexOf('\0');
-    if (sepIdx >= 0) {
-      tool_name = key.slice(0, sepIdx);
-      agent = key.slice(sepIdx + 1);
+    let prefix = 'all';
+    let ua = 'unknown';
+    const firstSep = key.indexOf('\0');
+    if (firstSep >= 0) {
+      tool_name = key.slice(0, firstSep);
+      const agentHalf = key.slice(firstSep + 1);
+      const parsed = parseAgentKey(agentHalf);
+      prefix = parsed.prefix;
+      ua = parsed.ua;
     }
-    const rowKey = `${tool_name}\0${agent}`;
-    const current = combined.get(rowKey) || { tool_name, agent, in_requests: 0, in_responses: 0, in_request_chars: 0 };
+    const rowKey = `${tool_name}\0${prefix}\0${ua}`;
+    const agent = formatAgentLabel({ prefix, ua });
+    const current = combined.get(rowKey) || { tool_name, agent, agent_prefix: prefix, agent_ua: ua, in_requests: 0, in_responses: 0, in_request_chars: 0 };
     current.in_responses += entry.tools;
     combined.set(rowKey, current);
   }
@@ -1595,7 +1769,9 @@ export function getAgentToolPanelStats(): AgentToolPanelEntry[] {
     if (bTotal !== aTotal) return bTotal - aTotal;
     const toolCmp = a.tool_name.localeCompare(b.tool_name);
     if (toolCmp !== 0) return toolCmp;
-    return a.agent.localeCompare(b.agent);
+    const prefixCmp = a.agent_prefix.localeCompare(b.agent_prefix);
+    if (prefixCmp !== 0) return prefixCmp;
+    return a.agent_ua.localeCompare(b.agent_ua);
   });
 }
 
@@ -1645,6 +1821,11 @@ export function getToolUsageStatsDesc(): ToolUsageStatsEntry[] {
  * and a `blocked` flag derived from the current blockedTools set (1=blocked, 0=not).
  * Used only by `dumpTodayTokens` — the dashboard continues to consume
  * `getToolUsageStatsDesc()` for its existing field shape.
+ *
+ * The `agent` field is preserved in the internal `${prefix}\0${ua}` form so
+ * the restore path can round-trip the split without loss. The on-disk JSON
+ * encodes `\0` verbatim — harmless since real agent/ua strings won't contain
+ * NUL bytes.
  */
 export function getToolUsageDumpDesc(): DumpedToolStatsEntry[] {
   const combined = new Map<string, DumpedToolStatsEntry>();
@@ -1652,7 +1833,7 @@ export function getToolUsageDumpDesc(): DumpedToolStatsEntry[] {
   for (const entry of agentStats.values()) {
     const sepIdx = entry.key.lastIndexOf(' / ');
     if (sepIdx < 0) continue;
-    const agent = entry.key.slice(0, sepIdx);
+    const agent = entry.key.slice(0, sepIdx); // already in `${prefix}\0${ua}` form
     const name = entry.key.slice(sepIdx + 3);
     const rowKey = `${name}\0${agent}`;
     const current = combined.get(rowKey) || {
@@ -1667,11 +1848,11 @@ export function getToolUsageDumpDesc(): DumpedToolStatsEntry[] {
     combined.set(rowKey, current);
   }
 
-  // toolRequestChars keys are `${tool}\0${agent}` (or plain `tool` for legacy)
+  // toolRequestChars keys are `${tool}\0${prefix}\0${ua}` (or plain `tool` for legacy)
   for (const [key, request_chars] of toolRequestChars.entries()) {
-    const sepIdx = key.indexOf('\0');
-    const name = sepIdx >= 0 ? key.slice(0, sepIdx) : key;
-    const agent = sepIdx >= 0 ? key.slice(sepIdx + 1) : 'all';
+    const firstSep = key.indexOf('\0');
+    const name = firstSep >= 0 ? key.slice(0, firstSep) : key;
+    const agent = firstSep >= 0 ? key.slice(firstSep + 1) : 'all';
     const rowKey = `${name}\0${agent}`;
     const current = combined.get(rowKey) || {
       name,
@@ -1685,11 +1866,11 @@ export function getToolUsageDumpDesc(): DumpedToolStatsEntry[] {
     combined.set(rowKey, current);
   }
 
-  // upstreamResponseToolStats keys are `${tool}\0${agent}` (or plain `tool` for legacy)
+  // upstreamResponseToolStats keys are `${tool}\0${prefix}\0${ua}` (or plain `tool` for legacy)
   for (const [key, entry] of upstreamResponseToolStats.entries()) {
-    const sepIdx = key.indexOf('\0');
-    const name = sepIdx >= 0 ? key.slice(0, sepIdx) : entry.tool_name;
-    const agent = sepIdx >= 0 ? key.slice(sepIdx + 1) : 'all';
+    const firstSep = key.indexOf('\0');
+    const name = firstSep >= 0 ? key.slice(0, firstSep) : entry.tool_name;
+    const agent = firstSep >= 0 ? key.slice(firstSep + 1) : 'all';
     const rowKey = `${name}\0${agent}`;
     const current = combined.get(rowKey) || {
       name,
@@ -1759,9 +1940,10 @@ export function getUpstreamResponseToolStatsDesc(): UpstreamResponseToolStatsEnt
 }
 
 export function createResponseToolTrackingTransformStream(
-  onNames: (toolNames: string[], agent: string) => void,
-  agent: string = 'all',
+  onNames: (toolNames: string[], agent: ResolvedAgent) => void,
+  agent: ResolvedAgent | string = { prefix: 'all', ua: 'unknown' },
 ): TransformStream<Uint8Array, Uint8Array> {
+  const resolved = normaliseAgent(agent);
   const decoder = new TextDecoder();
   let remainder = '';
   const toolNames: string[] = [];
@@ -1865,7 +2047,7 @@ export function createResponseToolTrackingTransformStream(
     },
     flush() {
       if (toolNames.length > 0) {
-        onNames(toolNames, agent);
+        onNames(toolNames, resolved);
       }
     },
   });

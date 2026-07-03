@@ -1335,10 +1335,24 @@ class DashboardApp {
     // re-open-inside-Enter-handler that broke key input.
     type ToolItem = SelectItem & {
       tool_name: string;
-      agent: string;
+      agent_prefix: string;
+      agent_ua: string;
       in_requests: number;
       in_responses: number;
       in_request_chars: number;
+    };
+
+    // Format the agent column as "<prefix>/<ua>" (or whichever half is
+    // present). Falls back to the legacy `agent` field for snapshot rows
+    // emitted before the prefix/ua split landed.
+    const formatAgent = (item: ToolItem): string => {
+      if (item.agent_prefix || item.agent_ua) {
+        const p = item.agent_prefix && item.agent_prefix !== 'unknown' ? item.agent_prefix : '';
+        const u = item.agent_ua && item.agent_ua !== 'unknown' ? item.agent_ua : '';
+        if (p && u) return `${p}/${u}`;
+        return p || u || 'unknown';
+      }
+      return (item as unknown as { agent?: string }).agent || 'unknown';
     };
 
     // Prefix character conveys block state (✗ = blocked, · = active) without
@@ -1346,12 +1360,15 @@ class DashboardApp {
     // `selectedText: green(...)` wrap mid-line and break the selected-line
     // highlighting that the Test custom model list gets for free.
     const formatLabel = (item: ToolItem): string =>
-      `${isToolBlocked(item.tool_name) ? '✗' : '·'} ${item.tool_name.padEnd(26)}${item.agent.padEnd(18)}${alignRight(fmt(item.in_requests), 4)} ${alignRight(fmt(item.in_responses), 5)} ${alignRight(fmt(item.in_request_chars), 10)}`;
+      `${isToolBlocked(item.tool_name) ? '✗' : '·'} ${item.tool_name.padEnd(26)}${formatAgent(item).padEnd(22)}${alignRight(fmt(item.in_requests), 4)} ${alignRight(fmt(item.in_responses), 5)} ${alignRight(fmt(item.in_request_chars), 10)}`;
 
     const items: ToolItem[] = (snap.agentToolStats || []).map((e) => ({
-      value: `${e.tool_name}\0${e.agent}`,
+      // Unique key combines all three dims so the same tool_name from
+      // different (prefix, ua) pairs is selectable independently.
+      value: `${e.tool_name}\0${e.agent_prefix}\0${e.agent_ua}`,
       tool_name: e.tool_name,
-      agent: e.agent,
+      agent_prefix: e.agent_prefix,
+      agent_ua: e.agent_ua,
       in_requests: e.in_requests,
       in_responses: e.in_responses,
       in_request_chars: e.in_request_chars,

@@ -41,6 +41,8 @@ import {
   extractToolNamesFromResponsePayload,
   extractUsageFromResponsePayload,
   extractUserAgentPrefix,
+  resolveAgentName,
+  type ResolvedAgent,
   createResponseToolTrackingTransformStream,
   recordAgentStat,
   recordModelStat,
@@ -784,6 +786,12 @@ export default {
       let forceStreaming: boolean = false;
       let isGeminiBypass = false;
       const userAgentPrefix = extractUserAgentPrefix(request.headers.get('user-agent'));
+      // Structured agent identity — filled in once the request body is parsed
+      // (path == '/v1/messages' etc.). Stays at this outer scope so it's
+      // visible to the downstream `runAttempt(...)` closure, which threads
+      // it into response-side tool stats so request and response records
+      // share the same (prefix, ua) key.
+      let agent: ResolvedAgent = { prefix: userAgentPrefix, ua: userAgentPrefix };
       let requestToolNames: string[] = ['none'];
 
       // Tool stats are extracted from the already-parsed body inside the routing
@@ -800,6 +808,11 @@ export default {
         upstreamMode?: string;
         forceStreaming: boolean;
         authHeaders: Record<string, string>;
+        /** Structured {prefix, ua} resolved from request body + User-Agent
+         *  header. Carried into the response-tracking closure so request-side
+         *  and response-side records share one (prefix, ua) key. Optional for
+         *  legacy callers — defaults to UA-only. */
+        agent?: ResolvedAgent;
       };
       let compositeAttempts: RouteAttempt[] | undefined;
       let compositeAliasName: string | undefined;
@@ -836,8 +849,14 @@ export default {
           // Extract tool stats from the already-parsed body — avoids a second
           // clone()+parse that would otherwise happen before the routing block.
           requestToolNames = extractToolNamesFromBody(body);
-          recordToolRequestChars(extractToolRequestCharLengthsFromBody(body), userAgentPrefix);
-          recordAgentStat(userAgentPrefix, requestToolNames);
+          // Identify the agent by matching the system-content prefix against
+          // known clients (e.g. "openclaw/hermes" for OpenClaw's Hermes
+          // system prompt). Falls back to the User-Agent prefix when nothing
+          // matches. Returns {prefix, ua} so we can display them separately
+          // in the Tool Blocklist.
+          agent = resolveAgentName(body, userAgentPrefix);
+          recordToolRequestChars(extractToolRequestCharLengthsFromBody(body), agent);
+          recordAgentStat(agent, requestToolNames);
 
           // Privacy filter: redact PII out of the request body before routing so
           // every downstream path (single/composite/fusion) operates on redacted
@@ -1759,7 +1778,7 @@ export default {
                 }
               }
               const toolNames = extractToolNamesFromResponsePayload(payload);
-              recordUpstreamResponseToolNames(toolNames, userAgentPrefix);
+              recordUpstreamResponseToolNames(toolNames, attempt.agent);
             } catch {
               // ignore stats extraction failures
             }
@@ -1768,7 +1787,7 @@ export default {
             // from Claude SSE events (message_start.usage.input_tokens,
             // message_delta.usage.output_tokens)
             const usageStream = createUsageTrackingTransformStream(attemptModelId, compositeAliasName);
-            const toolStream = createResponseToolTrackingTransformStream((names, agent) => recordUpstreamResponseToolNames(names, agent), userAgentPrefix);
+            const toolStream = createResponseToolTrackingTransformStream((names, agent) => recordUpstreamResponseToolNames(names, agent), attempt.agent);
             response = new Response(response.body!.pipeThrough(usageStream).pipeThrough(toolStream), response);
           }
         }
@@ -1818,6 +1837,7 @@ export default {
         upstreamMode,
         forceStreaming,
         authHeaders: modelAuthHeaders,
+        agent,
       });
 
       // Apply CORS headers
