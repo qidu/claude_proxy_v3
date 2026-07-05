@@ -320,6 +320,11 @@ optional "judge" and a required "synth" model that writes the final answer:
 For the full set of composite/fusion options and the TUI editor workflow, see
 [`docs/design_fusion_composite_alias.md`](./docs/design_fusion_composite_alias.md).
 
+> **Cycles are not allowed.** A composite alias may target another composite alias, but the
+> chain must terminate at a real `[models.*]` entry — `A → B → C → A` is rejected at load time
+> with a `[FATAL]` log, marked with a red `x` in the TUI / dashboard, and the cyclic target is
+> omitted from the snapshot. See [CHANGELOG.md](./CHANGELOG.md) for the full safety rules.
+
 ## Schedule Aliases
 
 A `[schedule]` alias is the **top-most layer**: it picks *one* target for the request

@@ -611,6 +611,8 @@ class CompositeAliasesOverlay implements Component, Focusable {
       return frame('Edit Composite Aliases Config', [toolbar, 'Loading…'], width).map((line) => clip(line, width));
     }
 
+    const compositeErrors = (snap.config.config_errors ?? []).filter((e) => e.path.startsWith('composite.'));
+
     const selections = this.selections();
     const selected = selections[this.selectionIndex] ?? null;
     const composites = Object.entries(snap.config.composite).sort(([a, aTargets], [b, bTargets]) => {
@@ -642,9 +644,11 @@ class CompositeAliasesOverlay implements Component, Focusable {
         ? ` ${dim(fmt(windowUsed))} ${dim('/')} ${dim('L')} ${dim(fmt(aliasLimit.num) + '/' + windowDuration)}`
         : '';
       const aliasTag = typedTargets?.fusion_options ? dim(' [F]') : dim(' [C]');
+      const hasError = compositeErrors.some((e) => e.path === `composite.${alias}`);
+      const errorMark = hasError ? red(' x') : '';
       // Record this alias's line index for selections array
       selectionLineIndex.push(bodyLines.length);
-      bodyLines.push(`  ${prefix} ${bold(alias)}${aliasTag}${aliasSummary}`);
+      bodyLines.push(`  ${prefix} ${bold(alias)}${aliasTag}${errorMark}${aliasSummary}`);
       const entries = Object.entries(targets || {}).filter(([target]) => target !== 'token_limit' && target !== 'fusion_options');
       if (!entries.length) bodyLines.push(`    ${dim('(empty)')}`);
       const targetRouteModel = new Map<string, string | undefined>();
@@ -691,7 +695,13 @@ class CompositeAliasesOverlay implements Component, Focusable {
     const scrollIndicator = bodyLines.length > viewportHeight
       ? dim(` ${this.scrollOffset + 1}-${Math.min(this.scrollOffset + viewportHeight, bodyLines.length)}/${bodyLines.length}`)
       : '';
-    const statusLine = (this.message ? yellow(this.message) : dim('Ready')) + scrollIndicator;
+    const defaultStatus = compositeErrors.length > 0
+      ? red(`Config error: ${compositeErrors[0].path} — ${compositeErrors[0].message}`)
+      : dim('Ready');
+    // Treat the initial 'Ready' sentinel as "no active message" so composite
+    // config errors can replace it in the status bar.
+    const hasActiveMessage = this.message && this.message !== 'Ready';
+    const statusLine = (hasActiveMessage ? yellow(this.message) : defaultStatus) + scrollIndicator;
 
     const allLines = [toolbar, ...visibleBody, '', statusLine];
     return frame('Edit Composite Aliases Config', allLines, width).map((line) => clip(line, width));

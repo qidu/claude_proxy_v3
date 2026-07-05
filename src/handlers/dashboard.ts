@@ -124,14 +124,20 @@ export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): Dashbo
       alias,
       targets: Object.entries(proxyConfig.composite?.[alias] || {})
         .filter(([key]) => key !== 'token_limit' && key !== 'fusion_options' && !key.startsWith('_'))
-        .map(([modelName]) => {
-          const route = getModelRouteConfig(modelName, proxyConfig);
-          return {
-            model: modelName,
-            routeModel: route.modelAlias,
-            upstreamMode: route.upstreamMode,
-            targetUrl: route.targetUrl,
-          };
+        .flatMap(([modelName]) => {
+          try {
+            const route = getModelRouteConfig(modelName, proxyConfig, new Set([alias]));
+            return [{
+              model: modelName,
+              routeModel: route.modelAlias,
+              upstreamMode: route.upstreamMode,
+              targetUrl: route.targetUrl,
+            }];
+          } catch {
+            // Cycle or unresolvable target — omit from snapshot so consumers
+            // don't receive undefined upstreamMode/targetUrl.
+            return [];
+          }
         }),
     }));
 
@@ -548,6 +554,7 @@ export function handleDashboardPage(): Response {
       let configPathHint = '';
       let compositeResolved = [];
       let modelStats = [];
+      let configErrorsList = [];
       let compositeLimitWindowsSnapshot = {};
 
       function getAliasUsed(aliasName) {
@@ -800,7 +807,9 @@ export function handleDashboardPage(): Response {
             + '<div class="section-actions"><button type="button" class="test-btn mini-btn" data-action="test-composite" data-alias="' + escapeHtml(aliasName) + '">test model</button>'
             + ' <button type="button" class="mini-btn" data-action="add-composite-target" data-alias="' + escapeHtml(aliasName) + '"' + (isReadOnly ? ' disabled' : '') + '>Add target</button>'
             + ' <button type="button" class="mini-btn danger" data-action="remove-composite-alias" data-alias="' + escapeHtml(aliasName) + '"' + (isReadOnly ? ' disabled' : '') + '>Remove alias</button></div>';
-          return '<div class="config-block"><h3>composite.' + escapeHtml(aliasName) + '</h3>' + rows + '</div>';
+          const hasError = configErrorsList.some((e) => e.path === 'composite.' + aliasName);
+          const errorMark = hasError ? ' <span style="color:#c62828;font-weight:bold;" title="Config error — see status bar">x</span>' : '';
+          return '<div class="config-block"><h3>composite.' + escapeHtml(aliasName) + errorMark + '</h3>' + rows + '</div>';
         }).join('');
 
         const compositeGlobalActions = '<div class="section-actions"><button type="button" class="mini-btn" data-action="add-composite-alias"' + (isReadOnly ? ' disabled' : '') + '>Add composite alias</button></div>';
@@ -1252,6 +1261,7 @@ export function handleDashboardPage(): Response {
         compositeResolved = json.compositeResolved || [];
         modelStats = json.modelStats || [];
         compositeLimitWindowsSnapshot = json.compositeLimitWindows || {};
+        configErrorsList = json.config.config_errors || [];
         const glRaw = (json.config.global_token_limit || '').trim();
         const glParts = glRaw ? glRaw.split(' ') : []; // ' ' is better than /\s+/
         globalTokenLimitNum.value = glParts[0] || '';

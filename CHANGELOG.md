@@ -7,6 +7,27 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Composite alias safety: routing cycle detection, name-conflict stripping, self-reference rejection
+
+#### Routing cycle detection
+- **Load time**: `validateProxyConfig` now resolves every composite alias through the full routing chain and catches cycles (e.g. `for-claw6 → for-claw7 → for-claw8 → for-claw6`). Each unique cycle is pushed as a fatal validation error, logged as `[FATAL]`, and surfaced in the TUI status bar and dashboard status bar via `_validationErrors`.
+- **Request time**: `getModelRouteConfig`, `getOrderedCompositeTargets`, `resolveCompositeModelRoute`, `getCompositeRouteCandidates`, and `resolveFusionPlan` all accept a `visited: Set<string>` parameter. If a cycle is detected mid-resolution, a `Routing cycle detected: A → B → … → A` error is thrown immediately rather than looping forever.
+- **Dashboard snapshot**: `getDashboardSnapshot` now passes `new Set([alias])` when resolving each composite target's route and uses `flatMap` + try/catch so a cyclic target is silently omitted from the snapshot instead of crashing the entire snapshot call (which previously caused TUI to hang at `Loading…`).
+
+#### Nested composite routing (composite → composite)
+- Composite targets that are themselves composite (or schedule/fusion) aliases are now resolved through the full routing chain (`getModelRouteConfig`) rather than only `resolveModelRouteFromConfig` (which only looked at `[models.*]`). This makes `alias-a → alias-b → real-model` work correctly end-to-end.
+
+#### Name-conflict stripping
+- `findAliasNameConflicts` / `stripConflictingAliases`: composite and schedule aliases whose name collides with a `[models.*]` entry are stripped from the in-memory config at load time. `[FATAL]` is logged per stripped alias; `_validationErrors` carries the error so it appears in TUI / dashboard.
+- `addCompositeAlias` / `addScheduleAlias` throw if the new alias name matches an existing model name, preventing the conflict from being written to disk.
+
+#### Self-reference rejection
+- `findSelfReferencingCompositeTargets` / `stripSelfReferencingCompositeTargets`: composite targets that list their own alias name as a target are stripped from the in-memory config at load time with `[FATAL]` logging.
+- `upsertCompositeTarget` and `validateAndNormalizeComposite` (dashboard PUT path) both throw immediately if a target name equals the alias name, preventing self-references from reaching disk.
+- All four TUI call sites for `upsertCompositeTargetFromDashboard` (add/edit × share/fusion) are wrapped in try/catch; errors are shown on the TUI message line without saving.
+
+**Files changed:** `src/utils/config-loader.ts`, `src/handlers/dashboard.ts`, `src/tui.ts`.
+
 ### Test runner: `TEST_CONFIG` default is now force-set on `process.env`
 
 - **Fixed silent isolation bypass**: `run-tests.js` and `testcases/utils/test_helpers.js`

@@ -241,20 +241,29 @@ function resolveModelRouteFromConfig(
 
 function getOrderedCompositeTargets(
   modelName: string,
-  proxyConfig: ProxyConfig
+  proxyConfig: ProxyConfig,
+  visited: Set<string> = new Set(),
 ): { orderedTargets: CompositeResolvedTarget[]; skippedTargets: string[] } | undefined {
   const compositeConfig = proxyConfig.composite?.[modelName];
   if (!compositeConfig) {
     return undefined;
   }
 
+  // We are about to recurse into each target with full routing (schedule →
+  // composite → direct → default), so push `modelName` onto the visited
+  // chain first. If a target ever references a composite alias that's already
+  // on the stack (e.g. A → B → A), getModelRouteConfig throws a cycle error.
+  const nextVisited = new Set(visited);
+  nextVisited.add(modelName);
+
   const skippedTargets: string[] = [];
   const resolvedTargets = getCompositeTargetEntries(compositeConfig)
     .map(([targetModelName, targetConfig], index) => {
-      const route = resolveModelRouteFromConfig(targetModelName, proxyConfig) || {
-        ...getDefaultModelRoute(proxyConfig),
-        modelAlias: targetModelName,
-      };
+      // Use the full routing chain so a composite / schedule / fusion target
+      // resolves to a leaf model's route (not the broken default-route
+      // fallback with the alias name passed as `model:`). Cycle detection
+      // happens inside getModelRouteConfig.
+      const route = getModelRouteConfig(targetModelName, proxyConfig, nextVisited);
 
       return {
         targetModelName,
@@ -307,9 +316,10 @@ function getOrderedCompositeTargets(
 
 function resolveCompositeModelRoute(
   modelName: string,
-  proxyConfig: ProxyConfig
+  proxyConfig: ProxyConfig,
+  visited: Set<string> = new Set(),
 ): CompositeRouteSelection | undefined {
-  const orderedComposite = getOrderedCompositeTargets(modelName, proxyConfig);
+  const orderedComposite = getOrderedCompositeTargets(modelName, proxyConfig, visited);
   if (!orderedComposite) {
     return undefined;
   }
@@ -384,13 +394,14 @@ function getDefaultModelRoute(proxyConfig: ProxyConfig): ModelRouteConfig {
 
 export function getCompositeRouteCandidates(
   modelName: string,
-  proxyConfig: ProxyConfig
+  proxyConfig: ProxyConfig,
+  visited: Set<string> = new Set(),
 ): Array<{ modelName: string; route: ModelRouteConfig }> {
   if (!proxyConfig.models) {
     return [];
   }
 
-  const orderedComposite = getOrderedCompositeTargets(modelName, proxyConfig);
+  const orderedComposite = getOrderedCompositeTargets(modelName, proxyConfig, visited);
   if (!orderedComposite) {
     return [];
   }
@@ -439,10 +450,17 @@ export function getCompositeAliasMode(
 
 export function resolveFusionPlan(
   modelName: string,
-  proxyConfig: ProxyConfig
+  proxyConfig: ProxyConfig,
+  visited: Set<string> = new Set(),
 ): FusionPlan | undefined {
   const compositeConfig = proxyConfig.composite?.[modelName];
   if (!compositeConfig) return undefined;
+
+  // Push `modelName` onto the chain before resolving panel / judge / synth
+  // targets. If a target references a composite alias that's already on the
+  // stack, getModelRouteConfig throws a cycle error.
+  const nextVisited = new Set(visited);
+  nextVisited.add(modelName);
 
   const entries = getCompositeTargetEntries(compositeConfig);
 
@@ -451,10 +469,10 @@ export function resolveFusionPlan(
   let synth: { modelName: string; route: ModelRouteConfig } | undefined;
 
   for (const [targetName, cfg] of entries) {
-    const route = resolveModelRouteFromConfig(targetName, proxyConfig) || {
-      ...getDefaultModelRoute(proxyConfig),
-      modelAlias: targetName,
-    };
+    // Use the full routing chain so a composite / schedule / fusion target
+    // resolves to a leaf model's route. Cycle detection happens inside
+    // getModelRouteConfig.
+    const route = getModelRouteConfig(targetName, proxyConfig, nextVisited);
     const resolvedRoute = { ...route, modelAlias: route.modelAlias || targetName };
 
     if (cfg.role === 'judge') {
@@ -552,7 +570,8 @@ export function resolveScheduleTarget(
 
 export function getModelRouteConfig(
   modelName: string,
-  proxyConfig: ProxyConfig
+  proxyConfig: ProxyConfig,
+  visited: Set<string> = new Set(),
 ): ModelRouteConfig {
   if (!proxyConfig.models) {
     return getDefaultModelRoute(proxyConfig);
@@ -563,7 +582,17 @@ export function getModelRouteConfig(
   const scheduledTarget = resolveScheduleTarget(modelName, proxyConfig);
   const effectiveName = scheduledTarget ?? modelName;
 
-  const compositeRoute = resolveCompositeModelRoute(effectiveName, proxyConfig);
+  // Cycle detection: if we're already in the middle of expanding `effectiveName`,
+  // throwing is better than recursing forever. The chain includes every
+  // composite / fusion alias currently on the recursion stack.
+  if (visited.has(effectiveName)) {
+    const chain = [...visited, effectiveName].join(' → ');
+    throw new Error(
+      `Routing cycle detected: ${chain}. Composite aliases cannot reference each other in a cycle — rename or restructure the involved aliases.`,
+    );
+  }
+
+  const compositeRoute = resolveCompositeModelRoute(effectiveName, proxyConfig, visited);
   if (compositeRoute) {
     return compositeRoute.route;
   }
@@ -1566,6 +1595,23 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
     });
   }
 
+  // Detect routing cycles among composite aliases. Try resolving each alias
+  // through the full routing chain; a thrown cycle error means the alias (or
+  // one of its transitive targets) forms a cycle. Reported as a fatal error so
+  // it surfaces in the dashboard status bar and TUI message line.
+  const seenCycles = new Set<string>();
+  for (const alias of Object.keys(config.composite ?? {})) {
+    try {
+      getModelRouteConfig(alias, config, new Set());
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (msg.includes('Routing cycle detected') && !seenCycles.has(msg)) {
+        seenCycles.add(msg);
+        errors.push({ path: `composite.${alias}`, message: msg });
+      }
+    }
+  }
+
   return { errors, warnings, valid: errors.length === 0 };
 }
 
@@ -1735,7 +1781,8 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
       config = parseConsulConfig(kvEntries);
       const validation = validateProxyConfig(config);
       for (const err of validation.errors) {
-        console.error(`[ERROR] ${err.path}: ${err.message}`);
+        const level = err.message.includes('Routing cycle detected') ? '[FATAL]' : '[ERROR]';
+        console.error(`${level} ${err.path}: ${err.message}`);
       }
       for (const warn of validation.warnings) {
         console.warn(`[WARN] ${warn.path}: ${warn.message}`);
@@ -1968,7 +2015,8 @@ export function parseSimpleToml(content: string): ProxyConfig {
   // Validate config and log errors/warnings
   const validation = validateProxyConfig(config);
   for (const err of validation.errors) {
-    console.error(`[ERROR] ${err.path}: ${err.message}`);
+    const level = err.message.includes('Routing cycle detected') ? '[FATAL]' : '[ERROR]';
+    console.error(`${level} ${err.path}: ${err.message}`);
   }
   for (const warn of validation.warnings) {
     console.warn(`[WARN] ${warn.path}: ${warn.message}`);
