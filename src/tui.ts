@@ -1600,11 +1600,18 @@ class DashboardApp {
               this.requestRender();
               return;
             }
-            upsertCompositeTargetFromDashboard(this.source.env, alias, item.value, { ...patch, share: null, fallback: null, primary: false });
-            await this.refresh(true);
-            this.compositeOverlay?.focusAlias(alias);
-            this.view.setMessage(`added ${item.value} to ${alias}`);
-            this.requestRender();
+            try {
+              upsertCompositeTargetFromDashboard(this.source.env, alias, item.value, { ...patch, share: null, fallback: null, primary: false });
+              await this.refresh(true);
+              this.compositeOverlay?.focusAlias(alias);
+              this.view.setMessage(`added ${item.value} to ${alias}`);
+              this.requestRender();
+            } catch (err) {
+              this.view.setMessage((err as Error).message);
+              await this.refresh();
+              this.compositeOverlay?.focusAlias(alias);
+              this.requestRender();
+            }
           });
           return;
         }
@@ -1646,15 +1653,22 @@ class DashboardApp {
             return;
           }
 
-          upsertCompositeTargetFromDashboard(this.source.env, alias, item.value, {
-            share,
-            primary: parsedPrimary === undefined ? undefined : parsedPrimary,
-            fallback,
-          });
-          await this.refresh(true);
-          this.compositeOverlay?.focusAlias(alias);
-          this.view.setMessage(`added ${item.value} to ${alias}`);
-          this.requestRender();
+          try {
+            upsertCompositeTargetFromDashboard(this.source.env, alias, item.value, {
+              share,
+              primary: parsedPrimary === undefined ? undefined : parsedPrimary,
+              fallback,
+            });
+            await this.refresh(true);
+            this.compositeOverlay?.focusAlias(alias);
+            this.view.setMessage(`added ${item.value} to ${alias}`);
+            this.requestRender();
+          } catch (err) {
+            this.view.setMessage((err as Error).message);
+            await this.refresh();
+            this.compositeOverlay?.focusAlias(alias);
+            this.requestRender();
+          }
         });
       },
       () => {
@@ -1924,9 +1938,14 @@ class DashboardApp {
           await this.refresh();
           return;
         }
-        upsertCompositeTargetFromDashboard(this.source.env, alias, target, { ...patch, share: null, fallback: null, primary: false });
-        this.view.setMessage(`updated ${alias}.${target}`);
-        await this.refresh(true);
+        try {
+          upsertCompositeTargetFromDashboard(this.source.env, alias, target, { ...patch, share: null, fallback: null, primary: false });
+          this.view.setMessage(`updated ${alias}.${target}`);
+          await this.refresh(true);
+        } catch (err) {
+          this.view.setMessage((err as Error).message);
+          await this.refresh();
+        }
       });
       return;
     }
@@ -1960,13 +1979,18 @@ class DashboardApp {
         return;
       }
 
-      upsertCompositeTargetFromDashboard(this.source.env, alias, target, {
-        share,
-        primary: parsedPrimary === undefined ? undefined : parsedPrimary,
-        fallback,
-      });
-      this.view.setMessage(`updated ${alias}.${target}`);
-      await this.refresh(true);
+      try {
+        upsertCompositeTargetFromDashboard(this.source.env, alias, target, {
+          share,
+          primary: parsedPrimary === undefined ? undefined : parsedPrimary,
+          fallback,
+        });
+        this.view.setMessage(`updated ${alias}.${target}`);
+        await this.refresh(true);
+      } catch (err) {
+        this.view.setMessage((err as Error).message);
+        await this.refresh();
+      }
     });
   }
 

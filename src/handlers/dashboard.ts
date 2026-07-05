@@ -1561,8 +1561,13 @@ export async function handleDashboardPutConfig(request: Request, env: Env, _prox
     // the live config on the next reload.
     const validation = validateProxyConfig(nextConfig);
     if (!validation.valid) {
+      // Surface the first fatal error's path + message in `error` so the
+      // dashboard status bar shows the specific reason (e.g. which alias
+      // name collides with a model) instead of the generic "Invalid config".
+      const first = validation.errors[0];
+      const firstMessage = first ? `${first.path}: ${first.message}` : 'Invalid config';
       return jsonResponse({
-        error: 'Invalid config',
+        error: firstMessage,
         config_errors: validation.errors,
       }, 400);
     }

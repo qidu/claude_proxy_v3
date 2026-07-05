@@ -1223,6 +1223,149 @@ export interface ValidationResult {
   valid: boolean;
 }
 
+/**
+ * Returns the set of model names defined under [models.*] — i.e. concrete
+ * keys declared in any model category, excluding reserved category-level
+ * keys (upstream_mode/base_url/api_key) and internal `_`-prefixed markers.
+ *
+ * Used to detect name collisions with alias names: a composite/fusion/
+ * schedule alias whose name is also a model name makes routing ambiguous,
+ * so the loader strips those aliases (fatal) and add-alias helpers refuse
+ * to create them.
+ */
+export function getModelNamesInConfig(config: ProxyConfig): Set<string> {
+  const reservedKeys = new Set(['upstream_mode', 'base_url', 'api_key']);
+  const names = new Set<string>();
+  if (!config.models) return names;
+  for (const [categoryName, categoryConfig] of Object.entries(config.models)) {
+    // models.list is a special list-shaped entry, not a category with model names
+    if (categoryName === 'list' || Array.isArray(categoryConfig)) continue;
+    const typedCategory = categoryConfig as Record<string, unknown>;
+    for (const key of Object.keys(typedCategory)) {
+      if (reservedKeys.has(key)) continue;
+      if (key.startsWith('_')) continue; // internal markers (e.g. _comment, _invalid)
+      names.add(key);
+    }
+  }
+  return names;
+}
+
+/**
+ * Returns alias names (composite or schedule) whose name collides with a
+ * model name under [models.*]. Used by the loader to strip those aliases
+ * from the in-memory config and by validateProxyConfig to emit fatal
+ * errors that surface in the dashboard status bar / TUI message line.
+ */
+export function findAliasNameConflicts(config: ProxyConfig): { composite: string[]; schedule: string[] } {
+  const modelNames = getModelNamesInConfig(config);
+  const composite: string[] = [];
+  const schedule: string[] = [];
+  if (modelNames.size === 0) return { composite, schedule };
+  if (config.composite) {
+    for (const alias of Object.keys(config.composite)) {
+      if (modelNames.has(alias)) composite.push(alias);
+    }
+  }
+  if (config.schedule) {
+    for (const alias of Object.keys(config.schedule)) {
+      if (modelNames.has(alias)) schedule.push(alias);
+    }
+  }
+  return { composite, schedule };
+}
+
+/**
+ * Returns a copy of `config` with conflicting composite/schedule aliases
+ * removed. The on-disk file is NOT modified — this is purely a runtime
+ * filter so the proxy refuses to route on an alias whose name is also a
+ * concrete model. `_validationErrors` / `_validationWarnings` (if present)
+ * are copied to the returned object so the dashboard status bar still
+ * shows the original fatal errors after stripping.
+ */
+export function stripConflictingAliases(
+  config: ProxyConfig,
+): { config: ProxyConfig; stripped: { composite: string[]; schedule: string[] } } {
+  const stripped = findAliasNameConflicts(config);
+  if (stripped.composite.length === 0 && stripped.schedule.length === 0) {
+    return { config, stripped };
+  }
+  const next: ProxyConfig = { ...config };
+  if (stripped.composite.length > 0 && config.composite) {
+    next.composite = { ...config.composite };
+    for (const alias of stripped.composite) delete next.composite[alias];
+    if (Object.keys(next.composite).length === 0) delete next.composite;
+  }
+  if (stripped.schedule.length > 0 && config.schedule) {
+    next.schedule = { ...config.schedule };
+    for (const alias of stripped.schedule) delete next.schedule[alias];
+    if (Object.keys(next.schedule).length === 0) delete next.schedule;
+  }
+  // Carry over validation metadata so the dashboard status bar / TUI keep
+  // showing the original fatal errors even after the conflicting aliases
+  // are stripped from the active config.
+  const meta = config as unknown as {
+    _validationErrors?: ConfigValidationError[];
+    _validationWarnings?: ConfigValidationError[];
+  };
+  if (meta._validationErrors) {
+    (next as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors = meta._validationErrors;
+  }
+  if (meta._validationWarnings) {
+    (next as unknown as { _validationWarnings?: ConfigValidationError[] })._validationWarnings = meta._validationWarnings;
+  }
+  return { config: next, stripped };
+}
+
+/**
+ * Returns a map of composite alias → self-referencing target name for any
+ * alias that lists itself as one of its own targets (e.g.
+ * "for-claw2" = {"for-claw2" = {share = 1}, ...}). Such self-references
+ * are always wrong: they make the routing step refer back to the alias
+ * itself. Surfaced via:
+ *   - console.error in loadProxyConfig / loadProxyConfigFromPath (fatal)
+ *   - validateProxyConfig (dashboard status bar / TUI message line)
+ *   - upsertCompositeTarget + applyDashboardConfigUpdate (rejects save)
+ */
+export function findSelfReferencingCompositeTargets(config: ProxyConfig): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+  if (!config.composite) return result;
+  for (const [alias, targets] of Object.entries(config.composite)) {
+    if (!targets || typeof targets !== 'object' || Array.isArray(targets)) continue;
+    if (Object.prototype.hasOwnProperty.call(targets, alias)) {
+      result[alias] = [alias];
+    }
+  }
+  return result;
+}
+
+/**
+ * Returns a copy of `config` with self-referencing composite targets removed
+ * from in-memory config (the alias itself is preserved, only the bad target
+ * entry is dropped). The on-disk file is NOT modified — this is a runtime
+ * filter so the proxy refuses to route on a target that points back at its
+ * own alias. The next config save will persist the cleaned-up form.
+ */
+export function stripSelfReferencingCompositeTargets(
+  config: ProxyConfig,
+): { config: ProxyConfig; stripped: Record<string, string[]> } {
+  const stripped = findSelfReferencingCompositeTargets(config);
+  if (Object.keys(stripped).length === 0) {
+    return { config, stripped };
+  }
+  const next: ProxyConfig = { ...config };
+  if (config.composite) {
+    next.composite = { ...config.composite };
+    for (const [alias, badTargets] of Object.entries(stripped)) {
+      const existing = next.composite[alias];
+      if (!existing || typeof existing !== 'object' || Array.isArray(existing)) continue;
+      const nextTargets: Record<string, unknown> = { ...existing };
+      for (const target of badTargets) delete nextTargets[target];
+      next.composite[alias] = nextTargets as CompositeModelConfig;
+    }
+  }
+  return { config: next, stripped };
+}
+
 export function validateProxyConfig(config: ProxyConfig): ValidationResult {
   const errors: ConfigValidationError[] = [];
   const warnings: ConfigValidationError[] = [];
@@ -1321,6 +1464,17 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
         if ('_invalidShare' in typedTarget) {
           errors.push({ path: `composite.${alias}.${targetModel}`, message: `share must be a number` });
         }
+        // Self-reference: a composite alias listing itself as a target is
+        // always wrong (and would be rejected by upsertCompositeTarget /
+        // validateAndNormalizeComposite at save time). Surface the error
+        // here so it shows up in the dashboard status bar / TUI message line
+        // for any existing config that already contains this mistake.
+        if (targetModel === alias) {
+          errors.push({
+            path: `composite.${alias}.${targetModel}`,
+            message: `composite alias "${alias}" cannot list itself as a target — remove the self-reference`,
+          });
+        }
         if ('_invalidPrimary' in typedTarget) {
           errors.push({ path: `composite.${alias}.${targetModel}`, message: `primary must be boolean` });
         }
@@ -1386,6 +1540,30 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
         warnings.push({ path: `schedule.${alias}`, message: `no fallback target (empty window list) configured — requests outside all windows will fall through to default routing` });
       }
     }
+  }
+
+  // Reject same-name collisions between alias names (composite/fusion/schedule)
+  // and any model name defined under [models.*]. A collision makes routing
+  // ambiguous — the proxy cannot tell whether the caller meant the concrete
+  // model entry or the alias. Surfaced via:
+  //   - console.error in loadProxyConfig / parseSimpleToml (and via the
+  //     load-time stripper `stripConflictingAliases` that REMOVES the
+  //     conflicting alias from the in-memory config)
+  //   - dashboard status bar via toDashboardConfigPayload.config_errors
+  //   - TUI message line via _validationErrors read in src/tui.ts:refresh
+  //   - PUT /dashboard/api/config 400 response (rejects save in handleDashboardPutConfig)
+  const conflicts = findAliasNameConflicts(config);
+  for (const alias of conflicts.composite) {
+    errors.push({
+      path: `composite.${alias}`,
+      message: `alias name "${alias}" conflicts with a model defined under [models.*] — alias and model names must be unique (this alias will be skipped at load time)`,
+    });
+  }
+  for (const alias of conflicts.schedule) {
+    errors.push({
+      path: `schedule.${alias}`,
+      message: `alias name "${alias}" conflicts with a model defined under [models.*] — alias and model names must be unique (this alias will be skipped at load time)`,
+    });
   }
 
   return { errors, warnings, valid: errors.length === 0 };
@@ -1586,7 +1764,32 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
       return {};
     }
 
-    cachedConfig = config;
+    // Strip conflicting aliases (composite/schedule names that collide with
+    // a [models.*] entry). Log a fatal error for each stripped alias and
+    // cache the stripped config so the proxy refuses to route on it. The
+    // on-disk file is NOT modified — only the in-memory config is filtered.
+    const { config: strippedConfig, stripped } = stripConflictingAliases(config);
+    if (stripped.composite.length > 0 || stripped.schedule.length > 0) {
+      for (const alias of stripped.composite) {
+        console.error(`[FATAL] Refusing to load composite alias "${alias}" — alias name conflicts with a model defined under [models.*]`);
+      }
+      for (const alias of stripped.schedule) {
+        console.error(`[FATAL] Refusing to load schedule alias "${alias}" — alias name conflicts with a model defined under [models.*]`);
+      }
+    }
+
+    // Strip self-referencing composite targets (an alias that lists itself
+    // as one of its own targets). Log a fatal per stripped target so TUI /
+    // dashboard operators see the cause; the alias itself is preserved with
+    // its other valid targets intact.
+    const { config: cleanedConfig, stripped: selfRef } = stripSelfReferencingCompositeTargets(strippedConfig);
+    for (const [alias, badTargets] of Object.entries(selfRef)) {
+      for (const target of badTargets) {
+        console.error(`[FATAL] Refusing to load composite target "${alias}.${target}" — composite alias cannot list itself as a target`);
+      }
+    }
+
+    cachedConfig = cleanedConfig;
     return cachedConfig;
   } catch (error) {
     console.warn(`Failed to load proxy config: ${(error as Error).message}`);
@@ -2063,6 +2266,15 @@ function validateAndNormalizeComposite(payload: unknown): Record<string, Composi
     if (!isPlainObject(targetValue)) {
       throw new Error(`Invalid composite targets for alias: ${alias}`);
     }
+    // Defense-in-depth for the dashboard PUT bulk-save path: reject any alias
+    // that lists itself as a target (e.g. "for-claw2" = {"for-claw2" = ...}).
+    // Mirrors upsertCompositeTarget's runtime guard so a partial save that
+    // bypasses upsertCompositeTarget still can't persist a self-reference.
+    if (Object.prototype.hasOwnProperty.call(targetValue, alias)) {
+      throw new Error(
+        `Composite alias "${alias}" cannot list itself as a target — remove the self-reference before saving`,
+      );
+    }
 
     const targetConfig: CompositeModelConfig = {};
     for (const [key, rawValue] of Object.entries(targetValue)) {
@@ -2398,6 +2610,14 @@ function assertNonEmptyCompositeName(kind: 'alias' | 'target model', value: stri
 
 export function addCompositeAlias(baseConfig: ProxyConfig, alias: string): ProxyConfig {
   const aliasName = assertNonEmptyCompositeName('alias', alias);
+  // Same-name-with-model is a routing-ambiguity fatal: refuse to add the
+  // alias even though the alias slot is free, so TUI / dashboard users see
+  // the error and the on-disk file is never written with a conflicting name.
+  if (getModelNamesInConfig(baseConfig).has(aliasName)) {
+    throw new Error(
+      `Composite alias name "${aliasName}" conflicts with a model defined under [models.*] — alias and model names must be unique`,
+    );
+  }
   const nextConfig: ProxyConfig = {
     ...baseConfig,
     composite: cloneCompositeConfig(baseConfig.composite),
@@ -2524,6 +2744,15 @@ export function upsertCompositeTarget(
 ): ProxyConfig {
   const aliasName = assertNonEmptyCompositeName('alias', alias);
   const targetName = assertNonEmptyCompositeName('target model', targetModel);
+  // A composite alias must not list itself as one of its targets — that's a
+  // routing self-reference and is always wrong. Rejected here so TUI /
+  // dashboard save paths (and the dashboard PUT path via applyDashboardConfigUpdate)
+  // never persist this kind of cycle.
+  if (targetName === aliasName) {
+    throw new Error(
+      `Composite alias "${aliasName}" cannot list itself as a target — remove the self-reference before saving`,
+    );
+  }
   const nextConfig: ProxyConfig = {
     ...baseConfig,
     composite: cloneCompositeConfig(baseConfig.composite),
@@ -2662,6 +2891,14 @@ function assertNonEmptyScheduleName(kind: 'alias' | 'target', value: string): st
 
 export function addScheduleAlias(baseConfig: ProxyConfig, alias: string): ProxyConfig {
   const aliasName = assertNonEmptyScheduleName('alias', alias);
+  // Same-name-with-model is a routing-ambiguity fatal: refuse to add the
+  // alias even though the alias slot is free. See addCompositeAlias for the
+  // matching composite-side rationale.
+  if (getModelNamesInConfig(baseConfig).has(aliasName)) {
+    throw new Error(
+      `Schedule alias name "${aliasName}" conflicts with a model defined under [models.*] — alias and model names must be unique`,
+    );
+  }
   const nextConfig: ProxyConfig = {
     ...baseConfig,
     schedule: cloneScheduleConfig(baseConfig.schedule),
@@ -2806,7 +3043,23 @@ export function persistProxyConfigToPath(configPath: string, config: ProxyConfig
 
 export function loadProxyConfigFromPath(configPath: string): ProxyConfig {
   const content = readFileSync(configPath, 'utf-8');
-  return parseSimpleToml(content);
+  const config = parseSimpleToml(content);
+  const { config: strippedConfig, stripped } = stripConflictingAliases(config);
+  if (stripped.composite.length > 0 || stripped.schedule.length > 0) {
+    for (const alias of stripped.composite) {
+      console.error(`[FATAL] Refusing to load composite alias "${alias}" — alias name conflicts with a model defined under [models.*]`);
+    }
+    for (const alias of stripped.schedule) {
+      console.error(`[FATAL] Refusing to load schedule alias "${alias}" — alias name conflicts with a model defined under [models.*]`);
+    }
+  }
+  const { config: cleanedConfig, stripped: selfRef } = stripSelfReferencingCompositeTargets(strippedConfig);
+  for (const [alias, badTargets] of Object.entries(selfRef)) {
+    for (const target of badTargets) {
+      console.error(`[FATAL] Refusing to load composite target "${alias}.${target}" — composite alias cannot list itself as a target`);
+    }
+  }
+  return cleanedConfig;
 }
 
 export interface OpenClawProviderModelConfig {
