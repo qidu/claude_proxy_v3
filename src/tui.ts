@@ -4,6 +4,7 @@ import {
   type Focusable,
   type OverlayHandle,
   type SelectItem,
+  type SelectListLayoutOptions,
   type SelectListTheme,
   Input,
   ProcessTerminal,
@@ -453,9 +454,15 @@ class ListOverlay implements Component {
     onCancel: () => void,
     maxVisible = 8,
     onExtraKey?: (data: string) => boolean,
+    layout?: SelectListLayoutOptions,
   ) {
+    // Default layout matches the prior inline config so non-test callers
+    // (delete confirms, schedule windows, …) keep their existing column
+    // width. Pass a layout to override per-call (e.g. narrower primary
+    // column for the Test custom model picker).
     this.list = new SelectList(items, maxVisible, SELECT_LIST_THEME, {
       truncatePrimary: ({ text, maxWidth }) => clip(text, maxWidth),
+      ...layout,
     });
     this.list.onSelect = onSelect;
     this.list.onCancel = onCancel;
@@ -1692,6 +1699,10 @@ class DashboardApp {
         }
         return false;
       },
+      // Narrow primary column by 7 chars (32 → 25) so the description
+      // (avg timing + category · mode · base URL) starts closer to the
+      // model label, e.g. "deepseek-v4-flash     [2.50s] Default …".
+      { minPrimaryColumnWidth: 25, maxPrimaryColumnWidth: 25 },
     );
     this.overlay = this.tui.showOverlay(overlay, { width: '70%', maxHeight: '50%', anchor: 'center' });
     this.overlay.focus();
@@ -2437,6 +2448,12 @@ class DashboardApp {
     if (!snapshot) return [];
     const seenNames = new Set<string>();
     const choices: ModelChoice[] = [];
+    // Index per-model timings by the resolved model name (the same key used
+    // by recordModelTiming → requestModelTimingStats). Lets us prefix the
+    // description with an "Xs avg" marker when stats are available.
+    const modelTimingMap = new Map(
+      ((snapshot.requestStats?.model_timings) || []).map((t) => [t.endpoint, t])
+    );
 
     for (const [category, categoryConfig] of Object.entries(snapshot.config.models)) {
       for (const [key, value] of Object.entries(categoryConfig || {})) {
@@ -2458,12 +2475,25 @@ class DashboardApp {
           ? arr[2]
           : undefined;
         const resolvedMode = modelMode || categoryConfig.upstream_mode || 'openai-completions';
+        // Timing is keyed by the resolved upstream model name (routeModel =
+        // arr[0], e.g. `moonshotai/kimi-k2.6`), with a fallback to the
+        // config key. Same convention used by 'Edit Composite Aliases
+        // Config' (tui.ts:~658) and the 'Custom Models' panel (tui.ts:~1057),
+        // so the avg shown here matches what those views already display.
+        const routeModel = arr && arr.length >= 1 && typeof arr[0] === 'string' ? arr[0] : undefined;
+        const timing = modelTimingMap.get(routeModel ?? key);
+        // Leading stat prefix in the description (e.g. "[2.50s] ") when
+        // this model has at least one observed timing sample. Keeps the rest
+        // of the description (category · mode · base URL) unchanged.
+        const avgPrefix = timing && timing.count > 0
+          ? `[${(timing.avg_time_ms / 1000).toFixed(2)}s] `
+          : '';
         choices.push({
           category,
           modelId: key,
           value: key,
           label: key,
-          description: `${titleCase(category)} · ${stripCompletions(resolvedMode)} · ${stripHttps(modelUrl)}`,
+          description: `${avgPrefix}${titleCase(category)} · ${stripCompletions(resolvedMode)} · ${stripHttps(modelUrl)}`,
         });
       }
     }
@@ -2478,6 +2508,17 @@ class DashboardApp {
         const aliasConfig = snapshot.config.composite?.[alias.alias] as Record<string, unknown> | undefined;
         const orderedTargets = orderCompositeTargetsForDisplay(alias.targets, aliasConfig, isFusion);
         const targets = orderedTargets.map((t) => t.model || t.routeModel || '?').join(' · ');
+        // Leading avg-time stat for the primary (composite) or synth (fusion)
+        // target — orderedTargets[0] is whichever of those sorts first per
+        // orderCompositeTargetsForDisplay. Look up by routeModel with model
+        // fallback to match the convention in Edit Composite Aliases Config.
+        const leadTarget = orderedTargets[0];
+        const leadRouteModel = leadTarget?.routeModel ?? leadTarget?.model;
+        const leadTiming = leadRouteModel ? modelTimingMap.get(leadRouteModel) : undefined;
+        const avgPrefix = leadTiming && leadTiming.count > 0
+          ? `[${(leadTiming.avg_time_ms / 1000).toFixed(2)}s] `
+          : '';
+        const description = `${avgPrefix}${targets}`;
         if (isDuplicate) {
           // Same name already added as a model — add composite with [C] suffix to make value unique
           choices.push({
@@ -2485,7 +2526,7 @@ class DashboardApp {
             modelId: alias.alias,
             value: `${alias.alias} [C]`,
             label: `${alias.alias} ${modeTag}`,
-            description: targets,
+            description,
           });
         } else {
           seenNames.add(alias.alias);
@@ -2494,7 +2535,7 @@ class DashboardApp {
             modelId: alias.alias,
             value: alias.alias,
             label: `${alias.alias} ${modeTag}`,
-            description: targets,
+            description,
           });
         }
       }
