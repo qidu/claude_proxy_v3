@@ -9,6 +9,7 @@
  * - Adaptive thinking
  * - streaming with thinking
  * - reasoning_effort mapping
+ * - clampThinkingBudget (unit, covers interleaved-thinking exception)
  */
 
 const {
@@ -21,6 +22,18 @@ const {
 } = require('../utils/test_helpers');
 
 const { THINKING_MODELS } = require('../utils/model_config');
+
+const path = require('path');
+
+// Dynamic import of the ESM dist module — same pattern as
+// testcases/15_config_parse/config_parse.test.js. Loaded lazily because
+// require() can't pull in ESM directly.
+let clampThinkingBudget;
+async function loadValidationModule() {
+  if (clampThinkingBudget) return;
+  const mod = await import(path.join(process.cwd(), 'dist/utils/validation.js'));
+  clampThinkingBudget = mod.clampThinkingBudget;
+}
 
 /**
  * TC1701: Thinking Enabled with Budget
@@ -468,6 +481,36 @@ async function testThinkingDisabledStripped() {
   assertResponse(response);
 }
 
+/**
+ * TC1717: Thinking Budget Clamp (unit test, no live proxy)
+ * Covers the 4 branches of clampThinkingBudget introduced in commit 53632e7:
+ *   (a) budget_tokens > max_tokens  → clamp down to max_tokens
+ *   (b) budget_tokens <= max_tokens → return unchanged
+ *   (c) interleaved-thinking beta   → skip clamp (budget may exceed max_tokens)
+ *   (d) max_tokens < 1024 + clamp needed → throw (no valid clamp exists)
+ */
+async function testClampThinkingBudget() {
+  await loadValidationModule();
+  const mk = (budget) => ({ type: 'enabled', budget_tokens: budget });
+
+  // (a) clamp when budget exceeds max_tokens
+  const a = clampThinkingBudget(mk(5000), 2000);
+  assert(a.budget_tokens === 2000, `should clamp to max_tokens, got ${a.budget_tokens}`);
+
+  // (b) pass-through when budget is already within max_tokens
+  const b = clampThinkingBudget(mk(2000), 8000);
+  assert(b.budget_tokens === 2000, `should not change, got ${b.budget_tokens}`);
+
+  // (c) interleaved-thinking bypasses the clamp
+  const c = clampThinkingBudget(mk(5000), 2000, /*interleavedThinking*/ true);
+  assert(c.budget_tokens === 5000, `should not clamp under interleaved-thinking, got ${c.budget_tokens}`);
+
+  // (d) max_tokens below the 1024 minimum → throws
+  let threw = false;
+  try { clampThinkingBudget(mk(5000), 500); } catch { threw = true; }
+  assert(threw, 'should throw when max_tokens < 1024 and clamping is required');
+}
+
 module.exports = {
   testThinkingEnabled,
   testThinkingDisabled,
@@ -484,7 +527,8 @@ module.exports = {
   testOpenAITThinkingFormat,
   testSignatureDeltaStreaming,
   testCustomBudgetThresholds,
-  testThinkingDisabledStripped
+  testThinkingDisabledStripped,
+  testClampThinkingBudget
 };
 
 if (require.main === module) {
@@ -502,6 +546,7 @@ if (require.main === module) {
     { name: 'TC1713: OpenAI Format', fn: testOpenAITThinkingFormat },
     { name: 'TC1714: Signature Delta', fn: testSignatureDeltaStreaming },
     { name: 'TC1715: Custom Thresholds', fn: testCustomBudgetThresholds },
-    { name: 'TC1716: Disabled Stripped', fn: testThinkingDisabledStripped }
+    { name: 'TC1716: Disabled Stripped', fn: testThinkingDisabledStripped },
+    { name: 'TC1717: Budget Clamp (unit)', fn: testClampThinkingBudget }
   ]);
 }

@@ -14,6 +14,8 @@
  * - TC1508: rename round-trip — 'claude-1-2 = {target="claude-4-5-haiku"}' survives serialize → reparse
  * - TC1509: "* = {}" and "* = {target="*"}" produce identical parsed entry
  * - TC1510: "claude-* = {}" and 'claude-* = {target="claude-*"}' produce identical parsed entry
+ * - TC1511: composite target resolves through full routing chain (composite → composite, no cycle)
+ * - TC1512: A → B → A composite cycle throws "Routing cycle detected"
  *
  * Reference: README §"Per-Model Configuration Array Format", §"Model Routing Priority"
  */
@@ -355,6 +357,59 @@ base_url = "https://api.anthropic.com"
 }
 
 // ---------------------------------------------------------------------------
+// TC1511: composite alias targeting another composite alias (no cycle)
+// Covers the c1a769d change: composite targets now resolve through the full
+// routing chain (composite → schedule → fusion → direct → default). This
+// case must NOT throw — A's single target is a leaf model B.
+// ---------------------------------------------------------------------------
+async function testCompositeToCompositeNoCycle() {
+  // A composite alias whose single target is a leaf model — must resolve.
+  // Uses the [composite] inline-object syntax that parseSimpleToml handles
+  // (the [composite.X] sub-section header form doesn't scope nested keys).
+  // Alias names must NOT collide with any model name (validated by the loader).
+  const cfg = parse(`
+[models.leaf]
+base_url = "https://x.test"
+"leaf-model" = {}
+[composite]
+"aliasA" = {"leaf-model" = {share = 1}}
+`);
+  const route = getModelRouteConfig('aliasA', cfg);
+  assert(route !== undefined, 'composite.aliasA should resolve to a leaf route');
+  assert(
+    route?.targetUrl === 'https://x.test',
+    `targetUrl should come from leaf-model, got "${route?.targetUrl}"`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC1512: aliasA → aliasB → aliasA cycle throws "Routing cycle detected"
+// Covers the cycle guard added in c1a769d: getModelRouteConfig throws when
+// the effective name is already on the visited chain.
+// ---------------------------------------------------------------------------
+async function testCompositeCycle() {
+  const cfg = parse(`
+[models.leaf]
+base_url = "https://x.test"
+"leaf-model" = {}
+[composite]
+"aliasA" = {"aliasB" = {}}
+"aliasB" = {"aliasA" = {}}
+`);
+  let err = null;
+  try {
+    getModelRouteConfig('aliasA', cfg);
+  } catch (e) {
+    err = e;
+  }
+  assert(err !== null, 'aliasA → aliasB → aliasA cycle should throw');
+  assert(
+    err && err.message.includes('Routing cycle detected'),
+    `expected "Routing cycle detected" in error, got: ${err?.message}`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
 
@@ -369,6 +424,8 @@ const tests = [
   { name: 'TC1508: rename round-trip', fn: testRenameRoundTrip },
   { name: 'TC1509: "* = {}" ≡ "* = {target=\\"*\\"}"', fn: testCatchAllEquivalence },
   { name: 'TC1510: "claude-* = {}" ≡ "claude-* = {target=\\"claude-*\\"}"', fn: testWildcardEquivalence },
+  { name: 'TC1511: composite → composite resolves (no cycle)', fn: testCompositeToCompositeNoCycle },
+  { name: 'TC1512: A → B → A cycle throws', fn: testCompositeCycle },
 ];
 
 module.exports = {
@@ -382,6 +439,8 @@ module.exports = {
   testRenameRoundTrip,
   testCatchAllEquivalence,
   testWildcardEquivalence,
+  testCompositeToCompositeNoCycle,
+  testCompositeCycle,
 };
 
 if (require.main === module) {
