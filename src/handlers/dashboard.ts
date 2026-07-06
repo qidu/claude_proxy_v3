@@ -556,6 +556,10 @@ export function handleDashboardPage(): Response {
       let modelStats = [];
       let configErrorsList = [];
       let compositeLimitWindowsSnapshot = {};
+      // Set when the user mutates the config (e.g. adding an alias). While true,
+      // the dashboard-statistic auto-reload is paused to avoid clobbering the
+      // in-flight change. Cleared after the next successful loadConfig().
+      let configDirty = false;
 
       function getAliasUsed(aliasName) {
         const resolved = compositeResolved.find(r => r.alias === aliasName);
@@ -853,7 +857,11 @@ export function handleDashboardPage(): Response {
           const alias = el.value;
           const baseEl = document.querySelector('[data-kind="model-base"][data-category="' + category + '"][data-key="' + key + '"]');
           const base = baseEl ? baseEl.value : '';
-          payload.models[category][key] = [alias, base];
+          // Backend validator accepts model entries as [target] (1 elem) or
+          // [target, base_url, ''] (3 elems) — see isSafeModelArray /
+          // TC1214. A bare 2-element array would be rejected as
+          // "Invalid model entry for <category>.<key>".
+          payload.models[category][key] = base ? [alias, base, ''] : [alias];
         });
 
         const selectedPrimaryByAlias = {};
@@ -1088,10 +1096,17 @@ export function handleDashboardPage(): Response {
         }
 
         if (action === 'add-composite-alias') {
+          // Mark dirty before the prompt so stats auto-reload is paused
+          // while the user is still typing the alias name.
+          configDirty = true;
           const alias = window.prompt('New composite alias (e.g. gpt-all):');
-          if (!alias) return;
+          if (!alias) {
+            configDirty = false;
+            return;
+          }
           if (currentConfig.composite[alias]) {
             window.alert('Composite alias already exists');
+            configDirty = false;
             return;
           }
           currentConfig.composite[alias] = {};
@@ -1113,13 +1128,20 @@ export function handleDashboardPage(): Response {
         if (action === 'add-composite-target') {
           const alias = target.dataset.alias;
           if (!alias) return;
+          // Mark dirty before the prompt so stats auto-reload is paused
+          // while the user is still typing the target model name.
+          configDirty = true;
           const targetModel = window.prompt('New target model for composite.' + alias + ':');
-          if (!targetModel) return;
+          if (!targetModel) {
+            configDirty = false;
+            return;
+          }
           if (!currentConfig.composite[alias]) {
             currentConfig.composite[alias] = {};
           }
           if (currentConfig.composite[alias][targetModel]) {
             window.alert('Composite target already exists');
+            configDirty = false;
             return;
           }
           currentConfig.composite[alias][targetModel] = {};
@@ -1165,10 +1187,17 @@ export function handleDashboardPage(): Response {
         }
 
         if (action === 'add-schedule-alias') {
+          // Mark dirty before the prompt so stats auto-reload is paused
+          // while the user is still typing the alias name.
+          configDirty = true;
           const alias = window.prompt('New schedule alias (e.g. day-shift):');
-          if (!alias) return;
+          if (!alias) {
+            configDirty = false;
+            return;
+          }
           if (currentConfig.schedule[alias]) {
             window.alert('Schedule alias already exists');
+            configDirty = false;
             return;
           }
           currentConfig.schedule[alias] = {};
@@ -1190,13 +1219,20 @@ export function handleDashboardPage(): Response {
         if (action === 'add-schedule-target') {
           const alias = target.dataset.alias;
           if (!alias) return;
+          // Mark dirty before the prompt so stats auto-reload is paused
+          // while the user is still typing the target model name.
+          configDirty = true;
           const targetModel = window.prompt('New target model for schedule.' + alias + ' (must match an existing model id):');
-          if (!targetModel) return;
+          if (!targetModel) {
+            configDirty = false;
+            return;
+          }
           if (!currentConfig.schedule[alias]) {
             currentConfig.schedule[alias] = {};
           }
           if (currentConfig.schedule[alias][targetModel]) {
             window.alert('Schedule target already exists');
+            configDirty = false;
             return;
           }
           currentConfig.schedule[alias][targetModel] = [];
@@ -1288,6 +1324,9 @@ export function handleDashboardPage(): Response {
           configStatus.textContent = 'Loaded' + configPathHint;
           configStatus.className = '';
         }
+        // Form is now in sync with the backend — local mutation has been
+        // (or is about to be) saved, so resume stats auto-reload.
+        configDirty = false;
       }
 
       async function saveConfig() {
@@ -1516,10 +1555,14 @@ export function handleDashboardPage(): Response {
 
       refreshAll();
       setInterval(() => {
+        // Skip stats auto-reload while a config mutation is being saved —
+        // otherwise the in-flight change can be clobbered by re-rendering
+        // around it. Resumes on the next loadConfig() tick.
+        if (configDirty) return;
         loadModelStats();
         loadRequestStats();
         loadToolStats();
-      }, 5000);
+      }, 10000);
 
       setInterval(() => {
         loadConfig();
