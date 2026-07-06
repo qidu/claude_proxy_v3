@@ -14,7 +14,8 @@ const DEFAULT_IMAGE_DATA_MAX_SIZE = 10 * 1024 * 1024;
 export function validateClaudeMessagesRequest(
   request: ClaudeMessagesRequest,
   modelId?: string,
-  maxImageDataSize: number = DEFAULT_IMAGE_DATA_MAX_SIZE
+  maxImageDataSize: number = DEFAULT_IMAGE_DATA_MAX_SIZE,
+  interleavedThinking: boolean = false
 ): void {
   // Validate required fields
   if (!request.messages || !Array.isArray(request.messages)) {
@@ -84,6 +85,7 @@ export function validateClaudeMessagesRequest(
 
   // Validate thinking parameter
   if (request.thinking !== undefined) {
+    request.thinking = clampThinkingBudget(request.thinking, request.max_tokens, interleavedThinking);
     validateThinkingConfig(request.thinking, 'thinking');
   }
 
@@ -287,6 +289,49 @@ export function validateClaudeContentBlock(
 }
 
 /**
+ * Clamp thinking.budget_tokens down to max_tokens when the budget would
+ * otherwise exceed it. Returns the input unchanged when no clamping is
+ * needed or when the input is not an enabled thinking config.
+ *
+ * Per the Claude API spec (docs/claude-extended-thinking.md):
+ * - budget_tokens requires a minimum of 1,024 tokens
+ * - budget_tokens must be less than max_tokens
+ * - EXCEPTION: when using interleaved thinking with tools
+ *   (anthropic-beta: interleaved-thinking-2025-05-14), budget_tokens may
+ *   exceed max_tokens up to the full context window
+ *
+ * If max_tokens itself is below 1,024 and thinking is enabled with a budget,
+ * no valid clamp exists — throws with a clear message.
+ */
+export function clampThinkingBudget(
+  thinking: ThinkingConfigParam,
+  maxTokens?: number,
+  interleavedThinking: boolean = false
+): ThinkingConfigParam {
+  if (!thinking || typeof thinking !== 'object') return thinking;
+  if (maxTokens === undefined) return thinking;
+
+  const isEnabled = thinking.type === 'enabled' || thinking.type === true;
+  if (!isEnabled) return thinking;
+  if (typeof thinking.budget_tokens !== 'number') return thinking;
+  if (thinking.budget_tokens <= maxTokens) return thinking;
+
+  // Interleaved-thinking exception: budget may exceed max_tokens
+  // (per docs/claude-extended-thinking.md:323)
+  if (interleavedThinking) return thinking;
+
+  // max_tokens < 1,024 cannot satisfy the thinking minimum budget.
+  // Clamping here would produce an invalid budget that fails downstream validation.
+  if (maxTokens < 1024) {
+    throw new ValidationError(
+      `thinking.budget_tokens cannot be clamped to max_tokens (${maxTokens}): max_tokens must be at least 1,024 when thinking is enabled`
+    );
+  }
+
+  return { ...thinking, budget_tokens: maxTokens };
+}
+
+/**
  * Validate thinking configuration
  */
 export function validateThinkingConfig(
@@ -330,7 +375,8 @@ export function validateThinkingConfig(
  */
 export function validateClaudeTokenCountingRequest(
   request: ClaudeTokenCountingRequest,
-  maxImageDataSize: number = DEFAULT_IMAGE_DATA_MAX_SIZE
+  maxImageDataSize: number = DEFAULT_IMAGE_DATA_MAX_SIZE,
+  interleavedThinking: boolean = false
 ): void {
   // Validate required fields
   if (!request.model) {
@@ -356,6 +402,7 @@ export function validateClaudeTokenCountingRequest(
 
   // Validate thinking parameter
   if (request.thinking !== undefined) {
+    request.thinking = clampThinkingBudget(request.thinking, (request as any).max_tokens, interleavedThinking);
     validateThinkingConfig(request.thinking, 'thinking');
   }
 }

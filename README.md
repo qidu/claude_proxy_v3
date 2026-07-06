@@ -118,6 +118,14 @@ Key ideas:
 > that otherwise default to thinking mode). On a **fresh conversation** (no prior assistant
 > turns containing thinking blocks), a client-sent `{"type": "enabled"}` will be silently
 > dropped — use `"adaptive"` instead, which the model handles autonomously.
+
+> **Note — `thinking.budget_tokens` vs `max_tokens`:** on `POST /v1/messages` and
+> `POST /v1/messages/count_tokens`, when `thinking` is enabled the validator reduces
+> `thinking.budget_tokens` down to `max_tokens` if the budget would otherwise exceed it.
+> If you send `anthropic-beta: interleaved-thinking-2025-05-14`, the budget is left
+> unchanged (interleaved thinking may consume the full context window). If `max_tokens`
+> is below `1024` with thinking enabled and a non-null budget, validation throws with
+> a message explaining the minimum.
 - **Wildcards** (`claude-*`) and the **catch-all** (`*` in `[models.default]`) handle
   anything you don't list explicitly.
 
@@ -353,7 +361,7 @@ the configured windows.
 |---|---|---|---|
 | `from` | `0..24` (inclusive of start) | `0` | Hour-of-day the window opens (server-local time). |
 | `to`   | `0..24` (exclusive of end) | `24` | Hour-of-day the window closes. `24` is a legal value (end-of-day). |
-| `days` | `"weekday"`/`"weekdays"`, `"weekend"`/`"weekends"` (any casing), or `[mon, tue, ...]` | every day | When the window applies, evaluated against server-local day-of-week. Any other string (including hand-typed typos) normalizes to "every day" rather than raising an error. |
+| `days` | `"weekday"`/`"weekdays"`, `"weekend"`/`"weekends"` (any casing), or `[mon, tue, ...]` | everyday | When the window applies, evaluated against server-local day-of-week. Any other string (including hand-typed typos) normalizes to "everyday" rather than raising an error. |
 
 A target with **`windows = []`** is the **fallback**: it serves when no other target
 matches the current time. Each alias may have **at most one fallback** target.

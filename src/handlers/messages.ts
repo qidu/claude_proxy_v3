@@ -14,6 +14,7 @@ import { createStreamTransformer } from '../converters/streaming.js';
 import { validateClaudeMessagesRequest } from '../utils/validation.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { normalizeOpenAIToClaudeThinking } from '../utils/thinking.js';
+import { validateBetaFeatures, hasBetaFeature } from '../utils/beta-features.js';
 import { isSdkUrl, handleSdkOpenAIRequest, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
 import { addForwardedHeaders } from '../utils/routing.js';
 import { getLocalTokenCountingConfig } from '../utils/token-counting.js';
@@ -226,8 +227,13 @@ export async function handleMessagesRequest(
   // Claude format - convert to OpenAI
   const claudeRequest = requestBody as unknown as ClaudeMessagesRequest;
 
+  // Detect interleaved-thinking beta header (per docs/claude-extended-thinking.md:323):
+  // when present, budget_tokens is allowed to exceed max_tokens.
+  const betaFeatures = validateBetaFeatures(authHeaders['anthropic-beta'] ?? null);
+  const interleavedThinking = hasBetaFeature(betaFeatures, 'interleaved-thinking-2025-05-14');
+
   // Validate Claude request
-  validateClaudeMessagesRequest(claudeRequest);
+  validateClaudeMessagesRequest(claudeRequest, undefined, undefined, interleavedThinking);
 
   // Log thinking type configuration
   const thinking = claudeRequest.thinking;

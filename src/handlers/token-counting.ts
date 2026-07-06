@@ -24,6 +24,7 @@ import {
   getTiktokenTokenizer,
 } from '../utils/token-counting.js';
 import { addForwardedHeaders } from '../utils/routing.js';
+import { validateBetaFeatures, hasBetaFeature } from '../utils/beta-features.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 
 /**
@@ -55,8 +56,13 @@ export async function handleTokenCountingRequest(
     ? parseInt(env.IMAGE_BLOCK_DATA_MAX_SIZE, 10)
     : 1 * 1024 * 1024; // Default 1MB
 
+  // Detect interleaved-thinking beta header (per docs/claude-extended-thinking.md:323):
+  // when present, budget_tokens is allowed to exceed max_tokens.
+  const betaFeatures = validateBetaFeatures(authHeaders['anthropic-beta'] ?? null);
+  const interleavedThinking = hasBetaFeature(betaFeatures, 'interleaved-thinking-2025-05-14');
+
   // Validate request
-  validateClaudeTokenCountingRequest(claudeRequest, maxImageDataSize);
+  validateClaudeTokenCountingRequest(claudeRequest, maxImageDataSize, interleavedThinking);
   validateAuthHeaders(authHeaders);
 
   // Use env for local config (cast to Record<string, string> for compatibility)

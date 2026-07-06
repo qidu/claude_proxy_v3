@@ -7,6 +7,25 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Thinking budget clamping: `budget_tokens` is capped to `max_tokens` (with interleaved-thinking exception)
+When request to `kimi-2.7-code`, exception shows rised: 'InvalidParameter: max_completion_tokens [32000] must be greater than thinking_budget [32768]'. This is not a fix for the problem, they are just completions to follow api docs:
+- **`POST /v1/messages` and `POST /v1/messages/count_tokens`**: when `thinking` is enabled and
+  `thinking.budget_tokens` exceeds `max_tokens`, the request validator reduces
+  `budget_tokens` down to `max_tokens` before forwarding, keeping the budget within the
+  per-response output window required by the Claude API spec.
+- **Interleaved-thinking exception**: if the request carries the
+  `anthropic-beta: interleaved-thinking-2025-05-14` header, `budget_tokens` is left
+  unchanged even when it exceeds `max_tokens` (per `docs/claude-extended-thinking.md`),
+  since interleaved thinking is permitted to consume the full context window for
+  reasoning tokens.
+- **Below-minimum `max_tokens`**: if `max_tokens < 1024` while thinking is enabled with a
+  non-null budget, validation throws with a clear message instead of clamping to an
+  invalid value.
+
+**Files changed:** `src/utils/validation.ts` (new `clampThinkingBudget`; updated
+`validateClaudeMessagesRequest` / `validateClaudeTokenCountingRequest` signatures),
+`src/handlers/messages.ts`, `src/handlers/token-counting.ts`.
+
 ### Composite alias safety: routing cycle detection, name-conflict stripping, self-reference rejection
 
 #### Routing cycle detection
