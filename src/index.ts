@@ -999,6 +999,7 @@ export default {
               logger.debug(requestId, `Composite candidate ${modelName} -> ${candidateName} via ${route.targetUrl} (${route.upstreamMode}) [client ${clientAddress}:${clientPort}]`);
 
               const upstreamModelName = route.modelAlias || candidateName;
+              const safeModel = encodeURIComponent(upstreamModelName);
               const forwardedBodyText = JSON.stringify({
                 ...body,
                 model: upstreamModelName,
@@ -1042,8 +1043,8 @@ export default {
 
                   if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
                     candidateTargetUrl = isStreaming
-                      ? `${route.targetUrl}/v1beta/models/${upstreamModelName}:streamGenerateContent?alt=sse`
-                      : `${route.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
+                      ? `${route.targetUrl}/v1beta/models/${safeModel}:streamGenerateContent?alt=sse`
+                      : `${route.targetUrl}/v1beta/models/${safeModel}:generateContent`;
                   } else {
                     candidateTargetUrl = `${route.targetUrl}/v1/messages`;
                   }
@@ -1059,8 +1060,8 @@ export default {
                     const requestBody = JSON.parse(forwardedBodyText) as Record<string, unknown>;
                     const isStreaming = requestBody.stream === true;
                     candidateTargetUrl = isStreaming
-                      ? `${route.targetUrl}/v1beta/models/${upstreamModelName}:streamGenerateContent?alt=sse`
-                      : `${route.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
+                      ? `${route.targetUrl}/v1beta/models/${safeModel}:streamGenerateContent?alt=sse`
+                      : `${route.targetUrl}/v1beta/models/${safeModel}:generateContent`;
                     candidateUpstreamMode = route.upstreamMode;
                   } else {
                     candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
@@ -1073,7 +1074,7 @@ export default {
               } else if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && path.includes(':countTokens')) {
                 candidateHandlerType = 'generateContent';
                 if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
-                  candidateTargetUrl = `${route.targetUrl}/v1beta/models/${upstreamModelName}:countTokens`;
+                  candidateTargetUrl = `${route.targetUrl}/v1beta/models/${safeModel}:countTokens`;
                   candidateUpstreamMode = route.upstreamMode;
                 } else {
                   candidateTargetUrl = `${route.targetUrl}/v1/messages/count_tokens`;
@@ -1089,7 +1090,7 @@ export default {
                     if (isStreamEndpoint && !queryString.includes('alt=sse')) {
                       queryString = queryString ? `${queryString}&alt=sse` : '?alt=sse';
                     }
-                    candidateTargetUrl = `${route.targetUrl}/v1beta/models/${upstreamModelName}:${endpoint}${queryString}`;
+                    candidateTargetUrl = `${route.targetUrl}/v1beta/models/${safeModel}:${endpoint}${queryString}`;
                     candidateUpstreamMode = route.upstreamMode;
                   } else {
                     candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
@@ -1258,6 +1259,7 @@ export default {
         forceStreamOverride?: boolean,
       ): RouteAttempt => {
         const upstreamModelName = route.modelAlias || candidateName;
+        const safeModel = encodeURIComponent(upstreamModelName);
         const forwardedBodyText = JSON.stringify({ ...bodyObj, model: upstreamModelName });
         const candidateRequest = new Request(request.url, {
           method: request.method,
@@ -1302,8 +1304,8 @@ export default {
           if (isNativeMode) {
             if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
               candidateTargetUrl = bodyStream
-                ? `${route.targetUrl}/v1beta/models/${upstreamModelName}:streamGenerateContent?alt=sse`
-                : `${route.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
+                ? `${route.targetUrl}/v1beta/models/${safeModel}:streamGenerateContent?alt=sse`
+                : `${route.targetUrl}/v1beta/models/${safeModel}:generateContent`;
             } else {
               candidateTargetUrl = `${route.targetUrl}/v1/messages`;
             }
@@ -1316,8 +1318,8 @@ export default {
           candidateHandlerType = 'interactions';
           if (isNativeMode && (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions')) {
             candidateTargetUrl = bodyStream
-              ? `${route.targetUrl}/v1beta/models/${upstreamModelName}:streamGenerateContent?alt=sse`
-              : `${route.targetUrl}/v1beta/models/${upstreamModelName}:generateContent`;
+              ? `${route.targetUrl}/v1beta/models/${safeModel}:streamGenerateContent?alt=sse`
+              : `${route.targetUrl}/v1beta/models/${safeModel}:generateContent`;
             candidateUpstreamMode = route.upstreamMode;
           } else {
             candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
@@ -1326,7 +1328,7 @@ export default {
         } else if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && path.includes(':countTokens')) {
           candidateHandlerType = 'generateContent';
           if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
-            candidateTargetUrl = `${route.targetUrl}/v1beta/models/${upstreamModelName}:countTokens`;
+            candidateTargetUrl = `${route.targetUrl}/v1beta/models/${safeModel}:countTokens`;
             candidateUpstreamMode = route.upstreamMode;
           } else {
             candidateTargetUrl = `${route.targetUrl}/v1/messages/count_tokens`;
@@ -1339,7 +1341,7 @@ export default {
             const endpoint = isStreamEndpoint ? 'streamGenerateContent' : 'generateContent';
             let queryString = path.includes('?') ? path.substring(path.indexOf('?')) : '';
             if (isStreamEndpoint && !queryString.includes('alt=sse')) { queryString = queryString ? `${queryString}&alt=sse` : '?alt=sse'; }
-            candidateTargetUrl = `${route.targetUrl}/v1beta/models/${upstreamModelName}:${endpoint}${queryString}`;
+            candidateTargetUrl = `${route.targetUrl}/v1beta/models/${safeModel}:${endpoint}${queryString}`;
             candidateUpstreamMode = route.upstreamMode;
           } else {
             candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
