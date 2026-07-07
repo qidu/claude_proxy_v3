@@ -56,7 +56,7 @@ async function testThinkingEnabled() {
         role: 'user',
         content: 'Explain the theory of relativity'
       }],
-      max_tokens: 500,
+      max_tokens: 1024,
       thinking: {
         type: 'enabled',
         budget_tokens: 2000
@@ -115,7 +115,7 @@ async function testBooleanThinking() {
         role: 'user',
         content: 'What is machine learning?'
       }],
-      max_tokens: 200,
+      max_tokens: 1024,
       thinking: {
         type: true,
         budget_tokens: 1024
@@ -206,7 +206,7 @@ async function testLowBudgetThinking() {
         role: 'user',
         content: 'What is AI?'
       }],
-      max_tokens: 100,
+      max_tokens: 1024,
       thinking: {
         type: 'enabled',
         budget_tokens: 1024
@@ -230,7 +230,7 @@ async function testStreamingWithThinking() {
         role: 'user',
         content: 'Explain recursion'
       }],
-      max_tokens: 300,
+      max_tokens: 1708,
       thinking: {
         type: 'enabled',
         budget_tokens: 1024
@@ -411,7 +411,7 @@ async function testSignatureDeltaStreaming() {
     body: {
       model: 'deepseek-r1',
       messages: [{ role: 'user', content: 'Explain gravity' }],
-      max_tokens: 300,
+      max_tokens: 1024,
       thinking: {
         type: 'enabled',
         budget_tokens: 1024
@@ -485,7 +485,7 @@ async function testCustomBudgetThresholds() {
     body: {
       model: 'deepseek/deepseek-v4-flash',
       messages: [{ role: 'user', content: 'Count to 5' }],
-      max_tokens: 200,
+      max_tokens: 1024,
       thinking: {
         type: 'enabled',
         budget_tokens: 25000
