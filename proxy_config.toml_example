@@ -9,9 +9,9 @@
 # inheriting from this global default.
 default_base_url = "https://api.qnaigc.com"
 # default_api_key = "-" # NEVER defined in production.
-budget_to_effort_low = 8000
-budget_to_effort_medium = 20000
-budget_to_effort_high = 0
+budget_to_effort_low = 32768
+budget_to_effort_medium = 65536
+budget_to_effort_high = 128000
 global_token_limit = "700M 1w"
 
 [models.claude]

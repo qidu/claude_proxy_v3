@@ -1,6 +1,7 @@
 /**
  * Interactions API Tests
  * Tests POST /v1/interactions endpoint
+ * model.default.upstream_mode should be 'openai-completions' 
  *
  * Coverage:
  * - Basic text input

@@ -1,6 +1,7 @@
 /**
  * Extended Thinking Tests
  * Tests thinking/reasoning configuration and behavior
+ * model.default.upstream_mode should be 'anthropic-messages' 
  *
  * Coverage:
  * - Thinking enabled with budget
@@ -86,7 +87,7 @@ async function testThinkingDisabled() {
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
-      model: 'deepseek/deepseek-v3.2',
+      model: 'deepseek/deepseek-v4-flash',
       messages: [{
         role: 'user',
         content: 'What is 2+2?'
@@ -133,7 +134,7 @@ async function testAdaptiveThinking() {
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
-      model: 'deepseek/deepseek-v3.2',
+      model: 'deepseek/deepseek-v4-flash',
       messages: [{
         role: 'user',
         content: 'Explain quantum computing'
@@ -156,7 +157,7 @@ async function testReasoningEffort() {
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
-      model: 'deepseek/deepseek-v3.2',
+      model: 'deepseek/deepseek-v4-flash',
       messages: [{
         role: 'user',
         content: 'Solve: x^2 - 5x + 6 = 0'
@@ -177,7 +178,7 @@ async function testOutputConfigEffort() {
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
-      model: 'deepseek/deepseek-v3.2',
+      model: 'deepseek/deepseek-v4-flash',
       messages: [{
         role: 'user',
         content: 'Explain photosynthesis'
@@ -295,7 +296,7 @@ async function testBudgetToEffortMapping() {
   const response1 = await sendRequest({
     endpoint: '/v1/messages',
     body: {
-      model: 'deepseek/deepseek-v3.2',
+      model: 'deepseek/deepseek-v4-flash',
       messages: [{ role: 'user', content: 'Hello' }],
       max_tokens: 100,
       thinking: {
@@ -310,7 +311,7 @@ async function testBudgetToEffortMapping() {
   const response2 = await sendRequest({
     endpoint: '/v1/messages',
     body: {
-      model: 'deepseek/deepseek-v3.2',
+      model: 'deepseek/deepseek-v4-flash',
       messages: [{ role: 'user', content: 'Hello' }],
       max_tokens: 100,
       thinking: {
@@ -331,7 +332,7 @@ async function testTaskBudgetTotal() {
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
-      model: 'deepseek/deepseek-v3.2',
+      model: 'deepseek/deepseek-v4-flash',
       messages: [{ role: 'user', content: 'What is 2+2?' }],
       max_tokens: 100,
       output_config: {
@@ -354,7 +355,7 @@ async function testXhighEffort() {
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
-      model: 'deepseek/deepseek-v3.2',
+      model: 'deepseek/deepseek-v4-flash',
       messages: [{ role: 'user', content: 'Hi' }],
       max_tokens: 50,
       output_config: { effort: 'xhigh' }
@@ -376,7 +377,7 @@ async function testXhighEffort() {
 
 /**
  * TC1713: OpenAI Thinking Format
- * Tests that thinking: { enabled: true, budget_tokens: N } is accepted
+ * Tests that thinking: { type: 'enabled', budget_tokens: N } is accepted
  * (OpenAI passthrough format, normalized to Claude format).
  *
  * NOTE: budget_tokens must be <= max_tokens (validated upstream of the
@@ -386,11 +387,11 @@ async function testOpenAITThinkingFormat() {
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
-      model: 'deepseek/deepseek-v3.2',
+      model: 'deepseek/deepseek-v4-flash',
       messages: [{ role: 'user', content: 'Hi' }],
       max_tokens: 3000,
       thinking: {
-        enabled: true,
+        type: 'enabled',
         budget_tokens: 2000
       }
     }
@@ -482,7 +483,7 @@ async function testCustomBudgetThresholds() {
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
-      model: 'deepseek/deepseek-v3.2',
+      model: 'deepseek/deepseek-v4-flash',
       messages: [{ role: 'user', content: 'Count to 5' }],
       max_tokens: 200,
       thinking: {
@@ -504,7 +505,7 @@ async function testThinkingDisabledStripped() {
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
-      model: 'deepseek/deepseek-v3.2',
+      model: 'deepseek/deepseek-v4-flash',
       messages: [{ role: 'user', content: 'Hello' }],
       max_tokens: 30,
       thinking: {
@@ -559,7 +560,7 @@ async function testBudgetExceedsMaxTokens() {
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
-      model: 'deepseek/deepseek-v3.2',
+      model: 'deepseek/deepseek-v4-flash',
       messages: [{ role: 'user', content: 'Hello' }],
       max_tokens: 1000,
       thinking: {

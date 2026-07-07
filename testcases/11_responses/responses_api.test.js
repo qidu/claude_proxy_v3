@@ -102,7 +102,7 @@ async function testResponsesCompact() {
   const response = await sendRequest({
     endpoint: '/v1/responses/compact',
     body: {
-      model: 'gpt-5.4-mini',
+      model: 'openai/gpt-5.4-mini',
       input: [
         { type: 'message', role: 'user', content: 'Hello' },
         { type: 'message', role: 'assistant', content: 'Hi there' },

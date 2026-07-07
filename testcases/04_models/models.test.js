@@ -215,9 +215,10 @@ async function testCompositeAlias() {
 /**
  * TC408: Test All Endpoints for Model
  * Tests a single model across messages, interactions, generateContent
+ * model.default.upstream_mode should be 'openai-completions' 
  */
 async function testModelAllEndpoints() {
-  const results = await testModelEndpoints('deepseek/deepseek-v3.2');
+  const results = await testModelEndpoints('deepseek/deepseek-v4-flash');
 
   for (const result of results) {
     assert(result.passed, `${result.endpoint} should work: ${result.status}`);

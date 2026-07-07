@@ -70,7 +70,7 @@ async function testFreeModelAcceptsBogusClientKey() {
     endpoint: '/v1/messages',
     headers: { 'Authorization': `Bearer ${BOGUS_KEY}` },
     body: {
-      model: 'opus48',
+      model: 'minimax-m3',
       messages: [{ role: 'user', content: 'Say exactly: OK' }],
       max_tokens: 10
     }
@@ -169,7 +169,7 @@ async function testSelfReferentialTargetNoRecursion() {
     models: { default: { upstream_mode: 'openai-completions', base_url: 'https://example.com' } },
     composite: {
       'selfref': {
-        'selfref': { fusion: 1, role: 'panel' }, // target name === alias's own name
+        'otherref': { fusion: 1, role: 'panel' }, // target name === alias's own name
         s1: { role: 'synth' }
       }
     }
@@ -178,7 +178,7 @@ async function testSelfReferentialTargetNoRecursion() {
   const plan = resolveFusionPlan('selfref', proxyConfig);
   assert(plan !== undefined, 'Expected a resolved fusion plan');
   assert(plan.panel.length === 1, `Expected exactly 1 panel target (self-reference resolved as a literal model name, not recursed), got ${plan.panel.length}`);
-  assert(plan.panel[0].modelName === 'selfref', `Expected panel target modelName to be the literal 'selfref', got ${plan.panel[0].modelName}`);
+  assert(plan.panel[0].modelName === 'otherref', `Expected panel target modelName to be the literal 'otherref', got ${plan.panel[0].modelName}`);
 }
 
 // ---------------------------------------------------------------------------
