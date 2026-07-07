@@ -10,6 +10,7 @@ import { Env, Logger } from '../types/shared.js';
 import { createLogger } from './logger.js';
 import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
 import { createStreamTransformer } from '../converters/streaming.js';
+import { budgetToReasoningEffort, ThinkingConversionOptions } from '../converters/claude-to-openai.js';
 import { recordUpstreamResponseToolCount } from './dashboard-stats.js';
 
 /**
@@ -196,7 +197,8 @@ export async function handleSdkOpenAIRequest(
   logger?: Logger,
   env?: Env,
   requestBody?: Record<string, unknown>,
-  outputFormat: 'openai' | 'claude' = 'openai'
+  outputFormat: 'openai' | 'claude' = 'openai',
+  conversionOptions?: ThinkingConversionOptions
 ): Promise<Response> {
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
   activeLogger.debug(requestId, `Using SDK client for OpenAI request model ${modelAlias} url=${request.url}, method=${request.method}`);
@@ -215,8 +217,7 @@ export async function handleSdkOpenAIRequest(
       // Handle both OpenAI format (enabled) and Claude format (type)
       const isEnabled = 'enabled' in thinking ? thinking.enabled : thinking.type === true || thinking.type === 'enabled';
       if (isEnabled) {
-        const budget = thinking.budget_tokens;
-        openaiRequest.reasoning_effort = budget >= 4096 ? 'high' : budget >= 2048 ? 'medium' : 'low';
+        openaiRequest.reasoning_effort = budgetToReasoningEffort(thinking.budget_tokens, conversionOptions);
       }
     }
     delete openaiRequest.thinking;

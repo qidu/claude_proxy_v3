@@ -8,7 +8,7 @@ import { Env } from '../types/shared.js';
 import { Logger, createLogger } from '../utils/logger.js';
 import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.js';
 import { OpenAIRequest, OpenAIResponse } from '../types/openai.js';
-import { convertClaudeToOpenAIRequest, ThinkingConversionOptions } from '../converters/claude-to-openai.js';
+import { convertClaudeToOpenAIRequest, ThinkingConversionOptions, budgetToReasoningEffort } from '../converters/claude-to-openai.js';
 import { convertOpenAIToClaudeResponse, TokenCountingConfig } from '../converters/openai-to-claude.js';
 import { createStreamTransformer } from '../converters/streaming.js';
 import { validateClaudeMessagesRequest } from '../utils/validation.js';
@@ -131,7 +131,7 @@ export async function handleMessagesRequest(
       const thinking = openaiRequestBody.thinking as { enabled?: boolean; budget_tokens?: number } | undefined;
       if (thinking?.enabled && thinking?.budget_tokens && !openaiRequestBody.reasoning_effort) {
         const budget = thinking.budget_tokens;
-        openaiRequestBody.reasoning_effort = budget >= 4096 ? 'high' : budget >= 2048 ? 'medium' : 'low';
+        openaiRequestBody.reasoning_effort = budgetToReasoningEffort(budget, conversionOptions);
       }
       delete openaiRequestBody.thinking;
     }
@@ -164,7 +164,8 @@ export async function handleMessagesRequest(
             activeLogger,
             env,
             openaiRequestBody,
-            'claude'
+            'claude',
+            conversionOptions
         );
     }
 
@@ -302,7 +303,7 @@ export async function handleMessagesRequest(
   if (upstreamMode === 'openai-completions' && openaiRequest.thinking !== undefined) {
     if (openaiRequest.thinking.enabled && openaiRequest.thinking.budget_tokens !== undefined && !openaiRequest.reasoning_effort) {
       const budget = openaiRequest.thinking.budget_tokens;
-      openaiRequest.reasoning_effort = budget >= 4096 ? 'high' : budget >= 2048 ? 'medium' : 'low';
+      openaiRequest.reasoning_effort = budgetToReasoningEffort(budget, conversionOptions);
     }
     delete openaiRequest.thinking;
   }

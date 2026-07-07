@@ -1676,6 +1676,30 @@ export default {
 
         // Route to appropriate handler
         let response: Response;
+
+        // Build conversionOptions once for all handlers that need it
+        // (messages, interactions, generateContent — anything that may go
+        // through openai-completions and strip thinking → reasoning_effort).
+        const conversionOptions: ThinkingConversionOptions = {};
+        {
+          const upstream = proxyConfig.upstream;
+          const low = upstream?.budget_to_effort_low;
+          if (low !== undefined && low !== '') {
+            const val = parseInt(String(low));
+            if (!isNaN(val)) conversionOptions.budget_to_effort_low = val;
+          }
+          const medium = upstream?.budget_to_effort_medium;
+          if (medium !== undefined && medium !== '') {
+            const val = parseInt(String(medium));
+            if (!isNaN(val)) conversionOptions.budget_to_effort_medium = val;
+          }
+          const high = upstream?.budget_to_effort_high;
+          if (high !== undefined && high !== '') {
+            const val = parseInt(String(high));
+            if (!isNaN(val)) conversionOptions.budget_to_effort_high = val;
+          }
+        }
+
         switch (attemptHandlerType) {
           case 'models':
             response = await handleModelsRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, logger, env as unknown as Record<string, unknown>, configuredModelIds);
@@ -1691,23 +1715,6 @@ export default {
             } else if (attemptUpstreamMode === 'gemini-generatecontent' || attemptUpstreamMode === 'gemini-interactions') {
               response = await handleGeminiRequestForMessages(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger);
             } else {
-              const conversionOptions: ThinkingConversionOptions = {};
-              const upstream = proxyConfig.upstream;
-              const low = upstream?.budget_to_effort_low;
-              if (low !== undefined && low !== '') {
-                const val = parseInt(String(low));
-                if (!isNaN(val)) conversionOptions.budget_to_effort_low = val;
-              }
-              const medium = upstream?.budget_to_effort_medium;
-              if (medium !== undefined && medium !== '') {
-                const val = parseInt(String(medium));
-                if (!isNaN(val)) conversionOptions.budget_to_effort_medium = val;
-              }
-              const high = upstream?.budget_to_effort_high;
-              if (high !== undefined && high !== '') {
-                const val = parseInt(String(high));
-                if (!isNaN(val)) conversionOptions.budget_to_effort_high = val;
-              }
               response = await handleMessagesRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, conversionOptions, attemptUpstreamMode);
             }
             break;
@@ -1716,7 +1723,7 @@ export default {
             if (attemptUpstreamMode === 'gemini-generatecontent' || attemptUpstreamMode === 'gemini-interactions') {
               response = await handleGeminiRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger);
             } else {
-              response = await handleOpenAIRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptForceStreaming);
+              response = await handleOpenAIRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptForceStreaming, conversionOptions);
             }
             break;
 
@@ -1724,7 +1731,7 @@ export default {
             if (attemptUpstreamMode === 'gemini-generatecontent' || attemptUpstreamMode === 'gemini-interactions') {
               response = await handleGeminiRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger);
             } else {
-              response = await handleOpenAIRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptForceStreaming);
+              response = await handleOpenAIRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptForceStreaming, conversionOptions);
             }
             break;
 

@@ -29,10 +29,17 @@ const path = require('path');
 // testcases/15_config_parse/config_parse.test.js. Loaded lazily because
 // require() can't pull in ESM directly.
 let clampThinkingBudget;
+let budgetToReasoningEffort;
 async function loadValidationModule() {
   if (clampThinkingBudget) return;
   const mod = await import(path.join(process.cwd(), 'dist/utils/validation.js'));
   clampThinkingBudget = mod.clampThinkingBudget;
+}
+
+async function loadBudgetConverter() {
+  if (budgetToReasoningEffort) return;
+  const mod = await import(path.join(process.cwd(), 'dist/converters/claude-to-openai.js'));
+  budgetToReasoningEffort = mod.budgetToReasoningEffort;
 }
 
 /**
@@ -436,13 +443,42 @@ async function testSignatureDeltaStreaming() {
 
 /**
  * TC1715: Custom Budget Thresholds
- * Tests that custom budget_to_effort_* thresholds are honored
- * (proxy_config.toml has: budget_to_effort_low=8000, medium=20000, high=0)
+ * Tests that custom budget_to_effort_* thresholds are honored.
+ * proxy_config.toml has: budget_to_effort_low=8000, medium=20000, high=0.
+ * Mapping logic is:
+ *   - highThreshold === 0  → always "high" (force high)
+ *   - budget >= highThreshold → "high"
+ *   - budget >= mediumThreshold → "medium"
+ *   - otherwise → "low"
+ * With high=0, every budget maps to "high" regardless of medium/low.
  */
 async function testCustomBudgetThresholds() {
-  // With custom thresholds, budget < 8000 should be "low"
-  // budget < 20000 should be "medium"
-  // budget >= 20000 should be "high"
+  await loadBudgetConverter();
+
+  const config = { budget_to_effort_low: 8000, budget_to_effort_medium: 20000, budget_to_effort_high: 0 };
+
+  // high=0 is a special "force high" case
+  assert(
+    budgetToReasoningEffort(100, config) === 'high',
+    `budget=100 with high=0 should map to high, got ${budgetToReasoningEffort(100, config)}`
+  );
+
+  // medium threshold still matters when high is not forced and budget is below it
+  const noForceConfig = { budget_to_effort_low: 8000, budget_to_effort_medium: 20000, budget_to_effort_high: 50000 };
+  assert(
+    budgetToReasoningEffort(25000, noForceConfig) === 'medium',
+    `budget=25000 should map to medium, got ${budgetToReasoningEffort(25000, noForceConfig)}`
+  );
+  assert(
+    budgetToReasoningEffort(50000, noForceConfig) === 'high',
+    `budget=50000 should map to high, got ${budgetToReasoningEffort(50000, noForceConfig)}`
+  );
+  assert(
+    budgetToReasoningEffort(7000, noForceConfig) === 'low',
+    `budget=7000 should map to low, got ${budgetToReasoningEffort(7000, noForceConfig)}`
+  );
+
+  // End-to-end: high=0 forces high effort regardless of budget
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
@@ -451,7 +487,7 @@ async function testCustomBudgetThresholds() {
       max_tokens: 200,
       thinking: {
         type: 'enabled',
-        budget_tokens: 25000  // Should map to "high" with custom thresholds
+        budget_tokens: 25000
       }
     }
   });
@@ -511,6 +547,52 @@ async function testClampThinkingBudget() {
   assert(threw, 'should throw when max_tokens < 1024 and clamping is required');
 }
 
+/**
+ * TC1718: Thinking Budget Exceeds Max Tokens
+ * Tests that the proxy handles the upstream constraint
+ * max_completion_tokens > thinking_budget. Without an explicit fix, this
+ * request would be forwarded as-is and the upstream would reject it with
+ * InvalidParameter. The proxy must either reject it with a clear 4xx or
+ * auto-correct the budget before forwarding.
+ */
+async function testBudgetExceedsMaxTokens() {
+  const response = await sendRequest({
+    endpoint: '/v1/messages',
+    body: {
+      model: 'deepseek/deepseek-v3.2',
+      messages: [{ role: 'user', content: 'Hello' }],
+      max_tokens: 1000,
+      thinking: {
+        type: 'enabled',
+        budget_tokens: 2000
+      }
+    }
+  });
+
+  assert(
+    response.status < 500,
+    `Budget exceeding max_tokens should not cause a 500 internal error (got ${response.status})`
+  );
+
+  // The proxy should either return a successful corrected response or a
+  // structured client error explaining the constraint violation.
+  if (response.status === 200) {
+    assert(
+      response.body?.content || response.body?.choices,
+      'Successful response should contain content/choices'
+    );
+  } else {
+    assert(
+      response.status >= 400 && response.status < 500,
+      `Expected 4xx client error for invalid budget, got ${response.status}`
+    );
+    assert(
+      response.body?.error || response.body?.message,
+      'Client error response should include an error message'
+    );
+  }
+}
+
 module.exports = {
   testThinkingEnabled,
   testThinkingDisabled,
@@ -528,7 +610,8 @@ module.exports = {
   testSignatureDeltaStreaming,
   testCustomBudgetThresholds,
   testThinkingDisabledStripped,
-  testClampThinkingBudget
+  testClampThinkingBudget,
+  testBudgetExceedsMaxTokens
 };
 
 if (require.main === module) {
@@ -547,6 +630,7 @@ if (require.main === module) {
     { name: 'TC1714: Signature Delta', fn: testSignatureDeltaStreaming },
     { name: 'TC1715: Custom Thresholds', fn: testCustomBudgetThresholds },
     { name: 'TC1716: Disabled Stripped', fn: testThinkingDisabledStripped },
-    { name: 'TC1717: Budget Clamp (unit)', fn: testClampThinkingBudget }
+    { name: 'TC1717: Budget Clamp (unit)', fn: testClampThinkingBudget },
+    { name: 'TC1718: Budget Exceeds Max Tokens', fn: testBudgetExceedsMaxTokens }
   ]);
 }

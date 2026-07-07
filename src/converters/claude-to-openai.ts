@@ -168,20 +168,52 @@ export function convertClaudeThinkingToOpenAI(
         }
 
         const budget = convertedThinking.budget_tokens;
-        let effort: "low" | "medium" | "high" | "max" = "low";
-        const highThreshold = options?.budget_to_effort_high;
-        const mediumThreshold = options?.budget_to_effort_medium;
-
-        if (highThreshold !== undefined && (budget >= highThreshold || highThreshold === 0)) {
-            effort = "high";
-        } else if (mediumThreshold !== undefined && (budget >= mediumThreshold || mediumThreshold === 0)) {
-            effort = "medium";
-        }
+        const effort = budgetToReasoningEffort(budget, options);
 
         return { thinking: convertedThinking, reasoning_effort: effort };
     }
 
     return {};
+}
+
+/**
+ * Map a thinking budget_tokens value to a reasoning_effort enum using the
+ * configured thresholds in ThinkingConversionOptions.
+ *
+ * Threshold semantics (matching convertClaudeThinkingToOpenAI):
+ * - budget_to_effort_high === 0 → always "high" (special-case "force high")
+ * - budget >= budget_to_effort_high → "high"
+ * - budget >= budget_to_effort_medium → "medium"
+ * - otherwise → "low"
+ *
+ * When no thresholds are configured (options undefined or all undefined),
+ * falls back to legacy cutoffs 4096/2048 so behavior is unchanged for
+ * callers that previously used the inline hardcoded ternary.
+ */
+export function budgetToReasoningEffort(
+    budget: number,
+    options?: ThinkingConversionOptions
+): "low" | "medium" | "high" | "max" {
+    const highThreshold = options?.budget_to_effort_high;
+    const mediumThreshold = options?.budget_to_effort_medium;
+    const hasThresholds =
+        options !== undefined &&
+        (options.budget_to_effort_low !== undefined ||
+         options.budget_to_effort_medium !== undefined ||
+         options.budget_to_effort_high !== undefined);
+
+    if (!hasThresholds) {
+        // Legacy fallback used by the openai-passthrough and SDK paths.
+        return budget >= 4096 ? 'high' : budget >= 2048 ? 'medium' : 'low';
+    }
+
+    if (highThreshold !== undefined && (budget >= highThreshold || highThreshold === 0)) {
+        return "high";
+    }
+    if (mediumThreshold !== undefined && (budget >= mediumThreshold || mediumThreshold === 0)) {
+        return "medium";
+    }
+    return "low";
 }
 
 /**

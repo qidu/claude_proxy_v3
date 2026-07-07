@@ -126,6 +126,17 @@ Key ideas:
 > unchanged (interleaved thinking may consume the full context window). If `max_tokens`
 > is below `1024` with thinking enabled and a non-null budget, validation throws with
 > a message explaining the minimum.
+
+> **Note — `kimi-k2.7-code` and `thinking_budget` collision:** Moonshot's
+> `kimi-k2.7-code` maps `reasoning_effort: "medium"` to a fixed
+> `thinking_budget = 32768`, so any request with `max_tokens ≤ 32768` fails with
+> `InvalidParameter: max_completion_tokens [N] must be greater than thinking_budget [32768]`.
+> Under `[upstream]`, set `budget_to_effort_high = 0` — the proxy then emits
+> `reasoning_effort: "high"` for any thinking budget. if set 
+> `budget_to_effort_low = 32768`
+> `budget_to_effort_medium = 65536`
+> `budget_to_effort_high = 128000`
+> map `reasoning_effort: "low"` would avoid the limit of `kimi-k2.7-code`.
 - **Wildcards** (`claude-*`) and the **catch-all** (`*` in `[models.default]`) handle
   anything you don't list explicitly.
 

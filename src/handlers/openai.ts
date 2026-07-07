@@ -1,5 +1,5 @@
 import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.js';
-import { convertClaudeToOpenAIRequest } from '../converters/claude-to-openai.js';
+import { convertClaudeToOpenAIRequest, ThinkingConversionOptions } from '../converters/claude-to-openai.js';
 import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
 import { convertOpenAIToGeminiGenerateContent, convertOpenAIToGeminiInteractions } from '../converters/openai-to-gemini.js';
 import { createLogger } from '../utils/logger.js';
@@ -111,7 +111,8 @@ export async function handleOpenAIRequest(
     modelId?: string,
     env?: Env,
     logger?: Logger,
-    forceStreaming?: boolean
+    forceStreaming?: boolean,
+    conversionOptions?: ThinkingConversionOptions
 ): Promise<Response> {
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
@@ -223,7 +224,10 @@ export async function handleOpenAIRequest(
                 apiKey,
                 modelId,
                 activeLogger,
-                env
+                env,
+                undefined,
+                'openai',
+                conversionOptions
             );
         }
 
