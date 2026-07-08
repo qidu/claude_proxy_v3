@@ -9,8 +9,10 @@
  * (modulated by the CLI selection below).
  *
  * Usage:
+ *   start proxy with `DEV_PASS_THROUGH=true` to enable also `/v1/chat/completions` endpoint for codex.
+ *
  *   export ANTHROPIC_API_KEY="sk-hi"
- *   npx tsx tests/multi-agents-test.ts              # all models x all tasks x all agents
+ *   npx tsx tests/multi-agents-test.ts              # all models x agents x all tasks
  *   npx tsx tests/multi-agents-test.ts 1 1 1        # first model, first agent, first task
  *   npx tsx tests/multi-agents-test.ts 2 3 1        # 2nd model, 3rd agent, 1st task
  *   npx tsx tests/multi-agents-test.ts 0 0 2        # all models, all agents, 2nd task
