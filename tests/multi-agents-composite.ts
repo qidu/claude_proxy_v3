@@ -577,6 +577,9 @@ async function runGeminiAgent(prompt: string, model: string): Promise<AgentResul
   ];
   let toolCalls = 0;
   let finalText = "";
+  // Judge prompts expect a direct text (JSON) answer with no tool calls —
+  // don't nudge those. Sentinel string comes from buildJudgeUserPrompt.
+  const expectsToolUse = !prompt.includes("Return ONLY the JSON verdict.");
 
   for (let turn = 0; turn < 20; turn++) {
     try {
@@ -607,6 +610,22 @@ async function runGeminiAgent(prompt: string, model: string): Promise<AgentResul
         history.push({ role: "model", parts: [{ functionCall: { name: fnName, args: fnArgs ?? {} } }] });
         history.push({ role: "user", parts: [{ functionResponse: { name: fnName, response: { result } } }] });
       } else if (part.text) {
+        // A text-only reply before any tool call means the model answered
+        // without looking at the codebase (generic non-answer). Nudge it
+        // once to actually use the tools instead of accepting it as final.
+        if (expectsToolUse && toolCalls === 0 && turn === 0) {
+          history.push({ role: "model", parts: [{ text: part.text }] });
+          history.push({
+            role: "user",
+            parts: [{
+              text:
+                "Do not answer from assumptions. Use the provided tools " +
+                "(Glob, Grep, Read) to inspect the actual files under ./tests/ " +
+                "first, then give your final answer based on what you find.",
+            }],
+          });
+          continue;
+        }
         finalText += (finalText ? "\n" : "") + part.text;
         break;
       } else {
@@ -768,7 +787,7 @@ function buildJudgeUserPrompt(task: string, a: AgentResult, b: AgentResult): str
  * stall the whole composite. On timeout, returns an empty result so the
  * heuristic fallback can pick a winner.
  */
-const SDK_TIMEOUT_MS = 180_000;
+const SDK_TIMEOUT_MS = process.env.TIMEOUT_MS || 300_000;
 
 async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
