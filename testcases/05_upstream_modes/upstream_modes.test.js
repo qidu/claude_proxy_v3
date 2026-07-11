@@ -154,7 +154,9 @@ async function testResponsesAPI() {
 
 /**
  * TC908: Embeddings API
- * Tests embeddings endpoint
+ * Tests embeddings endpoint response shape.
+ * src/handlers/embeddings.ts passes through the upstream OpenAI shape:
+ *   { data: [{ embedding: number[], index: number }], model: string, usage }
  */
 async function testEmbeddingsAPI() {
   const response = await sendRequest({
@@ -165,10 +167,40 @@ async function testEmbeddingsAPI() {
     }
   });
 
+  // Upstream may 4xx/5xx for model-availability reasons; the union stays.
   assert(
     response.status === 200 || response.status >= 400,
     'Embeddings endpoint should respond'
   );
+
+  if (response.status === 200) {
+    assert(Array.isArray(response.body?.data), 'data should be an array');
+    assert(
+      response.body.data.length > 0,
+      'data array should have at least one entry'
+    );
+    const first = response.body.data[0];
+    assert(
+      Array.isArray(first?.embedding),
+      'data[0].embedding should be an array'
+    );
+    assert(
+      first.embedding.length > 0,
+      'data[0].embedding should be non-empty'
+    );
+    assert(
+      typeof first.embedding[0] === 'number',
+      'data[0].embedding entries should be numbers'
+    );
+    assert(
+      typeof first.index === 'number',
+      'data[0].index should be a number'
+    );
+    assert(
+      typeof response.body.model === 'string',
+      'model should be a string'
+    );
+  }
 }
 
 /**
@@ -201,9 +233,9 @@ async function testThinkingModeConversion() {
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
-      model: 'deepseek-r1',
+      model: 'deepseek-v4-flash',
       messages: [{ role: 'user', content: 'Hello' }],
-      max_tokens: 50,
+      max_tokens: 1024,
       thinking: {
         type: 'enabled',
         budget_tokens: 1024

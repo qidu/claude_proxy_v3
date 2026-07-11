@@ -70,6 +70,8 @@ const suites = [
   '16_security/free_fanout.test.js',
   '16_security/config_loader_pollution.test.js',
   '16_security/schedule_routing.test.js',
+  '16_security/dev_pass_through.test.js',
+  '16_security/reasoning_effort_conversion.test.js',
 ];
 
 // Parse CLI:
