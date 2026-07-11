@@ -13,7 +13,6 @@ Runs three agent SDKs (OpenAI Codex, Anthropic Claude, Google Gemini) against ei
 | `ANTHROPIC_API_KEY` | For Claude | API key for the proxy. Used by Claude Agent. |
 | `CODEX_API_KEY` | For Codex | API key for Codex Agent (uncomment `runCodexAgent` to enable). |
 | `GEMINI_API_KEY` | For Gemini | API key for Gemini Agent (uncomment `runGeminiAgent` to enable). |
-| `API_KEY` | For all them | API key for all Agents. |
 
 `multi-agents-test.ts` also supports 3 parameters to choose how many models x agents x tasks to run,
 refer to ./logs/results/test_result_of_deepseek_v4_flash_all_agents_all_tasks.md for 1 model x all agents x all tasks.

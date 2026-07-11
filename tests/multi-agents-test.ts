@@ -11,6 +11,11 @@
  * Usage:
  *   start proxy with `DEV_PASS_THROUGH=true` to enable also `/v1/chat/completions` endpoint for codex.
  *
+ *   export API_KEY=a-valid-key
+ *   export CODEX_API_KEY=$API_KEY
+ *   export ANTHROPIC_API_KEY=$API_KEY
+ *   export GEMINI_API_KEY=$API_KEY
+ *
  *   export ANTHROPIC_API_KEY="sk-hi"
  *   npx tsx tests/multi-agents-test.ts              # all models x agents x all tasks
  *   npx tsx tests/multi-agents-test.ts 1 1 1        # first model, first agent, first task

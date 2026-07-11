@@ -20,7 +20,7 @@
  *     4. Judge returns { winner, reason, confidence }.
  *     5. Winner output becomes the composite answer; other output discarded.
  *
- * Shared tool implementations (Glob, Read) and CLI selection semantics
+ * Shared tool implementations (Glob, Grep, Read) and CLI selection semantics
  * (M A T args; 0 means "all in that dimension") are preserved from the
  * original. New args:
  *   --json          Emit one JSON object per (task, model) to stdout, plus
@@ -31,12 +31,40 @@
  *   --judge <sdk>   Pin the judge SDK (case-insensitive: codex|claude|gemini).
  *                   The other two become workers. Unknown names throw.
  *
+ * TOOL PARITY across the three SDKs (current setup is read-only):
+ *   - Codex:  no user-supplied tools array — its tools are the built-in
+ *             sandboxed shell. Restricted via sandboxMode: "read-only".
+ *   - Claude: built-in tool registry, gated via allowedTools:
+ *             ["Glob", "Grep", "Read"].
+ *   - Gemini: no built-in tools — Glob/Grep/Read are declared in
+ *             GEMINI_TOOLS and implemented locally (toolMap).
+ *   Codex searches via its own shell (grep/find), so its search semantics
+ *   differ slightly from the shared Glob/Grep implementations.
+ *
+ *   To enable Edit/Write, each SDK needs a different mechanism:
+ *   - Codex:  sandboxMode: "workspace-write" (+ workingDirectory to scope
+ *             writes). file_change events are already counted as tool calls.
+ *   - Claude: add "Edit"/"Write" to allowedTools, plus
+ *             permissionMode: "acceptEdits" for non-interactive runs.
+ *   - Gemini: declare Edit/Write in GEMINI_TOOLS and implement executors in
+ *             toolMap. NOTE: custom executors have no sandbox — add a
+ *             WORK_DIR path guard for parity with Codex's workspace-write.
+ *   Caveat: workers run concurrently on the same directory, so write access
+ *   lets one worker mutate files mid-run and pollute the other's view.
+ *
  * Usage:
+ *   should export env KEY for each agent SDK respectively.
+ *   export API_KEY=a-valid-key
+ *   export CODEX_API_KEY=$API_KEY
+ *   export ANTHROPIC_API_KEY=$API_KEY
+ *   export GEMINI_API_KEY=$API_KEY
+ *
  *   export ANTHROPIC_API_KEY="sk-hi"
- *   npx tsx tests/multi-agents-composite.ts                       # all
+ *   npx tsx tests/multi-agents-composite.ts                        # all
  *   npx tsx tests/multi-agents-composite.ts 1 1 1                  # 1st model x 1st task, random pair
  *   npx tsx tests/multi-agents-composite.ts --json                 # JSON verdicts
  *   npx tsx tests/multi-agents-composite.ts --seed 42 0 0 1        # reproducible
+ *   npx tsx tests/multi-agents-composite.ts --judge claude         # specify judge
  */
 
 import { GoogleGenAI, Type } from "@google/genai";
@@ -179,8 +207,37 @@ async function toolRead(filePath: string): Promise<string> {
   }
 }
 
+async function toolGrep(pattern: string, maxResults = 100): Promise<string> {
+  let regex: RegExp;
+  try {
+    regex = new RegExp(pattern);
+  } catch (e: any) {
+    return `Error: invalid regex: ${e.message}`;
+  }
+  const files = toolGlobSync("**/*", 500);
+  const matches: string[] = [];
+  for (const file of files) {
+    if (matches.length >= maxResults) break;
+    let content: string;
+    try {
+      content = await fs.promises.readFile(file, "utf-8");
+    } catch {
+      continue;
+    }
+    const lines = content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (matches.length >= maxResults) break;
+      if (regex.test(lines[i])) {
+        matches.push(`${file}:${i + 1}:${lines[i].slice(0, 300)}`);
+      }
+    }
+  }
+  return matches.length > 0 ? matches.join("\n") : "(no matches)";
+}
+
 const toolMap: Record<string, (args: any) => Promise<string>> = {
   Glob: async (args: { pattern: string }) => toolGlob(args.pattern),
+  Grep: async (args: { pattern: string }) => toolGrep(args.pattern),
   Read: async (args: { path: string }) => toolRead(args.path),
 };
 
@@ -254,6 +311,10 @@ wire_api = "responses"
     const thread = codex.startThread({
       model,
       modelReasoningEffort: "minimal",
+      // Codex has no user-supplied tools array; its "tools" are the built-in
+      // sandboxed shell. read-only restricts it to the same capability class
+      // as the other workers (Glob/Grep/Read — no writes, no edits).
+      sandboxMode: "read-only",
     });
     const streamed = await thread.runStreamed(prompt);
     for await (const ev of streamed.events) {
@@ -323,11 +384,10 @@ async function runClaudeAgent(prompt: string, model: string): Promise<AgentResul
       prompt,
       options: {
         model,
-        // Tool names verified against SDKSystemMessage.tools at init time
-        // (claude_code_version 2.1.191). "Glob" and "Grep" are NOT in the
-        // SDK's tool registry — the closest equivalents are "Read" (file)
-        // and "Bash" (shell with find/grep).
-        allowedTools: ["Read", "Bash", "Edit", "Write"],
+        // Match the shared worker toolset (read-only search + read):
+        // Glob, Grep, Read are all in the SDK's tool registry
+        // (see GlobInput/GrepInput/FileReadInput in sdk-tools.d.ts).
+        allowedTools: ["Glob", "Grep", "Read"],
         maxTurns: 30,
         env: {
           ANTHROPIC_BASE_URL: PROXY_BASE,
@@ -468,6 +528,20 @@ const GEMINI_TOOLS: Record<string, any>[] = [
             pattern: {
               type: Type.STRING,
               description: 'e.g. "tests/**/*.ts" or "src/**/*.{ts,js}"',
+            },
+          },
+          required: ["pattern"],
+        },
+      },
+      {
+        name: "Grep",
+        description: "Search file contents under the project root with a JS regex; returns file:line:text matches",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            pattern: {
+              type: Type.STRING,
+              description: 'JavaScript regex, e.g. "curl\\\\s+-X" or "API_KEY"',
             },
           },
           required: ["pattern"],
