@@ -116,9 +116,15 @@ async function testResponsesCompact() {
   );
 
   if (response.status === 200) {
+    // convertCompletionsToCompactedResponse returns object: 'response.compaction'
+    // with output + usage fields (see src/converters/completions-to-responses.ts).
     assert(
-      'compaction' in response.body || 'response' in response.body,
-      'Should return compaction or response object'
+      response.body?.object === 'response.compaction',
+      `Expected object === 'response.compaction', got ${JSON.stringify(response.body?.object)}`
+    );
+    assert(
+      Array.isArray(response.body?.output),
+      'Should return output array'
     );
   }
 }
