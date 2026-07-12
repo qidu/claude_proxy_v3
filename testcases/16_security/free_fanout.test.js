@@ -90,9 +90,9 @@ async function testNonFreeModelRejectsBogusClientKey() {
     endpoint: '/v1/messages',
     headers: { 'Authorization': `Bearer ${BOGUS_KEY}` },
     body: {
-      model: 'gpt-5.4-mini',
+      model: 'deepseek/deepseek-v4-pro',
       messages: [{ role: 'user', content: 'Say exactly: OK' }],
-      max_tokens: 10
+      max_tokens: 1024
     }
   });
 

@@ -21,6 +21,19 @@ const LOG_LEVELS: Record<LogLevel, number> = {
   error: 3,
 };
 
+/**
+ * Shorten a request id for log display only: keep the `req_<timestamp>_`
+ * prefix and the last 12 chars of the UUID suffix.
+ * e.g. req_1783840535295_2a042b05-4d3f-4411-a808-5266bdbac7f1
+ *   →  req_1783840535295_5266bdbac7f1
+ * Non-matching ids are logged unchanged.
+ */
+function shortRequestId(requestId: string): string {
+  const m = /^(req_\d+_)(.+)$/.exec(requestId);
+  if (!m) return requestId;
+  return m[1] + m[2].slice(-12);
+}
+
 export function createLogger(env: Env | Record<string, unknown>): Logger {
   const logLevelRaw = env.LOG_LEVEL as string;
   const logLevel = (['debug', 'info', 'warn', 'error'].includes(logLevelRaw) ? logLevelRaw : 'info') as LogLevel;
@@ -29,22 +42,22 @@ export function createLogger(env: Env | Record<string, unknown>): Logger {
   return {
     debug: (requestId: string, message: string, ...args: unknown[]) => {
       if (minLevel <= 0) {
-        console.log(`[${requestId}] [DEBUG] ${message}`, ...args);
+        console.log(`[${shortRequestId(requestId)}] [DEBUG] ${message}`, ...args);
       }
     },
     info: (requestId: string, message: string, ...args: unknown[]) => {
       if (minLevel <= 1) {
-        console.log(`[${requestId}] [INFO] ${message}`, ...args);
+        console.log(`[${shortRequestId(requestId)}] [INFO] ${message}`, ...args);
       }
     },
     warn: (requestId: string, message: string, ...args: unknown[]) => {
       if (minLevel <= 2) {
-        console.log(`[${requestId}] [WARN] ${message}`, ...args);
+        console.log(`[${shortRequestId(requestId)}] [WARN] ${message}`, ...args);
       }
     },
     error: (requestId: string, message: string, ...args: unknown[]) => {
       if (minLevel <= 3) {
-        console.log(`[${requestId}] [ERROR] ${message}`, ...args);
+        console.log(`[${shortRequestId(requestId)}] [ERROR] ${message}`, ...args);
       }
     },
   };
