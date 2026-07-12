@@ -304,10 +304,11 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
   if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && path.includes(':countTokens')) {
     const modelMatch = path.match(/\/(v1beta|v1)\/models\/([^:?]+):countTokens/);
     const modelId = modelMatch ? decodeURIComponent(modelMatch[2]) : 'gemini-no-id-at-proxy';
+    const safeModelId = encodeURIComponent(modelId);
     const apiVersion = env.GEMINI_API_VERSION || 'v1beta';
     if (defaultMode === 'gemini-generatecontent' || defaultMode === 'gemini-interactions') {
       return {
-        targetUrl: `${defaultBaseUrl}/${apiVersion}/models/${modelId}:countTokens`,
+        targetUrl: `${defaultBaseUrl}/${apiVersion}/models/${safeModelId}:countTokens`,
         targetEndpoint: 'v1beta/models/countTokens',
         handlerType: 'generateContent',
         upstreamMode: defaultMode,
@@ -331,6 +332,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
   if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
     const modelMatch = path.match(/\/(v1beta|v1)\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
     const modelId = modelMatch ? decodeURIComponent(modelMatch[2]) : 'gemini-no-id-at-proxy';
+    const safeModelId = encodeURIComponent(modelId);
     const isStreamEndpoint = path.includes(':streamGenerateContent');
     
     if (defaultMode === 'gemini-generatecontent' || defaultMode === 'gemini-interactions') {
@@ -343,7 +345,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
         queryString = queryString ? `${queryString}&alt=sse` : '?alt=sse';
       }
       return {
-        targetUrl: `${defaultBaseUrl}/${apiVersion}/models/${modelId}:${endpoint}${queryString}`,
+        targetUrl: `${defaultBaseUrl}/${apiVersion}/models/${safeModelId}:${endpoint}${queryString}`,
         targetEndpoint: `v1beta/models/${endpoint}`,
         handlerType: 'generateContent',
         upstreamMode: defaultMode,

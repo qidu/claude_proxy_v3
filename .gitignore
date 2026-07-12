@@ -7,3 +7,5 @@ docs/test_keys.md
 .env
 .kiro
 tests/.fuse_*
+config-dumps/
+model_proxy_tokens.jsonl

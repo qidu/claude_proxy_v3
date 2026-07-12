@@ -375,6 +375,7 @@ async function handleGeminiToOpenAIMode(
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...finalAuthHeaders },
         body: JSON.stringify(openaiRequest),
+        signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 
     recordResponseStatusCodeFromUpstream(response.status);
@@ -556,6 +557,7 @@ async function handleGeminiToGeminiMode(
             method: 'POST',
             headers: geminiHeaders,
             body: JSON.stringify(geminiRequest),
+            signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
         });
 
         recordResponseStatusCodeFromUpstream(response.status);
@@ -658,6 +660,7 @@ async function handleGeminiGenerateContentRequest(
             method: 'POST',
             headers: geminiHeaders,
             body: JSON.stringify(geminiRequest),
+            signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
         });
 
         recordResponseStatusCodeFromUpstream(response.status);

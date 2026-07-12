@@ -240,7 +240,7 @@ export async function handleSdkOpenAIRequest(
     headers: {}
   };
 
-  activeLogger.debug(requestId, `Using SDK client config: ${JSON.stringify(config)}`);
+  // activeLogger.debug(requestId, `Using SDK client config: ${JSON.stringify(config)}`);
   // Create client
   const client = new sdk.OpenAICompatibleClient(config);
 
