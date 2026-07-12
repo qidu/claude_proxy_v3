@@ -121,17 +121,14 @@ async function testDashboardTestModel() {
     }
   });
 
-  // Should return test result
-  assert(
-    response.status === 200 || response.status === 400,
-    `Expected 200 or 400, got ${response.status}`
-  );
+  // handleDashboardTestModel always returns 200 (wraps inner upstream status
+  // as success: true/false). Only missing modelId (400, tested by TC709) or
+  // JSON parse failure (500) produce other statuses — neither applies here.
+  assert(response.status === 200, `Expected 200, got ${response.status}`);
 
   // Verify response structure
-  if (response.status === 200) {
-    assert('success' in response.body, 'Should have success field');
-    assert('modelId' in response.body, 'Should have modelId field');
-  }
+  assert('success' in response.body, 'Should have success field');
+  assert('modelId' in response.body, 'Should have modelId field');
 }
 
 /**
@@ -352,21 +349,13 @@ async function testSetGlobalTokenLimit() {
     method: 'POST',
     endpoint: '/dashboard/api/global-token-limit',
     headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
-    body: { value: '1000000/day' }
+    body: { value: '1M 1d' }
   });
 
-  // Outcome depends on upsertGlobalTokenLimitFromDashboard's own validation
-  // (not inspected here) — assert the two documented outcomes: success, or
-  // a 400 with an error message from the catch block.
-  assert(
-    response.status === 200 || response.status === 400,
-    `Expected 200 or 400, got ${response.status}`
-  );
-  if (response.status === 200) {
-    assert(response.body?.ok === true, 'Should return ok:true');
-  } else {
-    assert(response.body?.error, '400 response should include an error message');
-  }
+  // parseHumanTokenLimit requires format "<num>[KMBT] <1h|1d|1w|1m>".
+  // "1M 1d" is valid → upsertGlobalTokenLimit succeeds → handler returns 200.
+  assert(response.status === 200, `Expected 200, got ${response.status}`);
+  assert(response.body?.ok === true, 'Should return ok:true');
 }
 
 /**
@@ -382,13 +371,10 @@ async function testClearGlobalTokenLimit() {
     body: { value: null }
   });
 
-  assert(
-    response.status === 200 || response.status === 400,
-    `Expected 200 or 400, got ${response.status}`
-  );
-  if (response.status === 200) {
-    assert(response.body?.ok === true, 'Should return ok:true');
-  }
+  // upsertGlobalTokenLimit(config, null) never throws — it just deletes
+  // the global_token_limit field. Deterministic 200 with { ok: true }.
+  assert(response.status === 200, `Expected 200, got ${response.status}`);
+  assert(response.body?.ok === true, 'Should return ok:true');
 }
 
 module.exports = {

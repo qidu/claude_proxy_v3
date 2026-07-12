@@ -298,21 +298,15 @@ async function testCompositeSameNameAsModel() {
     }
   });
 
+  // handleDashboardTestModel always returns 200 (wraps inner upstream status
+  // as success: true/false). code-small is a configured composite alias
+  // (proxy_config.toml:42), so the composite branch at dashboard.ts:1836
+  // is taken. Deterministic 200.
+  assert(response.status === 200, `Expected 200, got ${response.status}`);
   assert(
-    response.status === 200 || response.status === 400,
-    `test-model should return 200 (result) or 400 (bad request), got ${response.status}`
+    'success' in response.body && 'modelId' in response.body,
+    'test-model 200 response should have success and modelId fields'
   );
-  if (response.status === 200) {
-    assert(
-      'success' in response.body && 'modelId' in response.body,
-      'test-model 200 response should have success and modelId fields'
-    );
-  } else {
-    assert(
-      response.body?.error,
-      'test-model 400 response should have an error field'
-    );
-  }
 }
 
 const PROXY_URL_COMPOSITE = process.env.PROXY_URL || 'http://localhost:7777';
