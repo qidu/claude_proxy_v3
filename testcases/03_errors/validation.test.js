@@ -12,7 +12,6 @@
 const {
   sendRequest,
   assert,
-  runTest,
   runTestSuite
 } = require('../utils/test_helpers');
 
@@ -21,9 +20,16 @@ const {
  * Tests 400 response for missing model
  */
 async function testMissingModel() {
+  // The `system` field forces Claude-format classification (see
+  // src/handlers/messages.ts isOpenAIFormat); without it the request is
+  // treated as OpenAI passthrough and forwarded upstream unvalidated,
+  // making the status upstream-dependent. With Claude format the proxy's
+  // validateClaudeMessagesRequest throws ValidationError (400)
+  // 'Either model must be specified in URL or in request body'.
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
+      system: 'You are a helpful assistant.',
       messages: [{ role: 'user', content: 'Hello' }],
       max_tokens: 10
     }
@@ -89,26 +95,26 @@ async function testNegativeMaxTokens() {
  * Tests error for invalid temperature
  */
 async function testTemperatureOutOfRange() {
+  // src/utils/validation.ts validateClaudeMessagesRequest requires
+  // 0 <= temperature <= 1 for Claude-format requests and throws
+  // ValidationError (400) otherwise.
+  // The `system` field forces Claude-format classification (see
+  // src/handlers/messages.ts isOpenAIFormat), so the validator runs and
+  // deterministically rejects temperature=2.5.
   const response = await sendRequest({
     endpoint: '/v1/messages',
     body: {
       model: 'deepseek/deepseek-v3.2',
+      system: 'You are a helpful assistant.',
       messages: [{ role: 'user', content: 'Hello' }],
       max_tokens: 10,
       temperature: 2.5  // > 1.0
     }
   });
 
-  // src/utils/validation.ts validateClaudeMessagesRequest requires
-  // 0 <= temperature <= 1 for Claude-format requests and throws
-  // ValidationError (400) otherwise. This request has no system/thinking/
-  // stop_sequences/content-blocks, so it is classified as OpenAI format
-  // (src/handlers/messages.ts isOpenAIFormat) and the Claude range check
-  // is bypassed entirely — it's forwarded upstream unvalidated (OpenAI's
-  // own temperature range is 0-2). So the outcome is upstream-dependent.
   assert(
-    response.status === 200 || response.status >= 400,
-    'Temperature should be validated'
+    response.status === 400,
+    `Expected 400 for temperature=2.5 (Claude format), got ${response.status}`
   );
 }
 

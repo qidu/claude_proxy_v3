@@ -12,7 +12,6 @@ const {
   sendStreamingRequest,
   assert,
   assertStreamingResponse,
-  runTest,
   runTestSuite
 } = require('../utils/test_helpers');
 

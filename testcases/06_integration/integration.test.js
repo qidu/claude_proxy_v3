@@ -13,7 +13,6 @@ const {
   sendRequest,
   sendStreamingRequest,
   assert,
-  runTest,
   runTestSuite
 } = require('../utils/test_helpers');
 
@@ -450,9 +449,12 @@ async function testPutConfigPersists() {
     }
   });
 
+  // PUT /dashboard/api/config is decided by the proxy (validation + write).
+  // Tighten from `200 || >= 400`: the proxy returns 200 on success or 4xx on
+  // validation failure — 5xx is never expected here and would indicate a crash.
   assert(
-    putRes.status === 200 || putRes.status >= 400,
-    'PUT should respond'
+    putRes.status === 200 || (putRes.status >= 400 && putRes.status < 500),
+    `PUT /dashboard/api/config should return 200 or 4xx, got ${putRes.status}`
   );
 
   if (putRes.status === 200) {

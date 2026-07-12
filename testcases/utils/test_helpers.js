@@ -250,6 +250,11 @@ async function runTestSuite(name, tests) {
   console.log(`\nResults: ${passed} passed, ${failed} failed`);
   console.log(`${'='.repeat(60)}\n`);
 
+  // Fail loud: propagate failures to the runner via the process exit code.
+  // Without this, run-tests.js (which counts suite child exit codes) reports
+  // "0 failed" even when individual tests inside a suite failed.
+  if (failed > 0) process.exitCode = 1;
+
   return { passed, failed, results };
 }
 

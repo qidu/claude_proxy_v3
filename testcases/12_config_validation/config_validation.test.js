@@ -25,7 +25,6 @@
 const {
   sendRequest,
   assert,
-  runTest,
   runTestSuite
 } = require('../utils/test_helpers');
 

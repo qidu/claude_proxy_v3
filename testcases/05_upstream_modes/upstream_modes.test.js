@@ -13,7 +13,6 @@ const {
   sendRequest,
   assert,
   assertResponse,
-  runTest,
   runTestSuite
 } = require('../utils/test_helpers');
 

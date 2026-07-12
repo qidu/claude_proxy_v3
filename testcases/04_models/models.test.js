@@ -17,7 +17,6 @@ const {
   assert,
   assertResponse,
   testModelEndpoints,
-  runTest,
   runTestSuite
 } = require('../utils/test_helpers');
 
@@ -129,7 +128,7 @@ async function testThinkingModels() {
       body: {
         model,
         messages: [{ role: 'user', content: 'Explain recursion' }],
-        max_tokens: 200,
+        max_tokens: 1024,
         thinking: {
           type: 'enabled',
           budget_tokens: 1024

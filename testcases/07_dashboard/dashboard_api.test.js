@@ -17,7 +17,6 @@
 const {
   sendRequest,
   assert,
-  runTest,
   runTestSuite
 } = require('../utils/test_helpers');
 
@@ -179,10 +178,11 @@ async function testDashboardTestCompositeModel() {
     }
   });
 
-  // Should return test result for composite
+  // Should return 200 (test ran) or 4xx (test setup error like unknown model).
+  // The proxy alone decides the status; tighten from the prior loose `200 || >= 400`.
   assert(
-    response.status === 200 || response.status >= 400,
-    'Should handle composite model test'
+    response.status === 200 || (response.status >= 400 && response.status < 500),
+    `Expected 200 or 4xx for composite model test, got ${response.status}`
   );
 }
 
