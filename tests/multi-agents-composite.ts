@@ -76,7 +76,7 @@ import * as os from "os";
 // Configuration
 // ---------------------------------------------------------------------------
 
-const PROXY_BASE = "http://127.0.0.1:8788";
+const PROXY_BASE = process.env.PROXY_BASE || "http://127.0.0.1:8788";
 const WORK_DIR = "./tests/";
 
 const MODELS = [
