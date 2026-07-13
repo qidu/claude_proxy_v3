@@ -72,6 +72,7 @@ const suites = [
   '16_security/schedule_routing.test.js',
   '16_security/dev_pass_through.test.js',
   '16_security/reasoning_effort_conversion.test.js',
+  '16_security/openai_responses_routing.test.js',
 ];
 
 // Parse CLI:

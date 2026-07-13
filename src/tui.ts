@@ -277,7 +277,7 @@ function buildClaudeToolRequest(): Record<string, unknown> {
 // `max_tokens` is rejected by the OpenAI Responses API ("Unsupported parameter:
 // 'max_tokens' is not supported"), which expects `max_completion_tokens` instead.
 // Map the parameter name per upstream mode so the test request is accepted as-is.
-function maxTokensField(upstreamMode: string): string {
+export function maxTokensField(upstreamMode: string): string {
   return upstreamMode === 'openai-responses' ? 'max_completion_tokens' : 'max_tokens';
 }
 
@@ -299,7 +299,7 @@ function buildOpenAIToolRequest(upstreamMode: string): Record<string, unknown> {
 
 const TEST_TEXT_PROMPT = 'Reply with one short sentence.';
 
-function buildTestTextRequest(upstreamMode: string): Record<string, unknown> {
+export function buildTestTextRequest(upstreamMode: string): Record<string, unknown> {
   // Plain text, non-streaming — safe for fusion (panel responses must be text, not tool-call blobs,
   // and stream:false ensures the synth response is a buffered JSON body the TUI can parse).
   return {
@@ -309,7 +309,7 @@ function buildTestTextRequest(upstreamMode: string): Record<string, unknown> {
   };
 }
 
-function buildTestToolRequest(upstreamMode: string): Record<string, unknown> {
+export function buildTestToolRequest(upstreamMode: string): Record<string, unknown> {
   if (upstreamMode === 'openai-completions' ||
       upstreamMode === 'openai-responses' ||
       upstreamMode === 'gemini-generatecontent' ||
