@@ -297,6 +297,16 @@ inheritance chain — anything left empty falls back to the level above:
 > with the global default. Always configure `base_url` at the section level (recommended)
 > or per-entry.
 
+> **`base_url` may include the full endpoint path.** If `base_url` already contains a known
+> full upstream endpoint path, the proxy uses it as-is instead of appending the endpoint
+> suffix again. This lets you point a model at the exact URL an upstream expects (e.g.
+> `base_url = "https://api.anthropic.com/v1/messages"` with
+> `upstream_mode = "anthropic-messages"`) without producing a doubled path like
+> `.../v1/messages/v1/messages`. Recognised full-endpoint markers (case-insensitive):
+> `/v1/messages`, `/anthropic/messages`, `/v1/chat/completions`, `/chat/completions`, `/v1/interactions`,
+> `/v1/responses`, `/openai/responses`, and
+> `/v1beta/models/{model}:generateContent` (`:streamGenerateContent`, `:countTokens`).
+
 
 **Who wins — caller's key vs. configured `api_key`** — this depends on the section:
 

@@ -2048,9 +2048,9 @@ export function getModelConfig(config: ProxyConfig, modelName: string) {
     }
   }
 
-  // Priority 2: Wildcard pattern match in provider categories (claude, gemini).
+  // Priority 2: Wildcard pattern match in provider categories (claude, gemini, gpt).
   // models.free does NOT support wildcards — it only has explicit model entries.
-  const providerWildcardOrder = ['claude', 'gemini'];
+  const providerWildcardOrder = ['claude', 'gemini', 'gpt'];
   for (const cat of providerWildcardOrder) {
     const categoryConfig = config.models[cat];
     if (categoryConfig && !Array.isArray(categoryConfig)) {

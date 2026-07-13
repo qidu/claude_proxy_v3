@@ -6,7 +6,7 @@
  */
 
 import { Env } from './types/shared.js';
-import { extractAuthHeaders, transformAuthHeadersForUpstream, formatApiKeyForUpstream, parseDynamicRoute, isHostAllowed, getHandlerType, buildTargetUrl } from './utils/routing.js';
+import { extractAuthHeaders, transformAuthHeadersForUpstream, formatApiKeyForUpstream, parseDynamicRoute, isHostAllowed, getHandlerType, buildTargetUrl, buildUpstreamUrl } from './utils/routing.js';
 import { createErrorResponse, OverLimitError, ClaudeProxyError } from './utils/errors.js';
 import { createLogger } from './utils/logger.js';
 import { handleModelsRequest, getModelCount } from './handlers/models.js';
@@ -254,7 +254,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     if (defaultMode === 'anthropic-messages') {
       // Native Claude API
       return {
-        targetUrl: `${defaultBaseUrl}/v1/messages`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/messages'),
         targetEndpoint: 'v1/messages',
         handlerType: 'messages',
         upstreamMode: 'anthropic-messages',
@@ -262,7 +262,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     } else if (defaultMode === 'gemini-generatecontent' || defaultMode === 'gemini-interactions') {
       // Native Gemini API - not typically used for /v1/messages but supported
       return {
-        targetUrl: `${defaultBaseUrl}/v1beta/models`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1beta/models'),
         targetEndpoint: 'v1/messages',
         handlerType: 'messages',
         upstreamMode: defaultMode,
@@ -270,7 +270,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     } else {
       // OpenAI-compatible upstream
       return {
-        targetUrl: `${defaultBaseUrl}/v1/chat/completions`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/chat/completions'),
         targetEndpoint: 'v1/messages',
         handlerType: 'messages',
         upstreamMode: 'openai-completions',
@@ -284,7 +284,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
       // Native Gemini API
       const apiVersion = env.GEMINI_API_VERSION || 'v1beta';
       return {
-        targetUrl: `${defaultBaseUrl}/${apiVersion}`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', apiVersion),
         targetEndpoint: 'v1/interactions',
         handlerType: 'interactions',
         upstreamMode: defaultMode,
@@ -292,7 +292,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     } else {
       // OpenAI-compatible upstream
       return {
-        targetUrl: `${defaultBaseUrl}/v1/chat/completions`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/chat/completions'),
         targetEndpoint: 'v1/interactions',
         handlerType: 'interactions',
         upstreamMode: 'openai-completions',
@@ -308,7 +308,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     const apiVersion = env.GEMINI_API_VERSION || 'v1beta';
     if (defaultMode === 'gemini-generatecontent' || defaultMode === 'gemini-interactions') {
       return {
-        targetUrl: `${defaultBaseUrl}/${apiVersion}/models/${safeModelId}:countTokens`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', `${apiVersion}/models/${safeModelId}:countTokens`),
         targetEndpoint: 'v1beta/models/countTokens',
         handlerType: 'generateContent',
         upstreamMode: defaultMode,
@@ -318,7 +318,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
       // countTokens has no OpenAI equivalent — proxy the request upstream as-is and return the raw JSON.
       // The handler will fall through to handleOpenAIRequest which passes the body through.
       return {
-        targetUrl: `${defaultBaseUrl}/v1/messages/count_tokens`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/messages/count_tokens'),
         targetEndpoint: 'v1beta/models/countTokens',
         handlerType: 'token-counting',
         upstreamMode: 'openai-completions',
@@ -345,7 +345,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
         queryString = queryString ? `${queryString}&alt=sse` : '?alt=sse';
       }
       return {
-        targetUrl: `${defaultBaseUrl}/${apiVersion}/models/${safeModelId}:${endpoint}${queryString}`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', `${apiVersion}/models/${safeModelId}:${endpoint}${queryString}`),
         targetEndpoint: `v1beta/models/${endpoint}`,
         handlerType: 'generateContent',
         upstreamMode: defaultMode,
@@ -354,7 +354,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     } else {
       // OpenAI-compatible upstream
       return {
-        targetUrl: `${defaultBaseUrl}/v1/chat/completions`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/chat/completions'),
         targetEndpoint: 'v1beta/models/generateContent',
         handlerType: 'generateContent',
         upstreamMode: 'openai-completions',
@@ -368,7 +368,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
   if (path === '/v1/chat/completions' || path.startsWith('/v1/chat/completions?')) {
     if (env.DEV_PASS_THROUGH === 'true' || env.DEV_PASS_THROUGH === '1') {
       return {
-        targetUrl: `${defaultBaseUrl}/v1/chat/completions`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/chat/completions'),
         targetEndpoint: 'v1/chat/completions',
         handlerType: 'chat-completions' as const,
         upstreamMode: 'openai-completions',
@@ -380,7 +380,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
   // Token counting endpoint
   if (path === '/v1/messages/count_tokens' || path.startsWith('/v1/messages/count_tokens?')) {
     return {
-      targetUrl: `${defaultBaseUrl}/v1/messages/count_tokens`,
+      targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/messages/count_tokens'),
       targetEndpoint: 'v1/messages/count_tokens',
       handlerType: 'token-counting',
     };
@@ -390,14 +390,14 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
   if (path === '/v1/responses/input_tokens' || path.startsWith('/v1/responses/input_tokens?')) {
     if (defaultMode === 'openai-responses') {
       return {
-        targetUrl: `${defaultBaseUrl}/responses/input_tokens`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/responses/input_tokens'),
         targetEndpoint: 'v1/responses/input_tokens',
         handlerType: 'responses-input-tokens',
         upstreamMode: 'openai-responses',
       };
     } else {
       return {
-        targetUrl: `${defaultBaseUrl}/v1/chat/completions`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/chat/completions'),
         targetEndpoint: 'v1/responses/input_tokens',
         handlerType: 'responses-input-tokens',
         upstreamMode: 'openai-completions',
@@ -409,14 +409,14 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
   if (path === '/v1/responses/compact' || path.startsWith('/v1/responses/compact?')) {
     if (defaultMode === 'openai-responses') {
       return {
-        targetUrl: `${defaultBaseUrl}/responses/compact`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/responses/compact'),
         targetEndpoint: 'v1/responses/compact',
         handlerType: 'responses-compact',
         upstreamMode: 'openai-responses',
       };
     } else {
       return {
-        targetUrl: `${defaultBaseUrl}/v1/chat/completions`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/chat/completions'),
         targetEndpoint: 'v1/responses/compact',
         handlerType: 'responses-compact',
         upstreamMode: 'openai-completions',
@@ -429,7 +429,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     if (defaultMode === 'openai-responses') {
       // Pass through to OpenAI Responses API
       return {
-        targetUrl: `${defaultBaseUrl}/responses`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/responses'),
         targetEndpoint: 'v1/responses',
         handlerType: 'responses',
         upstreamMode: 'openai-responses',
@@ -437,7 +437,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     } else {
       // Convert to OpenAI Chat Completions
       return {
-        targetUrl: `${defaultBaseUrl}/v1/chat/completions`,
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/chat/completions'),
         targetEndpoint: 'v1/responses',
         handlerType: 'responses',
         upstreamMode: 'openai-completions',
@@ -448,7 +448,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
   // Models endpoint
   if (path === '/v1/models' || path.startsWith('/v1/models?')) {
     return {
-      targetUrl: `${defaultBaseUrl}/v1/models`,
+      targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/models'),
       targetEndpoint: 'v1/models',
       handlerType: 'models',
     };
@@ -460,7 +460,7 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     const embeddingConfig = embeddingCategory && !Array.isArray(embeddingCategory) ? embeddingCategory : undefined;
     const embeddingBaseUrl = embeddingConfig?.base_url || defaultBaseUrl;
     return {
-      targetUrl: `${embeddingBaseUrl}/v1/embeddings`,
+      targetUrl: buildUpstreamUrl(embeddingBaseUrl || '', 'v1/embeddings'),
       targetEndpoint: 'v1/embeddings',
       handlerType: 'embeddings',
       upstreamMode: 'openai-completions',
@@ -1045,14 +1045,14 @@ export default {
 
                   if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
                     candidateTargetUrl = isStreaming
-                      ? `${route.targetUrl}/v1beta/models/${safeModel}:streamGenerateContent?alt=sse`
-                      : `${route.targetUrl}/v1beta/models/${safeModel}:generateContent`;
+                      ? buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:streamGenerateContent?alt=sse`)
+                      : buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:generateContent`);
                   } else {
-                    candidateTargetUrl = `${route.targetUrl}/v1/messages`;
+                    candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/messages');
                   }
                   candidateUpstreamMode = route.upstreamMode;
                 } else {
-                  candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                  candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
                   candidateUpstreamMode = 'openai-completions';
                 }
               } else if (path === '/v1/interactions' || path.startsWith('/v1/interactions?')) {
@@ -1062,24 +1062,24 @@ export default {
                     const requestBody = JSON.parse(forwardedBodyText) as Record<string, unknown>;
                     const isStreaming = requestBody.stream === true;
                     candidateTargetUrl = isStreaming
-                      ? `${route.targetUrl}/v1beta/models/${safeModel}:streamGenerateContent?alt=sse`
-                      : `${route.targetUrl}/v1beta/models/${safeModel}:generateContent`;
+                      ? buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:streamGenerateContent?alt=sse`)
+                      : buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:generateContent`);
                     candidateUpstreamMode = route.upstreamMode;
                   } else {
-                    candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                    candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
                     candidateUpstreamMode = 'openai-completions';
                   }
                 } else {
-                  candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                  candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
                   candidateUpstreamMode = 'openai-completions';
                 }
               } else if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && path.includes(':countTokens')) {
                 candidateHandlerType = 'generateContent';
                 if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
-                  candidateTargetUrl = `${route.targetUrl}/v1beta/models/${safeModel}:countTokens`;
+                  candidateTargetUrl = buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:countTokens`);
                   candidateUpstreamMode = route.upstreamMode;
                 } else {
-                  candidateTargetUrl = `${route.targetUrl}/v1/messages/count_tokens`;
+                  candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/messages/count_tokens');
                   candidateUpstreamMode = 'openai-completions';
                 }
               } else if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
@@ -1092,43 +1092,43 @@ export default {
                     if (isStreamEndpoint && !queryString.includes('alt=sse')) {
                       queryString = queryString ? `${queryString}&alt=sse` : '?alt=sse';
                     }
-                    candidateTargetUrl = `${route.targetUrl}/v1beta/models/${safeModel}:${endpoint}${queryString}`;
+                    candidateTargetUrl = buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:${endpoint}${queryString}`);
                     candidateUpstreamMode = route.upstreamMode;
                   } else {
-                    candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                    candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
                     candidateUpstreamMode = 'openai-completions';
                     candidateForceStreaming = isStreamEndpoint;
                   }
                 } else {
-                  candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                  candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
                   candidateUpstreamMode = 'openai-completions';
                   candidateForceStreaming = isStreamEndpoint;
                 }
               } else if (path === '/v1/responses' || path.startsWith('/v1/responses?')) {
                 candidateHandlerType = 'responses';
                 if (route.upstreamMode === 'openai-responses') {
-                  candidateTargetUrl = `${route.targetUrl}/v1/responses`;
+                  candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/responses');
                   candidateUpstreamMode = 'openai-responses';
                 } else {
-                  candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                  candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
                   candidateUpstreamMode = 'openai-completions';
                 }
               } else if (path === '/v1/responses/input_tokens' || path.startsWith('/v1/responses/input_tokens?')) {
                 candidateHandlerType = 'responses-input-tokens';
                 if (route.upstreamMode === 'openai-responses') {
-                  candidateTargetUrl = `${route.targetUrl}/v1/responses/input_tokens`;
+                  candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/responses/input_tokens');
                   candidateUpstreamMode = 'openai-responses';
                 } else {
-                  candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                  candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
                   candidateUpstreamMode = 'openai-completions';
                 }
               } else if (path === '/v1/responses/compact' || path.startsWith('/v1/responses/compact?')) {
                 candidateHandlerType = 'responses-compact';
                 if (route.upstreamMode === 'openai-responses') {
-                  candidateTargetUrl = `${route.targetUrl}/v1/responses/compact`;
+                  candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/responses/compact');
                   candidateUpstreamMode = 'openai-responses';
                 } else {
-                  candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+                  candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
                   candidateUpstreamMode = 'openai-completions';
                 }
               }
@@ -1306,34 +1306,34 @@ export default {
           if (isNativeMode) {
             if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
               candidateTargetUrl = bodyStream
-                ? `${route.targetUrl}/v1beta/models/${safeModel}:streamGenerateContent?alt=sse`
-                : `${route.targetUrl}/v1beta/models/${safeModel}:generateContent`;
+                ? buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:streamGenerateContent?alt=sse`)
+                : buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:generateContent`);
             } else {
-              candidateTargetUrl = `${route.targetUrl}/v1/messages`;
+              candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/messages');
             }
             candidateUpstreamMode = route.upstreamMode;
           } else {
-            candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
             candidateUpstreamMode = 'openai-completions';
           }
         } else if (path === '/v1/interactions' || path.startsWith('/v1/interactions?')) {
           candidateHandlerType = 'interactions';
           if (isNativeMode && (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions')) {
             candidateTargetUrl = bodyStream
-              ? `${route.targetUrl}/v1beta/models/${safeModel}:streamGenerateContent?alt=sse`
-              : `${route.targetUrl}/v1beta/models/${safeModel}:generateContent`;
+              ? buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:streamGenerateContent?alt=sse`)
+              : buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:generateContent`);
             candidateUpstreamMode = route.upstreamMode;
           } else {
-            candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
             candidateUpstreamMode = 'openai-completions';
           }
         } else if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && path.includes(':countTokens')) {
           candidateHandlerType = 'generateContent';
           if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
-            candidateTargetUrl = `${route.targetUrl}/v1beta/models/${safeModel}:countTokens`;
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:countTokens`);
             candidateUpstreamMode = route.upstreamMode;
           } else {
-            candidateTargetUrl = `${route.targetUrl}/v1/messages/count_tokens`;
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/messages/count_tokens');
             candidateUpstreamMode = 'openai-completions';
           }
         } else if ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent'))) {
@@ -1343,38 +1343,38 @@ export default {
             const endpoint = isStreamEndpoint ? 'streamGenerateContent' : 'generateContent';
             let queryString = path.includes('?') ? path.substring(path.indexOf('?')) : '';
             if (isStreamEndpoint && !queryString.includes('alt=sse')) { queryString = queryString ? `${queryString}&alt=sse` : '?alt=sse'; }
-            candidateTargetUrl = `${route.targetUrl}/v1beta/models/${safeModel}:${endpoint}${queryString}`;
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:${endpoint}${queryString}`);
             candidateUpstreamMode = route.upstreamMode;
           } else {
-            candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
             candidateUpstreamMode = 'openai-completions';
             candidateForceStreaming = forceStreamOverride ?? isStreamEndpoint;
           }
         } else if (path === '/v1/responses' || path.startsWith('/v1/responses?')) {
           candidateHandlerType = 'responses';
           if (route.upstreamMode === 'openai-responses') {
-            candidateTargetUrl = `${route.targetUrl}/v1/responses`;
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/responses');
             candidateUpstreamMode = 'openai-responses';
           } else {
-            candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
             candidateUpstreamMode = 'openai-completions';
           }
         } else if (path === '/v1/responses/input_tokens' || path.startsWith('/v1/responses/input_tokens?')) {
           candidateHandlerType = 'responses-input-tokens';
           if (route.upstreamMode === 'openai-responses') {
-            candidateTargetUrl = `${route.targetUrl}/v1/responses/input_tokens`;
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/responses/input_tokens');
             candidateUpstreamMode = 'openai-responses';
           } else {
-            candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
             candidateUpstreamMode = 'openai-completions';
           }
         } else if (path === '/v1/responses/compact' || path.startsWith('/v1/responses/compact?')) {
           candidateHandlerType = 'responses-compact';
           if (route.upstreamMode === 'openai-responses') {
-            candidateTargetUrl = `${route.targetUrl}/v1/responses/compact`;
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/responses/compact');
             candidateUpstreamMode = 'openai-responses';
           } else {
-            candidateTargetUrl = `${route.targetUrl}/v1/chat/completions`;
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
             candidateUpstreamMode = 'openai-completions';
           }
         }

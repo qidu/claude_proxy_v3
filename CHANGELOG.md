@@ -7,6 +7,21 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### `base_url` may now point to a full upstream endpoint path
+
+The proxy no longer blindly appends the endpoint suffix to a configured `base_url`. If `base_url` already contains a known full endpoint path, it is used as-is. This lets providers configure `base_url` to the exact upstream URL they need, without getting a doubled path such as `.../v1/messages/v1/messages`.
+
+Recognised full-endpoint markers (case-insensitive):
+
+- `/v1/messages`, `/anthropic/messages` (anthropic-messages)
+- `/v1/chat/completions`, `/v1/interactions` (openai-completions / interactions)
+- `/v1/responses`, `/openai/responses` (openai-responses, including Azure)
+- `/v1beta/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens`
+
+For example, a model configured with `base_url = "https://api.anthropic.com/v1/messages"` and `upstream_mode = "anthropic-messages"` will forward `/v1/messages` requests to that exact URL, rather than `https://api.anthropic.com/v1/messages/v1/messages`.
+
+**Files changed:** `src/utils/routing.ts` (new `buildUpstreamUrl` helper), `src/index.ts` (use helper in fixed, composite, and fusion routing).
+
 ### Thinking budget clamping: `budget_tokens` is capped to `max_tokens` (with interleaved-thinking exception)
 When request to `kimi-2.7-code`, exception shows rised: 'InvalidParameter: max_completion_tokens [32000] must be greater than thinking_budget [32768]'. This is not a fix for the problem, they are just completions to follow api docs:
 - **`POST /v1/messages` and `POST /v1/messages/count_tokens`**: when `thinking` is enabled and

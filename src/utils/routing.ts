@@ -236,6 +236,53 @@ function buildTargetUrl(targetConfig: TargetConfig, endpoint: string, modelId?: 
 }
 
 /**
+ * Append `suffix` to `baseUrl` unless baseUrl already points at a known full
+ * upstream endpoint path. Providers occasionally configure base_url to the
+ * complete endpoint (e.g. ".../v1/messages" or ".../v1/chat/completions") and
+ * appending the suffix again would produce an invalid doubled path.
+ *
+ * Recognised full-endpoint markers (case-insensitive substring match):
+ *   - /v1/messages, /anthropic/messages      (anthropic-messages)
+ *   - /v1/chat/completions, /v1/interactions  (openai-completions / interactions)
+ *   - /v1/responses, /openai/responses        (openai-responses, incl. Azure)
+ *   - /v1beta/models/{model}:generateContent, :streamGenerateContent, :countTokens
+ *
+ * If none match but the exact suffix is already present in baseUrl, the
+ * baseUrl is returned unchanged to avoid duplicating the path segment.
+ */
+const GEMINI_ACTION_SUFFIXES = ['generatecontent', 'streamgeneratecontent', 'counttokens'];
+
+export function buildUpstreamUrl(baseUrl: string, suffix: string): string {
+  const lowerBase = baseUrl.toLowerCase();
+
+  // Full-endpoint markers — base_url already points at the complete path.
+  if (
+    lowerBase.includes('/v1/messages') ||
+    lowerBase.includes('/anthropic/messages') ||
+    lowerBase.includes('/chat/completions') ||
+    lowerBase.includes('/v1/interactions') ||
+    lowerBase.includes('/v1/responses') ||
+    lowerBase.includes('/openai/responses')
+  ) {
+    return baseUrl;
+  }
+
+  // Gemini full endpoint URLs like /v1beta/models/{model}:generateContent
+  if (lowerBase.includes('/v1beta/models/') || lowerBase.includes('/v1/models/')) {
+    if (GEMINI_ACTION_SUFFIXES.some(action => lowerBase.includes(`:${action}`))) {
+      return baseUrl;
+    }
+  }
+
+  // Defensive: exact suffix already present — don't duplicate.
+  if (lowerBase.includes(`/${suffix.toLowerCase()}`)) {
+    return baseUrl;
+  }
+
+  return `${baseUrl}/${suffix}`;
+}
+
+/**
  * Extract authentication headers from request
  *
  * Supports both Authorization and X-Api-Key headers.

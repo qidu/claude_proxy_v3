@@ -41,6 +41,26 @@ claude-sonnet-4-6 = {}
 "claude-*" = {}
 
 
+[models.gpt]
+# For the `gpt` model category:
+# Models in this section are routed to an OpenAI Responses-compatible upstream (/v1/responses).
+# `upstream_mode` selects the native protocol for all entries below.
+# `base_url` and `api_key` are the section-level defaults; each model entry is:
+#   {target = "upstream_model_name", base_url = "override_or_empty", api_key = "override_or_empty", mode = "override_or_empty"}
+# with empty override strings falling back to the section defaults.
+# The optional `mode` field overrides `upstream_mode` for just that entry.
+# - Exact-match entries (e.g. `gpt-4o`) are used when the incoming model name
+#   matches the key exactly.
+# - The `gpt-*` wildcard is the fallback for any other `gpt-*` name and
+#   rewrites the upstream model name via the `*` substitution.
+upstream_mode = "openai-responses"
+base_url = "https://api.openai.com"
+api_key = "sk-***"
+# Exact match: requests for `gpt-4o` are forwarded verbatim to the upstream.
+gpt-4o = {}
+# Wildcard fallback: catches any `gpt-*` model not matched above.
+"gpt-*" = {}
+
 [models.gemini]
 # For `gemini` model category:
 # Models in this section are routed to a Gemini `generateContent`-compatible upstream.
