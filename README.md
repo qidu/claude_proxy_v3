@@ -105,7 +105,7 @@ Key ideas:
 - **Categories** group models by provider: `[models.claude]`, `[models.gemini]`,
   `[models.default]`, etc.
 - **`upstream_mode`** picks the protocol: `anthropic-messages`, `gemini-generatecontent`,
-  or `openai-completions`.
+  `gemini-interactions`, `openai-completions`, or `openai-responses`.
 - **Per-model overrides** use an inline table: `"my-model" = {target = "real-name", base_url = "...", api_key = "..."}`.
   Empty fields inherit from the category.
 
@@ -202,17 +202,19 @@ The mode is selected by the route's `defaultMode` / model config:
 
 | Endpoints | `upstream_mode` Values |
 |---|---|
-| `POST /v1/messages` | `anthropic-messages`, `claude-messages`, `openai-completions` (passthrough when input is already OpenAI-formatted) |
+| `POST /v1/messages` | `anthropic-messages`, `gemini-generatecontent`, `gemini-interactions`, `openai-completions` (passthrough when input is already OpenAI-formatted), `openai-responses` |
 | `POST /v1/responses` | `openai-responses` (passthrough), `openai-completions` (convert) |
 | `POST /v1/chat/completions` | `openai-completions` (only when `DEV_PASS_THROUGH=true`; otherwise rejected) |
 | `POST /v1beta/models/{model}:generateContent` / `:streamGenerateContent` | `gemini-generatecontent`, `gemini-interactions`, `openai-completions` |
-| `POST /v1/interactions` | `anthropic-messages`, `claude-messages`, `openai-completions` |
+| `POST /v1/interactions` | `gemini-generatecontent`, `gemini-interactions`, `openai-completions` |
 | `GET /v1/models` | (passthrough; no `upstreamMode` set) |
 | `POST /v1/embeddings` | `openai-completions` (only) |
 
 Notes:
 - `/v1/responses*` only support the OpenAI upstream family — no `anthropic-messages`, `claude-messages`, or Gemini mode.
 - `/v1/messages` is the only endpoint that supports `anthropic-messages` (native Anthropic SDK passthrough).
+- When `/v1/messages` routes to `upstream_mode = "openai-responses"`, the proxy converts the Claude/OpenAI-chat-shaped request to OpenAI Responses `input`, then converts the Responses result back to Claude Messages format. Basic tools and streaming are supported, rewrite `max_tokens` to `max_completion_tokens`.
+- For default `openai-completions` upstreams `api.qnaigc.com`, proxy keeps the legacy `max_tokens` field.
 - `/v1/embeddings` is locked to `openai-completions`; no Gemini/Anthropic embedding path.
 
 ### Dashboard API

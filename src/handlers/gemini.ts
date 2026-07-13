@@ -17,7 +17,7 @@ import { convertClaudeToOpenAIRequest } from '../converters/claude-to-openai.js'
 import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
 import { createStreamTransformer } from '../converters/streaming.js';
 import { handleTargetApiError } from '../utils/errors.js';
-import { addForwardedHeaders } from '../utils/routing.js';
+import { addForwardedHeaders, mapMaxTokensForUpstream } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream } from '../utils/dashboard-stats.js';
 
@@ -374,7 +374,7 @@ async function handleGeminiToOpenAIMode(
     const response = await fetch(targetUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...finalAuthHeaders },
-        body: JSON.stringify(openaiRequest),
+        body: JSON.stringify(mapMaxTokensForUpstream(openaiRequest, targetUrl)),
         signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 

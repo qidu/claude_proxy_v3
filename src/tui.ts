@@ -274,10 +274,17 @@ function buildClaudeToolRequest(): Record<string, unknown> {
   };
 }
 
-function buildOpenAIToolRequest(): Record<string, unknown> {
+// `max_tokens` is rejected by the OpenAI Responses API ("Unsupported parameter:
+// 'max_tokens' is not supported"), which expects `max_completion_tokens` instead.
+// Map the parameter name per upstream mode so the test request is accepted as-is.
+function maxTokensField(upstreamMode: string): string {
+  return upstreamMode === 'openai-responses' ? 'max_completion_tokens' : 'max_tokens';
+}
+
+function buildOpenAIToolRequest(upstreamMode: string): Record<string, unknown> {
   return {
     messages: [{ role: 'user', content: TEST_TOOL_PROMPT }],
-    max_tokens: 128,
+    [maxTokensField(upstreamMode)]: 128,
     tools: [{
       type: 'function',
       function: {
@@ -292,12 +299,12 @@ function buildOpenAIToolRequest(): Record<string, unknown> {
 
 const TEST_TEXT_PROMPT = 'Reply with one short sentence.';
 
-function buildTestTextRequest(_upstreamMode: string): Record<string, unknown> {
+function buildTestTextRequest(upstreamMode: string): Record<string, unknown> {
   // Plain text, non-streaming — safe for fusion (panel responses must be text, not tool-call blobs,
   // and stream:false ensures the synth response is a buffered JSON body the TUI can parse).
   return {
     messages: [{ role: 'user', content: TEST_TEXT_PROMPT }],
-    max_tokens: 32,
+    [maxTokensField(upstreamMode)]: 32,
     stream: false,
   };
 }
@@ -307,7 +314,7 @@ function buildTestToolRequest(upstreamMode: string): Record<string, unknown> {
       upstreamMode === 'openai-responses' ||
       upstreamMode === 'gemini-generatecontent' ||
       upstreamMode === 'gemini-interactions') {
-    return buildOpenAIToolRequest();
+    return buildOpenAIToolRequest(upstreamMode);
   }
 
   const request = buildClaudeToolRequest();
@@ -1693,20 +1700,46 @@ class DashboardApp {
 
   openTestModelPicker(): void {
     const choices = this.modelChoices();
-    if (choices.length === 0) {
-      this.view.setMessage('No custom models available');
-      this.requestRender();
-      return;
-    }
+    // Always offer the manual-entry option so the user can test a model id
+    // that's only reachable via a wildcard routing entry (e.g. "claude-*")
+    // and therefore doesn't appear in the concrete model list above.
+    const OTHER_MODEL_ID = '\u0000other';
+    const allChoices: ModelChoice[] = [
+      ...choices,
+      {
+        category: 'manual',
+        modelId: '',
+        value: OTHER_MODEL_ID,
+        label: dim('Other model id…'),
+        description: dim('test a model matched by a wildcard route'),
+      },
+    ];
 
     const subtitle = this.testPickerSubtitle();
     this.hideOverlay();
     const overlay = new ListOverlay(
       'Test custom model',
       subtitle,
-      choices,
+      allChoices,
       (item) => {
         this.hideOverlay();
+        if (item.value === OTHER_MODEL_ID) {
+          this.openPrompt(
+            'Test custom model',
+            'model id (e.g. one matched by a wildcard route)',
+            '',
+            (value) => {
+              const modelId = value.trim();
+              if (!modelId) {
+                this.view.setMessage('test cancelled');
+                this.requestRender();
+                return;
+              }
+              void this.runModelTest(modelId);
+            },
+          );
+          return;
+        }
         void this.runModelTest(item.value as string);
       },
       () => {

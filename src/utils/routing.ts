@@ -283,6 +283,64 @@ export function buildUpstreamUrl(baseUrl: string, suffix: string): string {
 }
 
 /**
+ * Whether the upstream at `targetUrl` expects `max_completion_tokens` instead of
+ * `max_tokens` in the OpenAI Chat Completions / Responses request body.
+ *
+ * Rule (per project convention):
+ *   - `api.qnaigc.com` keeps the legacy `max_tokens` parameter.
+ *   - All other OpenAI-compatible upstreams (Azure OpenAI, OpenAI direct, etc.)
+ *     receive `max_completion_tokens`.
+ *   - Non-OpenAI upstream modes (anthropic-messages, gemini-*, sdk://) are
+ *     unaffected and return false.
+ *
+ * `upstreamMode` defaults to `'openai-completions'` when omitted so callers
+ * that serve only the OpenAI-completions path (e.g. handleOpenAIRequest) can
+ * pass nothing and still get the translation.
+ */
+export function shouldUseMaxCompletionTokens(
+  targetUrl: string,
+  upstreamMode: string = 'openai-completions'
+): boolean {
+  if (upstreamMode !== 'openai-completions' && upstreamMode !== 'openai-responses') {
+    return false;
+  }
+  try {
+    const url = new URL(targetUrl);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return false; // sdk:// and other schemes are handled by the SDK client
+    }
+    return url.hostname.toLowerCase() !== 'api.qnaigc.com';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Rewrite `max_tokens` → `max_completion_tokens` on a request body when the
+ * upstream expects the Responses-style parameter. Returns the body unchanged
+ * when the upstream keeps `max_tokens` (api.qnaigc.com), when the body has no
+ * `max_tokens`, or when the upstream mode is not OpenAI-completions/responses.
+ *
+ * The body is treated as a shallow record; callers should pass the object that
+ * is about to be JSON.stringify'd into the upstream fetch.
+ */
+export function mapMaxTokensForUpstream<T extends { max_tokens?: unknown }>(
+  body: T,
+  targetUrl: string,
+  upstreamMode: string = 'openai-completions'
+): T {
+  if (!shouldUseMaxCompletionTokens(targetUrl, upstreamMode)) {
+    return body;
+  }
+  if (body.max_tokens === undefined) {
+    return body;
+  }
+  const mapped = { ...body, max_completion_tokens: body.max_tokens } as T & { max_completion_tokens?: unknown };
+  delete (mapped as { max_tokens?: unknown }).max_tokens;
+  return mapped as T;
+}
+
+/**
  * Extract authentication headers from request
  *
  * Supports both Authorization and X-Api-Key headers.

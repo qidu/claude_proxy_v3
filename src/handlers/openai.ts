@@ -5,7 +5,7 @@ import { convertOpenAIToGeminiGenerateContent, convertOpenAIToGeminiInteractions
 import { createLogger } from '../utils/logger.js';
 import { isSdkUrl, handleSdkOpenAIRequest } from '../utils/sdk-handler.js';
 import type { Env, Logger } from '../types/shared.js';
-import { addForwardedHeaders } from '../utils/routing.js';
+import { addForwardedHeaders, mapMaxTokensForUpstream } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
 import { handleTargetApiError } from '../utils/errors.js';
@@ -234,7 +234,7 @@ export async function handleOpenAIRequest(
         const response = await fetch(targetUrl, {
             method: 'POST',
             headers: addForwardedHeaders(headers, request),
-            body: JSON.stringify(openaiRequest),
+            body: JSON.stringify(mapMaxTokensForUpstream(openaiRequest, targetUrl)),
             signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
         });
 

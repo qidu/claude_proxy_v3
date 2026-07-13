@@ -16,10 +16,11 @@ import { handleTargetApiError } from '../utils/errors.js';
 import { normalizeOpenAIToClaudeThinking } from '../utils/thinking.js';
 import { validateBetaFeatures, hasBetaFeature } from '../utils/beta-features.js';
 import { isSdkUrl, handleSdkOpenAIRequest, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
-import { addForwardedHeaders } from '../utils/routing.js';
+import { addForwardedHeaders, mapMaxTokensForUpstream } from '../utils/routing.js';
 import { getLocalTokenCountingConfig } from '../utils/token-counting.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
+import { OpenAIResponsesResponse } from '../converters/completions-to-responses.js';
 
 /**
  * Get token counting configuration from environment
@@ -39,6 +40,110 @@ function normalizeOpenAICompletionsBody(requestBody: Record<string, unknown>): R
     normalizedBody.reasoning_effort = outputConfig.effort;
   }
   return normalizedBody;
+}
+
+/**
+ * Convert OpenAI Chat Completions tools ({type:"function", function:{name, ...}})
+ * into the Responses API flat tool form ({type:"function", name, ...}).
+ */
+function completionsToolsToResponsesTools(tools: unknown[] | undefined): unknown[] | undefined {
+  if (!tools || !Array.isArray(tools)) return tools;
+  return tools.map((t) => {
+    const tool = t as Record<string, unknown>;
+    if (tool.type !== 'function') return tool;
+    const fn = tool.function as Record<string, unknown> | undefined;
+    if (!fn) return tool;
+    const flat: Record<string, unknown> = { type: 'function' };
+    if (fn.name !== undefined) flat.name = fn.name;
+    if (fn.description !== undefined) flat.description = fn.description;
+    if (fn.parameters !== undefined) flat.parameters = fn.parameters;
+    return flat;
+  });
+}
+
+/**
+ * Convert OpenAI Chat Completions tool_choice to Responses API form.
+ * Completions: {type:"function", function:{name:"..."}} or "auto"/"none"/"required"
+ * Responses:   {type:"function", name:"..."} or "auto"/"none"/"required"
+ */
+function completionsToolChoiceToResponsesToolChoice(tc: unknown): unknown {
+  if (typeof tc !== 'object' || tc === null) return tc;
+  const obj = tc as Record<string, unknown>;
+  if (obj.type !== 'function') return obj;
+  const fn = obj.function as Record<string, unknown> | undefined;
+  if (!fn) return obj;
+  const flat: Record<string, unknown> = { type: 'function' };
+  if (fn.name !== undefined) flat.name = fn.name;
+  return flat;
+}
+
+/**
+ * Convert OpenAI Chat Completions `messages` array into a Responses API
+ * `input` array.
+ *
+ * The Responses API uses a different content part vocabulary:
+ *   - `text` (Completions) → `input_text` (user/system) or `output_text` (assistant)
+ *   - `image_url`         → `input_image`
+ * Tool calls on assistant messages become standalone `function_call` items;
+ * `tool` role messages become `function_call_output` items.
+ */
+function completionsMessagesToResponsesInput(messages: unknown[]): unknown[] {
+  const input: unknown[] = [];
+  for (const raw of messages) {
+    if (!raw || typeof raw !== 'object') continue;
+    const msg = raw as Record<string, unknown>;
+    const role = msg.role as string | undefined;
+    const content = msg.content;
+
+    // assistant message with tool_calls → emit function_call items (no message item)
+    if (role === 'assistant' && Array.isArray(msg.tool_calls)) {
+      for (const tc of msg.tool_calls as Array<Record<string, unknown>>) {
+        const fn = tc.function as Record<string, unknown> | undefined;
+        input.push({
+          type: 'function_call',
+          call_id: tc.id ?? `call_${Date.now()}`,
+          name: fn?.name ?? '',
+          arguments: fn?.arguments ?? '',
+        });
+      }
+      // If the assistant message also has text content, fall through to emit a message item too
+      if (content === undefined || content === null || content === '') continue;
+    }
+
+    // tool role → function_call_output item
+    if (role === 'tool') {
+      const text = typeof content === 'string' ? content : JSON.stringify(content ?? '');
+      input.push({
+        type: 'function_call_output',
+        call_id: msg.tool_call_id ?? '',
+        output: text,
+      });
+      continue;
+    }
+
+    // Regular message → map content parts to Responses vocabulary
+    const textType = role === 'assistant' ? 'output_text' : 'input_text';
+    let contentParts: unknown[];
+    if (typeof content === 'string') {
+      contentParts = [{ type: textType, text: content }];
+    } else if (Array.isArray(content)) {
+      contentParts = (content as Array<Record<string, unknown>>).map(part => {
+        const pType = part.type as string;
+        if (pType === 'text') return { type: textType, text: part.text ?? '' };
+        if (pType === 'image_url') return { type: 'input_image', image_url: part.image_url };
+        // thinking parts have no Responses equivalent; drop them
+        return null;
+      }).filter(p => p !== null);
+    } else {
+      contentParts = [{ type: textType, text: JSON.stringify(content ?? '') }];
+    }
+
+    input.push({
+      role: role ?? 'user',
+      content: contentParts,
+    });
+  }
+  return input;
 }
 
 /**
@@ -169,6 +274,81 @@ export async function handleMessagesRequest(
         );
     }
 
+    // OpenAI Responses API upstream: body has `messages` (Completions format), must be
+    // converted to Responses format (`input`) before forwarding.
+    if (upstreamMode === 'openai-responses') {
+      const responsesBody: Record<string, unknown> = {
+        model: openaiRequestBody.model ?? model,
+        input: completionsMessagesToResponsesInput(openaiRequestBody.messages as unknown[]),
+        stream: isStreaming,
+      };
+      if (openaiRequestBody.temperature !== undefined) responsesBody.temperature = openaiRequestBody.temperature;
+      if (openaiRequestBody.top_p !== undefined) responsesBody.top_p = openaiRequestBody.top_p;
+      if (openaiRequestBody.max_tokens !== undefined) responsesBody.max_output_tokens = openaiRequestBody.max_tokens;
+      if (openaiRequestBody.tools !== undefined) responsesBody.tools = completionsToolsToResponsesTools(openaiRequestBody.tools as unknown[]);
+      if (openaiRequestBody.tool_choice !== undefined) responsesBody.tool_choice = completionsToolChoiceToResponsesToolChoice(openaiRequestBody.tool_choice);
+
+      const responsesResponse = await fetch(targetUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...addForwardedHeaders(authHeaders, request),
+        },
+        body: JSON.stringify(responsesBody),
+        signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
+      });
+
+      recordResponseStatusCodeFromUpstream(responsesResponse.status);
+      recordUpstreamResponseToolCount('openai-responses', 0);
+
+      if (!responsesResponse.ok) {
+        const upstreamResponseBody = await responsesResponse.text();
+        activeLogger.error(requestId, `Messages->Responses API error (openai-passthrough): ${responsesResponse.status}, URL: ${targetUrl}, upstream body: ${upstreamResponseBody.substring(0, 500)}`);
+        handleTargetApiError(responsesResponse, 'Messages API (via Responses)', { url: targetUrl, body: JSON.stringify(responsesBody), upstreamBody: upstreamResponseBody });
+      }
+
+      const tokenCountingConfig = getTokenCountingConfig(env);
+      if (isStreaming) {
+        return handleResponsesStreamAsClaude(responsesResponse, model, requestId, activeLogger);
+      }
+      const responsesJson = await responsesResponse.json() as OpenAIResponsesResponse;
+      const outputItem = responsesJson.output?.find(o => o.type === 'message');
+      const textPart = outputItem?.content?.find(c => c.type === 'output_text');
+      const toolCallItems = responsesJson.output?.filter(o => o.type === 'function_call') ?? [];
+      const syntheticCompletions: OpenAIResponse = {
+        id: responsesJson.id ?? 'resp_unknown',
+        object: 'chat.completion',
+        created: responsesJson.created_at ?? Math.floor(Date.now() / 1000),
+        model: responsesJson.model ?? model,
+        choices: [{
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: textPart?.text ?? '',
+            tool_calls: toolCallItems.length > 0
+              ? toolCallItems.map(tc => ({
+                  id: tc.call_id ?? tc.id ?? `call_${Date.now()}`,
+                  type: 'function' as const,
+                  function: { name: tc.name ?? '', arguments: tc.arguments ?? '' },
+                }))
+              : undefined,
+          },
+          finish_reason: toolCallItems.length > 0 ? 'tool_calls' : 'stop',
+          logprobs: null,
+        }],
+        usage: responsesJson.usage ? {
+          prompt_tokens: responsesJson.usage.input_tokens,
+          completion_tokens: responsesJson.usage.output_tokens,
+          total_tokens: responsesJson.usage.total_tokens,
+        } : undefined,
+      };
+      const claudeResponse = await convertOpenAIToClaudeResponse(syntheticCompletions, model, requestId, requestBody, tokenCountingConfig);
+      return new Response(JSON.stringify(claudeResponse), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+      });
+    }
+
       const response = await fetch(targetUrl, {
 
       method: 'POST',
@@ -176,7 +356,7 @@ export async function handleMessagesRequest(
         'Content-Type': 'application/json',
         ...addForwardedHeaders(authHeaders, request),
       },
-      body: JSON.stringify(openaiRequestBody),
+      body: JSON.stringify(mapMaxTokensForUpstream(openaiRequestBody, targetUrl, upstreamMode)),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 
@@ -308,6 +488,94 @@ export async function handleMessagesRequest(
     delete openaiRequest.thinking;
   }
 
+  // OpenAI Responses API upstream: convert Completions request → Responses request,
+  // POST to /v1/responses, then convert the Responses response back to Claude format.
+  if (upstreamMode === 'openai-responses') {
+    activeLogger.info(requestId, `Upstream (stream=${isStreaming}): /v1/responses → ${targetModelId}`);
+
+    // Build Responses API request body from the converted Completions request.
+    // The Responses API uses `input` (array of message items) instead of `messages`.
+    const responsesBody: Record<string, unknown> = {
+      model: openaiRequest.model,
+      input: completionsMessagesToResponsesInput(openaiRequest.messages),
+      stream: isStreaming,
+    };
+    if (openaiRequest.temperature !== undefined) responsesBody.temperature = openaiRequest.temperature;
+    if (openaiRequest.top_p !== undefined) responsesBody.top_p = openaiRequest.top_p;
+    if (openaiRequest.max_tokens !== undefined) responsesBody.max_output_tokens = openaiRequest.max_tokens;
+    if (openaiRequest.tools !== undefined) responsesBody.tools = completionsToolsToResponsesTools(openaiRequest.tools);
+    if (openaiRequest.tool_choice !== undefined) responsesBody.tool_choice = completionsToolChoiceToResponsesToolChoice(openaiRequest.tool_choice);
+
+    const responsesResponse = await fetch(targetUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...addForwardedHeaders(authHeaders, request),
+      },
+      body: JSON.stringify(responsesBody),
+      signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
+    });
+
+    recordResponseStatusCodeFromUpstream(responsesResponse.status);
+    recordUpstreamResponseToolCount('openai-responses', 0);
+
+    if (!responsesResponse.ok) {
+      const upstreamResponseBody = await responsesResponse.text();
+      activeLogger.error(requestId, `Messages->Responses API error: ${responsesResponse.status}, URL: ${targetUrl}, upstream body: ${upstreamResponseBody.substring(0, 500)}`);
+      handleTargetApiError(responsesResponse, 'Messages API (via Responses)', { url: targetUrl, body: JSON.stringify(responsesBody), upstreamBody: upstreamResponseBody });
+    }
+
+    const tokenCountingConfig = getTokenCountingConfig(env);
+
+    if (isStreaming) {
+      // Stream from upstream Responses API (SSE), re-emit as Claude SSE.
+      // Convert each `response.output_text.delta` event to a Claude `content_block_delta`.
+      return handleResponsesStreamAsClaude(responsesResponse, targetModelId, requestId, activeLogger);
+    }
+
+    // Non-streaming: parse Responses response and convert to Claude format.
+    const responsesJson = await responsesResponse.json() as OpenAIResponsesResponse;
+
+    // Synthesise an OpenAI Completions-style response so we can reuse the existing converter.
+    const outputItem = responsesJson.output?.find(o => o.type === 'message');
+    const textPart = outputItem?.content?.find(c => c.type === 'output_text');
+    const toolCallItems = responsesJson.output?.filter(o => o.type === 'function_call') ?? [];
+
+    const syntheticCompletions: OpenAIResponse = {
+      id: responsesJson.id ?? 'resp_unknown',
+      object: 'chat.completion',
+      created: responsesJson.created_at ?? Math.floor(Date.now() / 1000),
+      model: responsesJson.model ?? targetModelId,
+      choices: [{
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: textPart?.text ?? '',
+          tool_calls: toolCallItems.length > 0
+            ? toolCallItems.map(tc => ({
+                id: tc.call_id ?? tc.id ?? `call_${Date.now()}`,
+                type: 'function' as const,
+                function: { name: tc.name ?? '', arguments: tc.arguments ?? '' },
+              }))
+            : undefined,
+        },
+        finish_reason: toolCallItems.length > 0 ? 'tool_calls' : 'stop',
+        logprobs: null,
+      }],
+      usage: responsesJson.usage ? {
+        prompt_tokens: responsesJson.usage.input_tokens,
+        completion_tokens: responsesJson.usage.output_tokens,
+        total_tokens: responsesJson.usage.total_tokens,
+      } : undefined,
+    };
+
+    const claudeResponse = await convertOpenAIToClaudeResponse(syntheticCompletions, targetModelId, requestId, requestBody, tokenCountingConfig);
+    return new Response(JSON.stringify(claudeResponse), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+    });
+  }
+
   const upstreamRequest = JSON.stringify(openaiRequest);
   activeLogger.debug(requestId, `Converted request (claude->openai): ${upstreamRequest.substring(0, 250)} ... ${upstreamRequest.substring(upstreamRequest.length - 250)}`);
 
@@ -328,7 +596,7 @@ export async function handleMessagesRequest(
       'Content-Type': 'application/json',
       ...addForwardedHeaders(authHeaders, request),
     },
-    body: JSON.stringify(openaiRequest),
+    body: JSON.stringify(mapMaxTokensForUpstream(openaiRequest, targetUrl, upstreamMode)),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
@@ -493,4 +761,185 @@ async function handleStreamingResponse(
     logger.error(requestId, `Error creating streaming response: ${(error as Error).message}`);
     throw new Error(`Failed to create streaming response: ${(error as Error).message}`);
   }
+}
+
+/**
+ * Convert an upstream OpenAI Responses API SSE stream to Claude SSE format.
+ *
+ * Responses API events consumed:
+ *   response.created                    → emit message_start
+ *   response.output_text.delta          → emit content_block_delta
+ *   response.output_text.done           → emit content_block_stop
+ *   response.completed                  → emit message_delta (stop) + message_stop
+ *
+ * Tool-call events (response.output_item.added with function_call type) are
+ * mapped to Claude tool_use content blocks.
+ */
+function handleResponsesStreamAsClaude(
+  upstreamResponse: Response,
+  model: string,
+  requestId: string,
+  logger: Logger,
+): Response {
+  if (!upstreamResponse.body) {
+    throw new Error('Upstream Responses stream body is not readable');
+  }
+
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
+  function claudeEvent(event: string, data: unknown): Uint8Array {
+    return encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  }
+
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+
+  async function pump() {
+    try {
+      const messageId = `msg_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
+
+      // message_start — we don't know usage yet, placeholder zeros
+      await writer.write(claudeEvent('message_start', {
+        type: 'message_start',
+        message: {
+          id: messageId,
+          type: 'message',
+          role: 'assistant',
+          content: [],
+          model,
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 0, output_tokens: 0 },
+        },
+      }));
+
+      let textBlockIndex = -1;
+      // Map from function_call output_index → Claude content block index
+      const toolBlockIndex = new Map<number, number>();
+      let nextBlockIndex = 0;
+      let buffer = '';
+      let inputTokens = 0;
+      let outputTokens = 0;
+
+      const reader = upstreamResponse.body!.getReader();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (!raw || raw === '[DONE]') continue;
+
+          let evt: Record<string, unknown>;
+          try { evt = JSON.parse(raw); } catch { continue; }
+
+          const type = evt.type as string | undefined;
+
+          if (type === 'response.output_item.added') {
+            const item = evt.item as Record<string, unknown> | undefined;
+            if (item?.type === 'function_call') {
+              const outputIndex = evt.output_index as number ?? nextBlockIndex;
+              const blockIdx = nextBlockIndex++;
+              toolBlockIndex.set(outputIndex, blockIdx);
+              await writer.write(claudeEvent('content_block_start', {
+                type: 'content_block_start',
+                index: blockIdx,
+                content_block: {
+                  type: 'tool_use',
+                  id: item.call_id ?? item.id ?? `call_${Date.now()}`,
+                  name: item.name ?? '',
+                  input: {},
+                },
+              }));
+            }
+          } else if (type === 'response.output_text.delta') {
+            if (textBlockIndex === -1) {
+              textBlockIndex = nextBlockIndex++;
+              await writer.write(claudeEvent('content_block_start', {
+                type: 'content_block_start',
+                index: textBlockIndex,
+                content_block: { type: 'text', text: '' },
+              }));
+            }
+            await writer.write(claudeEvent('content_block_delta', {
+              type: 'content_block_delta',
+              index: textBlockIndex,
+              delta: { type: 'text_delta', text: evt.delta ?? '' },
+            }));
+          } else if (type === 'response.function_call_arguments.delta') {
+            const outputIndex = evt.output_index as number ?? 0;
+            const blockIdx = toolBlockIndex.get(outputIndex);
+            if (blockIdx !== undefined) {
+              await writer.write(claudeEvent('content_block_delta', {
+                type: 'content_block_delta',
+                index: blockIdx,
+                delta: { type: 'input_json_delta', partial_json: evt.delta ?? '' },
+              }));
+            }
+          } else if (type === 'response.output_text.done') {
+            if (textBlockIndex !== -1) {
+              await writer.write(claudeEvent('content_block_stop', {
+                type: 'content_block_stop',
+                index: textBlockIndex,
+              }));
+            }
+          } else if (type === 'response.output_item.done') {
+            const item = evt.item as Record<string, unknown> | undefined;
+            if (item?.type === 'function_call') {
+              const outputIndex = evt.output_index as number ?? 0;
+              const blockIdx = toolBlockIndex.get(outputIndex);
+              if (blockIdx !== undefined) {
+                await writer.write(claudeEvent('content_block_stop', {
+                  type: 'content_block_stop',
+                  index: blockIdx,
+                }));
+              }
+            }
+          } else if (type === 'response.completed') {
+            const resp = evt.response as Record<string, unknown> | undefined;
+            const usage = resp?.usage as Record<string, unknown> | undefined;
+            if (usage) {
+              inputTokens = (usage.input_tokens as number) ?? 0;
+              outputTokens = (usage.output_tokens as number) ?? 0;
+            }
+            const hasToolUse = toolBlockIndex.size > 0;
+            await writer.write(claudeEvent('message_delta', {
+              type: 'message_delta',
+              delta: {
+                stop_reason: hasToolUse ? 'tool_use' : 'end_turn',
+                stop_sequence: null,
+              },
+              usage: { output_tokens: outputTokens },
+            }));
+            await writer.write(claudeEvent('message_stop', { type: 'message_stop' }));
+          }
+        }
+      }
+
+      logger.debug(requestId, `Responses stream done: input=${inputTokens} output=${outputTokens}`);
+    } catch (e) {
+      logger.error(requestId, `Error in Responses->Claude stream: ${(e as Error).message}`);
+    } finally {
+      await writer.close();
+    }
+  }
+
+  pump();
+
+  return new Response(readable, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'x-request-id': requestId,
+    },
+  });
 }

@@ -267,6 +267,14 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
         handlerType: 'messages',
         upstreamMode: defaultMode,
       };
+    } else if (defaultMode === 'openai-responses') {
+      // OpenAI Responses API upstream
+      return {
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/responses'),
+        targetEndpoint: 'v1/messages',
+        handlerType: 'messages',
+        upstreamMode: 'openai-responses',
+      };
     } else {
       // OpenAI-compatible upstream
       return {
@@ -1030,7 +1038,8 @@ export default {
 
               const isNativeMode = route.upstreamMode === 'anthropic-messages' ||
                                   route.upstreamMode === 'gemini-generatecontent' ||
-                                  route.upstreamMode === 'gemini-interactions';
+                                  route.upstreamMode === 'gemini-interactions' ||
+                                  route.upstreamMode === 'openai-responses';
 
               let candidateTargetUrl = '';
               let candidateHandlerType: RouteAttempt['handlerType'] = 'messages';
@@ -1047,6 +1056,8 @@ export default {
                     candidateTargetUrl = isStreaming
                       ? buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:streamGenerateContent?alt=sse`)
                       : buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:generateContent`);
+                  } else if (route.upstreamMode === 'openai-responses') {
+                    candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/responses');
                   } else {
                     candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/messages');
                   }
@@ -1292,7 +1303,8 @@ export default {
 
         const isNativeMode = route.upstreamMode === 'anthropic-messages' ||
                              route.upstreamMode === 'gemini-generatecontent' ||
-                             route.upstreamMode === 'gemini-interactions';
+                             route.upstreamMode === 'gemini-interactions' ||
+                             route.upstreamMode === 'openai-responses';
 
         let candidateTargetUrl = '';
         let candidateHandlerType: RouteAttempt['handlerType'] = 'messages';
@@ -1308,6 +1320,8 @@ export default {
               candidateTargetUrl = bodyStream
                 ? buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:streamGenerateContent?alt=sse`)
                 : buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:generateContent`);
+            } else if (route.upstreamMode === 'openai-responses') {
+              candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/responses');
             } else {
               candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/messages');
             }
@@ -1717,6 +1731,7 @@ export default {
             } else if (attemptUpstreamMode === 'gemini-generatecontent' || attemptUpstreamMode === 'gemini-interactions') {
               response = await handleGeminiRequestForMessages(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger);
             } else {
+              // covers openai-completions and openai-responses
               response = await handleMessagesRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, conversionOptions, attemptUpstreamMode);
             }
             break;

@@ -9,7 +9,7 @@ import { Env } from '../types/shared.js';
 import { Logger, createLogger } from '../utils/logger.js';
 import { OpenAIRequest, OpenAIResponse } from '../types/openai.js';
 import { handleTargetApiError } from '../utils/errors.js';
-import { addForwardedHeaders } from '../utils/routing.js';
+import { addForwardedHeaders, mapMaxTokensForUpstream } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { convertResponsesToChatCompletions } from '../converters/responses-to-completions.js';
 import { convertCompletionsToResponses, convertCompletionsToCompactedResponse } from '../converters/completions-to-responses.js';
@@ -152,7 +152,7 @@ async function handleAsCompletions(
       'Content-Type': 'application/json',
       ...addForwardedHeaders(authHeaders, request),
     },
-    body: JSON.stringify(completionsRequest),
+    body: JSON.stringify(mapMaxTokensForUpstream(completionsRequest, targetUrl, 'openai-completions')),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
@@ -607,7 +607,7 @@ export async function handleResponsesInputTokensRequest(
         'Content-Type': 'application/json',
         ...addForwardedHeaders(authHeaders, request),
       },
-      body: JSON.stringify(countRequest),
+      body: JSON.stringify(mapMaxTokensForUpstream(countRequest as Record<string, unknown>, targetUrl, 'openai-completions')),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 
@@ -640,7 +640,7 @@ export async function handleResponsesInputTokensRequest(
       'Content-Type': 'application/json',
       ...addForwardedHeaders(authHeaders, request),
     },
-    body: JSON.stringify(requestBody),
+    body: JSON.stringify(mapMaxTokensForUpstream(requestBody, targetUrl, 'openai-responses')),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
@@ -697,7 +697,7 @@ export async function handleResponsesCompactRequest(
         'Content-Type': 'application/json',
         ...addForwardedHeaders(authHeaders, request),
       },
-      body: JSON.stringify(completionsRequest),
+      body: JSON.stringify(mapMaxTokensForUpstream(completionsRequest, targetUrl, 'openai-completions')),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 
@@ -730,7 +730,7 @@ export async function handleResponsesCompactRequest(
       'Content-Type': 'application/json',
       ...addForwardedHeaders(authHeaders, request),
     },
-    body: JSON.stringify(requestBody),
+    body: JSON.stringify(mapMaxTokensForUpstream(requestBody, targetUrl, 'openai-responses')),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
@@ -771,7 +771,7 @@ async function handleAsPassthrough(
       'Content-Type': 'application/json',
       ...addForwardedHeaders(authHeaders, request),
     },
-    body: JSON.stringify(requestBody),
+    body: JSON.stringify(mapMaxTokensForUpstream(requestBody, targetUrl, 'openai-responses')),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
