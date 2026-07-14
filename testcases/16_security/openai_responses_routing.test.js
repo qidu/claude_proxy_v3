@@ -13,6 +13,8 @@
  * - TC3005: /v1/responses -> openai-completions maps max_tokens for non-qnaigc
  * - TC3006: /v1/responses -> openai-completions keeps max_tokens for qnaigc
  * - TC3007: TUI test request token field follows upstream mode
+ * - TC3008: /v1/responses -> anthropic-messages converts to Claude Messages format
+ * - TC3009: /v1/responses -> gemini-generatecontent converts via Claude format
  */
 
 const path = require('path');
@@ -365,6 +367,124 @@ async function testTuiMaxTokenFieldFollowsUpstreamMode() {
   assert(!('max_tokens' in responsesTool), 'openai-responses tool test should not use max_tokens');
 }
 
+/**
+ * TC3008: /v1/responses -> anthropic-messages routes to v1/messages with Claude format
+ *
+ * Verifies that when upstreamMode='anthropic-messages':
+ * - The request body is converted from Responses format to Claude Messages format
+ * - The upstream call targets v1/messages
+ * - `input` is converted to `messages`
+ * - `instructions` is extracted as `system`
+ * - The Claude response is converted back to Responses API format
+ */
+async function testResponsesToAnthropicMessages() {
+  const claudeUpstreamResponse = {
+    id: 'msg_test',
+    type: 'message',
+    role: 'assistant',
+    model: 'claude-test',
+    content: [{ type: 'text', text: 'Hello from Claude' }],
+    stop_reason: 'end_turn',
+    usage: { input_tokens: 5, output_tokens: 4 },
+  };
+
+  await withFetchStub(
+    () => new Response(JSON.stringify(claudeUpstreamResponse), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    async (calls) => {
+      const response = await handleResponsesRequest(
+        makeRequest('/v1/responses', {
+          model: 'claude-test',
+          instructions: 'Be concise.',
+          input: 'Hello',
+          max_output_tokens: 50,
+        }),
+        'https://api.anthropic.com/v1/messages',
+        { 'x-api-key': 'sk-test' },
+        'req_tc3008',
+        'claude-test',
+        {},
+        undefined,
+        'anthropic-messages'
+      );
+
+      assert(calls.length === 1, `expected one upstream call, got ${calls.length}`);
+      assert(calls[0].url === 'https://api.anthropic.com/v1/messages', `unexpected URL ${calls[0].url}`);
+      assert(Array.isArray(calls[0].body.messages), 'Claude body should contain messages array');
+      assert(!('input' in calls[0].body), 'Claude body must not contain Responses API input field');
+      assert(calls[0].body.system === 'Be concise.', `expected system='Be concise.', got ${calls[0].body.system}`);
+      const userMsg = calls[0].body.messages.find(m => m.role === 'user');
+      assert(userMsg, 'should have a user message');
+      assert(userMsg.content === 'Hello', `expected user content 'Hello', got ${userMsg.content}`);
+
+      assert(response.status === 200, `expected 200, got ${response.status}`);
+      const body = await readJson(response);
+      assert(body.object === 'response', `expected object=response, got ${body.object}`);
+      assert(Array.isArray(body.output), 'response should have output array');
+      const msgItem = body.output.find(o => o.type === 'message');
+      assert(msgItem, 'response output should contain a message item');
+      const textPart = msgItem.content.find(c => c.type === 'output_text');
+      assert(textPart?.text === 'Hello from Claude', `unexpected text: ${textPart?.text}`);
+    }
+  );
+}
+
+/**
+ * TC3009: /v1/responses -> gemini-generatecontent converts to Claude format for Gemini handler
+ *
+ * Verifies that when upstreamMode='gemini-generatecontent':
+ * - The Responses body is converted to Claude Messages format
+ * - The synthetic Claude request is passed to the Gemini handler
+ * - The final response is Responses API format
+ *
+ * We stub global fetch to intercept the Gemini upstream call and return a
+ * synthetic Claude-format response (as handleGeminiRequestForMessages would produce).
+ */
+async function testResponsesToGeminiGenerateContent() {
+  // handleGeminiRequestForMessages converts Claude→Gemini for the upstream call,
+  // gets back Gemini response, and converts to Claude format. We stub fetch at the
+  // Gemini upstream level so we return a Gemini-format response.
+  const geminiUpstreamResponse = {
+    candidates: [{
+      content: { role: 'model', parts: [{ text: 'Hello from Gemini' }] },
+      finishReason: 'STOP',
+    }],
+    usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 4, totalTokenCount: 7 },
+  };
+
+  await withFetchStub(
+    () => new Response(JSON.stringify(geminiUpstreamResponse), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    async (calls) => {
+      const response = await handleResponsesRequest(
+        makeRequest('/v1/responses', {
+          model: 'gemini-test',
+          input: 'Hello',
+          max_output_tokens: 20,
+        }),
+        'https://generativelanguage.googleapis.com/v1beta',
+        { 'x-goog-api-key': 'gm-test' },
+        'req_tc3009',
+        'gemini-test',
+        {},
+        undefined,
+        'gemini-generatecontent'
+      );
+
+      assert(calls.length === 1, `expected one upstream call, got ${calls.length}`);
+      // The Gemini handler constructs the URL with model and endpoint
+      assert(calls[0].url.includes('generateContent'), `upstream URL should contain generateContent, got ${calls[0].url}`);
+
+      assert(response.status === 200, `expected 200, got ${response.status}`);
+      const body = await readJson(response);
+      assert(body.object === 'response', `expected object=response, got ${body.object}`);
+      assert(Array.isArray(body.output), 'response should have output array');
+      const msgItem = body.output.find(o => o.type === 'message');
+      assert(msgItem, 'response output should contain a message item');
+      const textPart = msgItem.content.find(c => c.type === 'output_text');
+      assert(textPart?.text === 'Hello from Gemini', `unexpected text: ${textPart?.text}`);
+    }
+  );
+}
+
 if (require.main === module) {
   loadModule().then(() => runTestSuite('OpenAI Responses Routing/Conversion Unit Tests', [
     { name: 'TC3001: /v1/messages Claude -> openai-responses body', fn: testClaudeMessagesToResponsesBody },
@@ -374,5 +494,7 @@ if (require.main === module) {
     { name: 'TC3005: /v1/responses -> completions maps max tokens for OpenAI', fn: testResponsesToCompletionsMapsMaxTokensForOpenAI },
     { name: 'TC3006: /v1/responses -> completions keeps max tokens for qnaigc', fn: testResponsesToCompletionsKeepsMaxTokensForQnaigc },
     { name: 'TC3007: TUI test request token field follows upstream mode', fn: testTuiMaxTokenFieldFollowsUpstreamMode },
+    { name: 'TC3008: /v1/responses -> anthropic-messages converts to Claude format', fn: testResponsesToAnthropicMessages },
+    { name: 'TC3009: /v1/responses -> gemini-generatecontent converts to Claude format', fn: testResponsesToGeminiGenerateContent },
   ]));
 }

@@ -442,6 +442,23 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
         handlerType: 'responses',
         upstreamMode: 'openai-responses',
       };
+    } else if (defaultMode === 'anthropic-messages') {
+      // Convert Responses API to Claude Messages and forward to native Anthropic upstream
+      return {
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/messages'),
+        targetEndpoint: 'v1/responses',
+        handlerType: 'responses',
+        upstreamMode: 'anthropic-messages',
+      };
+    } else if (defaultMode === 'gemini-generatecontent' || defaultMode === 'gemini-interactions') {
+      // Convert Responses API to Claude Messages and forward to Gemini upstream
+      const apiVersion = env.GEMINI_API_VERSION || 'v1beta';
+      return {
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', apiVersion),
+        targetEndpoint: 'v1/responses',
+        handlerType: 'responses',
+        upstreamMode: defaultMode,
+      };
     } else {
       // Convert to OpenAI Chat Completions
       return {
@@ -1120,6 +1137,13 @@ export default {
                 if (route.upstreamMode === 'openai-responses') {
                   candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/responses');
                   candidateUpstreamMode = 'openai-responses';
+                } else if (route.upstreamMode === 'anthropic-messages') {
+                  candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/messages');
+                  candidateUpstreamMode = 'anthropic-messages';
+                } else if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
+                  const apiVersion = env.GEMINI_API_VERSION || 'v1beta';
+                  candidateTargetUrl = buildUpstreamUrl(route.targetUrl, apiVersion);
+                  candidateUpstreamMode = route.upstreamMode;
                 } else {
                   candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
                   candidateUpstreamMode = 'openai-completions';
@@ -1369,6 +1393,13 @@ export default {
           if (route.upstreamMode === 'openai-responses') {
             candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/responses');
             candidateUpstreamMode = 'openai-responses';
+          } else if (route.upstreamMode === 'anthropic-messages') {
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/messages');
+            candidateUpstreamMode = 'anthropic-messages';
+          } else if (route.upstreamMode === 'gemini-generatecontent' || route.upstreamMode === 'gemini-interactions') {
+            const apiVersion = env.GEMINI_API_VERSION || 'v1beta';
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, apiVersion);
+            candidateUpstreamMode = route.upstreamMode;
           } else {
             candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
             candidateUpstreamMode = 'openai-completions';

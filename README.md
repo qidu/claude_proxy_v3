@@ -203,7 +203,7 @@ The mode is selected by the route's `defaultMode` / model config:
 | Endpoints | `upstream_mode` Values |
 |---|---|
 | `POST /v1/messages` | `anthropic-messages`, `gemini-generatecontent`, `gemini-interactions`, `openai-completions` (passthrough when input is already OpenAI-formatted), `openai-responses` |
-| `POST /v1/responses` | `openai-responses` (passthrough), `openai-completions` (convert) |
+| `POST /v1/responses` | `openai-responses` (passthrough), `openai-completions` (convert), `anthropic-messages` (convert), `gemini-generatecontent` (convert), `gemini-interactions` (convert) |
 | `POST /v1/chat/completions` | `openai-completions` (only when `DEV_PASS_THROUGH=true`; otherwise rejected) |
 | `POST /v1beta/models/{model}:generateContent` / `:streamGenerateContent` | `gemini-generatecontent`, `gemini-interactions`, `openai-completions` |
 | `POST /v1/interactions` | `gemini-generatecontent`, `gemini-interactions`, `openai-completions` |
@@ -211,8 +211,9 @@ The mode is selected by the route's `defaultMode` / model config:
 | `POST /v1/embeddings` | `openai-completions` (only) |
 
 Notes:
-- `/v1/responses*` only support the OpenAI upstream family — no `anthropic-messages`, `claude-messages`, or Gemini mode.
-- `/v1/messages` is the only endpoint that supports `anthropic-messages` (native Anthropic SDK passthrough).
+- When `/v1/responses` routes to `upstream_mode = "anthropic-messages"`, the proxy converts the Responses `input` to Claude Messages format (`messages` + `system`), forwards to `/v1/messages`, and converts the Claude result back to Responses API format. Text and tool-use are supported in both non-streaming and streaming modes.
+- When `/v1/responses` routes to `upstream_mode = "gemini-generatecontent"` or `"gemini-interactions"`, the proxy converts the Responses body to Claude Messages format, delegates to the Gemini handler (which converts Claude→Gemini upstream and Gemini→Claude response), then converts the Claude result back to Responses API format.
+- `/v1/messages` is the only endpoint that supports native `anthropic-messages` SDK passthrough (request stays in Claude format end-to-end).
 - When `/v1/messages` routes to `upstream_mode = "openai-responses"`, the proxy converts the Claude/OpenAI-chat-shaped request to OpenAI Responses `input`, then converts the Responses result back to Claude Messages format. Basic tools and streaming are supported, rewrite `max_tokens` to `max_completion_tokens`.
 - For default `openai-completions` upstreams `api.qnaigc.com`, proxy keeps the legacy `max_tokens` field.
 - `/v1/embeddings` is locked to `openai-completions`; no Gemini/Anthropic embedding path.

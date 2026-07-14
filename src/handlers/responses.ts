@@ -15,6 +15,7 @@ import { convertResponsesToChatCompletions } from '../converters/responses-to-co
 import { convertCompletionsToResponses, convertCompletionsToCompactedResponse } from '../converters/completions-to-responses.js';
 import { getConversation, saveConversation, normalizeInputToItems } from '../utils/conversation-store.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
+import { handleGeminiRequestForMessages } from './gemini.js';
 
 /**
  * Short-lived store: tool call ID → reasoning_content string.
@@ -80,8 +81,461 @@ export async function handleResponsesRequest(
     return handleAsCompletions(request, targetUrl, authHeaders, requestId, model, activeLogger, requestBody, isStreaming, env);
   }
 
+  if (upstreamMode === 'anthropic-messages') {
+    return handleAsAnthropicMessages(request, targetUrl, authHeaders, requestId, model, activeLogger, requestBody, isStreaming, env);
+  }
+
+  if (upstreamMode === 'gemini-generatecontent' || upstreamMode === 'gemini-interactions') {
+    return handleAsGemini(request, targetUrl, authHeaders, requestId, model, activeLogger, requestBody, isStreaming, env, upstreamMode);
+  }
+
   // Default: Pass through to OpenAI Responses API upstream
   return handleAsPassthrough(request, targetUrl, authHeaders, requestId, activeLogger, requestBody, isStreaming, env);
+}
+
+/**
+ * Convert a Chat Completions body to Claude Messages body.
+ * Extracts the system message from the messages array and maps the rest.
+ */
+function completionsBodyToClaudeBody(completions: OpenAIRequest, model: string): Record<string, unknown> {
+  const messages = completions.messages || [];
+  const systemMsg = messages.find(m => m.role === 'system');
+  const otherMessages = messages.filter(m => m.role !== 'system');
+
+  const claudeBody: Record<string, unknown> = {
+    model,
+    messages: otherMessages.map(m => {
+      if (m.tool_calls) {
+        return {
+          role: 'assistant',
+          content: m.tool_calls.map(tc => ({
+            type: 'tool_use',
+            id: tc.id,
+            name: tc.function.name,
+            input: (() => { try { return JSON.parse(tc.function.arguments); } catch { return {}; } })(),
+          })),
+        };
+      }
+      if (m.role === 'tool') {
+        return {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: m.tool_call_id,
+            content: m.content ?? '',
+          }],
+        };
+      }
+      return { role: m.role, content: m.content ?? '' };
+    }),
+    max_tokens: completions.max_tokens ?? 4096,
+    stream: completions.stream === true,
+  };
+
+  if (systemMsg) claudeBody.system = systemMsg.content;
+  if (completions.temperature !== undefined) claudeBody.temperature = completions.temperature;
+  if (completions.top_p !== undefined) claudeBody.top_p = completions.top_p;
+  if (completions.stop !== undefined) claudeBody.stop_sequences = Array.isArray(completions.stop) ? completions.stop : [completions.stop];
+
+  if (completions.tools && completions.tools.length > 0) {
+    claudeBody.tools = completions.tools.map(t => ({
+      name: t.function.name,
+      description: t.function.description,
+      input_schema: t.function.parameters ?? { type: 'object', properties: {} },
+    }));
+  }
+
+  return claudeBody;
+}
+
+/**
+ * Convert a Claude Messages JSON response to Responses API format.
+ */
+function claudeResponseToResponses(claudeJson: Record<string, unknown>, model: string): Record<string, unknown> {
+  const content = (claudeJson.content as Array<Record<string, unknown>>) ?? [];
+  const responseId = `resp_${crypto.randomUUID().replace(/-/g, '')}`;
+  const created_at = Math.floor(Date.now() / 1000);
+  const msgId = `msg_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+
+  const outputItems: unknown[] = [];
+
+  // Text content
+  const textBlock = content.find(c => c.type === 'text');
+  if (textBlock || content.length === 0) {
+    outputItems.push({
+      id: msgId,
+      type: 'message',
+      status: 'completed',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: (textBlock?.text as string) ?? '' }],
+    });
+  }
+
+  // Tool use content
+  for (const block of content) {
+    if (block.type === 'tool_use') {
+      outputItems.push({
+        id: block.id ?? `call_${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`,
+        type: 'function_call',
+        status: 'completed',
+        name: block.name,
+        arguments: typeof block.input === 'string' ? block.input : JSON.stringify(block.input ?? {}),
+        call_id: block.id ?? `call_${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`,
+      });
+    }
+  }
+
+  const usage = claudeJson.usage as Record<string, unknown> | undefined;
+  return {
+    id: responseId,
+    object: 'response',
+    created_at,
+    status: 'completed',
+    model: (claudeJson.model as string) ?? model,
+    output: outputItems.length > 0 ? outputItems : [{
+      id: msgId,
+      type: 'message',
+      status: 'completed',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: '' }],
+    }],
+    usage: usage ? {
+      input_tokens: usage.input_tokens ?? 0,
+      output_tokens: usage.output_tokens ?? 0,
+      total_tokens: ((usage.input_tokens as number) ?? 0) + ((usage.output_tokens as number) ?? 0),
+      input_tokens_details: { cached_tokens: 0 },
+    } : undefined,
+  };
+}
+
+/**
+ * Convert a Claude SSE stream to a Responses API SSE stream.
+ *
+ * Claude SSE events: message_start, content_block_start, content_block_delta, content_block_stop, message_delta, message_stop
+ * Responses SSE events: response.created, response.output_item.added, response.content_part.added, response.output_text.delta, response.output_text.done, response.output_item.done, response.completed
+ */
+function streamClaudeAsResponses(
+  upstreamResponse: Response,
+  model: string,
+  requestId: string,
+  logger?: Logger,
+): Response {
+  const responseId = `resp_${crypto.randomUUID().replace(/-/g, '')}`;
+  const itemId = `msg_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+  const created_at = Math.floor(Date.now() / 1000);
+
+  let sequenceNumber = 0;
+  const nextSeq = () => sequenceNumber++;
+
+  function sseEvent(event: string, data: unknown): string {
+    return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  }
+
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
+  async function pump() {
+    try {
+      await writer.write(encoder.encode(sseEvent('response.created', {
+        type: 'response.created',
+        sequence_number: nextSeq(),
+        response: { id: responseId, object: 'response', created_at, status: 'in_progress', model, output: [] },
+      })));
+
+      let textPartOpened = false;
+      let accumulatedText = '';
+      let inputTokens = 0;
+      let outputTokens = 0;
+      let buffer = '';
+      // Map from Claude block index → whether it's a tool_use block
+      const toolBlocks = new Map<number, { id: string; name: string; arguments: string; outputIndex: number }>();
+      let nextOutputIndex = 0;
+
+      const reader = upstreamResponse.body?.getReader();
+      if (!reader) { await writer.close(); return; }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) continue; // handled separately via data
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (!raw) continue;
+          let evt: Record<string, unknown>;
+          try { evt = JSON.parse(raw); } catch { continue; }
+
+          const type = evt.type as string;
+
+          if (type === 'message_start') {
+            const msg = evt.message as Record<string, unknown> | undefined;
+            const usage = msg?.usage as Record<string, unknown> | undefined;
+            if (usage?.input_tokens) inputTokens = usage.input_tokens as number;
+          } else if (type === 'content_block_start') {
+            const block = evt.content_block as Record<string, unknown> | undefined;
+            const idx = evt.index as number;
+            if (block?.type === 'text') {
+              if (!textPartOpened) {
+                const outputIndex = nextOutputIndex++;
+                await writer.write(encoder.encode(sseEvent('response.output_item.added', {
+                  type: 'response.output_item.added',
+                  sequence_number: nextSeq(),
+                  output_index: outputIndex,
+                  item: { id: itemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] },
+                })));
+                await writer.write(encoder.encode(sseEvent('response.content_part.added', {
+                  type: 'response.content_part.added',
+                  sequence_number: nextSeq(),
+                  item_id: itemId,
+                  output_index: outputIndex,
+                  content_index: 0,
+                  part: { type: 'output_text', text: '' },
+                })));
+                textPartOpened = true;
+              }
+            } else if (block?.type === 'tool_use') {
+              const outputIndex = nextOutputIndex++;
+              const toolId = block.id as string ?? `call_${Date.now()}_${idx}`;
+              const toolName = block.name as string ?? '';
+              toolBlocks.set(idx, { id: toolId, name: toolName, arguments: '', outputIndex });
+              await writer.write(encoder.encode(sseEvent('response.output_item.added', {
+                type: 'response.output_item.added',
+                sequence_number: nextSeq(),
+                output_index: outputIndex,
+                item: { id: toolId, type: 'function_call', status: 'in_progress', name: toolName, arguments: '', call_id: toolId },
+              })));
+            }
+          } else if (type === 'content_block_delta') {
+            const delta = evt.delta as Record<string, unknown> | undefined;
+            const idx = evt.index as number;
+            if (delta?.type === 'text_delta') {
+              const text = delta.text as string ?? '';
+              accumulatedText += text;
+              await writer.write(encoder.encode(sseEvent('response.output_text.delta', {
+                type: 'response.output_text.delta',
+                sequence_number: nextSeq(),
+                item_id: itemId,
+                output_index: 0, // text item is always first
+                content_index: 0,
+                delta: text,
+              })));
+            } else if (delta?.type === 'input_json_delta') {
+              const tool = toolBlocks.get(idx);
+              if (tool) {
+                const partial = delta.partial_json as string ?? '';
+                tool.arguments += partial;
+                await writer.write(encoder.encode(sseEvent('response.function_call_arguments.delta', {
+                  type: 'response.function_call_arguments.delta',
+                  sequence_number: nextSeq(),
+                  item_id: tool.id,
+                  output_index: tool.outputIndex,
+                  delta: partial,
+                })));
+              }
+            }
+          } else if (type === 'content_block_stop') {
+            const idx = evt.index as number;
+            const tool = toolBlocks.get(idx);
+            if (tool) {
+              await writer.write(encoder.encode(sseEvent('response.function_call_arguments.done', {
+                type: 'response.function_call_arguments.done',
+                sequence_number: nextSeq(),
+                item_id: tool.id,
+                output_index: tool.outputIndex,
+                arguments: tool.arguments,
+              })));
+              await writer.write(encoder.encode(sseEvent('response.output_item.done', {
+                type: 'response.output_item.done',
+                sequence_number: nextSeq(),
+                output_index: tool.outputIndex,
+                item: { id: tool.id, type: 'function_call', status: 'completed', name: tool.name, arguments: tool.arguments, call_id: tool.id },
+              })));
+            }
+          } else if (type === 'message_delta') {
+            const usage = evt.usage as Record<string, unknown> | undefined;
+            if (usage?.output_tokens) outputTokens = usage.output_tokens as number;
+          }
+        }
+      }
+
+      if (textPartOpened) {
+        await writer.write(encoder.encode(sseEvent('response.output_text.done', {
+          type: 'response.output_text.done',
+          sequence_number: nextSeq(),
+          item_id: itemId,
+          output_index: 0,
+          content_index: 0,
+          text: accumulatedText,
+        })));
+        await writer.write(encoder.encode(sseEvent('response.output_item.done', {
+          type: 'response.output_item.done',
+          sequence_number: nextSeq(),
+          output_index: 0,
+          item: { id: itemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: accumulatedText }] },
+        })));
+      }
+
+      const outputItems: unknown[] = [];
+      if (textPartOpened) {
+        outputItems.push({ id: itemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: accumulatedText }] });
+      }
+      for (const tool of toolBlocks.values()) {
+        outputItems.push({ id: tool.id, type: 'function_call', status: 'completed', name: tool.name, arguments: tool.arguments, call_id: tool.id });
+      }
+      if (outputItems.length === 0) {
+        outputItems.push({ id: itemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: '' }] });
+      }
+
+      await writer.write(encoder.encode(sseEvent('response.completed', {
+        type: 'response.completed',
+        sequence_number: nextSeq(),
+        response: {
+          id: responseId,
+          object: 'response',
+          created_at,
+          status: 'completed',
+          model,
+          output: outputItems,
+          usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens, input_tokens_details: { cached_tokens: 0 } },
+        },
+      })));
+
+      await writer.write(encoder.encode('data: [DONE]\n\n'));
+    } catch {
+      // stream ended or errored
+    } finally {
+      await writer.close();
+    }
+  }
+
+  pump();
+
+  return new Response(readable, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'x-request-id': requestId,
+    },
+  });
+}
+
+/**
+ * Handle request by converting Responses API to Claude Messages format and forwarding to anthropic-messages upstream.
+ */
+async function handleAsAnthropicMessages(
+  request: Request,
+  targetUrl: string,
+  authHeaders: Record<string, string>,
+  requestId: string,
+  model: string,
+  logger: Logger,
+  requestBody: Record<string, unknown>,
+  isStreaming: boolean,
+  env?: Env
+): Promise<Response> {
+  const completionsRequest = convertResponsesToChatCompletions(requestBody, model);
+  const claudeBody = completionsBodyToClaudeBody(completionsRequest, model);
+
+  logger.debug(requestId, `Responses->anthropic-messages: ${JSON.stringify(claudeBody).substring(0, 500)}`);
+
+  const response = await fetch(targetUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...addForwardedHeaders(authHeaders, request),
+    },
+    body: JSON.stringify(claudeBody),
+    signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
+  });
+
+  recordResponseStatusCodeFromUpstream(response.status);
+  recordUpstreamResponseToolCount('anthropic-messages', 0);
+
+  if (!response.ok) {
+    const upstreamBody = await response.text();
+    logger.error(requestId, `Responses->anthropic-messages error: ${response.status}, URL: ${targetUrl}`);
+    handleTargetApiError(response, 'Responses API (via anthropic-messages)', { url: targetUrl, upstreamBody });
+  }
+
+  if (isStreaming) {
+    return streamClaudeAsResponses(response, model, requestId, logger);
+  }
+
+  const claudeJson = await response.json() as Record<string, unknown>;
+  logger.debug(requestId, `Upstream claude response: ${JSON.stringify(claudeJson).substring(0, 500)}`);
+  const responsesResponse = claudeResponseToResponses(claudeJson, model);
+
+  return new Response(JSON.stringify(responsesResponse), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-request-id': requestId,
+    },
+  });
+}
+
+/**
+ * Handle request by converting Responses API to Claude Messages format and forwarding to a Gemini upstream.
+ * The Gemini handler (handleGeminiRequestForMessages) accepts Claude-format input and returns Claude-format output.
+ */
+async function handleAsGemini(
+  request: Request,
+  targetUrl: string,
+  authHeaders: Record<string, string>,
+  requestId: string,
+  model: string,
+  logger: Logger,
+  requestBody: Record<string, unknown>,
+  isStreaming: boolean,
+  env?: Env,
+  upstreamMode?: string
+): Promise<Response> {
+  const completionsRequest = convertResponsesToChatCompletions(requestBody, model);
+  const claudeBody = completionsBodyToClaudeBody(completionsRequest, model);
+
+  logger.debug(requestId, `Responses->${upstreamMode}: ${JSON.stringify(claudeBody).substring(0, 500)}`);
+
+  // Build a synthetic request with Claude-format body so handleGeminiRequestForMessages can process it
+  const claudeRequest = new Request(request.url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...Object.fromEntries(request.headers),
+    },
+    body: JSON.stringify(claudeBody),
+  });
+
+  const claudeResponse = await handleGeminiRequestForMessages(claudeRequest, targetUrl, authHeaders, requestId, model, env, logger);
+
+  if (!claudeResponse.ok) {
+    // Error already handled by the Gemini handler; propagate it
+    return claudeResponse;
+  }
+
+  if (isStreaming) {
+    // claudeResponse is Claude SSE; convert to Responses SSE
+    return streamClaudeAsResponses(claudeResponse, model, requestId, logger);
+  }
+
+  const claudeJson = await claudeResponse.json() as Record<string, unknown>;
+  logger.debug(requestId, `Upstream gemini claude response: ${JSON.stringify(claudeJson).substring(0, 500)}`);
+  const responsesResponse = claudeResponseToResponses(claudeJson, model);
+
+  return new Response(JSON.stringify(responsesResponse), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-request-id': requestId,
+    },
+  });
 }
 
 /**
