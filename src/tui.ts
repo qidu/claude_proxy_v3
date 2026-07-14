@@ -1373,7 +1373,7 @@ class DashboardApp {
       if (item.agent_prefix || item.agent_ua) {
         const p = item.agent_prefix && item.agent_prefix !== 'unknown' ? item.agent_prefix : '';
         const u = item.agent_ua && item.agent_ua !== 'unknown' ? item.agent_ua : '';
-        if (p && u) return `${p}/${u}`;
+        if (p && u && p !== u) return `${p}/${u}`;
         return p || u || 'unknown';
       }
       return (item as unknown as { agent?: string }).agent || 'unknown';
@@ -1383,8 +1383,10 @@ class DashboardApp {
     // embedded ANSI color codes — embedded resets would terminate the theme's
     // `selectedText: green(...)` wrap mid-line and break the selected-line
     // highlighting that the Test custom model list gets for free.
-    const formatLabel = (item: ToolItem): string =>
-      `${isToolBlocked(item.tool_name) ? '✗' : '·'} ${item.tool_name.padEnd(26)}${formatAgent(item).padEnd(22)}${alignRight(fmt(item.in_requests), 4)} ${alignRight(fmt(item.in_responses), 5)} ${alignRight(fmt(item.in_request_chars), 10)}`;
+    const formatLabel = (item: ToolItem): string => {
+      const name = item.tool_name.length > 24 ? `…${item.tool_name.slice(-23)}` : item.tool_name;
+      return `${isToolBlocked(item.tool_name) ? '✗' : '·'} ${name.padEnd(24)}${formatAgent(item).padEnd(12)}${alignRight(fmt(item.in_requests), 4)} ${alignRight(fmt(item.in_responses), 5)} ${alignRight(fmt(item.in_request_chars), 10)}`;
+    };
 
     const items: ToolItem[] = (snap.agentToolStats || []).map((e) => ({
       // Unique key combines all three dims so the same tool_name from

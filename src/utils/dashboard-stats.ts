@@ -676,7 +676,7 @@ export function loadTokenStatsFromLog(retentionDays = 30): void {
           for (const row of toolEntries as Array<Record<string, unknown>>) {
             const name = typeof row?.name === 'string' ? row.name.trim() : '';
             if (!name) continue;
-            const agent = typeof row.agent === 'string' && row.agent ? row.agent : 'all';
+            const agent = typeof row.agent === 'string' && row.agent ? row.agent : 'unknown';
             const req = toSafeNumber(row.req);
             const resp = toSafeNumber(row.resp);
             const len = toSafeNumber(row.len);
@@ -848,7 +848,7 @@ const SYSTEM_AGENT_MATCHERS: SystemPrefixMatcher[] = [
   (prefix) => (prefix.toLowerCase().includes('opencode') ? 'opencode' : null),
   (prefix) => (prefix.toLowerCase().includes('deepcode') ? 'deepcode' : null),
   (prefix) => (prefix.toLowerCase().includes('nanobot') ? 'nanobot' : null),
-  (prefix) => (prefix.toLowerCase().includes('pi') ? 'pi' : null),
+  (prefix) => (/pi[- ]/i.test(prefix) ? 'pi' : null),
   (prefix) => (prefix.toLowerCase().includes('omp') ? 'omp' : null),
   (prefix) => (prefix.toLowerCase().includes('buddy') ? 'buddy' : null),
 ];
@@ -878,7 +878,7 @@ export function formatAgentLabel(agent: ResolvedAgent): string {
   const { prefix, ua } = agent;
   const p = prefix && prefix !== 'unknown' ? prefix : '';
   const u = ua && ua !== 'unknown' ? ua : '';
-  if (p && u) return `${p}/${u}`;
+  if (p && u && p !== u) return `${p}/${u}`;
   return p || u || 'unknown';
 }
 
@@ -1639,7 +1639,7 @@ export function recordResponseStatusCodeFromUpstream(statusCode: number): void {
 
 export function recordUpstreamResponseToolNames(
   toolNames: string[],
-  agent: ResolvedAgent | string = { prefix: 'all', ua: 'unknown' },
+  agent: ResolvedAgent | string = { prefix: 'unknown', ua: 'unknown' },
 ): void {
   if (!Array.isArray(toolNames) || toolNames.length === 0) {
     return;
@@ -1713,6 +1713,7 @@ export function getAgentToolPanelStats(): AgentToolPanelEntry[] {
     if (sepIdx < 0) continue;
     const { prefix, ua } = parseAgentKey(entry.key.slice(0, sepIdx));
     const tool_name = entry.key.slice(sepIdx + 3);
+    if (tool_name === 'none') continue;
     const rowKey = `${tool_name}\0${prefix}\0${ua}`;
     const agent = formatAgentLabel({ prefix, ua });
     const current = combined.get(rowKey) || { tool_name, agent, agent_prefix: prefix, agent_ua: ua, in_requests: 0, in_responses: 0, in_request_chars: 0 };
@@ -1723,7 +1724,7 @@ export function getAgentToolPanelStats(): AgentToolPanelEntry[] {
   // request chars are keyed by `${tool}\0${prefix}\0${ua}` (or plain `tool` for legacy)
   for (const [key, request_chars] of toolRequestChars.entries()) {
     let tool_name = key;
-    let prefix = 'all';
+    let prefix = 'unknown';
     let ua = 'unknown';
     // Find the first \0 — everything before is tool_name, the rest is the
     // agent half. handle both legacy `${tool}\0${prefix}` and new
@@ -1746,7 +1747,7 @@ export function getAgentToolPanelStats(): AgentToolPanelEntry[] {
   // upstream response tools are keyed by `${tool}\0${prefix}\0${ua}` (or plain `tool` for legacy)
   for (const [key, entry] of upstreamResponseToolStats.entries()) {
     let tool_name = entry.tool_name;
-    let prefix = 'all';
+    let prefix = 'unknown';
     let ua = 'unknown';
     const firstSep = key.indexOf('\0');
     if (firstSep >= 0) {
@@ -1941,7 +1942,7 @@ export function getUpstreamResponseToolStatsDesc(): UpstreamResponseToolStatsEnt
 
 export function createResponseToolTrackingTransformStream(
   onNames: (toolNames: string[], agent: ResolvedAgent) => void,
-  agent: ResolvedAgent | string = { prefix: 'all', ua: 'unknown' },
+  agent: ResolvedAgent | string = { prefix: 'unknown', ua: 'unknown' },
 ): TransformStream<Uint8Array, Uint8Array> {
   const resolved = normaliseAgent(agent);
   const decoder = new TextDecoder();
