@@ -72,9 +72,8 @@ A minimal `proxy_config.toml` looks like this:
 # any `[models.*]` category section below. A model name that falls through
 # every section's exact / wildcard / catch-all lookup gets routed here.
 [upstream]
-upstream_mode = "openai-completions"
 default_base_url = "https://api.your-provider.com"
-default_api_key = "your-api-key"
+# default_api_key = "your-key"   # config fallback; caller auth still wins outside [models.free]
 
 # Claude models, spoken to in native Anthropic format
 [models.claude]
@@ -284,11 +283,12 @@ inheritance chain — anything left empty falls back to the level above:
   `base_url` (section-level), or every model entry in that section must define its own
   per-entry `base_url`. A section that does neither will fail to resolve at routing time
   rather than silently inheriting from `[upstream] default_base_url`.
-- **`api_key`**: per-entry override → section `api_key` → `[upstream] default_api_key`.
+- **Configured `api_key`**: per-entry override → section `api_key` → `[upstream] default_api_key`.
+  This only resolves the configured fallback key; runtime caller-vs-config priority is section-specific below.
 - **`upstream_mode`**: per-entry `mode` → section `upstream_mode` → `[upstream] upstream_mode`
   → `"openai-completions"`.
-- The target-only form (`opus48 = {target = "..."}`) requires the section to define **both**
-  `base_url` and `api_key`; the full form may leave either empty to inherit.
+- The target-only form (`opus48 = {target = "..."}`) requires the section to define `base_url`;
+  `api_key` may be inherited from the section or `[upstream] default_api_key`, or supplied by the caller for non-`free` sections.
 
 > **What `[upstream] default_base_url` is for:** it is the *global* upstream endpoint
 > applied **only** to models that are **not claimed by any `[models.*]` category section** —
@@ -315,9 +315,9 @@ inheritance chain — anything left empty falls back to the level above:
 | Section | Caller's auth header | Configured `api_key` |
 |:--------|:---------------------|:---------------------|
 | `[models.free]` | **Ignored** | Section/per-entry key **always wins** — the proxy authenticates upstream on the caller's behalf (this is what makes the FREE tier work). |
-| `[models.default]` | **Wins** | Used only as a fallback when the caller sends no key. |
-| `[models.claude]`, `[models.gemini]` | **Wins** | Same as `default` — caller's key passes through; config is a fallback. |
-| `[models.embedding]` | **Wins** | Same — configured key is the fallback. |
+| `[models.default]` | **Wins** | Used only when the caller sends no key. May come from the entry, section, or `[upstream] default_api_key`. |
+| `[models.claude]`, `[models.gemini]` | **Wins** | Same as `default` — caller's key passes through; configured keys are fallbacks only. |
+| `[models.embedding]` | **Wins** | Same — configured keys are fallbacks only. |
 
 Composite and fusion aliases don't route directly: each target is resolved through its own
 `[models.*]` section, so the rules above apply per target. The rule is keyed on
@@ -536,6 +536,17 @@ npm run deploy    # publish
 Most users only need `proxy_config.toml`. Optional environment variables tune behavior.
 On the Node server (`npm run server` / `dist/server.js`) these come from the process
 environment; on Cloudflare Workers they come from `[vars]` in `wrangler.toml`.
+
+**`[upstream]` config fields**
+
+| Field | Example | Purpose |
+|---|---|---|
+| `default_base_url` | `"https://api.example.com"` | Upstream endpoint for any model not claimed by any `[models.*]` section. Not a fallback for sections that omit `base_url`. |
+| `default_api_key` | `"sk-..."` | Global configured-key fallback when a route has no per-entry or section `api_key`. For non-`free` sections, caller auth headers still win at request time; for `[models.free]`, the configured key wins. Typically left unset in production. |
+| `global_token_limit` | `"1B 1d"` | Rolling-window token cap across all models. Format: `"<num><K/M/B> <duration>"` where duration is `1h`/`1d`/`1w`/`1m`. Returns HTTP 429 when exceeded. |
+| `budget_to_effort_low` | `32768` | Thinking-budget threshold (tokens) below which `reasoning_effort: "low"` is emitted for upstreams that use effort levels instead of token budgets. |
+| `budget_to_effort_medium` | `65536` | Threshold above `low` and below this → `reasoning_effort: "medium"`. |
+| `budget_to_effort_high` | `128000` | Threshold above `medium` → `reasoning_effort: "high"`. Set to `0` to always emit `"high"`. |
 
 **Core / server**
 
