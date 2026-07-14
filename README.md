@@ -621,4 +621,4 @@ The [`docs/`](./docs/) folder has deep-dives on specific topics:
 
 ## License
 
-See the repository for license details.
+This project is licensed under the [MIT License](./LICENSE).
