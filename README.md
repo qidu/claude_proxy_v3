@@ -215,6 +215,7 @@ Notes:
 - **Direct transform** means the proxy converts directly between the client endpoint format and the selected upstream family, then converts the response directly back to the client endpoint shape.
 - **Direct transform via Claude Messages** means Responses uses Claude Messages as its internal bridge before calling Gemini; it does not go through `openai-completions`.
 - **Indirect transform via `openai-completions`** means Gemini endpoint input first becomes OpenAI Chat Completions, then becomes Claude Messages or OpenAI Responses. This reuses the Chat Completions middle mode while preserving the original Gemini endpoint response shape.
+- Direct transforms are preferred long-term for endpoint fidelity. The current `/v1/interactions` → `anthropic-messages` / `openai-responses` routes use the indirect `openai-completions` bridge for code reuse; see [Routing transform review](./docs/routing-review.md) for tradeoffs and recommendations.
 
 ### Dashboard API
 
