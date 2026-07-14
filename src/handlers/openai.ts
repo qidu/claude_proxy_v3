@@ -5,7 +5,7 @@ import { convertOpenAIToGeminiGenerateContent, convertOpenAIToGeminiInteractions
 import { createLogger } from '../utils/logger.js';
 import { isSdkUrl, handleSdkOpenAIRequest } from '../utils/sdk-handler.js';
 import type { Env, Logger } from '../types/shared.js';
-import { addForwardedHeaders, mapMaxTokensForUpstream } from '../utils/routing.js';
+import { addForwardedHeaders, mapMaxTokensForUpstream, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
 import { handleTargetApiError } from '../utils/errors.js';
@@ -75,6 +75,25 @@ function convertGeminiInteractionsToOpenAI(geminiRequest: Record<string, unknown
 }
 
 /**
+ * Recursively normalize Gemini schema type names (uppercase) to JSON Schema
+ * (lowercase) so OpenAI-compatible upstreams accept the function parameters.
+ * e.g. "STRING" → "string", "OBJECT" → "object"
+ */
+function normalizeGeminiSchema(schema: any): any {
+  if (!schema || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema)) return schema.map(normalizeGeminiSchema);
+  const out: Record<string, any> = {};
+  for (const key of Object.keys(schema)) {
+    if (key === 'type' && typeof schema[key] === 'string') {
+      out[key] = (schema[key] as string).toLowerCase();
+    } else {
+      out[key] = normalizeGeminiSchema(schema[key]);
+    }
+  }
+  return out;
+}
+
+/**
  * Convert Gemini generateContent request to OpenAI format
  */
 function convertGeminiGenerateContentToOpenAI(geminiRequest: Record<string, unknown>): Record<string, unknown> {
@@ -82,20 +101,71 @@ function convertGeminiGenerateContentToOpenAI(geminiRequest: Record<string, unkn
 
   // Handle contents format
   if (Array.isArray(geminiRequest.contents)) {
-    const messages = geminiRequest.contents.map((content: any) => ({
-      role: content.role === 'model' ? 'assistant' : content.role,
-      content: content.parts?.map((p: any) => p.text).join('') || '',
-    }));
+    const messages: Record<string, unknown>[] = [];
+
+    for (const content of geminiRequest.contents as any[]) {
+      const role = content.role === 'model' ? 'assistant' : content.role;
+      const parts: any[] = content.parts ?? [];
+
+      const funcCallParts = parts.filter((p: any) => p.functionCall);
+      const funcRespParts = parts.filter((p: any) => p.functionResponse);
+      const textContent = parts.filter((p: any) => p.text).map((p: any) => p.text).join('');
+
+      if (funcCallParts.length > 0) {
+        // Model turn: convert functionCall parts to OpenAI tool_calls
+        messages.push({
+          role: 'assistant',
+          content: textContent || null,
+          tool_calls: funcCallParts.map((p: any, i: number) => ({
+            id: `call_${p.functionCall.name}_${i}`,
+            type: 'function',
+            function: {
+              name: p.functionCall.name,
+              arguments: JSON.stringify(p.functionCall.args ?? {}),
+            },
+          })),
+        });
+      } else if (funcRespParts.length > 0) {
+        // User turn: convert functionResponse parts to OpenAI tool messages
+        for (let i = 0; i < funcRespParts.length; i++) {
+          const p = funcRespParts[i];
+          messages.push({
+            role: 'tool',
+            tool_call_id: `call_${p.functionResponse.name}_${i}`,
+            content: JSON.stringify(p.functionResponse.response ?? {}),
+          });
+        }
+      } else {
+        messages.push({ role, content: textContent });
+      }
+    }
+
+    // Convert Gemini tools[].functionDeclarations to OpenAI tools[]
+    const tools: unknown[] = [];
+    if (Array.isArray(geminiRequest.tools)) {
+      for (const tool of geminiRequest.tools as any[]) {
+        if (Array.isArray(tool.functionDeclarations)) {
+          for (const fd of tool.functionDeclarations) {
+            tools.push({
+              type: 'function',
+              function: {
+                name: fd.name,
+                description: fd.description,
+                parameters: normalizeGeminiSchema(fd.parameters ?? { type: 'object', properties: {} }),
+              },
+            });
+          }
+        }
+      }
+    }
 
     // Check for stream parameter in both top-level and generationConfig
     const config = geminiRequest.generationConfig as Record<string, unknown> | undefined;
     const stream = geminiRequest.stream === true || config?.stream === true;
 
-    return {
-      model,
-      messages,
-      stream,
-    };
+    const result: Record<string, unknown> = { model, messages, stream };
+    if (tools.length > 0) result.tools = tools;
+    return result;
   }
 
   throw new Error('Invalid Gemini generateContent request format');
@@ -337,10 +407,13 @@ function completionsToResponsesBody(completions: Record<string, unknown>, model:
       continue;
     }
 
+    // Prior assistant turns replayed as input must use `output_text` (mirrors what
+    // the upstream originally emitted); user turns use `input_text`.
+    const textType = msg.role === 'assistant' ? 'output_text' : 'input_text';
     input.push({
       type: 'message',
       role: msg.role,
-      content: [{ type: 'input_text', text: openAIContentToText(msg.content) }],
+      content: [{ type: textType, text: openAIContentToText(msg.content) }],
     });
   }
 
@@ -511,7 +584,7 @@ async function forwardCompletionsAsOpenAIResponses(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...addForwardedHeaders(authHeaders, originalRequest),
+      ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), originalRequest),
     },
     body: JSON.stringify(mapMaxTokensForUpstream(responsesBody, targetUrl)),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
@@ -620,13 +693,19 @@ export async function handleOpenAIRequest(
     // This handler always targets an OpenAI-compatible upstream (openai-completions),
     // which expects `Authorization: Bearer <key>` regardless of the incoming endpoint
     // (/v1/messages, /v1/interactions, or :generateContent mapped here). Resolve the
-    // key from whichever header the client supplied and forward it as Bearer.
-    const incomingKey =
-        (authTokenIn ? authTokenIn.replace(/^Bearer\s+/i, '') : '') ||
-        apiKey ||
-        (googApiKey ? googApiKey.replace(/^Bearer\s+/i, '') : '');
-    if (incomingKey) {
-        authHeaders['Authorization'] = `Bearer ${incomingKey}`;
+    // key from whichever header the client supplied and forward it as Bearer — but
+    // only when the proxy has not already populated an Authorization header from its
+    // own configuration (e.g. [models.free] `api_key`). Overwriting a configured key
+    // with a stray client header breaks the /v1beta/models (Gemini) path, which
+    // dispatches here, while /v1/responses (handleResponsesRequest) does not.
+    if (!authHeaders['Authorization']) {
+        const incomingKey =
+            (authTokenIn ? authTokenIn.replace(/^Bearer\s+/i, '') : '') ||
+            apiKey ||
+            (googApiKey ? googApiKey.replace(/^Bearer\s+/i, '') : '');
+        if (incomingKey) {
+            authHeaders['Authorization'] = `Bearer ${incomingKey}`;
+        }
     }
 
     // Parse request body

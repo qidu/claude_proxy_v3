@@ -16,7 +16,7 @@ import { handleTargetApiError } from '../utils/errors.js';
 import { normalizeOpenAIToClaudeThinking } from '../utils/thinking.js';
 import { validateBetaFeatures, hasBetaFeature } from '../utils/beta-features.js';
 import { isSdkUrl, handleSdkOpenAIRequest, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
-import { addForwardedHeaders, mapMaxTokensForUpstream } from '../utils/routing.js';
+import { addForwardedHeaders, mapMaxTokensForUpstream, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
 import { getLocalTokenCountingConfig } from '../utils/token-counting.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
@@ -292,7 +292,7 @@ export async function handleMessagesRequest(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...addForwardedHeaders(authHeaders, request),
+          ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
         },
         body: JSON.stringify(responsesBody),
         signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
@@ -354,7 +354,7 @@ export async function handleMessagesRequest(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...addForwardedHeaders(authHeaders, request),
+        ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
       },
       body: JSON.stringify(mapMaxTokensForUpstream(openaiRequestBody, targetUrl, upstreamMode)),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
@@ -510,7 +510,7 @@ export async function handleMessagesRequest(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...addForwardedHeaders(authHeaders, request),
+        ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
       },
       body: JSON.stringify(responsesBody),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
@@ -580,7 +580,7 @@ export async function handleMessagesRequest(
   activeLogger.debug(requestId, `Converted request (claude->openai): ${upstreamRequest.substring(0, 250)} ... ${upstreamRequest.substring(upstreamRequest.length - 250)}`);
 
   // Log the actual auth headers being sent upstream (for openai-completions)
-  const finalHeaders = addForwardedHeaders(authHeaders, request);
+  const finalHeaders = addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request);
   if (finalHeaders['Authorization']) {
     const masked = finalHeaders['Authorization'].length > 16 ? `${finalHeaders['Authorization'].substring(0, 16)}...` : '***';
     activeLogger.debug(requestId, `Upstream Authorization: ${masked}`);
@@ -594,7 +594,7 @@ export async function handleMessagesRequest(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...addForwardedHeaders(authHeaders, request),
+      ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
     },
     body: JSON.stringify(mapMaxTokensForUpstream(openaiRequest, targetUrl, upstreamMode)),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),

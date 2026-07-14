@@ -310,7 +310,9 @@ wire_api = "responses"
     const codex = new Codex({ apiKey: KEY });
     const thread = codex.startThread({
       model,
-      modelReasoningEffort: "minimal",
+      modelReasoningEffort: "low",
+      webSearchMode: "disabled",
+      webSearchEnabled: false,
       // Codex has no user-supplied tools array; its "tools" are the built-in
       // sandboxed shell. read-only restricts it to the same capability class
       // as the other workers (Glob/Grep/Read — no writes, no edits).
@@ -1033,16 +1035,27 @@ async function main() {
       if (json) {
         console.log(JSON.stringify(result, null, 2));
       } else {
+        const [workerResultA, workerResultB] = result.workerResults;
+        const losingResult = result.verdict.winner === workerResultA.sdk
+          ? workerResultB
+          : result.verdict.winner === workerResultB.sdk
+          ? workerResultA
+          : workerResultA.output.length < workerResultB.output.length
+          ? workerResultA
+          : workerResultB;
+
         console.log(`  workers: ${result.workers.join(" + ")}`);
         console.log(`  judge:   ${result.judge}`);
-        console.log(`  tool calls: A=${result.workerResults[0].toolCalls}, B=${result.workerResults[1].toolCalls}`);
-        console.log(`  elapsed: A=${result.workerResults[0].elapsedMs}ms, B=${result.workerResults[1].elapsedMs}ms`);
-        if (result.workerResults[0].error) console.log(`  A error: ${result.workerResults[0].error}`);
-        if (result.workerResults[1].error) console.log(`  B error: ${result.workerResults[1].error}`);
+        console.log(`  tool calls: A=${workerResultA.toolCalls}, B=${workerResultB.toolCalls}`);
+        console.log(`  elapsed: A=${workerResultA.elapsedMs}ms, B=${workerResultB.elapsedMs}ms`);
+        if (workerResultA.error) console.log(`  A error: ${workerResultA.error}`);
+        if (workerResultB.error) console.log(`  B error: ${workerResultB.error}`);
         console.log(`  verdict: ${result.verdict.winner} wins (${result.verdict.confidence})`);
         console.log(`  reason:  ${result.verdict.reason}`);
         console.log(`\n--- Winning output (${result.verdict.winner}) ---`);
         console.log(result.winningOutput || "(empty)");
+        console.log(`\n--- Losing output (${losingResult.sdk}${losingResult.error ? ", partial" : ""}) ---`);
+        console.log(losingResult.output || "(empty)");
       }
     }
   }

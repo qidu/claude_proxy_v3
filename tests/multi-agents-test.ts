@@ -58,6 +58,7 @@ const PROXY_BASE = process.env.PROXY_BASE || "http://127.0.0.1:8788";
 const WORK_DIR = "./tests/";
 
 const MODELS = [
+  "gpt-5.5",                        // gpt
   "deepseek/deepseek-v4-flash",     // deepseek
   "minimax/minimax-m3",             // minimax
   "google/gemini-3.1-flash-lite",   // gemini
@@ -223,7 +224,7 @@ wire_api = "responses"
     const codex = new Codex({ apiKey: KEY });
     const thread = codex.startThread({
       model,
-      modelReasoningEffort: "minimal",
+      modelReasoningEffort: "low",
     });
     const result = await thread.run(prompt);
     console.log("Codex result:", result.finalResponse ?? result);
@@ -322,6 +323,7 @@ async function runGeminiAgent(prompt: string, model: string) {
   const history: { role: string; parts: any[] }[] = [
     { role: "user", parts: [{ text: prompt }] },
   ];
+  let completed = false;
 
   for (let turn = 0; turn < 20; turn++) {
     const resp = await ai.models.generateContent({
@@ -333,43 +335,79 @@ async function runGeminiAgent(prompt: string, model: string) {
     });
 
     const candidate = resp.candidates?.[0];
-    const part = candidate?.content?.parts?.[0];
-    if (!part) {
+    const parts = candidate?.content?.parts ?? [];
+    if (parts.length === 0) {
       console.log("Gemini: no candidate / empty response");
+      completed = true;
       break;
     }
 
-    if (part.functionCall) {
-      const fc = part.functionCall;
-      const fnName = fc.name as string;
-      const fnArgs = fc.args as Record<string, any> | undefined;
+    const fcParts: any[] = [];
+    const frParts: any[] = [];
+    let sawText = false;
 
-      console.log(`  Tool call: ${fnName}(${JSON.stringify(fnArgs ?? {})})`);
+    for (const part of parts) {
+      if (part.functionCall) {
+        const fc = part.functionCall;
+        const fnName = fc.name as string;
+        const fnArgs = fc.args as Record<string, any> | undefined;
 
-      const executor = toolMap[fnName];
-      let result: string;
-      if (executor) {
-        result = await executor(fnArgs ?? {});
+        console.log(`  Tool call: ${fnName}(${JSON.stringify(fnArgs ?? {})})`);
+
+        const executor = toolMap[fnName];
+        let result: string;
+        if (executor) {
+          result = await executor(fnArgs ?? {});
+        } else {
+          result = `Error: unknown tool "${fnName}"`;
+        }
+        const resultPreview = result.length > 1000 ? `${result.slice(0, 1000)}...` : result;
+        // console.log(`  Tool result: ${resultPreview}`);
+
+        fcParts.push({ functionCall: { name: fnName, args: fnArgs ?? {} } });
+        frParts.push({
+          functionResponse: {
+            name: fnName,
+            response: { result },
+          },
+        });
+      } else if (part.text) {
+        if (!sawText) console.log("Gemini output:");
+        console.log(part.text);
+        sawText = true;
       } else {
-        result = `Error: unknown tool "${fnName}"`;
+        console.log("Gemini: unexpected part type", JSON.stringify(part));
       }
+    }
 
-      const fcPart = { functionCall: { name: fnName, args: fnArgs ?? {} } };
-      const frPart = {
-        functionResponse: {
-          name: fnName,
-          response: { result },
-        },
-      };
-      history.push({ role: "model", parts: [fcPart] });
-      history.push({ role: "user", parts: [frPart] });
-    } else if (part.text) {
-      console.log("Gemini output:");
-      console.log(part.text);
-      break;
+    if (fcParts.length > 0) {
+      history.push({ role: "model", parts: fcParts });
+      history.push({ role: "user", parts: frParts });
     } else {
-      console.log("Gemini: unexpected part type", JSON.stringify(part));
+      completed = true;
       break;
+    }
+  }
+
+  if (!completed) {
+    console.log("Gemini: reached 20 tool turns; forcing final output without tools");
+    const finalResp = await ai.models.generateContent({
+      model,
+      contents: [
+        ...history,
+        {
+          role: "user",
+          parts: [{ text: "No more tool calls. Provide the final answer now based on the information gathered." }],
+        },
+      ],
+    });
+    const finalParts = finalResp.candidates?.[0]?.content?.parts ?? [];
+    const textParts = finalParts.filter((part) => part.text).map((part) => part.text);
+    if (textParts.length > 0) {
+      console.log("Gemini output:");
+      console.log(textParts.join("\n"));
+    } else {
+      console.log("Gemini: no final text output", JSON.stringify(finalParts));
     }
   }
 }

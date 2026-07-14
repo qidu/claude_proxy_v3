@@ -13,7 +13,7 @@ import { validateBetaFeatures } from './beta-features.js';
 import { validateBetaFeatures as validateBetaFeaturesUtil } from './beta-features.js';
 import { createLogger } from './logger.js';
 
-export { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, transformAuthHeadersForUpstream, isHostAllowed, getAllowedHosts, formatApiKeyForUpstream };
+export { parseDynamicRoute, getHandlerType, buildTargetUrl, extractAuthHeaders, transformAuthHeadersForUpstream, isHostAllowed, getAllowedHosts, formatApiKeyForUpstream, normalizeOpenAIAuthHeaders };
 
 // Default allowed hosts for SSRF protection
 const DEFAULT_ALLOWED_HOSTS = ['127.0.0.1', 'localhost'];
@@ -569,6 +569,23 @@ function formatApiKeyForUpstream(apiKey: string, upstreamMode: string): Record<s
   }
 
   return headers;
+}
+
+function normalizeOpenAIAuthHeaders(authHeaders: Record<string, string>, targetUrl: string): Record<string, string> {
+  const url = targetUrl.toLowerCase();
+  if (!url.includes('.cognitiveservices.azure.com') && !url.includes('.openai.azure.com')) {
+    return authHeaders;
+  }
+
+  const authorization = authHeaders['Authorization'] || authHeaders['authorization'];
+  const rawKey = authHeaders['api-key'] || authHeaders['x-api-key'] || (authorization?.replace(/^Bearer\s+/i, ''));
+  if (!rawKey) return authHeaders;
+
+  const normalized: Record<string, string> = { ...authHeaders, 'api-key': rawKey };
+  delete normalized['Authorization'];
+  delete normalized['authorization'];
+  delete normalized['x-api-key'];
+  return normalized;
 }
 
 /**
