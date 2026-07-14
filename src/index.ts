@@ -297,6 +297,20 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
         handlerType: 'interactions',
         upstreamMode: defaultMode,
       };
+    } else if (defaultMode === 'anthropic-messages') {
+      return {
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/messages'),
+        targetEndpoint: 'v1/interactions',
+        handlerType: 'interactions',
+        upstreamMode: 'anthropic-messages',
+      };
+    } else if (defaultMode === 'openai-responses') {
+      return {
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/responses'),
+        targetEndpoint: 'v1/interactions',
+        handlerType: 'interactions',
+        upstreamMode: 'openai-responses',
+      };
     } else {
       // OpenAI-compatible upstream
       return {
@@ -358,6 +372,28 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
         handlerType: 'generateContent',
         upstreamMode: defaultMode,
         modelId,
+      };
+    } else if (defaultMode === 'anthropic-messages') {
+      // Route through openai-completions transforming: handler converts
+      // generateContent body → openai-completions → anthropic-messages.
+      return {
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/messages'),
+        targetEndpoint: 'v1beta/models/generateContent',
+        handlerType: 'generateContent',
+        upstreamMode: 'anthropic-messages',
+        modelId,
+        forceStreaming: isStreamEndpoint,
+      };
+    } else if (defaultMode === 'openai-responses') {
+      // Route through openai-completions transforming: handler converts
+      // generateContent body → openai-completions → openai-responses.
+      return {
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/responses'),
+        targetEndpoint: 'v1beta/models/generateContent',
+        handlerType: 'generateContent',
+        upstreamMode: 'openai-responses',
+        modelId,
+        forceStreaming: isStreamEndpoint,
       };
     } else {
       // OpenAI-compatible upstream
@@ -1093,6 +1129,12 @@ export default {
                       ? buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:streamGenerateContent?alt=sse`)
                       : buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:generateContent`);
                     candidateUpstreamMode = route.upstreamMode;
+                  } else if (route.upstreamMode === 'anthropic-messages') {
+                    candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/messages');
+                    candidateUpstreamMode = 'anthropic-messages';
+                  } else if (route.upstreamMode === 'openai-responses') {
+                    candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/responses');
+                    candidateUpstreamMode = 'openai-responses';
                   } else {
                     candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
                     candidateUpstreamMode = 'openai-completions';
@@ -1122,6 +1164,18 @@ export default {
                     }
                     candidateTargetUrl = buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:${endpoint}${queryString}`);
                     candidateUpstreamMode = route.upstreamMode;
+                  } else if (route.upstreamMode === 'anthropic-messages') {
+                    // Through openai-completions transforming: handler converts
+                    // generateContent body → openai-completions → anthropic-messages.
+                    candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/messages');
+                    candidateUpstreamMode = 'anthropic-messages';
+                    candidateForceStreaming = isStreamEndpoint;
+                  } else if (route.upstreamMode === 'openai-responses') {
+                    // Through openai-completions transforming: handler converts
+                    // generateContent body → openai-completions → openai-responses.
+                    candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/responses');
+                    candidateUpstreamMode = 'openai-responses';
+                    candidateForceStreaming = isStreamEndpoint;
                   } else {
                     candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
                     candidateUpstreamMode = 'openai-completions';
@@ -1361,6 +1415,12 @@ export default {
               ? buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:streamGenerateContent?alt=sse`)
               : buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:generateContent`);
             candidateUpstreamMode = route.upstreamMode;
+          } else if (isNativeMode && route.upstreamMode === 'anthropic-messages') {
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/messages');
+            candidateUpstreamMode = 'anthropic-messages';
+          } else if (isNativeMode && route.upstreamMode === 'openai-responses') {
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/responses');
+            candidateUpstreamMode = 'openai-responses';
           } else {
             candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
             candidateUpstreamMode = 'openai-completions';
@@ -1383,6 +1443,18 @@ export default {
             if (isStreamEndpoint && !queryString.includes('alt=sse')) { queryString = queryString ? `${queryString}&alt=sse` : '?alt=sse'; }
             candidateTargetUrl = buildUpstreamUrl(route.targetUrl, `v1beta/models/${safeModel}:${endpoint}${queryString}`);
             candidateUpstreamMode = route.upstreamMode;
+          } else if (isNativeMode && route.upstreamMode === 'anthropic-messages') {
+            // Through openai-completions transforming: handler converts
+            // generateContent body → openai-completions → anthropic-messages.
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/messages');
+            candidateUpstreamMode = 'anthropic-messages';
+            candidateForceStreaming = forceStreamOverride ?? isStreamEndpoint;
+          } else if (isNativeMode && route.upstreamMode === 'openai-responses') {
+            // Through openai-completions transforming: handler converts
+            // generateContent body → openai-completions → openai-responses.
+            candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/responses');
+            candidateUpstreamMode = 'openai-responses';
+            candidateForceStreaming = forceStreamOverride ?? isStreamEndpoint;
           } else {
             candidateTargetUrl = buildUpstreamUrl(route.targetUrl, 'v1/chat/completions');
             candidateUpstreamMode = 'openai-completions';
@@ -1771,7 +1843,7 @@ export default {
             if (attemptUpstreamMode === 'gemini-generatecontent' || attemptUpstreamMode === 'gemini-interactions') {
               response = await handleGeminiRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger);
             } else {
-              response = await handleOpenAIRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptForceStreaming, conversionOptions);
+              response = await handleOpenAIRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptForceStreaming, conversionOptions, attemptUpstreamMode);
             }
             break;
 
@@ -1779,7 +1851,7 @@ export default {
             if (attemptUpstreamMode === 'gemini-generatecontent' || attemptUpstreamMode === 'gemini-interactions') {
               response = await handleGeminiRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger);
             } else {
-              response = await handleOpenAIRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptForceStreaming, conversionOptions);
+              response = await handleOpenAIRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptForceStreaming, conversionOptions, attemptUpstreamMode);
             }
             break;
 

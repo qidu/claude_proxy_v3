@@ -9,6 +9,7 @@ import { addForwardedHeaders, mapMaxTokensForUpstream } from '../utils/routing.j
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
 import { handleTargetApiError } from '../utils/errors.js';
+import { OpenAIContent, OpenAIMessage } from '../types/openai.js';
 
 /**
  * Check if request is in Gemini Interactions format
@@ -78,26 +79,510 @@ function convertGeminiInteractionsToOpenAI(geminiRequest: Record<string, unknown
  */
 function convertGeminiGenerateContentToOpenAI(geminiRequest: Record<string, unknown>): Record<string, unknown> {
   const model = (geminiRequest.model as string) || 'gemini-no-id-at-proxy';
-  
+
   // Handle contents format
   if (Array.isArray(geminiRequest.contents)) {
     const messages = geminiRequest.contents.map((content: any) => ({
       role: content.role === 'model' ? 'assistant' : content.role,
       content: content.parts?.map((p: any) => p.text).join('') || '',
     }));
-    
+
     // Check for stream parameter in both top-level and generationConfig
     const config = geminiRequest.generationConfig as Record<string, unknown> | undefined;
     const stream = geminiRequest.stream === true || config?.stream === true;
-    
+
     return {
       model,
       messages,
       stream,
     };
   }
-  
+
   throw new Error('Invalid Gemini generateContent request format');
+}
+
+function openAIContentToText(content: OpenAIContent | null | undefined): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter(part => part.type === 'text')
+    .map(part => 'text' in part ? part.text : '')
+    .join('');
+}
+
+function parseJsonObject(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object') return value as Record<string, unknown>;
+  if (typeof value !== 'string' || value === '') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function openAIChunk(text: string, model: string): Record<string, unknown> {
+  return {
+    id: `chatcmpl_${Date.now()}`,
+    object: 'chat.completion.chunk',
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
+  };
+}
+
+function processAnthropicSSEBuffer(buffer: string, model: string, requestId: string, isInteractionsRequest: boolean, isGenerateContentRequest: boolean): { processed: string; remaining: string } {
+  let result = '';
+  const events = buffer.split('\n\n');
+  const remaining = events.pop() || '';
+
+  for (const event of events) {
+    if (!event.trim()) continue;
+    const dataLine = event.split('\n').find(line => line.startsWith('data: '));
+    if (!dataLine) continue;
+    try {
+      const parsed = JSON.parse(dataLine.slice(6));
+      if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+        const chunk = openAIChunk(parsed.delta.text || '', model);
+        const { processed } = processSSEBuffer(`data: ${JSON.stringify(chunk)}\n\n`, model, requestId, isInteractionsRequest, isGenerateContentRequest);
+        result += processed;
+      }
+    } catch {
+      // Skip invalid SSE data.
+    }
+  }
+
+  return { processed: result, remaining };
+}
+
+function processResponsesSSEBuffer(buffer: string, model: string, requestId: string, isInteractionsRequest: boolean, isGenerateContentRequest: boolean): { processed: string; remaining: string } {
+  let result = '';
+  const events = buffer.split('\n\n');
+  const remaining = events.pop() || '';
+
+  for (const event of events) {
+    if (!event.trim()) continue;
+    const dataLine = event.split('\n').find(line => line.startsWith('data: '));
+    if (!dataLine) continue;
+    const data = dataLine.slice(6).trim();
+    if (data === '[DONE]') continue;
+    try {
+      const parsed = JSON.parse(data);
+      if (parsed.type === 'response.output_text.delta') {
+        const chunk = openAIChunk(parsed.delta || '', model);
+        const { processed } = processSSEBuffer(`data: ${JSON.stringify(chunk)}\n\n`, model, requestId, isInteractionsRequest, isGenerateContentRequest);
+        result += processed;
+      }
+    } catch {
+      // Skip invalid SSE data.
+    }
+  }
+
+  return { processed: result, remaining };
+}
+
+async function handleCrossModeStreamingResponse(
+  response: Response,
+  model: string,
+  requestId: string,
+  logger: Logger,
+  isInteractionsRequest: boolean,
+  isGenerateContentRequest: boolean,
+  source: 'anthropic-messages' | 'openai-responses',
+): Promise<Response> {
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+
+  (async () => {
+    try {
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No response body');
+
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += new TextDecoder().decode(value);
+        const converted = source === 'anthropic-messages'
+          ? processAnthropicSSEBuffer(buffer, model, requestId, isInteractionsRequest, isGenerateContentRequest)
+          : processResponsesSSEBuffer(buffer, model, requestId, isInteractionsRequest, isGenerateContentRequest);
+        buffer = converted.remaining;
+        if (converted.processed) await writer.write(encoder.encode(converted.processed));
+      }
+      if (buffer.trim()) {
+        const converted = source === 'anthropic-messages'
+          ? processAnthropicSSEBuffer(buffer + '\n\n', model, requestId, isInteractionsRequest, isGenerateContentRequest)
+          : processResponsesSSEBuffer(buffer + '\n\n', model, requestId, isInteractionsRequest, isGenerateContentRequest);
+        if (converted.processed) await writer.write(encoder.encode(converted.processed));
+      }
+      await writer.close();
+    } catch (error) {
+      logger.error(requestId, `Cross-mode streaming error: ${(error as Error).message}`);
+      await writer.abort();
+    }
+  })();
+
+  return new Response(readable, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'x-request-id': requestId,
+    },
+  });
+}
+
+/**
+ * Convert an OpenAI Chat Completions body (model, messages, max_tokens, ...) to a
+ * Claude Messages body. Used to route Gemini endpoints (interactions/generateContent)
+ * through an anthropic-messages upstream.
+ */
+function completionsToClaudeBody(completions: Record<string, unknown>, model: string): Record<string, unknown> {
+  const messages = (completions.messages as OpenAIMessage[]) || [];
+  const systemMsg = messages.find(m => m.role === 'system');
+  const otherMessages = messages.filter(m => m.role !== 'system');
+
+  const claudeBody: Record<string, unknown> = {
+    model,
+    messages: otherMessages.map(m => {
+      if (m.tool_calls) {
+        return {
+          role: 'assistant',
+          content: m.tool_calls.map(tc => ({
+            type: 'tool_use',
+            id: tc.id,
+            name: tc.function.name,
+            input: parseJsonObject(tc.function.arguments),
+          })),
+        };
+      }
+      if (m.role === 'tool') {
+        return {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: m.tool_call_id,
+            content: m.content ?? '',
+          }],
+        };
+      }
+      return { role: m.role, content: m.content ?? '' };
+    }),
+    max_tokens: (completions.max_tokens as number | undefined) ?? 4096,
+    stream: completions.stream === true,
+  };
+
+  if (systemMsg) claudeBody.system = systemMsg.content;
+  if (completions.temperature !== undefined) claudeBody.temperature = completions.temperature;
+  if (completions.top_p !== undefined) claudeBody.top_p = completions.top_p;
+  if (completions.stop !== undefined) claudeBody.stop_sequences = Array.isArray(completions.stop) ? completions.stop : [completions.stop as string];
+
+  if (completions.tools && Array.isArray(completions.tools) && (completions.tools as unknown[]).length > 0) {
+    claudeBody.tools = (completions.tools as Array<{ type: string; function: { name: string; description?: string; parameters?: unknown } }>).map(t => ({
+      name: t.function.name,
+      description: t.function.description,
+      input_schema: t.function.parameters ?? { type: 'object', properties: {} },
+    }));
+  }
+
+  return claudeBody;
+}
+
+/**
+ * Convert an OpenAI Chat Completions body to an OpenAI Responses body (`input`).
+ * Used to route Gemini endpoints (interactions/generateContent) through an
+ * openai-responses upstream.
+ */
+function completionsToResponsesBody(completions: Record<string, unknown>, model: string): Record<string, unknown> {
+  const messages = (completions.messages as OpenAIMessage[]) || [];
+  const input: unknown[] = [];
+  const instructions = messages
+    .filter(msg => msg.role === 'system' || msg.role === 'developer')
+    .map(msg => openAIContentToText(msg.content))
+    .filter(text => text !== '')
+    .join('\n');
+
+  for (const msg of messages) {
+    if (msg.role === 'system' || msg.role === 'developer') {
+      continue;
+    }
+
+    if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+      for (const tc of msg.tool_calls) {
+        input.push({
+          type: 'function_call',
+          call_id: tc.id,
+          name: tc.function.name,
+          arguments: tc.function.arguments,
+        });
+      }
+      const text = openAIContentToText(msg.content);
+      if (text !== '') {
+        input.push({
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text }],
+        });
+      }
+      continue;
+    }
+
+    if (msg.role === 'tool') {
+      input.push({
+        type: 'function_call_output',
+        call_id: msg.tool_call_id,
+        output: openAIContentToText(msg.content),
+      });
+      continue;
+    }
+
+    input.push({
+      type: 'message',
+      role: msg.role,
+      content: [{ type: 'input_text', text: openAIContentToText(msg.content) }],
+    });
+  }
+
+  const responsesBody: Record<string, unknown> = {
+    model,
+    input,
+    stream: completions.stream === true,
+  };
+  if (instructions) responsesBody.instructions = instructions;
+
+  if (completions.temperature !== undefined) responsesBody.temperature = completions.temperature;
+  if (completions.top_p !== undefined) responsesBody.top_p = completions.top_p;
+  if (completions.max_tokens !== undefined) responsesBody.max_output_tokens = completions.max_tokens;
+  if (completions.tools && Array.isArray(completions.tools) && (completions.tools as unknown[]).length > 0) {
+    responsesBody.tools = (completions.tools as Array<{ type: string; function: { name: string; description?: string; parameters?: unknown } }>).map(t => ({
+      type: 'function',
+      name: t.function.name,
+      description: t.function.description,
+      parameters: t.function.parameters,
+    }));
+  }
+
+  return responsesBody;
+}
+
+/**
+ * Forward an OpenAI Chat Completions body as a Claude Messages request to an
+ * anthropic-messages upstream. Used when the inbound endpoint is
+ * /v1/interactions or :generateContent and the route is anthropic-messages.
+ *
+ * The body has already been converted from Gemini/Claude to OpenAI Completions
+ * by handleOpenAIRequest; we run a second conversion to Claude Messages format
+ * and call the upstream directly. The response is converted from Claude
+ * format back to the Gemini endpoint shape (Interactions or generateContent).
+ */
+async function forwardCompletionsAsAnthropicMessages(
+  openaiRequest: Record<string, unknown>,
+  targetUrl: string,
+  authHeaders: Record<string, string>,
+  requestId: string,
+  model: string,
+  logger: Logger,
+  originalRequest: Request,
+  env?: Env,
+): Promise<Response> {
+  const claudeBody = completionsToClaudeBody(openaiRequest, model);
+  logger.debug(requestId, `Interactions/generateContent -> anthropic-messages body: ${JSON.stringify(claudeBody).substring(0, 500)}`);
+
+  // anthropic-messages expects x-api-key (or Authorization). Normalize headers.
+  const anthropicHeaders: Record<string, string> = { ...authHeaders };
+  if (anthropicHeaders['x-api-key']) {
+    delete anthropicHeaders['Authorization'];
+  }
+
+  const response = await fetch(targetUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...addForwardedHeaders(anthropicHeaders, originalRequest),
+    },
+    body: JSON.stringify(claudeBody),
+    signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
+  });
+
+  recordResponseStatusCodeFromUpstream(response.status);
+  recordUpstreamResponseToolCount('anthropic-messages', 0);
+
+  if (!response.ok) {
+    const upstreamBody = await response.text();
+    logger.error(requestId, `Interactions/generateContent->anthropic-messages error: ${response.status}, URL: ${targetUrl}`);
+    handleTargetApiError(response, 'Interactions/generateContent (via anthropic-messages)', { url: targetUrl, upstreamBody });
+  }
+
+  const url = new URL(originalRequest.url);
+  const isInteractionsRequest = url.pathname === '/v1/interactions' || url.pathname.startsWith('/v1/interactions?');
+  const isGenerateContentRequest = url.pathname.includes(':generateContent') || url.pathname.includes(':streamGenerateContent');
+
+  const isStreaming = claudeBody.stream === true;
+  if (isStreaming) {
+    return handleCrossModeStreamingResponse(response, model, requestId, logger, isInteractionsRequest, isGenerateContentRequest, 'anthropic-messages');
+  }
+
+  const claudeJson = await response.json() as Record<string, unknown>;
+  const contentBlocks = (claudeJson.content as Array<Record<string, unknown>>) ?? [];
+  const toolUseBlocks = contentBlocks.filter(c => c.type === 'tool_use');
+  // Convert Claude Messages response → OpenAI Completions response shape, then
+  // let the existing Gemini response converters produce the right endpoint shape.
+  const syntheticCompletions: Record<string, unknown> = {
+    id: claudeJson.id ?? `chatcmpl_${Date.now()}`,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: (claudeJson.model as string) ?? model,
+    choices: [{
+      index: 0,
+      message: {
+        role: 'assistant',
+        content: contentBlocks
+          .filter(c => c.type === 'text')
+          .map(c => c.text)
+          .join(''),
+        ...(toolUseBlocks.length > 0 ? {
+          tool_calls: toolUseBlocks.map(tc => ({
+            id: (tc.id as string) ?? `call_${Date.now()}`,
+            type: 'function',
+            function: { name: tc.name ?? '', arguments: JSON.stringify(tc.input ?? {}) },
+          })),
+        } : {}),
+      },
+      finish_reason: toolUseBlocks.length > 0 ? 'tool_calls' : (claudeJson.stop_reason === 'max_tokens' ? 'length' : 'stop'),
+    }],
+    usage: (() => {
+      const u = claudeJson.usage as Record<string, unknown> | undefined;
+      if (!u) return undefined;
+      return {
+        prompt_tokens: u.input_tokens ?? 0,
+        completion_tokens: u.output_tokens ?? 0,
+        total_tokens: ((u.input_tokens as number) ?? 0) + ((u.output_tokens as number) ?? 0),
+      };
+    })(),
+  };
+
+  if (isGenerateContentRequest) {
+    const geminiResponse = convertOpenAIToGeminiGenerateContent(syntheticCompletions, model, requestId);
+    return new Response(JSON.stringify(geminiResponse), {
+      headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+    });
+  }
+  if (isInteractionsRequest) {
+    const interactionResponse = convertOpenAIToGeminiInteractions(syntheticCompletions, model, requestId);
+    return new Response(JSON.stringify(interactionResponse), {
+      headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+    });
+  }
+
+  // Fallback: return Claude Messages response as-is
+  return new Response(JSON.stringify(claudeJson), {
+    headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+  });
+}
+
+/**
+ * Forward an OpenAI Chat Completions body as an OpenAI Responses body to an
+ * openai-responses upstream. Used when the inbound endpoint is
+ * /v1/interactions or :generateContent and the route is openai-responses.
+ *
+ * The body has already been converted from Gemini/Claude to OpenAI Completions
+ * by handleOpenAIRequest; we run a second conversion to Responses `input`
+ * format and call the upstream. The response is converted from Responses
+ * format back to the Gemini endpoint shape.
+ */
+async function forwardCompletionsAsOpenAIResponses(
+  openaiRequest: Record<string, unknown>,
+  targetUrl: string,
+  authHeaders: Record<string, string>,
+  requestId: string,
+  model: string,
+  logger: Logger,
+  originalRequest: Request,
+  env?: Env,
+  isInteractionsRequest?: boolean,
+  isGenerateContentRequest?: boolean,
+  isStreaming?: boolean,
+): Promise<Response> {
+  const responsesBody = completionsToResponsesBody(openaiRequest, model);
+  logger.debug(requestId, `Interactions/generateContent -> openai-responses body: ${JSON.stringify(responsesBody).substring(0, 500)}`);
+
+  const response = await fetch(targetUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...addForwardedHeaders(authHeaders, originalRequest),
+    },
+    body: JSON.stringify(mapMaxTokensForUpstream(responsesBody, targetUrl)),
+    signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
+  });
+
+  recordResponseStatusCodeFromUpstream(response.status);
+  recordUpstreamResponseToolCount('openai-responses', 0);
+
+  if (!response.ok) {
+    const upstreamBody = await response.text();
+    logger.error(requestId, `Interactions/generateContent->openai-responses error: ${response.status}, URL: ${targetUrl}`);
+    handleTargetApiError(response, 'Interactions/generateContent (via openai-responses)', { url: targetUrl, upstreamBody });
+  }
+
+  if (isStreaming) {
+    return handleCrossModeStreamingResponse(response, model, requestId, logger, isInteractionsRequest === true, isGenerateContentRequest === true, 'openai-responses');
+  }
+
+  const responsesJson = await response.json() as Record<string, unknown>;
+  // Build a synthetic Completions response from the Responses output items so
+  // we can reuse the existing Gemini response converters.
+  const outputItems = (responsesJson.output as Array<Record<string, unknown>>) ?? [];
+  const textMsg = outputItems.find(o => o.type === 'message');
+  const textPart = (textMsg?.content as Array<Record<string, unknown>> | undefined)?.find(c => c.type === 'output_text');
+  const toolCallItems = outputItems.filter(o => o.type === 'function_call');
+  const usageObj = responsesJson.usage as Record<string, unknown> | undefined;
+
+  const syntheticCompletions: Record<string, unknown> = {
+    id: responsesJson.id ?? `chatcmpl_${Date.now()}`,
+    object: 'chat.completion',
+    created: (responsesJson.created_at as number) ?? Math.floor(Date.now() / 1000),
+    model: (responsesJson.model as string) ?? model,
+    choices: [{
+      index: 0,
+      message: {
+        role: 'assistant',
+        content: (textPart?.text as string) ?? '',
+        ...(toolCallItems.length > 0 ? {
+          tool_calls: toolCallItems.map(tc => ({
+            id: (tc.call_id as string) ?? (tc.id as string) ?? `call_${Date.now()}`,
+            type: 'function',
+            function: { name: tc.name ?? '', arguments: tc.arguments ?? '' },
+          })),
+        } : {}),
+      },
+      finish_reason: toolCallItems.length > 0 ? 'tool_calls' : 'stop',
+    }],
+    usage: usageObj ? {
+      prompt_tokens: usageObj.input_tokens ?? 0,
+      completion_tokens: usageObj.output_tokens ?? 0,
+      total_tokens: usageObj.total_tokens ?? 0,
+    } : undefined,
+  };
+
+  if (isGenerateContentRequest) {
+    const geminiResponse = convertOpenAIToGeminiGenerateContent(syntheticCompletions, model, requestId);
+    return new Response(JSON.stringify(geminiResponse), {
+      headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+    });
+  }
+  if (isInteractionsRequest) {
+    const interactionResponse = convertOpenAIToGeminiInteractions(syntheticCompletions, model, requestId);
+    return new Response(JSON.stringify(interactionResponse), {
+      headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+    });
+  }
+
+  // Fallback: return Responses API response as-is
+  return new Response(JSON.stringify(responsesJson), {
+    headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+  });
 }
 
 /**
@@ -112,7 +597,8 @@ export async function handleOpenAIRequest(
     env?: Env,
     logger?: Logger,
     forceStreaming?: boolean,
-    conversionOptions?: ThinkingConversionOptions
+    conversionOptions?: ThinkingConversionOptions,
+    upstreamMode?: string
 ): Promise<Response> {
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
@@ -189,6 +675,23 @@ export async function handleOpenAIRequest(
     if (forceStreaming || isStreamRequest) {
       openaiRequest.stream = true;
       isStreaming = true;
+    }
+
+    // Cross-mode routes: re-target the converted Completions body to a different
+    // upstream family. Done after the Gemini/Claude → Completions conversion so
+    // we reuse that conversion ("through openai-completions transforming").
+    if (upstreamMode === 'anthropic-messages') {
+      return forwardCompletionsAsAnthropicMessages(
+        openaiRequest, targetUrl, authHeaders, requestId,
+        openaiRequest.model as string, activeLogger, request, env,
+      );
+    }
+    if (upstreamMode === 'openai-responses') {
+      return forwardCompletionsAsOpenAIResponses(
+        openaiRequest, targetUrl, authHeaders, requestId,
+        openaiRequest.model as string, activeLogger, request, env,
+        isInteractionsRequest, isGenerateContentRequest, isStreaming,
+      );
     }
 
     // Log request info
@@ -436,8 +939,8 @@ function processSSEBuffer(buffer: string, modelId: string, requestId: string, is
                             convertedChunk = convertOpenAIToClaudeResponse(parsed, modelId, requestId);
                         }
                         
-                        // Skip chunks with no candidates/content
-                        if (!convertedChunk || (!convertedChunk.candidates && !convertedChunk.content)) {
+                        // Skip chunks with no endpoint-specific payload.
+                        if (!convertedChunk || (!convertedChunk.candidates && !convertedChunk.content && !convertedChunk.outputs)) {
                             continue;
                         }
                         

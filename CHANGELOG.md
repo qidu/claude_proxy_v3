@@ -7,6 +7,16 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Gemini endpoint routing can target Anthropic Messages and OpenAI Responses
+
+- `/v1/interactions` can now route to `upstream_mode = "anthropic-messages"` and `"openai-responses"` through the existing OpenAI Chat Completions intermediate conversion. The upstream response is converted back to the Interactions shape.
+- `/v1beta/models/{model}:generateContent` and `:streamGenerateContent` (plus `/v1/models/...`) can now route to `anthropic-messages` and `openai-responses` through the same double-conversion path, then convert responses back to Gemini `candidates[].content.parts`.
+- Cross-mode streaming text deltas are converted back to Gemini-shaped SSE instead of passing through raw Claude or Responses SSE.
+- Tool calls are preserved: Claude `tool_use` blocks and OpenAI Responses `function_call` items become Chat Completions `tool_calls`, then Gemini `functionCall` parts or Interactions `function_call` outputs.
+- When routing Interactions/generateContent to OpenAI Responses, `system`/`developer` messages are forwarded as Responses `instructions`, and OpenAI content-part arrays are normalized to text for Responses `input_text` fields.
+
+**Files changed:** `src/index.ts`, `src/handlers/openai.ts`, `src/converters/openai-to-gemini.ts`, `testcases/16_security/openai_responses_routing.test.js`, `README.md`.
+
 ### `base_url` may now point to a full upstream endpoint path
 
 The proxy no longer blindly appends the endpoint suffix to a configured `base_url`. If `base_url` already contains a known full endpoint path, it is used as-is. This lets providers configure `base_url` to the exact upstream URL they need, without getting a doubled path such as `.../v1/messages/v1/messages`.

@@ -200,23 +200,21 @@ endpoint. Full request/response examples live in the [API reference docs](#docum
 Each endpoint can be routed to one or more upstream API families (`upstream_mode`).
 The mode is selected by the route's `defaultMode` / model config:
 
-| Endpoints | `upstream_mode` Values |
-|---|---|
-| `POST /v1/messages` | `anthropic-messages`, `gemini-generatecontent`, `gemini-interactions`, `openai-completions` (passthrough when input is already OpenAI-formatted), `openai-responses` |
-| `POST /v1/responses` | `openai-responses` (passthrough), `openai-completions` (convert), `anthropic-messages` (convert), `gemini-generatecontent` (convert), `gemini-interactions` (convert) |
-| `POST /v1/chat/completions` | `openai-completions` (only when `DEV_PASS_THROUGH=true`; otherwise rejected) |
-| `POST /v1beta/models/{model}:generateContent` / `:streamGenerateContent` | `gemini-generatecontent`, `gemini-interactions`, `openai-completions` |
-| `POST /v1/interactions` | `gemini-generatecontent`, `gemini-interactions`, `openai-completions` |
-| `GET /v1/models` | (passthrough; no `upstreamMode` set) |
-| `POST /v1/embeddings` | `openai-completions` (only) |
+| Client endpoint | `anthropic-messages` | `openai-completions` | `openai-responses` | `gemini-generatecontent` | `gemini-interactions` |
+|---|---|---|---|---|---|
+| `POST /v1/messages` | **Native passthrough** to `/v1/messages`; request stays Claude Messages format end-to-end. | **Direct transform**: Claude Messages → Chat Completions → Claude Messages. If input is already OpenAI-shaped, it can pass through. | **Direct transform**: Claude/OpenAI-chat-shaped request → Responses `input` → Claude Messages. Basic tools and streaming are supported; `max_tokens` is rewritten to `max_completion_tokens`. | **Direct transform**: Claude Messages → Gemini generateContent → Claude Messages. | **Direct transform**: Claude Messages → Gemini Interactions/generateContent-compatible upstream → Claude Messages. |
+| `POST /v1/responses` | **Direct transform**: Responses `input`/`instructions` → Claude Messages → Responses. Text and tool-use are supported for non-streaming and streaming. | **Direct transform**: Responses → Chat Completions → Responses. For `api.qnaigc.com`, keeps legacy `max_tokens`; otherwise uses `max_completion_tokens`. | **Native passthrough** to `/v1/responses`. | **Direct transform via Claude Messages**: Responses → Claude Messages → Gemini generateContent → Claude Messages → Responses. | **Direct transform via Claude Messages**: Responses → Claude Messages → Gemini Interactions/generateContent → Claude Messages → Responses. |
+| `POST /v1/chat/completions` | Not supported. | **Native passthrough** only when `DEV_PASS_THROUGH=true`; otherwise rejected. | Not supported. | Not supported. | Not supported. |
+| `POST /v1beta/models/{model}:generateContent` / `:streamGenerateContent` | **Indirect transform via `openai-completions`**: generateContent → Chat Completions → Claude Messages → generateContent. Forwards upstream to `/v1/messages`; text, tool calls, and streaming text deltas return as Gemini `candidates[].content.parts`; tool calls become `functionCall` parts. | **Direct transform**: generateContent → Chat Completions → generateContent. Forwards upstream to `/v1/chat/completions`. | **Indirect transform via `openai-completions`**: generateContent → Chat Completions → Responses `input` → generateContent. Forwards upstream to `/v1/responses`; `system`/`developer` messages become Responses `instructions`; content-part arrays are normalized to text. | **Native passthrough** to `:generateContent` / `:streamGenerateContent` using the configured Gemini API version. | **Native Gemini-family route**; forwards to Gemini generateContent/stream endpoint using Interactions-compatible mode. |
+| `POST /v1/interactions` | **Indirect transform via `openai-completions`**: Interactions → Chat Completions → Claude Messages → Interactions. Forwards upstream to `/v1/messages`; text, tool calls, and streaming text deltas return in Interactions shape. | **Direct transform**: Interactions → Chat Completions → Interactions. Forwards upstream to `/v1/chat/completions`. | **Indirect transform via `openai-completions`**: Interactions → Chat Completions → Responses `input` → Interactions. Forwards upstream to `/v1/responses`; `system`/`developer` messages become Responses `instructions`; content-part arrays are normalized to text. | **Native Gemini-family route**; forwards to Gemini generateContent/stream endpoint. | **Native Gemini-family route**; forwards to Gemini generateContent/stream endpoint using Interactions-compatible mode. |
+| `GET /v1/models` | Passthrough model listing; no `upstreamMode` conversion is applied. | Passthrough model listing; no `upstreamMode` conversion is applied. | Passthrough model listing; no `upstreamMode` conversion is applied. | Passthrough model listing; no `upstreamMode` conversion is applied. | Passthrough model listing; no `upstreamMode` conversion is applied. |
+| `POST /v1/embeddings` | Not supported. | **Only supported mode**; forwards to OpenAI-compatible embeddings upstream. | Not supported. | Not supported. | Not supported. |
 
 Notes:
-- When `/v1/responses` routes to `upstream_mode = "anthropic-messages"`, the proxy converts the Responses `input` to Claude Messages format (`messages` + `system`), forwards to `/v1/messages`, and converts the Claude result back to Responses API format. Text and tool-use are supported in both non-streaming and streaming modes.
-- When `/v1/responses` routes to `upstream_mode = "gemini-generatecontent"` or `"gemini-interactions"`, the proxy converts the Responses body to Claude Messages format, delegates to the Gemini handler (which converts Claude→Gemini upstream and Gemini→Claude response), then converts the Claude result back to Responses API format.
-- `/v1/messages` is the only endpoint that supports native `anthropic-messages` SDK passthrough (request stays in Claude format end-to-end).
-- When `/v1/messages` routes to `upstream_mode = "openai-responses"`, the proxy converts the Claude/OpenAI-chat-shaped request to OpenAI Responses `input`, then converts the Responses result back to Claude Messages format. Basic tools and streaming are supported, rewrite `max_tokens` to `max_completion_tokens`.
-- For default `openai-completions` upstreams `api.qnaigc.com`, proxy keeps the legacy `max_tokens` field.
-- `/v1/embeddings` is locked to `openai-completions`; no Gemini/Anthropic embedding path.
+- **Native passthrough** means the client endpoint and upstream API family already match, so the request body is not converted to another provider's format.
+- **Direct transform** means the proxy converts directly between the client endpoint format and the selected upstream family, then converts the response directly back to the client endpoint shape.
+- **Direct transform via Claude Messages** means Responses uses Claude Messages as its internal bridge before calling Gemini; it does not go through `openai-completions`.
+- **Indirect transform via `openai-completions`** means Gemini endpoint input first becomes OpenAI Chat Completions, then becomes Claude Messages or OpenAI Responses. This reuses the Chat Completions middle mode while preserving the original Gemini endpoint response shape.
 
 ### Dashboard API
 

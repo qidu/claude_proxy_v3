@@ -15,6 +15,10 @@
  * - TC3007: TUI test request token field follows upstream mode
  * - TC3008: /v1/responses -> anthropic-messages converts to Claude Messages format
  * - TC3009: /v1/responses -> gemini-generatecontent converts via Claude format
+ * - TC3010: /v1/interactions -> anthropic-messages via openai-completions transforming
+ * - TC3011: /v1/interactions -> openai-responses via openai-completions transforming
+ * - TC3012: :generateContent -> anthropic-messages via openai-completions transforming
+ * - TC3013: :generateContent -> openai-responses via openai-completions transforming
  */
 
 const path = require('path');
@@ -25,15 +29,18 @@ const {
 
 let handleMessagesRequest;
 let handleResponsesRequest;
+let handleOpenAIRequest;
 let buildTestTextRequest;
 let buildTestToolRequest;
 
 async function loadModule() {
   const messages = await import(path.join(process.cwd(), 'dist/handlers/messages.js'));
   const responses = await import(path.join(process.cwd(), 'dist/handlers/responses.js'));
+  const openai = await import(path.join(process.cwd(), 'dist/handlers/openai.js'));
   const tui = await import(path.join(process.cwd(), 'dist/tui.js'));
   handleMessagesRequest = messages.handleMessagesRequest;
   handleResponsesRequest = responses.handleResponsesRequest;
+  handleOpenAIRequest = openai.handleOpenAIRequest;
   buildTestTextRequest = tui.buildTestTextRequest;
   buildTestToolRequest = tui.buildTestToolRequest;
 }
@@ -61,6 +68,23 @@ function responsesJson(text = 'ok') {
       role: 'assistant',
       status: 'completed',
       content: [{ type: 'output_text', text }],
+    }],
+    usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
+  };
+}
+
+function responsesToolCallJson() {
+  return {
+    id: 'resp_tool_test',
+    object: 'response',
+    created_at: 123,
+    model: 'gpt-test',
+    output: [{
+      id: 'fc_test',
+      type: 'function_call',
+      call_id: 'call_weather',
+      name: 'get_weather',
+      arguments: '{"city":"Paris"}',
     }],
     usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
   };
@@ -122,19 +146,8 @@ async function readSseEvents(response) {
     });
 }
 
-function upstreamSseResponse() {
+function sseResponse(events) {
   const encoder = new TextEncoder();
-  const events = [
-    { type: 'response.output_text.delta', delta: 'hel' },
-    { type: 'response.output_text.delta', delta: 'lo' },
-    { type: 'response.output_text.done' },
-    {
-      type: 'response.completed',
-      response: {
-        usage: { input_tokens: 4, output_tokens: 2, total_tokens: 6 },
-      },
-    },
-  ];
   const body = events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n';
   return new Response(new ReadableStream({
     start(controller) {
@@ -145,6 +158,31 @@ function upstreamSseResponse() {
     status: 200,
     headers: { 'Content-Type': 'text/event-stream' },
   });
+}
+
+function upstreamSseResponse() {
+  return sseResponse([
+    { type: 'response.output_text.delta', delta: 'hel' },
+    { type: 'response.output_text.delta', delta: 'lo' },
+    { type: 'response.output_text.done' },
+    {
+      type: 'response.completed',
+      response: {
+        usage: { input_tokens: 4, output_tokens: 2, total_tokens: 6 },
+      },
+    },
+  ]);
+}
+
+function anthropicSseResponse() {
+  return sseResponse([
+    { type: 'message_start', message: { id: 'msg_stream', type: 'message', role: 'assistant' } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hel' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'lo' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_stop' },
+  ]);
 }
 
 async function testClaudeMessagesToResponsesBody() {
@@ -485,6 +523,346 @@ async function testResponsesToGeminiGenerateContent() {
   );
 }
 
+/**
+ * TC3010: /v1/interactions -> anthropic-messages via openai-completions transforming
+ *
+ * Verifies that when the inbound endpoint is /v1/interactions and upstreamMode
+ * is 'anthropic-messages', the handler:
+ * - Converts the Interactions body to OpenAI Chat Completions (intermediate step)
+ * - Converts the Completions body to Claude Messages
+ * - Calls the upstream v1/messages
+ * - Converts the Claude response back to Interactions shape
+ */
+async function testInteractionsToAnthropicMessages() {
+  const claudeUpstreamResponse = {
+    id: 'msg_test_interactions',
+    type: 'message',
+    role: 'assistant',
+    model: 'claude-test',
+    content: [{ type: 'text', text: 'Hello from Claude (via interactions)' }],
+    stop_reason: 'end_turn',
+    usage: { input_tokens: 4, output_tokens: 6 },
+  };
+
+  await withFetchStub(
+    () => new Response(JSON.stringify(claudeUpstreamResponse), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    async (calls) => {
+      const response = await handleOpenAIRequest(
+        makeRequest('/v1/interactions', {
+          model: 'claude-test',
+          input: 'Hello',
+        }),
+        'https://api.anthropic.com/v1/messages',
+        { 'x-api-key': 'sk-test' },
+        'req_tc3010',
+        'claude-test',
+        {},
+        undefined,
+        undefined,
+        undefined,
+        'anthropic-messages'
+      );
+
+      assert(calls.length === 1, `expected one upstream call, got ${calls.length}`);
+      assert(calls[0].url === 'https://api.anthropic.com/v1/messages', `unexpected URL ${calls[0].url}`);
+      assert(Array.isArray(calls[0].body.messages), 'Claude body should contain messages array');
+      const userMsg = calls[0].body.messages.find(m => m.role === 'user');
+      assert(userMsg, 'should have a user message');
+      assert(userMsg.content === 'Hello', `expected user content 'Hello', got ${userMsg.content}`);
+
+      assert(response.status === 200, `expected 200, got ${response.status}`);
+      const body = await readJson(response);
+      assert(body.object === 'interaction', `expected interaction object, got ${body.object}`);
+      assert(Array.isArray(body.outputs), 'Interactions response should contain outputs array');
+      assert(body.outputs[0]?.type === 'text', `expected text output, got ${JSON.stringify(body.outputs[0])}`);
+      assert(body.outputs[0]?.text === 'Hello from Claude (via interactions)', `unexpected text ${body.outputs[0]?.text}`);
+    }
+  );
+}
+
+/**
+ * TC3011: /v1/interactions -> openai-responses via openai-completions transforming
+ *
+ * Verifies that when the inbound endpoint is /v1/interactions and upstreamMode
+ * is 'openai-responses', the handler:
+ * - Converts the Interactions body to OpenAI Chat Completions (intermediate step)
+ * - Converts the Completions body to Responses input format
+ * - Calls the upstream v1/responses
+ * - Converts the Responses output back to Interactions shape
+ */
+async function testInteractionsToOpenAIResponses() {
+  const responsesUpstreamResponse = responsesJson('Hello from Responses (via interactions)');
+
+  await withFetchStub(
+    () => new Response(JSON.stringify(responsesUpstreamResponse), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    async (calls) => {
+      const response = await handleOpenAIRequest(
+        makeRequest('/v1/interactions', {
+          model: 'gpt-test',
+          input: 'Hello',
+        }),
+        'https://api.openai.com/v1/responses',
+        { 'Authorization': 'Bearer sk-test' },
+        'req_tc3011',
+        'gpt-test',
+        {},
+        undefined,
+        undefined,
+        undefined,
+        'openai-responses'
+      );
+
+      assert(calls.length === 1, `expected one upstream call, got ${calls.length}`);
+      assert(calls[0].url === 'https://api.openai.com/v1/responses', `unexpected URL ${calls[0].url}`);
+      assert(Array.isArray(calls[0].body.input) || typeof calls[0].body.input === 'string', 'Responses body should have input field');
+
+      assert(response.status === 200, `expected 200, got ${response.status}`);
+      const body = await readJson(response);
+      assert(body.object === 'interaction', `expected interaction object, got ${body.object}`);
+      assert(Array.isArray(body.outputs), 'Interactions response should contain outputs array');
+      assert(body.outputs[0]?.type === 'text', `expected text output, got ${JSON.stringify(body.outputs[0])}`);
+      assert(body.outputs[0]?.text === 'Hello from Responses (via interactions)', `unexpected text ${body.outputs[0]?.text}`);
+    }
+  );
+}
+
+/**
+ * TC3012: :generateContent -> anthropic-messages via openai-completions transforming
+ *
+ * Verifies that when the inbound endpoint is :generateContent and upstreamMode
+ * is 'anthropic-messages', the handler:
+ * - Converts the generateContent body to OpenAI Chat Completions (intermediate step)
+ * - Converts the Completions body to Claude Messages
+ * - Calls the upstream v1/messages
+ * - Converts the Claude response back to generateContent shape
+ */
+async function testGenerateContentToAnthropicMessages() {
+  const claudeUpstreamResponse = {
+    id: 'msg_test_gencontent',
+    type: 'message',
+    role: 'assistant',
+    model: 'claude-test',
+    content: [{ type: 'text', text: 'Hello from Claude (via generateContent)' }],
+    stop_reason: 'end_turn',
+    usage: { input_tokens: 3, output_tokens: 5 },
+  };
+
+  await withFetchStub(
+    () => new Response(JSON.stringify(claudeUpstreamResponse), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    async (calls) => {
+      const response = await handleOpenAIRequest(
+        makeRequest('/v1beta/models/claude-test:generateContent', {
+          contents: [{ role: 'user', parts: [{ text: 'Hello' }] }],
+        }),
+        'https://api.anthropic.com/v1/messages',
+        { 'x-api-key': 'sk-test' },
+        'req_tc3012',
+        'claude-test',
+        {},
+        undefined,
+        undefined,
+        undefined,
+        'anthropic-messages'
+      );
+
+      assert(calls.length === 1, `expected one upstream call, got ${calls.length}`);
+      assert(calls[0].url === 'https://api.anthropic.com/v1/messages', `unexpected URL ${calls[0].url}`);
+      assert(Array.isArray(calls[0].body.messages), 'Claude body should contain messages array');
+      const userMsg = calls[0].body.messages.find(m => m.role === 'user');
+      assert(userMsg, 'should have a user message');
+      assert(userMsg.content === 'Hello', `expected user content 'Hello', got ${userMsg.content}`);
+
+      assert(response.status === 200, `expected 200, got ${response.status}`);
+      const body = await readJson(response);
+      assert(Array.isArray(body.candidates), 'response should have candidates array (generateContent shape)');
+      assert(body.candidates[0]?.content?.parts?.[0]?.text === 'Hello from Claude (via generateContent)', `unexpected text ${JSON.stringify(body.candidates)}`);
+    }
+  );
+}
+
+/**
+ * TC3013: :generateContent -> openai-responses via openai-completions transforming
+ *
+ * Verifies that when the inbound endpoint is :generateContent and upstreamMode
+ * is 'openai-responses', the handler:
+ * - Converts the generateContent body to OpenAI Chat Completions (intermediate step)
+ * - Converts the Completions body to Responses input format
+ * - Calls the upstream v1/responses
+ * - Converts the Responses output back to generateContent shape
+ */
+async function testGenerateContentToOpenAIResponses() {
+  const responsesUpstreamResponse = responsesJson('Hello from Responses (via generateContent)');
+
+  await withFetchStub(
+    () => new Response(JSON.stringify(responsesUpstreamResponse), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    async (calls) => {
+      const response = await handleOpenAIRequest(
+        makeRequest('/v1beta/models/gpt-test:generateContent', {
+          contents: [{ role: 'user', parts: [{ text: 'Hello' }] }],
+        }),
+        'https://api.openai.com/v1/responses',
+        { 'Authorization': 'Bearer sk-test' },
+        'req_tc3013',
+        'gpt-test',
+        {},
+        undefined,
+        undefined,
+        undefined,
+        'openai-responses'
+      );
+
+      assert(calls.length === 1, `expected one upstream call, got ${calls.length}`);
+      assert(calls[0].url === 'https://api.openai.com/v1/responses', `unexpected URL ${calls[0].url}`);
+
+      assert(response.status === 200, `expected 200, got ${response.status}`);
+      const body = await readJson(response);
+      assert(Array.isArray(body.candidates), 'response should have candidates array (generateContent shape)');
+      assert(body.candidates[0]?.content?.parts?.[0]?.text === 'Hello from Responses (via generateContent)', `unexpected text ${JSON.stringify(body.candidates)}`);
+    }
+  );
+}
+
+async function testResponsesInstructionsAndArrayContent() {
+  await withFetchStub(
+    () => new Response(JSON.stringify(responsesJson()), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    async (calls) => {
+      await handleOpenAIRequest(
+        makeRequest('/v1/interactions', {
+          model: 'gpt-test',
+          input: {
+            messages: [
+              { role: 'system', content: 'Be concise.' },
+              { role: 'developer', content: [{ type: 'text', text: 'Use JSON.' }] },
+              { role: 'user', content: [{ type: 'text', text: 'Hello' }] },
+            ],
+          },
+        }),
+        'https://api.openai.com/v1/responses',
+        { 'Authorization': 'Bearer sk-test' },
+        'req_tc3014',
+        'gpt-test',
+        {},
+        undefined,
+        undefined,
+        undefined,
+        'openai-responses'
+      );
+
+      assert(calls[0].body.instructions === 'Be concise.\nUse JSON.', `unexpected instructions ${calls[0].body.instructions}`);
+      assert(calls[0].body.input[0].content[0].text === 'Hello', `array content should become text, got ${JSON.stringify(calls[0].body.input[0])}`);
+    }
+  );
+}
+
+async function testAnthropicToolUseToGenerateContentFunctionCall() {
+  const claudeUpstreamResponse = {
+    id: 'msg_tool_test',
+    type: 'message',
+    role: 'assistant',
+    model: 'claude-test',
+    content: [{ type: 'tool_use', id: 'call_weather', name: 'get_weather', input: { city: 'Paris' } }],
+    stop_reason: 'tool_use',
+    usage: { input_tokens: 3, output_tokens: 5 },
+  };
+
+  await withFetchStub(
+    () => new Response(JSON.stringify(claudeUpstreamResponse), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    async () => {
+      const response = await handleOpenAIRequest(
+        makeRequest('/v1beta/models/claude-test:generateContent', {
+          contents: [{ role: 'user', parts: [{ text: 'Weather' }] }],
+        }),
+        'https://api.anthropic.com/v1/messages',
+        { 'x-api-key': 'sk-test' },
+        'req_tc3015',
+        'claude-test',
+        {},
+        undefined,
+        undefined,
+        undefined,
+        'anthropic-messages'
+      );
+
+      const body = await readJson(response);
+      const functionCall = body.candidates[0]?.content?.parts?.find(part => part.functionCall)?.functionCall;
+      assert(functionCall?.name === 'get_weather', `unexpected function call ${JSON.stringify(functionCall)}`);
+      assert(functionCall?.args?.city === 'Paris', `unexpected function args ${JSON.stringify(functionCall?.args)}`);
+    }
+  );
+}
+
+async function testResponsesToolCallToInteractionsFunctionCall() {
+  await withFetchStub(
+    () => new Response(JSON.stringify(responsesToolCallJson()), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    async () => {
+      const response = await handleOpenAIRequest(
+        makeRequest('/v1/interactions', { model: 'gpt-test', input: 'Weather' }),
+        'https://api.openai.com/v1/responses',
+        { 'Authorization': 'Bearer sk-test' },
+        'req_tc3016',
+        'gpt-test',
+        {},
+        undefined,
+        undefined,
+        undefined,
+        'openai-responses'
+      );
+
+      const body = await readJson(response);
+      const output = body.outputs?.[0];
+      assert(output?.type === 'function_call', `expected function_call output, got ${JSON.stringify(output)}`);
+      assert(output?.name === 'get_weather', `unexpected function name ${output?.name}`);
+      assert(output?.arguments?.city === 'Paris', `unexpected arguments ${JSON.stringify(output?.arguments)}`);
+    }
+  );
+}
+
+async function testCrossModeStreamsReturnGeminiShape() {
+  await withFetchStub(
+    () => anthropicSseResponse(),
+    async () => {
+      const response = await handleOpenAIRequest(
+        makeRequest('/v1beta/models/claude-test:streamGenerateContent', {
+          contents: [{ role: 'user', parts: [{ text: 'Hello' }] }],
+        }),
+        'https://api.anthropic.com/v1/messages',
+        { 'x-api-key': 'sk-test' },
+        'req_tc3017a',
+        'claude-test',
+        {},
+        undefined,
+        true,
+        undefined,
+        'anthropic-messages'
+      );
+      const events = await readSseEvents(response);
+      assert(events.some(event => event.data?.candidates?.[0]?.content?.parts?.[0]?.text === 'hel'), `expected Gemini generateContent SSE, got ${JSON.stringify(events)}`);
+      assert(!events.some(event => event.data?.type === 'content_block_delta'), 'should not return raw Claude SSE');
+    }
+  );
+
+  await withFetchStub(
+    () => upstreamSseResponse(),
+    async () => {
+      const response = await handleOpenAIRequest(
+        makeRequest('/v1/interactions', { model: 'gpt-test', input: 'Hello', stream: true }),
+        'https://api.openai.com/v1/responses',
+        { 'Authorization': 'Bearer sk-test' },
+        'req_tc3017b',
+        'gpt-test',
+        {},
+        undefined,
+        undefined,
+        undefined,
+        'openai-responses'
+      );
+      const events = await readSseEvents(response);
+      assert(events.some(event => event.data?.object === 'interaction' && event.data?.outputs?.[0]?.text === 'hel'), `expected Interactions SSE, got ${JSON.stringify(events)}`);
+      assert(!events.some(event => event.data?.type === 'response.output_text.delta'), 'should not return raw Responses SSE');
+    }
+  );
+}
+
 if (require.main === module) {
   loadModule().then(() => runTestSuite('OpenAI Responses Routing/Conversion Unit Tests', [
     { name: 'TC3001: /v1/messages Claude -> openai-responses body', fn: testClaudeMessagesToResponsesBody },
@@ -496,5 +874,13 @@ if (require.main === module) {
     { name: 'TC3007: TUI test request token field follows upstream mode', fn: testTuiMaxTokenFieldFollowsUpstreamMode },
     { name: 'TC3008: /v1/responses -> anthropic-messages converts to Claude format', fn: testResponsesToAnthropicMessages },
     { name: 'TC3009: /v1/responses -> gemini-generatecontent converts to Claude format', fn: testResponsesToGeminiGenerateContent },
+    { name: 'TC3010: /v1/interactions -> anthropic-messages via openai-completions', fn: testInteractionsToAnthropicMessages },
+    { name: 'TC3011: /v1/interactions -> openai-responses via openai-completions', fn: testInteractionsToOpenAIResponses },
+    { name: 'TC3012: :generateContent -> anthropic-messages via openai-completions', fn: testGenerateContentToAnthropicMessages },
+    { name: 'TC3013: :generateContent -> openai-responses via openai-completions', fn: testGenerateContentToOpenAIResponses },
+    { name: 'TC3014: cross-mode Responses preserves instructions and array text', fn: testResponsesInstructionsAndArrayContent },
+    { name: 'TC3015: anthropic tool_use converts to Gemini functionCall', fn: testAnthropicToolUseToGenerateContentFunctionCall },
+    { name: 'TC3016: Responses function_call converts to Interactions output', fn: testResponsesToolCallToInteractionsFunctionCall },
+    { name: 'TC3017: cross-mode streams return Gemini-shaped SSE', fn: testCrossModeStreamsReturnGeminiShape },
   ]));
 }
