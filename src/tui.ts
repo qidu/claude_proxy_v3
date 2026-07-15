@@ -1069,8 +1069,12 @@ class DashboardView implements Component {
       live.input > 0 ? `${dim('↑')} ${fmt(live.input)}` : '',
       live.output > 0 ? `${dim('↓')} ${fmt(live.output)}` : '',
     ].filter(Boolean) : [];
-    const liveSuffix = liveParts.length ? `            ${liveParts.join(' ')}` : '';
-    tokenHeatmapLines[0] = `${bold('Tokens Panel')} [${fmt(tokenHeatmap.totalValues)}${globalLimitSuffix}${globalLimitSuffix ? '' : ']'}${liveSuffix}`;
+    const liveSuffix = liveParts.join(' ');
+    const tokenHeader = `${bold('Tokens Panel')} [${fmt(tokenHeatmap.totalValues)}${globalLimitSuffix}${globalLimitSuffix ? '' : ']'}`;
+    const tokenPanelWidth = Math.max(...tokenHeatmapLines.map((line) => visibleWidth(line)));
+    tokenHeatmapLines[0] = liveSuffix
+      ? `${tokenHeader}${' '.repeat(Math.max(1, tokenPanelWidth - 1 - visibleWidth(tokenHeader) - visibleWidth(liveSuffix)))}${liveSuffix}`
+      : tokenHeader;
     lines.push(...tokenHeatmapLines);
     lines.push('');
     const customModels = this.customModels();
