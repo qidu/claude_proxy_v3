@@ -34,7 +34,7 @@ import {
   handleDashboardToolBlocklist,
   handleDashboardUpsertScheduleTarget,
 } from './handlers/dashboard.js';
-import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, getCompositeAliasMode, resolveFusionPlan, FusionPlan, ModelRouteConfig, ProxyConfig, parseHumanTokenLimit, getAllowedHostsFromConfig, resolveScheduleTarget } from './utils/config-loader.js';
+import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, getCompositeAliasMode, resolveFusionPlan, FusionPlan, ModelRouteConfig, ProxyConfig, CompositeRouteCandidate, CompositeTargetConfig, parseHumanTokenLimit, getAllowedHostsFromConfig, resolveScheduleTarget } from './utils/config-loader.js';
 import {
   extractToolNamesFromBody,
   extractToolRequestCharLengthsFromBody,
@@ -81,6 +81,81 @@ import { getKompressConfig, shouldCompressPath, compressBody } from './utils/kom
 import { eraseBlockedTools } from './utils/tool-blocklist.js';
 
 let hasLoggedUpstreamConfig = false;
+
+const compositeEffectiveShares = new Map<string, number>();
+
+function getConfiguredCompositeShare(targetConfig: CompositeTargetConfig): number {
+  return typeof targetConfig.share === 'number' && targetConfig.share > 0 ? targetConfig.share : 1;
+}
+
+function compositeShareKey(alias: string, targetModel: string): string {
+  return `${alias}\u0000${targetModel}`;
+}
+
+export function getEffectiveCompositeShare(alias: string, targetModel: string, configuredShare: number): number {
+  return compositeEffectiveShares.get(compositeShareKey(alias, targetModel)) ?? configuredShare;
+}
+
+export function decayEffectiveCompositeShare(alias: string, targetModel: string, configuredShare: number): { previous: number; next: number; floor: number } {
+  const normalizedShare = configuredShare > 0 ? configuredShare : 1;
+  const previous = getEffectiveCompositeShare(alias, targetModel, normalizedShare);
+  const floor = normalizedShare / 10;
+  const next = Math.max(floor, previous / 2);
+  compositeEffectiveShares.set(compositeShareKey(alias, targetModel), next);
+  return { previous, next, floor };
+}
+
+export function resetEffectiveCompositeSharesForTest(): void {
+  compositeEffectiveShares.clear();
+}
+
+function selectWeightedCompositeCandidate<T>(candidates: T[], getWeight: (candidate: T) => number): T | undefined {
+  const totalWeight = candidates.reduce((sum, candidate) => sum + Math.max(0, getWeight(candidate)), 0);
+  if (totalWeight <= 0) return candidates[0];
+
+  let remaining = Math.random() * totalWeight;
+  for (const candidate of candidates) {
+    remaining -= Math.max(0, getWeight(candidate));
+    if (remaining <= 0) return candidate;
+  }
+  return candidates[candidates.length - 1];
+}
+
+function orderCompositeCandidatesForRuntimeShare(alias: string, candidates: CompositeRouteCandidate[]): CompositeRouteCandidate[] {
+  const primary = candidates.find(candidate => candidate.targetConfig.primary);
+  if (primary) {
+    const configuredShare = getConfiguredCompositeShare(primary.targetConfig);
+    const effectiveShare = getEffectiveCompositeShare(alias, primary.modelName, configuredShare);
+    if (effectiveShare >= configuredShare) return candidates;
+
+    const first = selectWeightedCompositeCandidate(candidates, candidate =>
+      candidate === primary ? effectiveShare : getConfiguredCompositeShare(candidate.targetConfig)
+    );
+    return first ? [first, ...candidates.filter(candidate => candidate !== first)] : candidates;
+  }
+
+  // Fallback-only alias: candidates are pre-sorted by fallback number ascending.
+  // If any fallback target has decayed, reorder using weighted selection among
+  // fallback-numbered candidates so a degraded first-fallback can be skipped.
+  const fallbackCandidates = candidates.filter(candidate =>
+    typeof candidate.targetConfig.fallback === 'number' && candidate.targetConfig.fallback > 0
+  );
+  if (fallbackCandidates.length < 2) return candidates;
+
+  const anyDecayed = fallbackCandidates.some(candidate => {
+    const configured = getConfiguredCompositeShare(candidate.targetConfig);
+    return getEffectiveCompositeShare(alias, candidate.modelName, configured) < configured;
+  });
+  if (!anyDecayed) return candidates;
+
+  const first = selectWeightedCompositeCandidate(fallbackCandidates, candidate => {
+    const configured = getConfiguredCompositeShare(candidate.targetConfig);
+    return getEffectiveCompositeShare(alias, candidate.modelName, configured);
+  });
+  if (!first) return candidates;
+  const rest = candidates.filter(candidate => candidate !== first);
+  return [first, ...rest];
+}
 
 /**
  * Generate a unique request ID using a cryptographically secure source.
@@ -895,6 +970,8 @@ export default {
         upstreamMode?: string;
         forceStreaming: boolean;
         authHeaders: Record<string, string>;
+        compositeTargetName?: string;
+        compositeTargetConfig?: CompositeTargetConfig;
         /** Structured {prefix, ua} resolved from request body + User-Agent
          *  header. Carried into the response-tracking closure so request-side
          *  and response-side records share one (prefix, ua) key. Optional for
@@ -1074,15 +1151,15 @@ export default {
               }
             }
 
-            const routeCandidates: Array<{ modelName: string; route: ModelRouteConfig }> = compositeCandidates.length > 0
-              ? compositeCandidates
-              : [{ modelName, route: getModelRouteConfig(modelName, proxyConfig) }];
+            const routeCandidates: CompositeRouteCandidate[] = compositeCandidates.length > 0
+              ? orderCompositeCandidatesForRuntimeShare(modelName, compositeCandidates)
+              : [{ modelName, route: getModelRouteConfig(modelName, proxyConfig), targetConfig: {} }];
 
             // Get client connection info from headers (added by Node.js server adapter)
             const clientAddress = request.headers.get('x-client-address') || 'unknown';
             const clientPort = request.headers.get('x-client-port') || 'unknown';
 
-            compositeAttempts = routeCandidates.map(({ modelName: candidateName, route }) => {
+            compositeAttempts = routeCandidates.map(({ modelName: candidateName, route, targetConfig }) => {
               logger.debug(requestId, `Composite candidate ${modelName} -> ${candidateName} via ${route.targetUrl} (${route.upstreamMode}) [client ${clientAddress}:${clientPort}]`);
 
               const upstreamModelName = route.modelAlias || candidateName;
@@ -1254,6 +1331,8 @@ export default {
                 upstreamMode: candidateUpstreamMode,
                 forceStreaming: candidateForceStreaming,
                 authHeaders: candidateAuthHeaders,
+                compositeTargetName: compositeAliasName ? candidateName : undefined,
+                compositeTargetConfig: compositeAliasName ? targetConfig : undefined,
               };
             });
 
@@ -1972,6 +2051,17 @@ export default {
               failedModelId = attempt.modelId;
               recordModelFailedRequest(attempt.modelId);
               modelFailureRecorded = true;
+            }
+            if (error instanceof ClaudeProxyError && compositeAliasName && attempt.compositeTargetName && attempt.compositeTargetConfig) {
+              const isPrimary = attempt.compositeTargetConfig.primary === true;
+              const fallbackNum = attempt.compositeTargetConfig.fallback;
+              const isFallback = typeof fallbackNum === 'number' && fallbackNum > 0;
+              if (isPrimary || isFallback) {
+                const configuredShare = getConfiguredCompositeShare(attempt.compositeTargetConfig);
+                const { previous, next, floor } = decayEffectiveCompositeShare(compositeAliasName, attempt.compositeTargetName, configuredShare);
+                const role = isPrimary ? 'primary' : `fallback(${fallbackNum})`;
+                logger.warn(requestId, `Composite ${role} ${compositeAliasName}.${attempt.compositeTargetName} returned ${error.status}; effective share ${previous} -> ${next} (floor ${floor})`);
+              }
             }
             if (i < compositeAttempts.length - 1) {
               logger.warn(requestId, `Composite attempt ${i + 1}/${compositeAttempts.length} failed for model=${attempt.modelId}: ${(error as Error).message}; retrying next candidate`);

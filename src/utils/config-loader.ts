@@ -162,6 +162,12 @@ export interface CompositeRouteSelection {
   skippedTargets: string[];
 }
 
+export interface CompositeRouteCandidate {
+  modelName: string;
+  route: ModelRouteConfig;
+  targetConfig: CompositeTargetConfig;
+}
+
 interface CompositeResolvedTarget {
   targetModelName: string;
   targetConfig: CompositeTargetConfig;
@@ -399,7 +405,7 @@ export function getCompositeRouteCandidates(
   modelName: string,
   proxyConfig: ProxyConfig,
   visited: Set<string> = new Set(),
-): Array<{ modelName: string; route: ModelRouteConfig }> {
+): CompositeRouteCandidate[] {
   if (!proxyConfig.models) {
     return [];
   }
@@ -426,6 +432,7 @@ export function getCompositeRouteCandidates(
       ...candidate.route,
       modelAlias: candidate.route.modelAlias || candidate.targetModelName,
     },
+    targetConfig: candidate.targetConfig,
   }));
 }
 

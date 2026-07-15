@@ -1065,7 +1065,11 @@ class DashboardView implements Component {
       globalLimitSuffix = ` ${limitColor('L')} ${limitColor(globalLimitDisplay)}]`;
     }
     const live = getActiveRequestCount() > 0 ? getLiveTokens() : null;
-    const liveSuffix = live ? ` ${dim('↑')} ${fmt(live.output)} ${dim('↓')} ${fmt(live.input)}` : '';
+    const liveParts = live ? [
+      live.input > 0 ? `${dim('↑')} ${fmt(live.input)}` : '',
+      live.output > 0 ? `${dim('↓')} ${fmt(live.output)}` : '',
+    ].filter(Boolean) : [];
+    const liveSuffix = liveParts.length ? `            ${liveParts.join(' ')}` : '';
     tokenHeatmapLines[0] = `${bold('Tokens Panel')} [${fmt(tokenHeatmap.totalValues)}${globalLimitSuffix}${globalLimitSuffix ? '' : ']'}${liveSuffix}`;
     lines.push(...tokenHeatmapLines);
     lines.push('');

@@ -361,6 +361,17 @@ Group multiple models under one name in a `[composite]` section:
 
 - `share` — weighted random selection across targets.
 - `primary` / `fallback` — try primary first, fall back in order on failure.
+  When a target returns a non-200 upstream error, its effective share is reduced in memory
+  by half for later requests, down to a floor of one tenth of its configured share:
+  - **Primary target**: decay fires when the `primary = true` target fails. Subsequent
+    requests use a weighted pick between the primary (at its reduced share) and the other
+    targets, so a heavily degraded primary is less likely to be tried first.
+  - **Fallback targets** (no primary): when the alias has two or more `fallback`-numbered
+    targets and the first-tried one fails, its effective share is decayed by the same rule.
+    The next request picks the first attempt by weighted share, so a degraded fallback-1
+    can be overtaken by fallback-2.
+  - Decay is runtime-only — `proxy_config.toml` is never modified and state resets when
+    the proxy process restarts.
 - `token_limit` — `{num, duration}` rolling-window cap (`1h`/`1d`/`1w`/`1m`); returns HTTP 429 when exceeded.
 
 **Fusion** fans a request out to multiple "panel" models in parallel and routes through an

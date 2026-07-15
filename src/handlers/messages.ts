@@ -17,7 +17,7 @@ import { normalizeOpenAIToClaudeThinking } from '../utils/thinking.js';
 import { validateBetaFeatures, hasBetaFeature } from '../utils/beta-features.js';
 import { isSdkUrl, handleSdkOpenAIRequest, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
 import { addForwardedHeaders, mapMaxTokensForUpstream, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
-import { getLocalTokenCountingConfig } from '../utils/token-counting.js';
+import { countClaudeRequestTokens, getLocalTokenCountingConfig, TokenCountingOptions } from '../utils/token-counting.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
 import { OpenAIResponsesResponse } from '../converters/completions-to-responses.js';
@@ -309,7 +309,7 @@ export async function handleMessagesRequest(
 
       const tokenCountingConfig = getTokenCountingConfig(env);
       if (isStreaming) {
-        return handleResponsesStreamAsClaude(responsesResponse, model, requestId, activeLogger);
+        return handleResponsesStreamAsClaude(responsesResponse, model, requestId, activeLogger, requestBody);
       }
       const responsesJson = await responsesResponse.json() as OpenAIResponsesResponse;
       const outputItem = responsesJson.output?.find(o => o.type === 'message');
@@ -530,7 +530,7 @@ export async function handleMessagesRequest(
     if (isStreaming) {
       // Stream from upstream Responses API (SSE), re-emit as Claude SSE.
       // Convert each `response.output_text.delta` event to a Claude `content_block_delta`.
-      return handleResponsesStreamAsClaude(responsesResponse, targetModelId, requestId, activeLogger);
+      return handleResponsesStreamAsClaude(responsesResponse, targetModelId, requestId, activeLogger, requestBody);
     }
 
     // Non-streaming: parse Responses response and convert to Claude format.
@@ -780,6 +780,7 @@ function handleResponsesStreamAsClaude(
   model: string,
   requestId: string,
   logger: Logger,
+  requestBody?: Record<string, unknown>,
 ): Response {
   if (!upstreamResponse.body) {
     throw new Error('Upstream Responses stream body is not readable');
@@ -799,7 +800,16 @@ function handleResponsesStreamAsClaude(
     try {
       const messageId = `msg_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
 
-      // message_start — we don't know usage yet, placeholder zeros
+      let inputTokens = 0;
+      if (requestBody) {
+        try {
+          const options: TokenCountingOptions = { useLocalCounting: true, tokenizer: null };
+          inputTokens = countClaudeRequestTokens(requestBody as any, options);
+        } catch {
+          inputTokens = 0;
+        }
+      }
+
       await writer.write(claudeEvent('message_start', {
         type: 'message_start',
         message: {
@@ -810,7 +820,7 @@ function handleResponsesStreamAsClaude(
           model,
           stop_reason: null,
           stop_sequence: null,
-          usage: { input_tokens: 0, output_tokens: 0 },
+          usage: { input_tokens: inputTokens, output_tokens: 0 },
         },
       }));
 
@@ -819,7 +829,6 @@ function handleResponsesStreamAsClaude(
       const toolBlockIndex = new Map<number, number>();
       let nextBlockIndex = 0;
       let buffer = '';
-      let inputTokens = 0;
       let outputTokens = 0;
 
       const reader = upstreamResponse.body!.getReader();
@@ -916,7 +925,7 @@ function handleResponsesStreamAsClaude(
                 stop_reason: hasToolUse ? 'tool_use' : 'end_turn',
                 stop_sequence: null,
               },
-              usage: { output_tokens: outputTokens },
+              usage: { input_tokens: inputTokens, output_tokens: outputTokens },
             }));
             await writer.write(claudeEvent('message_stop', { type: 'message_stop' }));
           }
