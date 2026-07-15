@@ -30,7 +30,9 @@ accounting out of the box.
   - `/v1/interactions` — Gemini Interactions API
   - `/v1/responses` — OpenAI Responses API
 - **Model-based routing** — route each model name to its own upstream URL, API key,
-  and protocol via a simple TOML config. Wildcards (`claude-*`) and catch-alls (`*`) supported.
+  and protocol via a simple TOML config. Exact model keys are supported in every
+  `[models.*]` category; provider wildcards (`claude-*`) and the final catch-all
+  (`*`) are scoped as described in [Model Routing](#model-routing).
 - **Composite aliases** — group several models under one name with weighted random,
   primary/fallback, or automatic retry-on-failure routing.
 - **Fusion mode** — fan one request out to multiple models in parallel, then have a
@@ -90,12 +92,11 @@ base_url = "https://generativelanguage.googleapis.com"
 api_key = "your-gemini-key"
 "gemini-*" = {}
 
-# Everything else goes here (OpenAI-compatible). Each `[models.*]` section must
-# define its own `base_url` — `[upstream] default_base_url` does NOT fall through
-# to fill in a missing section base_url.
+# Everything else goes here (OpenAI-compatible). Empty entry fields inherit
+# from the section, then from `[upstream]` defaults.
 [models.default]
 upstream_mode = "openai-completions"
-base_url = "https://api.your-provider.com"   # section base_url is required; not inherited from [upstream]
+base_url = "https://api.your-provider.com"   # section base_url overrides [upstream].default_base_url
 "*" = {}                                     # final catch-all for this section
 "deepseek/deepseek-v3.2" = {}
 ```
@@ -106,6 +107,9 @@ Key ideas:
   `[models.default]`, etc.
 - **`upstream_mode`** picks the protocol: `anthropic-messages`, `gemini-generatecontent`,
   `gemini-interactions`, `openai-completions`, or `openai-responses`.
+- **`sdk://` target URLs** route supported Claude/OpenAI upstream calls through the
+  local SDK handler instead of plain HTTP fetch, while still using the configured
+  `upstream_mode` for request/response shape.
 - **Per-model overrides** use an inline table: `"my-model" = {target = "real-name", base_url = "...", api_key = "..."}`.
   Empty fields inherit from the category.
 
@@ -137,8 +141,9 @@ Key ideas:
 > `budget_to_effort_medium = 65536`
 > `budget_to_effort_high = 128000`
 > map `reasoning_effort: "low"` would avoid the limit of `kimi-k2.7-code`.
-- **Wildcards** (`claude-*`) and the **catch-all** (`*` in `[models.default]`) handle
-  anything you don't list explicitly.
+- **Wildcards** (`claude-*`) apply only in the provider/default sections listed in
+  [Model Routing](#model-routing); the **catch-all** (`*`) is only the final
+  `[models.default]` fallback for anything not claimed earlier.
 
 See [`proxy_config.toml_example`](./proxy_config.toml_example) for a fully commented config
 covering every section and option.
@@ -193,7 +198,9 @@ request, `r` to reload config, `Ctrl+C` to quit. A web dashboard is also availab
 | `GET /dashboard` | Web dashboard for config + stats |
 
 A Gemini `/v1/models/{model}:...` variant exists for each `/v1beta/models/{model}:...`
-endpoint. Full request/response examples live in the [API reference docs](#documentation).
+endpoint. `:countTokens` is supported too: native Gemini routes forward to Gemini
+`countTokens`, while non-Gemini upstream modes are bridged through the proxy's token-counting path.
+Full request/response examples live in the [API reference docs](#documentation).
 
 ### Supported `upstream_mode`
 
@@ -219,8 +226,8 @@ Notes:
 
 ### Dashboard API
 
-The `/dashboard` web UI is driven by a small JSON API. All routes require a
-`Bearer <API_KEY>` header (where `API_KEY` is the proxy's configured auth key).
+The `/dashboard` web UI is driven by a small JSON API. Dashboard/admin routes are
+restricted to loopback clients by the Node server adapter.
 
 | Endpoint | Purpose |
 |---|---|
@@ -232,7 +239,11 @@ The `/dashboard` web UI is driven by a small JSON API. All routes require a
 | `POST /dashboard/api/schedule/alias/:alias/target` | Upsert a target's window list (body: `{target, windows}`) |
 | `DELETE /dashboard/api/schedule/alias/:alias/target/:target` | Remove a target from an alias |
 | `POST /dashboard/api/test-model` | Send a test request through a configured model |
-| `GET /dashboard/api/stats` | Per-model token and request stats |
+| `GET /dashboard/api/stats/models` | Per-model token and request stats |
+| `GET /dashboard/api/stats/agents` | Per-agent request stats |
+| `GET /dashboard/api/stats/requests` | Endpoint, upstream, status-code, timing, and tool-response stats |
+| `GET /dashboard/api/tools/blocklist` | Read the current tool blocklist |
+| `POST /dashboard/api/tools/toggle-block` | Block or unblock a tool by name |
 
 The four `schedule/*` routes are the dedicated CRUD for `[schedule]` aliases;
 mutations also round-trip through the TOML file so the change persists across restarts.
@@ -257,14 +268,17 @@ resolved against the configured sections in three priority levels (highest first
 | Priority | Lookup | Where it's checked |
 |:--------:|:-------|:-------------------|
 | 1 | **Exact key** match | All `[models.*]` sections |
-| 2 | **`prefix-*` wildcard** | `models.claude`, then `models.gemini` |
+| 2 | **`prefix-*` wildcard** | `models.claude`, then `models.gemini`, then `models.gpt` |
 | 3 | **`*` catch-all** | `models.default` |
 
 - An exact entry always wins over a wildcard in the same category — e.g. an explicit
   `claude-sonnet-4-6` is matched before `claude-*`.
+- Only provider wildcard sections (`models.claude`, `models.gemini`, `models.gpt`) and
+  optional `models.default` wildcards are checked for `prefix-*` matches. Other sections,
+  including `models.free` and `models.embedding`, are exact-only.
 - Only `prefix-*` (hyphen before `*`) is a wildcard; the `*` is substituted so the
-  upstream sees the real model name. A bare `*` key is the catch-all and preserves the
-  original model name.
+  upstream sees the real model name. A bare `*` key is the final `models.default`
+  catch-all and preserves the original model name.
 
 | Section | Exact | `prefix-*` | `*` catch-all |
 |:--------|:-----:|:----------:|:-------------:|
@@ -279,26 +293,19 @@ resolved against the configured sections in three priority levels (highest first
 Each model entry is an inline table `{target, base_url, api_key}`. Resolution walks an
 inheritance chain — anything left empty falls back to the level above:
 
-- **`base_url`**: per-entry override → section `base_url`. **That's it — `[upstream] default_base_url`
-  is NOT a fallback for any category.** Each `[models.*]` section must define its own
-  `base_url` (section-level), or every model entry in that section must define its own
-  per-entry `base_url`. A section that does neither will fail to resolve at routing time
-  rather than silently inheriting from `[upstream] default_base_url`.
+- **`base_url`**: per-entry override → section `base_url` → `[upstream] default_base_url`
+  → `http://localhost`.
 - **Configured `api_key`**: per-entry override → section `api_key` → `[upstream] default_api_key`.
   This only resolves the configured fallback key; runtime caller-vs-config priority is section-specific below.
 - **`upstream_mode`**: per-entry `mode` → section `upstream_mode` → `[upstream] upstream_mode`
   → `"openai-completions"`.
-- The target-only form (`opus48 = {target = "..."}`) requires the section to define `base_url`;
-  `api_key` may be inherited from the section or `[upstream] default_api_key`, or supplied by the caller for non-`free` sections.
+- The target-only form (`opus48 = {target = "..."}`) inherits `base_url` from the section,
+  then `[upstream] default_base_url`; `api_key` may be inherited from the section or
+  `[upstream] default_api_key`, or supplied by the caller for non-`free` sections.
 
-> **What `[upstream] default_base_url` is for:** it is the *global* upstream endpoint
-> applied **only** to models that are **not claimed by any `[models.*]` category section** —
-> i.e. a model name that falls through every section's exact / wildcard / catch-all lookup
-> gets routed to `default_base_url`. It is intentionally **not** a chain link that
-> individual sections fall through to: a missing section-level `base_url` (or per-entry
-> `base_url` for an entry that omits one) is a configuration error, not something to mask
-> with the global default. Always configure `base_url` at the section level (recommended)
-> or per-entry.
+> **What `[upstream] default_base_url` is for:** it is the global upstream endpoint used
+> when no per-entry or section `base_url` is configured, including models that fall through
+> every section's exact / wildcard / catch-all lookup.
 
 > **`base_url` may include the full endpoint path.** If `base_url` already contains a known
 > full upstream endpoint path, the proxy uses it as-is instead of appending the endpoint
@@ -318,7 +325,7 @@ inheritance chain — anything left empty falls back to the level above:
 | `[models.free]` | **Ignored** | Section/per-entry key **always wins** — the proxy authenticates upstream on the caller's behalf (this is what makes the FREE tier work). |
 | `[models.default]` | **Wins** | Used only when the caller sends no key. May come from the entry, section, or `[upstream] default_api_key`. |
 | `[models.claude]`, `[models.gemini]` | **Wins** | Same as `default` — caller's key passes through; configured keys are fallbacks only. |
-| `[models.embedding]` | **Wins** | Same — configured keys are fallbacks only. |
+| `[models.embedding]` | **Overridden for embeddings** | Section `api_key` wins for `/v1/embeddings` requests when configured. |
 
 Composite and fusion aliases don't route directly: each target is resolved through its own
 `[models.*]` section, so the rules above apply per target. The rule is keyed on
@@ -342,7 +349,8 @@ Group multiple models under one name in a `[composite]` section:
 - `token_limit` — `{num, duration}` rolling-window cap (`1h`/`1d`/`1w`/`1m`); returns HTTP 429 when exceeded.
 
 **Fusion** fans a request out to multiple "panel" models in parallel and routes through an
-optional "judge" and a required "synth" model that writes the final answer:
+optional "judge" and an optional but recommended "synth" model that writes the final answer.
+If no synth is configured, the judge is used as synth; if no judge exists, the first panel is used:
 
 ```toml
 [composite]
@@ -382,16 +390,17 @@ the configured windows.
 | `to`   | `0..24` (exclusive of end) | `24` | Hour-of-day the window closes. `24` is a legal value (end-of-day). |
 | `days` | `"weekday"`/`"weekdays"`, `"weekend"`/`"weekends"` (any casing), or `[mon, tue, ...]` | everyday | When the window applies, evaluated against server-local day-of-week. Any other string (including hand-typed typos) normalizes to "everyday" rather than raising an error. |
 
-A target with **`windows = []`** is the **fallback**: it serves when no other target
-matches the current time. Each alias may have **at most one fallback** target.
-If no fallback exists and no window matches, the alias resolves to `undefined` and the
-client receives `404 model not found`.
+A target with **`windows = []`** is a **fallback**: it serves when no other target
+matches the current time. If multiple empty-window targets are configured, the first one listed is used.
+If no fallback exists and no window matches, schedule does not select a target; the
+request falls through to normal routing with the original model name, including
+`[models.default]` / `*` catch-all routing when configured.
 
 **Selection rules (in order, first match wins):**
 
 1. The current `(hour, day-of-week)` matches one of the target's `windows` → that target.
 2. Otherwise, the target with `windows = []` (the fallback) → that target.
-3. Otherwise, the alias resolves to `undefined` (no such model right now).
+3. Otherwise, no schedule target is selected and normal/default routing handles the original model name.
 
 **Windows are unioned across the alias**, not per-target: a single window belongs to
 exactly one target. If two targets cover overlapping hours, the *first one listed*
@@ -463,8 +472,8 @@ Logical grouping of two or more Level-1 entries under one name. Two strategies:
   `primary` (the default target) or `fallback` (consulted in order if the primary fails).
   This is one request → one target.
 - **`fusion` fan-out** — every target with `fusion = 1, role = "panel"` runs in parallel
-  against the same request; an optional `role = "judge"` scores them; and a required
-  `role = "synth"` merges them into one final response. `fusion_options` configures
+  against the same request; an optional `role = "judge"` scores them; and an optional but recommended
+  `role = "synth"` merges them into one final response. Without synth, fusion uses the judge, then the first panel. `fusion_options` configures
   `min_panel`, `panel_timeout_ms`, `judge_required`, `expose_metadata`, `max_concurrent`.
   This is one request → many targets → one response.
 
@@ -537,7 +546,7 @@ environment; on Cloudflare Workers they come from `[vars]` in `wrangler.toml`.
 
 | Field | Example | Purpose |
 |---|---|---|
-| `default_base_url` | `"https://api.example.com"` | Upstream endpoint for any model not claimed by any `[models.*]` section. Not a fallback for sections that omit `base_url`. |
+| `default_base_url` | `"https://api.example.com"` | Global upstream endpoint fallback when a route has no per-entry or section `base_url`, and for models not claimed by any `[models.*]` section. |
 | `default_api_key` | `"sk-..."` | Global configured-key fallback when a route has no per-entry or section `api_key`. For non-`free` sections, caller auth headers still win at request time; for `[models.free]`, the configured key wins. Typically left unset in production. |
 | `global_token_limit` | `"1B 1d"` | Rolling-window token cap across all models. Format: `"<num><K/M/B> <duration>"` where duration is `1h`/`1d`/`1w`/`1m`. Returns HTTP 429 when exceeded. |
 | `budget_to_effort_low` | `32768` | Thinking-budget threshold (tokens) below which `reasoning_effort: "low"` is emitted for upstreams that use effort levels instead of token budgets. |
@@ -564,6 +573,11 @@ environment; on Cloudflare Workers they come from `[vars]` in `wrangler.toml`.
 | `PROXY_CONFIG_URL` | unset | Remote/Consul config URL (read-only dashboard when set) |
 
 **Token counting & upstream**
+
+`sdk://...` model `base_url` values are handled by the local SDK adapter instead of
+HTTP fetch for supported Claude/OpenAI-shaped upstream calls. For example, a model
+entry can set `base_url = "sdk://chatjimmy.ai/api"` and keep the appropriate
+`upstream_mode` for the client/upstream protocol shape.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -608,6 +622,9 @@ is documented in the comments at the top of [`wrangler.toml`](./wrangler.toml) a
 ```bash
 # Start the proxy first (e.g. on PORT=7777), then:
 node run-tests.js
+node tests/multi-agents-test.ts
+node tests/multi-agents-composite.ts
+npm run test:unit
 
 # Point at a specific proxy / key
 PROXY_URL=http://localhost:8788 API_KEY=sk-test node run-tests.js
