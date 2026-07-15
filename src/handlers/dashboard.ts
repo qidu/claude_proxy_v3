@@ -405,6 +405,12 @@ export function handleDashboardPage(): Response {
       .config-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; }
       .global-limit-group { display: flex; align-items: center; gap: 6px; margin-right: auto; }
       .global-limit-group label { font-size: 13px; font-weight: 500; white-space: nowrap; }
+      .wildcard-test-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 12px; }
+      .wildcard-test-row label { font-size: 13px; font-weight: 600; }
+      #wildcardModelInput { width: 260px; }
+      #wildcardRouteHint { font-size: 12px; color: #000; }
+      #wildcardTestStatus { font-size: 12px; color: #666; }
+      #wildcardTestStatus.error { color: #c62828; }
       #globalTokenLimitNum { padding: 4px 8px; font-size: 13px; border: 1px solid #bdbdbd; border-radius: 4px; }
       #globalTokenLimitDuration { padding: 4px 6px; font-size: 13px; border: 1px solid #bdbdbd; border-radius: 4px; }
       #saveGlobalLimit { padding: 4px 10px; font-size: 13px; border: 1px solid #bdbdbd; border-radius: 4px; background: white; cursor: pointer; }
@@ -466,6 +472,13 @@ export function handleDashboardPage(): Response {
     <section class="card" id="section-config">
       <h2>Config Module</h2>
       <p>Edit config for <code>models.*</code> and <code>composite.*</code> as models alias. Note the <code>api_key</code> fields are hidden and not editable.</p>
+      <div class="wildcard-test-row">
+        <label for="wildcardModelInput">Wildcard model test:</label>
+        <input type="text" id="wildcardModelInput" placeholder="model id matched by wildcard" autocomplete="off" />
+        <button id="testWildcardModel" type="button" class="test-btn mini-btn">test</button>
+        <span id="wildcardRouteHint"></span>
+        <span id="wildcardTestStatus"></span>
+      </div>
       <div id="configForm"></div>
       <div class="config-divider"></div>
       <div class="config-toolbar">
@@ -549,6 +562,10 @@ export function handleDashboardPage(): Response {
       const globalTokenLimitNum = document.getElementById('globalTokenLimitNum');
       const globalTokenLimitDuration = document.getElementById('globalTokenLimitDuration');
       const globalLimitStatus = document.getElementById('globalLimitStatus');
+      const wildcardModelInput = document.getElementById('wildcardModelInput');
+      const testWildcardModelButton = document.getElementById('testWildcardModel');
+      const wildcardRouteHint = document.getElementById('wildcardRouteHint');
+      const wildcardTestStatus = document.getElementById('wildcardTestStatus');
       let currentConfig = { models: {}, composite: {}, schedule: {} };
       let isReadOnly = false;
       let configPathHint = '';
@@ -660,6 +677,22 @@ export function handleDashboardPage(): Response {
         if (num >= 1e6) return (num / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
         if (num >= 1e3) return (num / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
         return String(num);
+      }
+
+      function wildcardRoutes(config) {
+        const routes = [];
+        Object.values(config.models || {}).forEach((category) => {
+          if (!category || Array.isArray(category)) return;
+          Object.entries(category).forEach(([key, value]) => {
+            if (Array.isArray(value) && (key === '*' || key.endsWith('-*'))) routes.push(key);
+          });
+        });
+        return Array.from(new Set(routes)).sort();
+      }
+
+      function renderWildcardRouteHint(config) {
+        const routes = wildcardRoutes(config);
+        wildcardRouteHint.textContent = routes.length ? 'configured: ' + routes.join(', ') : 'no wildcard routes configured';
       }
 
       function upstreamModeSelect(categoryName, currentMode) {
@@ -1069,9 +1102,9 @@ export function handleDashboardPage(): Response {
         if (testResultClearTimer) { clearTimeout(testResultClearTimer); testResultClearTimer = null; }
       }
 
-      async function testModel(modelId) {
+      async function testModel(modelId, btn) {
         const isCompositeBtn = document.querySelector('[data-action="test-composite"][data-alias="' + modelId + '"]') !== null;
-        const btn = document.querySelector('[data-action="test-model"][data-model="' + modelId + '"]')
+        btn = btn || document.querySelector('[data-action="test-model"][data-model="' + modelId + '"]')
           || document.querySelector('[data-action="test-composite"][data-alias="' + modelId + '"]');
         if (btn) {
           btn.disabled = true;
@@ -1098,9 +1131,21 @@ export function handleDashboardPage(): Response {
           if (btn) {
             btn.disabled = false;
             btn.className = 'test-btn mini-btn';
-            btn.textContent = isCompositeBtn ? 'test' : 't';
+            btn.textContent = btn === testWildcardModelButton || isCompositeBtn ? 'test' : 't';
           }
         }
+      }
+
+      function testWildcardModel() {
+        const modelId = wildcardModelInput.value.trim();
+        if (!modelId) {
+          wildcardTestStatus.textContent = 'Enter a model id';
+          wildcardTestStatus.className = 'error';
+          return;
+        }
+        wildcardTestStatus.textContent = '';
+        wildcardTestStatus.className = '';
+        void testModel(modelId, testWildcardModelButton);
       }
 
       function handleConfigAction(event) {
@@ -1365,6 +1410,7 @@ export function handleDashboardPage(): Response {
         globalTokenLimitNum.value = glParts[0] || '';
         globalTokenLimitDuration.value = (glParts[1] || '').toLowerCase();
         renderConfigForm(currentConfig);
+        renderWildcardRouteHint(currentConfig);
         saveButton.disabled = isReadOnly;
         configPathHint = json.config.config_path ? ' (' + json.config.config_path + ')' : '';
 
@@ -1607,6 +1653,8 @@ export function handleDashboardPage(): Response {
 
       document.getElementById('saveGlobalLimit').addEventListener('click', saveGlobalLimit);
       globalTokenLimitNum.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveGlobalLimit(); });
+      testWildcardModelButton.addEventListener('click', testWildcardModel);
+      wildcardModelInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') testWildcardModel(); });
       configForm.addEventListener('click', handleConfigAction);
 
       async function refreshAll() {
