@@ -80,7 +80,8 @@ default_base_url = "https://api.your-provider.com"
 upstream_mode = "anthropic-messages"
 base_url = "https://api.anthropic.com"
 api_key = "your-claude-key"
-"claude-*" = {}                              # catch-all for every claude-* model
+"claude-sonnet-4-6" = {}                    # exact entry; inline table {target, base_url, api_key, mode} — empty fields inherit from section
+"claude-*" = {}                             # prefix wildcard — catch-all for every other claude-* model
 
 # Gemini models, spoken to in native Gemini format
 [models.gemini]
@@ -345,7 +346,7 @@ optional "judge" and a required "synth" model that writes the final answer:
 
 ```toml
 [composite]
-"answer" = {opus = {fusion = 1}, sonnet = {fusion = 1}, "judge-m" = {role = "judge"}, "synth-m" = {role = "synth"}}
+"answer" = {opus = {fusion = 1, role = "panel"}, sonnet = {fusion = 1, role = "panel"}, "judge-m" = {fusion = 1, role = "judge"}, "synth-m" = {role = "synth"}}
 ```
 
 For the full set of composite/fusion options and the TUI editor workflow, see
@@ -365,12 +366,7 @@ There is no weighting or fan-out here — exactly one target is selected per req
 
 ```toml
 [schedule]
-"saver" = {
-  "maxplan"        = [{from = 9, to = 12}, {from = 14, to = 18}],
-  "code-small"     = [{from = 0, to = 9, days = "weekday"}],
-  "max-m3"         = [{days = "weekend"}],
-  "max-m2.7-high"  = []
-}
+"saver" = {"maxplan" = [{from = 9, to = 12}, {from = 14, to = 18}], "code-small" = [{from = 0, to = 9, days = "weekday"}], "max-m3" = [{days = "weekend"}], "max-m2.7-high" = []}
 ```
 
 In the example above, on weekday mornings `code-small` serves, on weekday office
