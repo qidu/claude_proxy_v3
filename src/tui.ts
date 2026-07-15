@@ -1723,7 +1723,7 @@ class DashboardApp {
         modelId: '',
         value: OTHER_MODEL_ID,
         label: dim('Other model id…'),
-        description: dim('test a model matched by a wildcard route'),
+        description: dim(this.wildcardModelHint('test a wildcard route')),
       },
     ];
 
@@ -1738,7 +1738,7 @@ class DashboardApp {
         if (item.value === OTHER_MODEL_ID) {
           this.openPrompt(
             'Test custom model',
-            'model id (e.g. one matched by a wildcard route)',
+            this.wildcardModelHint('model id'),
             '',
             (value) => {
               const modelId = value.trim();
@@ -1782,6 +1782,20 @@ class DashboardApp {
       ? `W ${dim('stop test timer')}`
       : `W ${dim('test all (30m)')}`;
     return `↑/↓ ${dim('move')}  Enter ${dim('test')}  ${pHint}  Esc ${dim('cancel')}`;
+  }
+
+  private wildcardModelHint(prefix: string): string {
+    const wildcards: string[] = [];
+    const models = this.viewSnapshot()?.config.models || {};
+    for (const categoryConfig of Object.values(models)) {
+      if (Array.isArray(categoryConfig)) continue;
+      for (const [key, value] of Object.entries(categoryConfig || {})) {
+        if (!Array.isArray(value) || (key !== '*' && !key.endsWith('-*'))) continue;
+        wildcards.push(key);
+      }
+    }
+    if (wildcards.length === 0) return `${prefix} (e.g. one matched by a wildcard route)`;
+    return `${prefix} (${Array.from(new Set(wildcards)).sort().join(', ')})`;
   }
 
   async runModelTest(modelId: string): Promise<void> {
