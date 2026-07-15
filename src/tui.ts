@@ -1394,8 +1394,8 @@ class DashboardApp {
     // `selectedText: green(...)` wrap mid-line and break the selected-line
     // highlighting that the Test custom model list gets for free.
     const formatLabel = (item: ToolItem): string => {
-      const name = item.tool_name.length > 24 ? `…${item.tool_name.slice(-23)}` : item.tool_name;
-      return `${isToolBlocked(item.tool_name) ? '✗' : '·'} ${name.padEnd(24)}${formatAgent(item).padEnd(12)}${alignRight(fmt(item.in_requests), 4)} ${alignRight(fmt(item.in_responses), 5)} ${alignRight(fmt(item.in_request_chars), 10)}`;
+      const name = item.tool_name.slice(-24);
+      return `${isToolBlocked(item.tool_name) ? '✗' : '·'} ${name.padEnd(30)}${formatAgent(item).padEnd(12)}${alignRight(fmt(item.in_requests), 4)} ${alignRight(fmt(item.in_responses), 5)} ${alignRight(fmt(item.in_request_chars), 10)}`;
     };
 
     const items: ToolItem[] = (snap.agentToolStats || []).map((e) => ({
