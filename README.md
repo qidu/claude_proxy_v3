@@ -184,6 +184,61 @@ Press `c` to edit composite aliases, `s` to edit schedule aliases, `t` to send a
 request, `r` to reload config, `Ctrl+C` to quit. A web dashboard is also available at
 `GET /dashboard`.
 
+When `TUI=true` or `DUMP=true` is set, token stats are appended to
+`model_proxy_tokens.jsonl` in the working directory. Each line is one JSON dump:
+
+```json
+{
+  "date": "2026-07-15",
+  "timestamp": 1784112345,
+  "lastDumpTs": 1784109999,
+  "modelStats": [
+    {
+      "model": "claude-sonnet-4-6",
+      "requests": 12,
+      "failed_requests": 0,
+      "input_tokens": 12345,
+      "cached_tokens": 0,
+      "cache_written_tokens": 0,
+      "output_tokens": 6789,
+      "total_tokens": 19134
+    }
+  ],
+  "toolStats": [
+    { "name": "Read", "agent": "unknown", "req": 3, "resp": 1, "len": 2048, "blocked": 0 }
+  ],
+  "heatmapEvents": {
+    "models": { "ab12": "claude-sonnet-4-6" },
+    "sequences": [{ "ts": 1784112300, "values": 19134, "id": "ab12" }]
+  }
+}
+```
+
+Fields:
+- `date`: local `YYYY-MM-DD` bucket for the dump.
+- `timestamp`: dump time in Unix seconds.
+- `lastDumpTs`: previous dump timestamp. `0` means a full snapshot; non-zero means
+  `heatmapEvents` is a delta since that timestamp.
+- `modelStats`: cumulative per-model totals for that date.
+- `toolStats`: optional cumulative per-tool/per-agent totals.
+- `heatmapEvents`: token events used for the Tokens Panel and rolling global token
+  limit. Current files use the compact `{models, sequences}` shape, where model
+  names are mapped to short ids and each sequence stores `{ts, values, id}` in Unix
+  seconds. Older files with `heatmapEvents: [{timestamp, values, model}]` are still
+  accepted.
+- `compositeLimitWindows`: optional persisted per-alias rolling-window state, written
+  by day-rollover/full-snapshot dumps.
+
+On startup, the proxy avoids double-counting persisted stats as follows:
+- `modelStats`, `toolStats`, and `compositeLimitWindows` are loaded only from the
+  latest dump for each retained date because they are cumulative snapshots.
+- `modelStats` from those latest per-day dumps are summed across days to rebuild the
+  all-time dashboard totals.
+- `heatmapEvents` are loaded from all retained rows, because delta rows and multiple
+  proxy instances can contain different events. The loader skips events older than
+  the retention cutoff, skips events at or before a row's non-zero `lastDumpTs`, and
+  deduplicates by `timestamp:values:modelId` before adding them to memory.
+
 ## API Endpoints
 
 | Endpoint | Purpose |
