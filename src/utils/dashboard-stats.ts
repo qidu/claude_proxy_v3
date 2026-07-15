@@ -347,6 +347,24 @@ export function getActiveRequestCount(): number {
   return activeRequestCount;
 }
 
+// ── Live in-flight token snapshot ──────────────────────────────────────────────
+// Tracks input/output tokens for one active streaming request so the TUI can
+// display them in the Tokens Panel header. Last-write-wins when multiple
+// requests are in flight; cleared when the stream ends.
+let liveTokens: { input: number; output: number } | null = null;
+
+export function setLiveTokens(input: number, output: number): void {
+  liveTokens = { input, output };
+}
+
+export function clearLiveTokens(): void {
+  liveTokens = null;
+}
+
+export function getLiveTokens(): { input: number; output: number } | null {
+  return liveTokens;
+}
+
 const dailyTokenStats = new Map<string, ModelStatsEntry>();
 
 let currentDaySlot = getTodayDateStr();
@@ -1379,6 +1397,7 @@ export function createUsageTrackingTransformStream(
                 cacheWrittenTokens = usage.cache_creation_input_tokens;
                 foundUsage = true;
               }
+              if (inputTokens > 0 || outputTokens > 0) setLiveTokens(inputTokens, outputTokens);
             } else if (eventType === 'message_delta' && data.usage) {
               const usage = data.usage;
               if (typeof usage.output_tokens === 'number') {
@@ -1397,6 +1416,7 @@ export function createUsageTrackingTransformStream(
                 cacheWrittenTokens = usage.cache_creation_input_tokens;
                 foundUsage = true;
               }
+              if (inputTokens > 0 || outputTokens > 0) setLiveTokens(inputTokens, outputTokens);
             }
           } catch {
             // Not JSON data, skip
@@ -1419,6 +1439,7 @@ export function createUsageTrackingTransformStream(
                 outputTokens = ct;
                 totalTokens = tt;
                 foundUsage = true;
+                setLiveTokens(inputTokens, outputTokens);
               }
             }
           } catch {

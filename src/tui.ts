@@ -29,7 +29,7 @@ import {
 } from './handlers/dashboard.js';
 import { getConfiguredModelIds, type ScheduleWindow, type ScheduleDaysSpec } from './utils/config-loader.js';
 import { buildHeatmap, renderHeatmapPanel } from './heatmap.js';
-import { dumpTodayTokens, TOKEN_LOG_FILE, getActiveRequestCount, getTokensInWindow, blockTool, unblockTool, isToolBlocked } from './utils/dashboard-stats.js';
+import { dumpTodayTokens, TOKEN_LOG_FILE, getActiveRequestCount, getTokensInWindow, getLiveTokens, blockTool, unblockTool, isToolBlocked } from './utils/dashboard-stats.js';
 import type { Env } from './types/shared.js';
 import type { ConfigValidationError } from './utils/config-loader.js';
 import type { ProxyConfig, FusionRole, FusionOptions } from './utils/config-loader.js';
@@ -1064,7 +1064,9 @@ class DashboardView implements Component {
       }
       globalLimitSuffix = ` ${limitColor('L')} ${limitColor(globalLimitDisplay)}]`;
     }
-    tokenHeatmapLines[0] = `${bold('Tokens Panel')} [${fmt(tokenHeatmap.totalValues)}${globalLimitSuffix}${globalLimitSuffix ? '' : ']'}`;
+    const live = getActiveRequestCount() > 0 ? getLiveTokens() : null;
+    const liveSuffix = live ? ` ${dim('↑')} ${fmt(live.output)} ${dim('↓')} ${fmt(live.input)}` : '';
+    tokenHeatmapLines[0] = `${bold('Tokens Panel')} [${fmt(tokenHeatmap.totalValues)}${globalLimitSuffix}${globalLimitSuffix ? '' : ']'}${liveSuffix}`;
     lines.push(...tokenHeatmapLines);
     lines.push('');
     const customModels = this.customModels();

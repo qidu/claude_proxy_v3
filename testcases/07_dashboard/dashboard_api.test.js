@@ -15,10 +15,15 @@
  */
 
 const {
+  PROXY_URL,
   sendRequest,
   assert,
   runTestSuite
 } = require('../utils/test_helpers');
+
+const DASHBOARD_KEY_CONFIGURED = !!process.env.DASHBOARD_API_KEY;
+const DASHBOARD_API_KEY = process.env.DASHBOARD_API_KEY || process.env.API_KEY || 'test';
+const DASHBOARD_AUTH_HEADERS = { 'Authorization': `Bearer ${DASHBOARD_API_KEY}` };
 
 /**
  * TC701: Get Dashboard Config
@@ -28,7 +33,7 @@ async function testGetDashboardConfig() {
   const response = await sendRequest({
     method: 'GET',
     endpoint: '/dashboard/api/config',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
+    headers: DASHBOARD_AUTH_HEADERS
   });
 
   assert(response.status === 200, `Expected 200, got ${response.status}`);
@@ -41,9 +46,9 @@ async function testGetDashboardConfig() {
 }
 
 /**
- * TC702: Get Config (no auth) — proxy does not enforce inbound API key auth
- * The dashboard GET endpoint is openly accessible; auth is handled by upstreams,
- * not by the proxy itself. This test verifies the endpoint responds without error.
+ * TC702: Get Config invalid auth behavior
+ * If [dashboard].api_key is configured, invalid auth must return 401.
+ * If it is omitted, dashboard APIs keep the old loopback-only behavior.
  */
 async function testGetDashboardConfigAuth() {
   const response = await sendRequest({
@@ -53,8 +58,24 @@ async function testGetDashboardConfigAuth() {
   });
 
   assert(
-    response.status === 200,
-    `Dashboard config GET should return 200 regardless of key — got ${response.status}`
+    response.status === (DASHBOARD_KEY_CONFIGURED ? 401 : 200),
+    `Expected ${DASHBOARD_KEY_CONFIGURED ? 401 : 200}, got ${response.status}`
+  );
+}
+
+/**
+ * TC703: Get Config missing auth behavior
+ */ 
+async function testGetDashboardConfigMissingAuth() {
+  const response = await sendRequest({
+    method: 'GET',
+    endpoint: '/dashboard/api/config',
+    headers: { 'Authorization': '' }
+  });
+
+  assert(
+    response.status === (DASHBOARD_KEY_CONFIGURED ? 401 : 200),
+    `Expected ${DASHBOARD_KEY_CONFIGURED ? 401 : 200}, got ${response.status}`
   );
 }
 
@@ -66,7 +87,7 @@ async function testGetModelStats() {
   const response = await sendRequest({
     method: 'GET',
     endpoint: '/dashboard/api/stats/models',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
+    headers: DASHBOARD_AUTH_HEADERS
   });
 
   assert(response.status === 200, `Expected 200, got ${response.status}`);
@@ -81,7 +102,7 @@ async function testGetAgentStats() {
   const response = await sendRequest({
     method: 'GET',
     endpoint: '/dashboard/api/stats/agents',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
+    headers: DASHBOARD_AUTH_HEADERS
   });
 
   assert(response.status === 200, `Expected 200, got ${response.status}`);
@@ -96,7 +117,7 @@ async function testGetRequestStats() {
   const response = await sendRequest({
     method: 'GET',
     endpoint: '/dashboard/api/stats/requests',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
+    headers: DASHBOARD_AUTH_HEADERS
   });
 
   assert(response.status === 200, `Expected 200, got ${response.status}`);
@@ -115,7 +136,7 @@ async function testDashboardTestModel() {
   const response = await sendRequest({
     endpoint: '/dashboard/api/test-model',
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    headers: DASHBOARD_AUTH_HEADERS,
     body: {
       modelId: 'deepseek/deepseek-v3.2'
     }
@@ -139,7 +160,7 @@ async function testDashboardTestModelMissingId() {
   const response = await sendRequest({
     endpoint: '/dashboard/api/test-model',
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    headers: DASHBOARD_AUTH_HEADERS,
     body: {}
   });
 
@@ -156,7 +177,7 @@ async function testDashboardTestCompositeModel() {
   const configRes = await sendRequest({
     method: 'GET',
     endpoint: '/dashboard/api/config',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
+    headers: DASHBOARD_AUTH_HEADERS
   });
 
   const composites = Object.keys(configRes.body?.config?.composite || {});
@@ -169,7 +190,7 @@ async function testDashboardTestCompositeModel() {
   const response = await sendRequest({
     endpoint: '/dashboard/api/test-model',
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    headers: DASHBOARD_AUTH_HEADERS,
     body: {
       modelId: composites[0]
     }
@@ -188,15 +209,22 @@ async function testDashboardTestCompositeModel() {
  * Tests GET /dashboard returns HTML page
  */
 async function testDashboardHtmlPage() {
-  const response = await fetch('http://localhost:7777/dashboard', {
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
+  const response = await fetch(`${PROXY_URL}/dashboard`, {
+    headers: DASHBOARD_AUTH_HEADERS
   });
 
   assert(response.status === 200, `Expected 200, got ${response.status}`);
+  assert(
+    response.headers.get('cache-control')?.includes('no-store'),
+    'Dashboard HTML should disable browser caching'
+  );
 
   const text = await response.text();
   assert(text.includes('Proxy Dashboard'), 'Should contain dashboard title');
   assert(text.includes('<html'), 'Should be valid HTML');
+  assert(text.includes('dashboardApiKeyMaxAgeMs = 7 * 24 * 60 * 60 * 1000'), 'Should expire cached dashboard key after 7 days');
+  assert(text.includes('dashboardFetch'), 'Should route dashboard API requests through auth helper');
+  assert(!text.includes('Promise.all([loadConfig()'), 'Initial dashboard API loads should be sequential');
 }
 
 /**
@@ -208,7 +236,7 @@ async function testGetToolBlocklist() {
   const response = await sendRequest({
     method: 'GET',
     endpoint: '/dashboard/api/tools/blocklist',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
+    headers: DASHBOARD_AUTH_HEADERS
   });
 
   assert(response.status === 200, `Expected 200, got ${response.status}`);
@@ -229,7 +257,7 @@ async function testToggleToolBlockOn() {
   const toggleRes = await sendRequest({
     method: 'POST',
     endpoint: '/dashboard/api/tools/toggle-block',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    headers: DASHBOARD_AUTH_HEADERS,
     body: { tool_name: toolName, blocked: true }
   });
 
@@ -241,7 +269,7 @@ async function testToggleToolBlockOn() {
   const blocklistRes = await sendRequest({
     method: 'GET',
     endpoint: '/dashboard/api/tools/blocklist',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
+    headers: DASHBOARD_AUTH_HEADERS
   });
 
   assert(
@@ -253,7 +281,7 @@ async function testToggleToolBlockOn() {
   await sendRequest({
     method: 'POST',
     endpoint: '/dashboard/api/tools/toggle-block',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    headers: DASHBOARD_AUTH_HEADERS,
     body: { tool_name: toolName, blocked: false }
   });
 }
@@ -270,7 +298,7 @@ async function testToggleToolBlockOff() {
   await sendRequest({
     method: 'POST',
     endpoint: '/dashboard/api/tools/toggle-block',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    headers: DASHBOARD_AUTH_HEADERS,
     body: { tool_name: toolName, blocked: true }
   });
 
@@ -278,7 +306,7 @@ async function testToggleToolBlockOff() {
   const unblockRes = await sendRequest({
     method: 'POST',
     endpoint: '/dashboard/api/tools/toggle-block',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    headers: DASHBOARD_AUTH_HEADERS,
     body: { tool_name: toolName, blocked: false }
   });
 
@@ -288,7 +316,7 @@ async function testToggleToolBlockOff() {
   const blocklistRes = await sendRequest({
     method: 'GET',
     endpoint: '/dashboard/api/tools/blocklist',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` }
+    headers: DASHBOARD_AUTH_HEADERS
   });
 
   assert(
@@ -306,7 +334,7 @@ async function testToggleToolBlockMissingName() {
   const response = await sendRequest({
     method: 'POST',
     endpoint: '/dashboard/api/tools/toggle-block',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    headers: DASHBOARD_AUTH_HEADERS,
     body: { blocked: true }
   });
 
@@ -327,7 +355,7 @@ async function testToggleToolBlockWhitespaceName() {
   const response = await sendRequest({
     method: 'POST',
     endpoint: '/dashboard/api/tools/toggle-block',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    headers: DASHBOARD_AUTH_HEADERS,
     body: { tool_name: '   ', blocked: true }
   });
 
@@ -348,7 +376,7 @@ async function testSetGlobalTokenLimit() {
   const response = await sendRequest({
     method: 'POST',
     endpoint: '/dashboard/api/global-token-limit',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    headers: DASHBOARD_AUTH_HEADERS,
     body: { value: '1M 1d' }
   });
 
@@ -367,7 +395,7 @@ async function testClearGlobalTokenLimit() {
   const response = await sendRequest({
     method: 'POST',
     endpoint: '/dashboard/api/global-token-limit',
-    headers: { 'Authorization': `Bearer ${process.env.API_KEY || 'test'}` },
+    headers: DASHBOARD_AUTH_HEADERS,
     body: { value: null }
   });
 
@@ -380,6 +408,7 @@ async function testClearGlobalTokenLimit() {
 module.exports = {
   testGetDashboardConfig,
   testGetDashboardConfigAuth,
+  testGetDashboardConfigMissingAuth,
   testGetModelStats,
   testGetAgentStats,
   testGetRequestStats,
@@ -399,7 +428,8 @@ module.exports = {
 if (require.main === module) {
   runTestSuite('Dashboard API Tests', [
     { name: 'TC701: Get Config', fn: testGetDashboardConfig },
-    { name: 'TC702: Get Config (no auth)', fn: testGetDashboardConfigAuth },
+    { name: 'TC702: Get Config invalid auth behavior', fn: testGetDashboardConfigAuth },
+    { name: 'TC703: Get Config missing auth behavior', fn: testGetDashboardConfigMissingAuth },
     { name: 'TC705: Model Stats', fn: testGetModelStats },
     { name: 'TC706: Agent Stats', fn: testGetAgentStats },
     { name: 'TC707: Request Stats', fn: testGetRequestStats },

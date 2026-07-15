@@ -226,8 +226,23 @@ Notes:
 
 ### Dashboard API
 
-The `/dashboard` web UI is driven by a small JSON API. Dashboard/admin routes are
-restricted to loopback clients by the Node server adapter.
+The `/dashboard` web UI is driven by a small JSON API. Dashboard/admin routes
+are restricted to loopback clients by the Node server adapter. To also require a
+bearer token for the JSON API, set:
+
+```toml
+[dashboard]
+api_key = "your-dashboard-key"
+```
+
+When `dashboard.api_key` is configured, every `/dashboard/api/*` route requires
+`Authorization: Bearer <dashboard.api_key>`. `GET /dashboard` remains loadable
+from loopback without auth. The browser dashboard prompts for the key on the
+first API `401`, sends dashboard API requests sequentially, stores the key in
+browser `localStorage`, and expires the saved key after 7 days. The `/dashboard`
+HTML response uses no-cache headers so browser users get the latest dashboard
+script. If `dashboard.api_key` is omitted or empty, dashboard APIs keep the old
+loopback-only behavior.
 
 | Endpoint | Purpose |
 |---|---|

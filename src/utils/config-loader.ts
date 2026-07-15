@@ -30,6 +30,9 @@ export interface ProxyConfig {
   defaults?: {
     upstream_mode?: string;
   };
+  dashboard?: {
+    api_key?: string;
+  };
 }
 
 export interface ModelCategoryConfig {
@@ -1624,6 +1627,12 @@ export function serializeProxyConfigToml(config: ProxyConfig): string {
     lines.push('');
   }
 
+  if (config.dashboard) {
+    lines.push('[dashboard]');
+    lines.push(...serializeTomlSection(config.dashboard as Record<string, unknown>));
+    lines.push('');
+  }
+
   if (config.models) {
     for (const [categoryName, categoryConfig] of Object.entries(config.models)) {
       if (Array.isArray(categoryConfig)) {
@@ -1888,15 +1897,19 @@ export function parseSimpleToml(content: string): ProxyConfig {
         currentSection = 'defaults';
         currentCategory = null;
         config.defaults = {};
+      } else if (parts[0] === 'dashboard') {
+        currentSection = 'dashboard';
+        currentCategory = null;
+        config.dashboard = {};
       }
       continue;
     }
 
     // Key-value pairs
     // Handle simple strings: key = "value"
-    const stringMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*"([^"]*)"$/);
+    const stringMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*(["'])(.*?)\2$/);
     if (stringMatch) {
-      const [, key, value] = stringMatch;
+      const [, key, , value] = stringMatch;
       const cleanKey = key.trim().replace(/^"|"$/g, '');
 
       if (currentSection === 'upstream' && config.upstream) {
@@ -1910,6 +1923,8 @@ export function parseSimpleToml(content: string): ProxyConfig {
         config.composite[cleanKey] = parseCompositeModelConfig(value);
       } else if (currentSection === 'defaults' && config.defaults) {
         (config.defaults as any)[cleanKey] = value;
+      } else if (currentSection === 'dashboard' && config.dashboard && cleanKey === 'api_key') {
+        config.dashboard.api_key = value;
       }
       continue;
     }
@@ -3078,6 +3093,10 @@ export function persistProxyConfigToPath(configPath: string, config: ProxyConfig
       `Config serialization integrity check failed: schedule aliases changed on round-trip ` +
       `(expected [${expectedSchedule.join(', ')}], got [${actualSchedule.join(', ')}])`
     );
+  }
+
+  if ((config.dashboard?.api_key || '') !== (reparsed.dashboard?.api_key || '')) {
+    throw new Error('Config serialization integrity check failed: dashboard.api_key changed on round-trip');
   }
 
   // Atomic write: write to a temp file, back up the existing config, then rename.

@@ -208,6 +208,23 @@ function applyCorsHeaders(response: Response, request: Request, env: Env): Respo
   });
 }
 
+function validateDashboardApiAuth(request: Request, proxyConfig: ProxyConfig): Response | null {
+  const dashboardApiKey = proxyConfig.dashboard?.api_key?.trim();
+  if (!dashboardApiKey) {
+    return null;
+  }
+
+  const authHeader = request.headers.get('authorization') || '';
+  if (authHeader !== `Bearer ${dashboardApiKey}`) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  return null;
+}
+
 /**
  * Handle OPTIONS requests for CORS preflight
  */
@@ -648,6 +665,13 @@ export default {
 
       if (path === '/dashboard' && request.method === 'GET') {
         return applyCorsHeaders(handleDashboardPage(), request, env);
+      }
+
+      if (path.startsWith('/dashboard/api/')) {
+        const authError = validateDashboardApiAuth(request, proxyConfig);
+        if (authError) {
+          return applyCorsHeaders(authError, request, env);
+        }
       }
 
       if (path === '/dashboard/api/config' && request.method === 'GET') {

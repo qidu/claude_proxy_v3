@@ -556,6 +556,68 @@ export function handleDashboardPage(): Response {
       let modelStats = [];
       let configErrorsList = [];
       let compositeLimitWindowsSnapshot = {};
+      const dashboardApiKeyStorageKey = 'model-proxy-dashboard-api-key';
+      const dashboardApiKeyMaxAgeMs = 7 * 24 * 60 * 60 * 1000;
+
+      function getDashboardApiKey() {
+        try {
+          const raw = localStorage.getItem(dashboardApiKeyStorageKey);
+          if (!raw) return '';
+          const stored = JSON.parse(raw);
+          if (!stored || typeof stored.value !== 'string' || typeof stored.savedAt !== 'number') {
+            localStorage.removeItem(dashboardApiKeyStorageKey);
+            return '';
+          }
+          if (Date.now() - stored.savedAt > dashboardApiKeyMaxAgeMs) {
+            localStorage.removeItem(dashboardApiKeyStorageKey);
+            return '';
+          }
+          return stored.value;
+        } catch {
+          localStorage.removeItem(dashboardApiKeyStorageKey);
+          return '';
+        }
+      }
+
+      function setDashboardApiKey(value) {
+        try {
+          if (value) localStorage.setItem(dashboardApiKeyStorageKey, JSON.stringify({ value, savedAt: Date.now() }));
+          else localStorage.removeItem(dashboardApiKeyStorageKey);
+        } catch {}
+      }
+
+      let dashboardApiKeyPrompt = null;
+
+      function promptDashboardApiKey() {
+        if (!dashboardApiKeyPrompt) {
+          dashboardApiKeyPrompt = Promise.resolve()
+            .then(() => {
+              const nextKey = window.prompt('Dashboard API key from [dashboard].api_key:');
+              const trimmed = nextKey ? nextKey.trim() : '';
+              if (trimmed) setDashboardApiKey(trimmed);
+              return trimmed;
+            })
+            .finally(() => { dashboardApiKeyPrompt = null; });
+        }
+        return dashboardApiKeyPrompt;
+      }
+
+      async function dashboardFetch(url, options) {
+        while (true) {
+          const init = { ...(options || {}) };
+          const headers = new Headers(init.headers || {});
+          const apiKey = getDashboardApiKey();
+          if (apiKey) headers.set('Authorization', 'Bearer ' + apiKey);
+          init.headers = headers;
+
+          const res = await fetch(url, init);
+          if (res.status !== 401) return res;
+
+          const nextKey = await promptDashboardApiKey();
+          if (!nextKey) return res;
+        }
+      }
+
       // Set when the user mutates the config (e.g. adding an alias). While true,
       // the dashboard-statistic auto-reload is paused to avoid clobbering the
       // in-flight change. Cleared after the next successful loadConfig().
@@ -1023,7 +1085,7 @@ export function handleDashboardPage(): Response {
         panel.style.display = 'block';
 
         try {
-          const res = await fetch('/dashboard/api/test-model', {
+          const res = await dashboardFetch('/dashboard/api/test-model', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ modelId }),
@@ -1286,7 +1348,7 @@ export function handleDashboardPage(): Response {
 
       async function loadConfig(forceReload) {
         configStatus.textContent = 'Loading...';
-        const res = await fetch(forceReload === true ? '/dashboard/api/config?reload=1' : '/dashboard/api/config');
+        const res = await dashboardFetch(forceReload === true ? '/dashboard/api/config?reload=1' : '/dashboard/api/config');
         const json = await res.json();
         isReadOnly = json.config.read_only === true;
         currentConfig = {
@@ -1338,7 +1400,7 @@ export function handleDashboardPage(): Response {
         configStatus.textContent = 'Saving...';
         try {
           const parsed = collectConfigPayload();
-          const res = await fetch('/dashboard/api/config', {
+          const res = await dashboardFetch('/dashboard/api/config', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(parsed)
@@ -1360,11 +1422,9 @@ export function handleDashboardPage(): Response {
       }
 
       async function loadModelStats() {
-        const [modelsRes, reqRes] = await Promise.all([
-          fetch('/dashboard/api/stats/models'),
-          fetch('/dashboard/api/stats/requests'),
-        ]);
+        const modelsRes = await dashboardFetch('/dashboard/api/stats/models');
         const modelsJson = await modelsRes.json();
+        const reqRes = await dashboardFetch('/dashboard/api/stats/requests');
         const reqJson = await reqRes.json();
         const timingMap = {};
         for (const t of (reqJson.model_timings || [])) {
@@ -1434,14 +1494,14 @@ export function handleDashboardPage(): Response {
       }
 
       async function loadToolStats() {
-        const res = await fetch('/dashboard/api/tools/blocklist');
+        const res = await dashboardFetch('/dashboard/api/tools/blocklist');
         const json = await res.json();
         renderToolRows(json.rows || [], json.blockedTools || []);
       }
 
       async function toggleToolBlock(toolName, currentlyBlocked) {
         try {
-          const res = await fetch('/dashboard/api/tools/toggle-block', {
+          const res = await dashboardFetch('/dashboard/api/tools/toggle-block', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ tool_name: toolName, blocked: !currentlyBlocked })
@@ -1494,7 +1554,7 @@ export function handleDashboardPage(): Response {
       });
 
       async function loadRequestStats() {
-        const res = await fetch('/dashboard/api/stats/requests');
+        const res = await dashboardFetch('/dashboard/api/stats/requests');
         const json = await res.json();
 
         renderRows('#requestUpstreamStats', json.upstreams || [], (row) =>
@@ -1531,7 +1591,7 @@ export function handleDashboardPage(): Response {
         const value = (num && dur) ? num + ' ' + dur : '';
         globalLimitStatus.textContent = 'Saving...';
         try {
-          const res = await fetch('/dashboard/api/global-token-limit', {
+          const res = await dashboardFetch('/dashboard/api/global-token-limit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ value })
@@ -1550,7 +1610,10 @@ export function handleDashboardPage(): Response {
       configForm.addEventListener('click', handleConfigAction);
 
       async function refreshAll() {
-        await Promise.all([loadConfig(), loadModelStats(), loadRequestStats(), loadToolStats()]);
+        await loadConfig();
+        await loadModelStats();
+        await loadRequestStats();
+        await loadToolStats();
       }
 
       refreshAll();
@@ -1587,7 +1650,12 @@ export function handleDashboardPage(): Response {
 
   return new Response(html, {
     status: 200,
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    },
   });
 }
 

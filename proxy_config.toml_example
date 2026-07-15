@@ -1,3 +1,8 @@
+[dashboard]
+# Optional: require Authorization: Bearer <api_key> for /dashboard/api/*.
+# If omitted or empty, dashboard APIs remain loopback-only.
+api_key = "test"
+
 [upstream]
 # `default_base_url` is the *global* upstream endpoint applied **only** to models
 # that are NOT claimed by any `[models.*]` category section — i.e. a model name
