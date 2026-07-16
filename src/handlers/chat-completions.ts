@@ -5,11 +5,12 @@
  */
 
 import type { Env, Logger } from '../types/shared.js';
-import { addForwardedHeaders } from '../utils/routing.js';
+import { addForwardedHeaders, mapMaxTokensForUpstream, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream } from '../utils/dashboard-stats.js';
 import { validateOpenAICompletionsRequest } from '../utils/validation.js';
 import { ValidationError } from '../utils/errors.js';
+import { completionsToResponsesBody } from './openai.js';
 
 export async function handleChatCompletionsPassthrough(
   request: Request,
@@ -19,10 +20,11 @@ export async function handleChatCompletionsPassthrough(
   logger: Logger,
   env: Env,
   modelId?: string,
+  upstreamMode?: string,
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
-  logger.info(requestId, `${path} passthrough → ${targetUrl} model=${modelId || 'unknown'}`);
+  logger.info(requestId, `${path} passthrough → ${targetUrl} model=${modelId || 'unknown'} upstream=${upstreamMode || 'openai-completions'}`);
 
   const bodyText = await request.text();
 
@@ -48,6 +50,35 @@ export async function handleChatCompletionsPassthrough(
 
   const isStreaming = parsedBody.stream === true;
   logger.debug(requestId, `${path} req: model=${parsedBody.model} messages=${Array.isArray(parsedBody.messages) ? (parsedBody.messages as unknown[]).length : 0} stream=${isStreaming}`);
+
+  // When the upstream is openai-responses, convert the completions body to Responses API format
+  if (upstreamMode === 'openai-responses') {
+    const model = (modelId || parsedBody.model as string || 'unknown');
+    const responsesBody = completionsToResponsesBody(parsedBody, model);
+    logger.debug(requestId, `${path} converted to openai-responses body`);
+
+    const upstreamResponse = await fetch(targetUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
+      },
+      body: JSON.stringify(mapMaxTokensForUpstream(responsesBody, targetUrl)),
+      signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env as Record<string, unknown>)),
+    });
+
+    recordResponseStatusCodeFromUpstream(upstreamResponse.status);
+    logger.info(requestId, `${path} resp: status=${upstreamResponse.status} stream=${isStreaming}`);
+
+    const responseHeaders = new Headers(upstreamResponse.headers);
+    responseHeaders.set('x-request-id', requestId);
+
+    return new Response(upstreamResponse.body, {
+      status: upstreamResponse.status,
+      statusText: upstreamResponse.statusText,
+      headers: responseHeaders,
+    });
+  }
 
   const upstreamResponse = await fetch(targetUrl, {
     method: 'POST',

@@ -7,6 +7,14 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### `DEV_PASS_THROUGH` now honors per-model routes and OpenAI Responses upstreams
+
+- `/v1/chat/completions` with `DEV_PASS_THROUGH=true` now resolves the request `model` through the normal model config before forwarding, so per-model `base_url`, `api_key`, and `mode` entries (including `[models.free]`) are used instead of always falling back to `[models.default]`.
+- If the resolved route uses `upstream_mode = "openai-responses"`, the Chat Completions body is converted to Responses format and sent to `/v1/responses`; `openai-completions` routes still forward the original body as-is.
+- Azure OpenAI Responses routes keep using the configured model key; the handler normalizes OpenAI-style auth to Azure's `api-key` header for Azure URLs.
+
+**Files changed:** `src/index.ts`, `src/handlers/chat-completions.ts`, `src/handlers/openai.ts`, `testcases/16_security/dev_pass_through_responses.test.js`, `README.md`, `testcases/README.md`.
+
 ### Gemini endpoint routing can target Anthropic Messages and OpenAI Responses
 
 - `/v1/interactions` can now route to `upstream_mode = "anthropic-messages"` and `"openai-responses"` through the existing OpenAI Chat Completions intermediate conversion. The upstream response is converted back to the Interactions shape.

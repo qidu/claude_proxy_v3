@@ -503,6 +503,14 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
   // 4. /v1/chat/completions — passthrough (when DEV_PASS_THROUGH is enabled)
   if (path === '/v1/chat/completions' || path.startsWith('/v1/chat/completions?')) {
     if (env.DEV_PASS_THROUGH === 'true' || env.DEV_PASS_THROUGH === '1') {
+      if (defaultMode === 'openai-responses') {
+        return {
+          targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/responses'),
+          targetEndpoint: 'v1/chat/completions',
+          handlerType: 'chat-completions' as const,
+          upstreamMode: 'openai-responses',
+        };
+      }
       return {
         targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/chat/completions'),
         targetEndpoint: 'v1/chat/completions',
@@ -1084,10 +1092,20 @@ export default {
           // (fixed routing) calls parseFixedRoute() which throws the block error.
           if (path === '/v1/chat/completions' || path.startsWith('/v1/chat/completions?')) {
             if (env.DEV_PASS_THROUGH === 'true' || env.DEV_PASS_THROUGH === '1') {
+              // Prefer per-model route (e.g. gpt-5.5 in [models.free]) over the global default,
+              // so the correct base_url, api_key, and upstream_mode are used.
+              const modelRoute = modelName ? getModelRouteConfig(modelName, proxyConfig) : undefined;
               const fixedRoute = parseFixedRoute(path, proxyConfig, env);
-              targetUrl = fixedRoute.targetUrl;
+
+              if (modelRoute && modelRoute.targetUrl) {
+                targetUrl = buildUpstreamUrl(modelRoute.targetUrl,
+                  modelRoute.upstreamMode === 'openai-responses' ? 'v1/responses' : 'v1/chat/completions');
+                upstreamMode = modelRoute.upstreamMode || fixedRoute.upstreamMode;
+              } else {
+                targetUrl = fixedRoute.targetUrl;
+                upstreamMode = fixedRoute.upstreamMode;
+              }
               handlerType = fixedRoute.handlerType;
-              upstreamMode = fixedRoute.upstreamMode;
               modelId = modelName; // Use extracted model name for dashboard stats
               forceStreaming = fixedRoute.forceStreaming || false;
 
@@ -1098,8 +1116,11 @@ export default {
                 body: bodyText,
               });
 
-              // Transform auth headers for openai-completions upstream
+              // Transform auth headers, then override with model-specific api_key if configured
               modelAuthHeaders = transformAuthHeadersForUpstream(request, upstreamMode || 'openai-completions', path, requestId, env as Record<string, unknown>);
+              if (modelRoute?.apiKey) {
+                modelAuthHeaders = { ...modelAuthHeaders, ...formatApiKeyForUpstream(modelRoute.apiKey, upstreamMode || 'openai-completions') };
+              }
             }
             // passthrough disabled: don't set routing vars — falls through to outer fixed-routing block
           } else if (modelName && proxyConfig.models) {
@@ -1973,7 +1994,7 @@ export default {
           case 'chat-completions':
             response = await handleChatCompletionsPassthrough(
               attemptRequest, attemptTargetUrl, attemptAuthHeaders,
-              requestId, logger, env, attemptModelId
+              requestId, logger, env, attemptModelId, attemptUpstreamMode
             );
             break;
 

@@ -364,7 +364,7 @@ function completionsToClaudeBody(completions: Record<string, unknown>, model: st
  * Used to route Gemini endpoints (interactions/generateContent) through an
  * openai-responses upstream.
  */
-function completionsToResponsesBody(completions: Record<string, unknown>, model: string): Record<string, unknown> {
+export function completionsToResponsesBody(completions: Record<string, unknown>, model: string): Record<string, unknown> {
   const messages = (completions.messages as OpenAIMessage[]) || [];
   const input: unknown[] = [];
   const instructions = messages

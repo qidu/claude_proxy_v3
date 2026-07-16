@@ -73,12 +73,24 @@ const suites = [
   '16_security/dev_pass_through.test.js',
   '16_security/reasoning_effort_conversion.test.js',
   '16_security/openai_responses_routing.test.js',
+  '16_security/dev_pass_through_responses.test.js',
 ];
 
 // Parse CLI:
 //   node run-tests.js            → all suites
 //   node run-tests.js 5          → only suites[5]
 //   node run-tests.js 0,3,7      → suites[0], suites[3], suites[7]
+//   node run-tests.js -help      → show helps and examples
+//   node run-tests.js -h         → shorthand for --help
+if (process.argv.includes('--help') || process.argv.includes('-h')) {
+  console.log('[cli] Examples:');
+  console.log('  node run-tests.js --list   # list all suites');
+  console.log('  node run-tests.js          # run all suites');
+  console.log('  node run-tests.js 5        # only suites[5]');
+  console.log('  node run-tests.js 0,3      # suites[0] and suites[3]');
+  process.exit(0);
+}
+
 //   node run-tests.js --list     → print each suite's index + path, then exit
 //   node run-tests.js -l         → shorthand for --list
 if (process.argv.includes('--list') || process.argv.includes('-l')) {
