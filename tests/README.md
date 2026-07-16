@@ -1,5 +1,9 @@
 # Tests
 
+## Coverage testcases prerequisite
+
+Coverage test cases live in `../testcases` and must be run from the project root through the custom runner. Use `node run-tests.js --all` for all suites, or `node run-tests.js <index>` for selected suites. Bare `node run-tests.js` prints help only.
+
 ## Multi-Agent SDK Test
 
 ### `multi-agents-test.ts`

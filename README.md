@@ -279,6 +279,17 @@ Notes:
 - **Indirect transform via `openai-completions`** means Gemini endpoint input first becomes OpenAI Chat Completions, then becomes Claude Messages or OpenAI Responses. This reuses the Chat Completions middle mode while preserving the original Gemini endpoint response shape.
 - Direct transforms are preferred long-term for endpoint fidelity. The current `/v1/interactions` → `anthropic-messages` / `openai-responses` routes use the indirect `openai-completions` bridge for code reuse; see [Routing transform review](./docs/routing-review.md) for tradeoffs and recommendations.
 
+### OpenAI prompt caching fields
+
+The proxy only preserves OpenAI prompt-caching controls when the target mode can carry them without changing prompt structure. Cross-mode conversion preserves the top-level routing key, but not request-wide cache policy or content-block breakpoints.
+
+| Client endpoint | `upstream_mode` | `prompt_cache_key` | `prompt_cache_options` | `prompt_cache_breakpoint` |
+|---|---|---|---|---|
+| `POST /v1/responses` | `openai-responses` | Preserved | Preserved | Preserved |
+| `POST /v1/responses` | `openai-completions` | Preserved | Dropped | Dropped during `input` → `messages` conversion |
+| `POST /v1/chat/completions` | `openai-completions` | Preserved | Preserved | Preserved |
+| `POST /v1/chat/completions` | `openai-responses` | Preserved | Dropped | Dropped during `messages` → Responses `input` / `instructions` conversion |
+
 ### Dashboard API
 
 The `/dashboard` web UI is driven by a small JSON API. Dashboard/admin routes
@@ -701,17 +712,19 @@ is documented in the comments at the top of [`wrangler.toml`](./wrangler.toml) a
 ## Testing
 
 ```bash
-# Start the proxy first (e.g. on PORT=7777), then:
-node run-tests.js
+# Coverage testcases: run from the project root; the runner builds an isolated test config.
+node run-tests.js --all
+
+# Agent SDK / provider tests live under ./tests and need the proxy running first.
 node tests/multi-agents-test.ts
 node tests/multi-agents-composite.ts
 npm run test:unit
 
-# Point at a specific proxy / key
-PROXY_URL=http://localhost:8788 API_KEY=sk-test node run-tests.js
+# Point testcases at a specific proxy / key
+PROXY_URL=http://localhost:8788 API_KEY=sk-test node run-tests.js --all
 ```
 
-- Coverage test cases live in [`testcases/`](./testcases/README.md).
+- Coverage test cases live in [`testcases/`](./testcases/README.md); use `node run-tests.js --all` or selected suite indices.
 - Agent-SDK and provider tests live in [`tests/`](./tests/README.md).
 
 ## Documentation

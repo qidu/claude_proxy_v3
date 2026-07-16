@@ -86,6 +86,7 @@ export interface OpenAIRequest {
         budget_tokens?: number;
     };
     reasoning_effort?: "low" | "medium" | "high" | "max";
+    prompt_cache_key?: string;
 }
 
 export interface OpenAITokenCountingRequest {

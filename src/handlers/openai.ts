@@ -427,6 +427,7 @@ export function completionsToResponsesBody(completions: Record<string, unknown>,
   if (completions.temperature !== undefined) responsesBody.temperature = completions.temperature;
   if (completions.top_p !== undefined) responsesBody.top_p = completions.top_p;
   if (completions.max_tokens !== undefined) responsesBody.max_output_tokens = completions.max_tokens;
+  if (completions.prompt_cache_key !== undefined) responsesBody.prompt_cache_key = completions.prompt_cache_key;
   if (completions.tools && Array.isArray(completions.tools) && (completions.tools as unknown[]).length > 0) {
     responsesBody.tools = (completions.tools as Array<{ type: string; function: { name: string; description?: string; parameters?: unknown } }>).map(t => ({
       type: 'function',

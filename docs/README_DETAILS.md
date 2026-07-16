@@ -969,6 +969,15 @@ OpenAI Responses API support with format conversion to/from Chat Completions.
 - When `upstream_mode = "openai-completions"` (default): Converts Responses API request → Chat Completions → sends to upstream → converts response back to Responses API format
 - When `upstream_mode = "openai-responses"`: Passes through directly to OpenAI Responses API upstream
 
+**OpenAI prompt caching fields**:
+
+| Client endpoint | `upstream_mode` | `prompt_cache_key` | `prompt_cache_options` | `prompt_cache_breakpoint` |
+|---|---|---|---|---|
+| `/v1/responses` | `openai-responses` | Preserved | Preserved | Preserved |
+| `/v1/responses` | `openai-completions` | Preserved | Dropped | Dropped during `input` → `messages` conversion |
+| `/v1/chat/completions` | `openai-completions` | Preserved | Preserved | Preserved |
+| `/v1/chat/completions` | `openai-responses` | Preserved | Dropped | Dropped during `messages` → Responses `input` / `instructions` conversion |
+
 **Key Differences from Chat Completions**:
 - Uses `input` instead of `messages`
 - Response contains `output_items` array instead of `choices`

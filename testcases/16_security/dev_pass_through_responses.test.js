@@ -21,12 +21,15 @@ const { assert, runTestSuite } = require('../utils/test_helpers');
 
 let handleChatCompletionsPassthrough;
 let completionsToResponsesBody;
+let convertResponsesToChatCompletions;
 
 async function loadModule() {
   const chatCompletions = await import(path.join(process.cwd(), 'dist/handlers/chat-completions.js'));
   const openai = await import(path.join(process.cwd(), 'dist/handlers/openai.js'));
+  const responsesToCompletions = await import(path.join(process.cwd(), 'dist/converters/responses-to-completions.js'));
   handleChatCompletionsPassthrough = chatCompletions.handleChatCompletionsPassthrough;
   completionsToResponsesBody = openai.completionsToResponsesBody;
+  convertResponsesToChatCompletions = responsesToCompletions.convertResponsesToChatCompletions;
 }
 
 function makeRequest(body) {
@@ -90,6 +93,7 @@ async function testPassthroughConvertsToResponsesBody() {
       const response = await handleChatCompletionsPassthrough(
         makeRequest({
           model: 'gpt-5.5',
+          prompt_cache_key: 'tenant:acme:support-assistant-v1',
           messages: [{ role: 'user', content: 'hi' }],
           max_tokens: 20,
         }),
@@ -111,6 +115,7 @@ async function testPassthroughConvertsToResponsesBody() {
       assert(!('messages' in calls[0].body), 'Responses body must not contain Chat Completions messages field');
       assert(calls[0].body.max_output_tokens === 20, `expected max_output_tokens=20, got ${calls[0].body.max_output_tokens}`);
       assert(!('max_tokens' in calls[0].body), 'Responses body must not forward max_tokens');
+      assert(calls[0].body.prompt_cache_key === 'tenant:acme:support-assistant-v1', `expected prompt_cache_key to be preserved, got ${calls[0].body.prompt_cache_key}`);
       const userInput = calls[0].body.input.find(i => i.role === 'user');
       assert(userInput, `expected user input item, got ${JSON.stringify(calls[0].body.input)}`);
       assert(response.status === 200, `expected status 200, got ${response.status}`);
@@ -167,6 +172,7 @@ async function testPassthroughCompletionsBodyForwardedAsIs() {
 async function testCompletionsToResponsesBodySystemToInstructions() {
   const result = completionsToResponsesBody({
     model: 'gpt-5.5',
+    prompt_cache_key: 'tenant:acme:support-assistant-v1',
     messages: [
       { role: 'system', content: 'Be concise.' },
       { role: 'user', content: 'Hello' },
@@ -175,6 +181,7 @@ async function testCompletionsToResponsesBodySystemToInstructions() {
   }, 'gpt-5.5');
 
   assert(result.instructions === 'Be concise.', `expected instructions='Be concise.', got ${result.instructions}`);
+  assert(result.prompt_cache_key === 'tenant:acme:support-assistant-v1', `expected prompt_cache_key to be preserved, got ${result.prompt_cache_key}`);
   assert(Array.isArray(result.input), 'result.input should be an array');
   const userItem = result.input.find(i => i.role === 'user');
   assert(userItem, `expected user input item, got ${JSON.stringify(result.input)}`);
@@ -212,11 +219,26 @@ async function testCompletionsToResponsesBodyToolsFlattened() {
   assert(tool.parameters?.type === 'object', 'tool.parameters should be preserved');
 }
 
+// ---------------------------------------------------------------------------
+// TC3105: convertResponsesToChatCompletions preserves prompt_cache_key
+// ---------------------------------------------------------------------------
+
+async function testResponsesToCompletionsPreservesPromptCacheKey() {
+  const result = convertResponsesToChatCompletions({
+    model: 'gpt-5.6',
+    prompt_cache_key: 'tenant:acme:knowledge-base-v1',
+    input: 'Hello',
+  }, 'gpt-5.6');
+
+  assert(result.prompt_cache_key === 'tenant:acme:knowledge-base-v1', `expected prompt_cache_key to be preserved, got ${result.prompt_cache_key}`);
+}
+
 module.exports = {
   testPassthroughConvertsToResponsesBody,
   testPassthroughCompletionsBodyForwardedAsIs,
   testCompletionsToResponsesBodySystemToInstructions,
   testCompletionsToResponsesBodyToolsFlattened,
+  testResponsesToCompletionsPreservesPromptCacheKey,
 };
 
 if (require.main === module) {
@@ -226,6 +248,7 @@ if (require.main === module) {
       { name: 'TC3102: passthrough openai-completions forwards body as-is', fn: testPassthroughCompletionsBodyForwardedAsIs },
       { name: 'TC3103: completionsToResponsesBody converts system to instructions', fn: testCompletionsToResponsesBodySystemToInstructions },
       { name: 'TC3104: completionsToResponsesBody flattens tools', fn: testCompletionsToResponsesBodyToolsFlattened },
+      { name: 'TC3105: convertResponsesToChatCompletions preserves prompt_cache_key', fn: testResponsesToCompletionsPreservesPromptCacheKey },
     ]),
   );
 }

@@ -134,6 +134,9 @@ export function convertResponsesToChatCompletions(
   if (responsesRequest.reasoning_effort !== undefined) {
     completionsRequest.reasoning_effort = responsesRequest.reasoning_effort as 'low' | 'medium' | 'high';
   }
+  if (responsesRequest.prompt_cache_key !== undefined) {
+    completionsRequest.prompt_cache_key = responsesRequest.prompt_cache_key as string;
+  }
 
   return completionsRequest;
 }

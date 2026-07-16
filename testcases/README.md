@@ -8,7 +8,7 @@ Why custom: the suite is integration-heavy (talks to a live proxy over HTTP), ne
 
 ## Running All Tests
 
-The single entry point is **`run-tests.js`** at the project root — it spawns the proxy, isolates the config, runs every `*.test.js` under `testcases/`, and tears everything down on exit.
+The single entry point is **`run-tests.js`** at the project root — it spawns the proxy, isolates the config, runs every `*.test.js` under `testcases/`, and tears everything down on exit. Use `--all` for a full run; bare `node run-tests.js` only prints help.
 
 ```bash
 # Start testing proxy server WITH PORT=7777
@@ -16,10 +16,10 @@ The single entry point is **`run-tests.js`** at the project root — it spawns t
 # DO NOT modify `proxy_config.toml`, modify the testing config at `${TEST_CONFIG}proxy_config.toml`
 
 # Single pass (all suites)
-node run-tests.js
+node run-tests.js --all
 
 # With custom proxy URL and API key
-PROXY_URL=http://localhost:7777 API_KEY=sk-test node run-tests.js
+PROXY_URL=http://localhost:7777 API_KEY=sk-test node run-tests.js --all
 ```
 
 ### Running a subset by index
@@ -57,7 +57,7 @@ The proxy is started by the runner itself with `TEST_CONFIG=test_` and `PORT=777
 
 ```bash
 # Single command — runner spawns the proxy, runs all suites, restores config
-node run-tests.js
+node run-tests.js --all
 ```
 
 ## Running Tests Individually

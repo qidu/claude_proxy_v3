@@ -77,17 +77,24 @@ const suites = [
 ];
 
 // Parse CLI:
-//   node run-tests.js            → all suites
+//   node run-tests.js            → show help
+//   node run-tests.js --all      → test all suites
 //   node run-tests.js 5          → only suites[5]
 //   node run-tests.js 0,3,7      → suites[0], suites[3], suites[7]
 //   node run-tests.js -help      → show helps and examples
 //   node run-tests.js -h         → shorthand for --help
-if (process.argv.includes('--help') || process.argv.includes('-h')) {
+function printHelp() {
   console.log('[cli] Examples:');
+  console.log('  node run-tests.js          # show this help');
+  console.log('  node run-tests.js --help   # show this help');
   console.log('  node run-tests.js --list   # list all suites');
-  console.log('  node run-tests.js          # run all suites');
+  console.log('  node run-tests.js --all    # run all suites');
   console.log('  node run-tests.js 5        # only suites[5]');
   console.log('  node run-tests.js 0,3      # suites[0] and suites[3]');
+}
+
+if (process.argv.length <= 2 || process.argv.includes('--help') || process.argv.includes('-h')) {
+  printHelp();
   process.exit(0);
 }
 
@@ -98,10 +105,7 @@ if (process.argv.includes('--list') || process.argv.includes('-l')) {
   const pad = String(suites.length - 1).length;
   suites.forEach((p, i) => console.log(`  ${String(i).padStart(pad, ' ')}  ${p}`));
   console.log('');
-  console.log('[cli] Examples:');
-  console.log('  node run-tests.js          # run all suites');
-  console.log('  node run-tests.js 5        # only suites[5]');
-  console.log('  node run-tests.js 0,3      # suites[0] and suites[3]');
+  printHelp();
   process.exit(0);
 }
 
@@ -342,7 +346,7 @@ function replaceRequire(src, baseName, dstPath) {
 
 const cliArg = process.argv[2];
 let selectedIndices = null;
-if (cliArg !== undefined) {
+if (cliArg !== undefined && cliArg !== '--all') {
   selectedIndices = cliArg.split(',').map((s) => {
     const n = Number(s.trim());
     if (!Number.isInteger(n) || n < 0 || n >= suites.length) {
