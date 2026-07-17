@@ -693,6 +693,8 @@ entry can set `base_url = "sdk://chatjimmy.ai/api"` and keep the appropriate
 | `PRIVACY_FILTER_TIMEOUT_MS` | `40000` | Per-call timeout to the sidecar |
 | `PRIVACY_FILTER_MAX_CHARS` | `1024000` | Skip redaction above this total text size |
 
+When the sidecar is `serve.py` from [`submodules/privacy-filter`](./submodules/privacy-filter/), it emits two sentinel prefixes: `⟦PII:n⟧` (model-detected PII) and `⟦HASH:n⟧` (cryptographic-hash-shaped secrets such as API keys and tokens, caught by the entropy-based `hash_detect.py` scan). The proxy restores both prefixes transparently on the response, including for streaming SSE.
+
 **Compression sidecar** (inert unless `KOMPRESS_URL` is set)
 
 | Variable | Default | Purpose |

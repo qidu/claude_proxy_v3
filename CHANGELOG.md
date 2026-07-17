@@ -7,6 +7,12 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Privacy filter now restores both `PII` and `HASH` sentinels
+
+The privacy-filter sidecar ([`submodules/privacy-filter/serve.py`](./submodules/privacy-filter/serve.py)) emits two sentinel prefixes: `⟦PII:n⟧` (model-detected PII) and `⟦HASH:n⟧` (cryptographic-hash-shaped secrets such as API keys and tokens, caught by the entropy-based `hash_detect.py` scan). Previously the proxy's `SENTINEL_REGEX` only matched `PII:`, so `HASH:` sentinels would leak through as literal text in streaming responses. The regex now matches `(?:PII|HASH):`, and the info log line no longer claims HASH spans are PII. On overlap the sidecar's priority order (`HASH_HIGH > HASH_LOW > MODEL`) still applies — the proxy is just restoration, not detection.
+
+**Files changed:** `src/utils/privacy-filter.ts`, `src/index.ts`, `testcases/16_security/privacy_filter.test.js` (TC2113, TC2114), `dist/`.
+
 ### Smaller production Docker image
 
 - After the TypeScript build, `Dockerfile` runs `npm prune --omit=dev` so the runtime image no longer carries `wrangler`, `@anthropic-ai/claude-code`, `@anthropic-ai/claude-agent-sdk`, `@openai/codex-sdk`, `@google/genai`, etc. They have also been moved to `devDependencies` in `package.json`.

@@ -13,8 +13,10 @@
 import type { Env } from '../types/shared.js';
 import { isInternalHost } from './routing.js';
 
-/** Sentinels minted by the sidecar look like `⟦PII:0⟧`. */
-const SENTINEL_REGEX = /\u27e6PII:\d+\u27e7/g;
+/** Sentinels minted by the sidecar look like `⟦PII:0⟧` or `⟦HASH:0⟧`
+ *  (the latter from the entropy-based hash/API-key scan in
+ *  `submodules/privacy-filter/hash_detect.py`). */
+const SENTINEL_REGEX = /\u27e6(?:PII|HASH):\d+\u27e7/g;
 /** Longest sentinel we expect, used to size the streaming tail buffer. */
 const MAX_SENTINEL_LEN = 24;
 

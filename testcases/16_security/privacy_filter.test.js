@@ -30,6 +30,11 @@
  * - TC2112 (live proxy): with no PRIVACY_FILTER_URL configured in the live
  *           test environment, a normal /v1/messages request completes without
  *           any privacy-filter artifacts (sentinels) leaking into the response
+ * - TC2113: restoreText replaces HASH sentinels (the new entropy-based
+ *           hash/API-key detection from hash_detect.py) — these use the
+ *           `⟦HASH:n⟧` prefix, distinct from the `⟦PII:n⟧` prefix
+ * - TC2114: restoreText handles mixed PII + HASH sentinels in a single text,
+ *           confirming the regex covers both prefixes without interference
  *
  * Reference: src/utils/privacy-filter.ts, src/index.ts (privacy-filter wiring),
  *            testcases/gaps-of-testcases-konwn-round-2.md gap #1
@@ -260,6 +265,63 @@ async function testLiveProxyNoFilterArtifacts() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// TC2113: restoreText replaces HASH sentinels (entropy-based hash detection)
+// ---------------------------------------------------------------------------
+async function testRestoreTextReplacesHashSentinels() {
+  // The hash_detect.py sidecar emits `⟦HASH:n⟧` sentinels for
+  // cryptographic-hash-shaped secrets (API keys, tokens). The mapping
+  // keys are unique full sentinel strings, so restoration must work for
+  // HASH sentinels just like for PII sentinels.
+  const mapping = {
+    '\u27e6HASH:0\u27e7': '5d41402abc4b2a76b9719d911017c592',
+    '\u27e6HASH:1\u27e7': 'sk-deadbeefcafebabe0123456789abcdef'
+  };
+  const result = restoreText(
+    'API key=\u27e6HASH:0\u27e7 leaked; token=\u27e6HASH:1\u27e7 rotated',
+    mapping
+  );
+  assert(
+    result === 'API key=5d41402abc4b2a76b9719d911017c592 leaked; token=sk-deadbeefcafebabe0123456789abcdef rotated',
+    `Expected HASH sentinels replaced, got: ${result}`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC2114: restoreText handles mixed PII + HASH sentinels in a single text
+// ---------------------------------------------------------------------------
+async function testRestoreTextHandlesMixedPiiAndHashSentinels() {
+  // A single redaction batch may produce both PII and HASH sentinels; both
+  // prefixes must be matched and replaced independently. The order in
+  // which the sidecar mints them is independent of their type.
+  const mapping = {
+    '\u27e6HASH:0\u27e7': '5d41402abc4b2a76b9719d911017c592',
+    '\u27e6PII:1\u27e7': 'alice@example.com'
+  };
+  const result = restoreText(
+    'API key=\u27e6HASH:0\u27e7 leaked for \u27e6PII:1\u27e7',
+    mapping
+  );
+  assert(
+    result === 'API key=5d41402abc4b2a76b9719d911017c592 leaked for alice@example.com',
+    `Expected mixed sentinels restored, got: ${result}`
+  );
+
+  // Reverse order should also work, and unknown sentinels must be left intact.
+  const mapping2 = {
+    '\u27e6PII:0\u27e7': 'John Doe',
+    '\u27e6HASH:2\u27e7': 'feedfacefeedfacefeedfacefeedface'
+  };
+  const result2 = restoreText(
+    'user \u27e6PII:0\u27e7 key=\u27e6HASH:2\u27e7 unknown=\u27e6PII:99\u27e7',
+    mapping2
+  );
+  assert(
+    result2 === 'user John Doe key=feedfacefeedfacefeedfacefeedface unknown=\u27e6PII:99\u27e7',
+    `Expected unknown sentinel preserved, got: ${result2}`
+  );
+}
+
 module.exports = {
   testConfigNullWhenUnset,
   testConfigRejectsExternalHost,
@@ -272,7 +334,9 @@ module.exports = {
   testRedactBodyFailOpen,
   testRedactBodyFailClosed,
   testRedactBodyNoTextRefs,
-  testLiveProxyNoFilterArtifacts
+  testLiveProxyNoFilterArtifacts,
+  testRestoreTextReplacesHashSentinels,
+  testRestoreTextHandlesMixedPiiAndHashSentinels
 };
 
 if (require.main === module) {
@@ -288,6 +352,8 @@ if (require.main === module) {
     { name: 'TC2109: redactBody fail-open', fn: testRedactBodyFailOpen },
     { name: 'TC2110: redactBody fail-closed', fn: testRedactBodyFailClosed },
     { name: 'TC2111: redactBody no text refs', fn: testRedactBodyNoTextRefs },
-    { name: 'TC2112: live proxy no filter artifacts', fn: testLiveProxyNoFilterArtifacts }
+    { name: 'TC2112: live proxy no filter artifacts', fn: testLiveProxyNoFilterArtifacts },
+    { name: 'TC2113: restoreText replaces HASH sentinels', fn: testRestoreTextReplacesHashSentinels },
+    { name: 'TC2114: restoreText handles mixed PII + HASH sentinels', fn: testRestoreTextHandlesMixedPiiAndHashSentinels }
   ]));
 }

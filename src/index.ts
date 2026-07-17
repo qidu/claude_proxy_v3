@@ -1038,7 +1038,7 @@ export default {
             piiMapping = mapping;
             if (Object.keys(mapping).length > 0) {
               bodyText = JSON.stringify(body);
-              logger.info(requestId, `Privacy filter redacted ${Object.keys(mapping).length} PII span(s) from ${path}`);
+              logger.info(requestId, `Privacy filter redacted ${Object.keys(mapping).length} span(s) from ${path}`);
             }
           }
 
