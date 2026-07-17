@@ -141,7 +141,7 @@ function extractUpstreamMessage(rawBody: string | undefined): string | undefined
 export function handleTargetApiError(
   response: Response,
   targetApiName: string,
-  requestInfo?: { url: string; body?: string; upstreamBody?: string }
+  requestInfo?: { url: string; status?: number; body?: string; upstreamBody?: string }
 ): never {
   const status = response.status;
   const upstreamMessage = extractUpstreamMessage(requestInfo?.upstreamBody);

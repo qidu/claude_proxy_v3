@@ -68,7 +68,7 @@ export async function handleChatCompletionsPassthrough(
     });
 
     recordResponseStatusCodeFromUpstream(upstreamResponse.status);
-    logger.info(requestId, `${path} resp: status=${upstreamResponse.status} stream=${isStreaming}`);
+    logger.debug(requestId, `${path} resp: status=${upstreamResponse.status} stream=${isStreaming}`);
 
     const responseHeaders = new Headers(upstreamResponse.headers);
     responseHeaders.set('x-request-id', requestId);
@@ -91,7 +91,7 @@ export async function handleChatCompletionsPassthrough(
   });
 
   recordResponseStatusCodeFromUpstream(upstreamResponse.status);
-  logger.info(requestId, `${path} resp: status=${upstreamResponse.status} stream=${isStreaming}`);
+  logger.debug(requestId, `${path} resp: status=${upstreamResponse.status} stream=${isStreaming}`);
 
   // Forward the response body as-is -- preserve streaming or JSON
   const responseHeaders = new Headers(upstreamResponse.headers);

@@ -179,7 +179,7 @@ export async function handleMessagesRequest(
   
   // Detect Gemini CLI and force non-streaming to avoid JSON parsing issues
   const userAgent = request.headers.get('user-agent') || '';
-  activeLogger.info(requestId, `UA: ${userAgent}, stream = ${requestBody.stream}`);
+  activeLogger.debug(requestId, `UA: ${userAgent}, stream = ${requestBody.stream}`);
   
   // Check if request is already in OpenAI format
   // OpenAI format: { model, messages, stream, temperature, ... }
@@ -391,8 +391,8 @@ export async function handleMessagesRequest(
       const upstreamBodyPreview = upstreamResponseBody.length > 500
         ? `${upstreamResponseBody.substring(0, 500)}...`
         : upstreamResponseBody;
-      activeLogger.error(requestId, `Messages API error from upstream (openai-passthrough): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}, upstream response body: ${upstreamBodyPreview}`);
-      handleTargetApiError(response, 'Messages API', { url: targetUrl, body: bodyPreview, upstreamBody: upstreamResponseBody });
+      activeLogger.debug(requestId, `Messages API error from upstream (openai-passthrough): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}, upstream response body: ${upstreamBodyPreview}`);
+      handleTargetApiError(response, 'Messages API', { url: targetUrl, status: response.status, body: bodyPreview, upstreamBody: upstreamResponseBody });
     }
 
     // Get local token counting config
@@ -422,9 +422,9 @@ export async function handleMessagesRequest(
     activeLogger.debug(requestId, `Thinking: ${JSON.stringify(thinking)}`);
     const thinkingType = thinking.type === true || thinking.type === 'enabled' || thinking.type === 'adaptive' ? 'enabled' : 'disabled';
     const budget = 'budget_tokens' in thinking && thinking.budget_tokens ? `budget_tokens: ${thinking.budget_tokens}` : 'budget: unknown';
-    activeLogger.info(requestId, `Thinking type: ${thinkingType}, ${budget} extracted from Claude-Format`);
+    activeLogger.debug(requestId, `Thinking type: ${thinkingType}, ${budget} extracted from Claude-Format`);
   } else {
-    activeLogger.info(requestId, `Thinking type: not specified by req body format=message`);
+    activeLogger.debug(requestId, `Thinking type: not specified by req body format=message`);
   }
 
   // Get target model ID
@@ -434,7 +434,7 @@ export async function handleMessagesRequest(
   const isStreaming = claudeRequest.stream === true;
 
   // Log request info
-  activeLogger.info(requestId, `Upstream (stream=${isStreaming}): /v1/chat/completions → ${targetModelId}`);
+  activeLogger.info(requestId, `${userAgent} upstream (stream=${isStreaming}) thinking (${thinking?.type ?? 'none'}) to target ${targetModelId} [openai-completions]`);
   activeLogger.debug(requestId, `Has auth headers: ${!!authHeaders['Authorization'] || !!authHeaders['x-api-key']}`);
   activeLogger.debug(requestId, `Is for SDK Model: ${isSdkUrl(targetUrl)} with upstreamMode: ${upstreamMode}`);
 
@@ -630,8 +630,8 @@ export async function handleMessagesRequest(
     const upstreamBodyPreview = upstreamResponseBody.length > 500
       ? `${upstreamResponseBody.substring(0, 500)}...`
       : upstreamResponseBody;
-    activeLogger.error(requestId, `Messages API error from upstream (claude->openai): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}, upstream response body: ${upstreamBodyPreview}`);
-    handleTargetApiError(response, 'Messages API', { url: targetUrl, body: bodyPreview, upstreamBody: upstreamResponseBody });
+    activeLogger.debug(requestId, `Messages API error from upstream (claude->openai): ${response.status}, target URL: ${targetUrl}, request Body: ${bodyPreview.substring(0, 250)} ... ${bodyPreview.substring(bodyPreview.length - 250)}, upstream response body: ${upstreamBodyPreview}`);
+    handleTargetApiError(response, 'Messages API', { url: targetUrl, status: response.status, body: bodyPreview, upstreamBody: upstreamResponseBody });
   }
 
   // Get local token counting config

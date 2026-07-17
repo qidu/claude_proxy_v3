@@ -827,7 +827,7 @@ export async function handleOpenAIRequest(
         // Handle target API errors
         if (!response.ok) {
             const errorText = await response.text();
-            activeLogger.error(requestId, `OpenAI API error: ${response.status} ${errorText}`);
+            activeLogger.debug(requestId, `OpenAI API error: ${response.status} ${errorText}`);
             handleTargetApiError(response, 'OpenAI API', { url: targetUrl, upstreamBody: errorText });
         }
 
@@ -840,7 +840,7 @@ export async function handleOpenAIRequest(
         return handleOpenAINonStreamingResponse(response, openaiRequest.model as string, requestId, activeLogger, isInteractionsRequest, isGenerateContentRequest);
 
     } catch (error) {
-        activeLogger.error(requestId, `OpenAI API error: ${(error as Error).message}`);
+        activeLogger.debug(requestId, `OpenAI API error: ${(error as Error).message}`);
         throw error;
     }
 }

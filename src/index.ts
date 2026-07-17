@@ -2113,7 +2113,8 @@ export default {
       if (!modelFailureRecorded && failedModelId) {
         recordModelFailedRequest(failedModelId);
       }
-      logger.error(requestId, `Error: ${(error as Error).message}`);
+      const err = error as Error & { status?: number; type?: string };
+      logger.error(requestId, `Catch Error [model=${failedModelId ?? '-'} status=${err.status ?? '-'} type=${err.type ?? '-'}: ${err.message}`);
       recordRequestTiming(path, Date.now() - requestStartTime);
       recordModelTiming(failedModelId, Date.now() - requestStartTime);
       return createErrorResponse(error as Error, requestId);

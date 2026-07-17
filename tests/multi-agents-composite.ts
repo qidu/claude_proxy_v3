@@ -302,7 +302,7 @@ wire_api = "responses"
   fs.mkdirSync(codexDir, { recursive: true });
   fs.writeFileSync(codexConfig, configBody);
 
-  const KEY = process.env.CODEX_API_KEY || process.env.API_KEY || "sk-hi";
+  const KEY = process.env.CODEX_API_KEY || process.env.API_KEY || "sk-agent-test-key";
   let toolCalls = 0;
   let finalText = "";
   let lastError = "";
@@ -393,7 +393,7 @@ async function runClaudeAgent(prompt: string, model: string): Promise<AgentResul
         maxTurns: 30,
         env: {
           ANTHROPIC_BASE_URL: PROXY_BASE,
-          ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || process.env.API_KEY || "sk-fake",
+          ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || process.env.API_KEY || "sk-agent-test-key",
         },
       },
     });
@@ -570,7 +570,7 @@ const GEMINI_TOOLS: Record<string, any>[] = [
 async function runGeminiAgent(prompt: string, model: string): Promise<AgentResult> {
   const start = Date.now();
   const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY || process.env.API_KEY || "x-proxy-auth",
+    apiKey: process.env.GEMINI_API_KEY || process.env.API_KEY || "x-agent-test-key",
     httpOptions: { baseUrl: PROXY_BASE },
   });
 

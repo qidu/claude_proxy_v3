@@ -73,7 +73,7 @@ export async function handleResponsesRequest(
   // used by the messages handler: `const targetModelId = modelId || claudeRequest.model`
   const model = modelId || (requestBody.model as string) || 'unknown';
 
-  activeLogger.info(requestId, `Responses API request (stream=${isStreaming}, mode=${upstreamMode}, model=${model}): ${targetUrl}`);
+  activeLogger.debug(requestId, `Responses API request (stream=${isStreaming}, mode=${upstreamMode}, model=${model}): ${targetUrl}`);
 
   // Handle based on upstream mode
   if (upstreamMode === 'openai-completions') {
@@ -616,8 +616,8 @@ async function handleAsCompletions(
   if (!response.ok) {
     const bodyPreview = JSON.stringify(completionsRequest);
     const upstreamErrorBody = await response.text();
-    logger.error(requestId, `Responses->Completions API error: ${response.status}, URL: ${targetUrl}`);
-    handleTargetApiError(response, 'Responses API (via Completions)', { url: targetUrl, body: bodyPreview, upstreamBody: upstreamErrorBody });
+    logger.debug(requestId, `Responses->Completions API error code: ${response.status}, URL: ${targetUrl}`);
+    handleTargetApiError(response, 'Responses API (via Completions)', { url: targetUrl, status: response.status, body: bodyPreview, upstreamBody: upstreamErrorBody });
   }
 
   if (isStreaming) {
@@ -1046,7 +1046,7 @@ export async function handleResponsesInputTokensRequest(
   const requestBody = await request.json() as Record<string, unknown>;
   const model = modelId || (requestBody.model as string) || 'unknown';
 
-  activeLogger.info(requestId, `Responses input_tokens request (mode=${upstreamMode}, model=${model}): ${targetUrl}`);
+  activeLogger.debug(requestId, `Responses input_tokens request (mode=${upstreamMode}, model=${model}): ${targetUrl}`);
 
   if (upstreamMode === 'openai-completions') {
     // Convert to completions format, call with max_tokens=1, extract prompt_tokens from usage
@@ -1137,7 +1137,7 @@ export async function handleResponsesCompactRequest(
   const requestBody = await request.json() as Record<string, unknown>;
   const model = modelId || (requestBody.model as string) || 'unknown';
 
-  activeLogger.info(requestId, `Responses compact request (mode=${upstreamMode}, model=${model}): ${targetUrl}`);
+  activeLogger.debug(requestId, `Responses compact request (mode=${upstreamMode}, model=${model}): ${targetUrl}`);
 
   if (upstreamMode === 'openai-completions') {
     // Convert to chat completions, call upstream, wrap as CompactedResponse
@@ -1235,8 +1235,8 @@ async function handleAsPassthrough(
   if (!response.ok) {
     const bodyPreview = JSON.stringify(requestBody);
     const upstreamErrorBody = await response.text();
-    logger.error(requestId, `Responses API error: ${response.status}, URL: ${targetUrl}`);
-    handleTargetApiError(response, 'Responses API', { url: targetUrl, body: bodyPreview, upstreamBody: upstreamErrorBody });
+    logger.debug(requestId, `Responses API error code: ${response.status} from URL: ${targetUrl}`);
+    handleTargetApiError(response, 'Responses API', { url: targetUrl, status: response.status, body: bodyPreview, upstreamBody: upstreamErrorBody });
   }
 
   if (isStreaming) {
