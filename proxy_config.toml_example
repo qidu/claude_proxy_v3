@@ -233,3 +233,32 @@ base_url = "https://openrouter.ai/api"
 # - "max-m2.7-high serves all else time cause it has no specific arrange. So it's a fallback model alias in this schedule.
 [schedule]
 "saver" = {"maxplan" = [{from = 9, to = 12}, {from = 14, to = 18}], "code-small" = [{from = 0, to = 9, days="weekday"}], "max-m3" = [{days = "weekend"}], "max-m2.7-high" = []}
+
+# Privacy filter — redacts PII and hash-shaped secrets (API keys / tokens) from
+# outgoing LLM request text and restores them on the response. Two modes:
+#
+#   * `sidecar` (default when a URL is configured): the heavy PII model runs in
+#     the Python sidecar at `submodules/privacy-filter/serve.py`, reached over
+#     HTTP. The sidecar also runs the entropy-based hash/API-key scan
+#     (`hash_detect.py`) and emits `⟦HASH:n⟧` sentinels alongside `⟦PII:n⟧`.
+#   * `local`: an in-process TypeScript port of `hash_detect.py`
+#     (`src/utils/hash-detect.ts`) runs on every text fragment. No HTTP call,
+#     no Python sidecar — only hex-shaped secrets are caught (no PII model).
+#
+# The plugin is fully inert unless one of these is true:
+#   * `PRIVACY_FILTER_URL` env var is set (forces sidecar mode), or
+#   * toml `filter_mode = "local"` (no URL required), or
+#   * toml `filter_mode = "sidecar"` AND a valid `filter_url`.
+#
+# Env vars override toml values. There is no separate `enabled` flag — the
+# combination of `filter_mode` and `filter_url` is what turns the plugin on.
+#
+# [privacy_filter]
+# filter_mode = "local"       # "sidecar" (default when a filter_url is configured) | "local"
+# filter_url = "http://localhost:9500"   # required for sidecar, ignored in local mode
+# timeout_ms = 40000          # sidecar only: per-call timeout
+# max_chars = 1024000         # skip redaction above this total text size
+# entropy_threshold = 3.0     # local mode only: Shannon entropy cutoff for hash detection
+# whitelist_add = []          # additional hex tokens to skip (lowercased)
+# whitelist_remove = []       # tokens to remove from the built-in whitelist
+# whitelist_file = ""         # Node-only: one hex token per line, `#` starts a comment

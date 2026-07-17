@@ -688,12 +688,21 @@ entry can set `base_url = "sdk://chatjimmy.ai/api"` and keep the appropriate
 | Variable | Default | Purpose |
 |---|---|---|
 | `PRIVACY_FILTER_URL` | unset | Sidecar base URL, e.g. `http://127.0.0.1:8799`. Unset = off |
-| `PRIVACY_FILTER_ENDPOINTS` | `/v1/messages,/v1/chat/completions,/v1/responses,/v1/interactions` | Proxy paths to filter |
-| `PRIVACY_FILTER_FAIL_OPEN` | `false` | `false` = fail-closed (never leak PII upstream on sidecar error) |
 | `PRIVACY_FILTER_TIMEOUT_MS` | `40000` | Per-call timeout to the sidecar |
 | `PRIVACY_FILTER_MAX_CHARS` | `1024000` | Skip redaction above this total text size |
 
 When the sidecar is `serve.py` from [`submodules/privacy-filter`](./submodules/privacy-filter/), it emits two sentinel prefixes: `⟦PII:n⟧` (model-detected PII) and `⟦HASH:n⟧` (cryptographic-hash-shaped secrets such as API keys and tokens, caught by the entropy-based `hash_detect.py` scan). The proxy restores both prefixes transparently on the response, including for streaming SSE.
+
+**Local hash-only mode** (in-process, no sidecar). If you only need to redact hex-shaped secrets (API keys, tokens) and want to skip the OPF PII model entirely, add a `[privacy_filter]` section to `proxy_config.toml` with `filter_mode = "local"`. The proxy then runs an in-process TypeScript port of `hash_detect.py` (`src/utils/hash-detect.ts`) on every text fragment; no HTTP call, no Python sidecar. Detected spans are replaced with `⟦HASH:n⟧` sentinels and restored on the response, exactly as in sidecar mode. The plugin is enabled when `filter_mode = "local"` (no URL needed), or when `filter_mode = "sidecar"` is paired with a valid `filter_url`; otherwise it stays inert. All other knobs (`max_chars`, `whitelist_add`, `whitelist_remove`) work the same way; the sidecar-only knobs (`filter_url`, `timeout_ms`) are ignored in local mode. Env vars override toml values.
+
+```toml
+[privacy_filter]
+filter_mode = "local"             # "sidecar" (default when a filter_url is configured) | "local"
+max_chars = 1024000
+entropy_threshold = 3.0       # local mode only
+whitelist_add = []            # additional hex tokens to skip
+whitelist_remove = []         # tokens to remove from the built-in whitelist
+```
 
 **Compression sidecar** (inert unless `KOMPRESS_URL` is set)
 

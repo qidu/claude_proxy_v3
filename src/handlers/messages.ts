@@ -226,9 +226,9 @@ export async function handleMessagesRequest(
     if (originalThinking) {
       const thinkingType = originalThinking.enabled ? 'enabled' : 'disabled';
       const budget = originalThinking.budget_tokens ? ` budget_tokens: ${originalThinking.budget_tokens}` : 'budget: unknown';
-      activeLogger.info(requestId, `Thinking type: ${thinkingType} , ${budget} extracted from OpenAI-Format`);
+      activeLogger.debug(requestId, `Thinking type: ${thinkingType} , ${budget} extracted from OpenAI-Format`);
     } else {
-      activeLogger.info(requestId, `Thinking type: not specified by req body format=${isOpenAIFormat}`);
+      activeLogger.debug(requestId, `Thinking type: not specified by req body format=${isOpenAIFormat}`);
     }
 
     // openai-completions doesn't support thinking field; derive reasoning_effort from budget_tokens

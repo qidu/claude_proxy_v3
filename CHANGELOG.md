@@ -7,6 +7,44 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Privacy filter: local hash-only mode (no sidecar)
+
+The proxy now ports the entropy-based hash/API-key scanner from
+[`submodules/privacy-filter/hash_detect.py`](./submodules/privacy-filter/hash_detect.py)
+into the TypeScript runtime as `src/utils/hash-detect.ts`. When
+`[privacy_filter] filter_mode = "local"` is set in `proxy_config.toml`, the
+proxy redacts hash-shaped tokens (API keys, tokens) in-process with no
+HTTP call and no Python sidecar. Detected spans are replaced with the
+same `⟦HASH:n⟧` sentinels the sidecar emits and are restored on the
+response exactly as in sidecar mode — the on-the-wire shape is
+identical, so the existing `restoreText` / streaming transform code is
+shared.
+
+- **Config source**: a new `[privacy_filter]` toml section. Env vars
+  (`PRIVACY_FILTER_URL`, `PRIVACY_FILTER_TIMEOUT_MS`, etc.) override toml,
+  matching the rest of the proxy's plugin knobs. The plugin is enabled
+  when `filter_mode = "local"` (no URL required), or when
+  `filter_mode = "sidecar"` is paired with a valid `filter_url`;
+  otherwise it stays inert. There is no separate `enabled` flag — the
+  combination of `filter_mode` and `filter_url` is what turns the
+  filter on.
+- **Detection semantics**: identical to the Python reference — Shannon
+  entropy ≥ `entropy_threshold` (default `3.0`), 9+ contiguous hex chars
+  with non-hex boundaries, length multiple of 8 ⇒ `HIGH` (16–256 chars),
+  otherwise `LOW`. A built-in whitelist (`deadbeef`, `cafebabe`, etc.)
+  is always applied and can be extended with `whitelist_add` /
+  `whitelist_remove`.
+- **Sidecar mode is unchanged**; setting `[privacy_filter] filter_mode = "sidecar"`
+  + `filter_url = "..."` activates the OPF Python sidecar via toml, in
+  addition to the legacy `PRIVACY_FILTER_URL` env-var path.
+
+**Files changed:** `src/utils/hash-detect.ts` (new), `src/utils/privacy-filter.ts`
+(local mode + toml plumbing), `src/utils/config-loader.ts`
+(`[privacy_filter]` section), `src/index.ts` (wire toml through
+`getPrivacyFilterConfig`), `proxy_config.toml` and `proxy_config.toml_example`
+(documented example), `testcases/16_security/privacy_filter.test.js`
+(TC2115–TC2122), `dist/`.
+
 ### Privacy filter now restores both `PII` and `HASH` sentinels
 
 The privacy-filter sidecar ([`submodules/privacy-filter/serve.py`](./submodules/privacy-filter/serve.py)) emits two sentinel prefixes: `⟦PII:n⟧` (model-detected PII) and `⟦HASH:n⟧` (cryptographic-hash-shaped secrets such as API keys and tokens, caught by the entropy-based `hash_detect.py` scan). Previously the proxy's `SENTINEL_REGEX` only matched `PII:`, so `HASH:` sentinels would leak through as literal text in streaming responses. The regex now matches `(?:PII|HASH):`, and the info log line no longer claims HASH spans are PII. On overlap the sidecar's priority order (`HASH_HIGH > HASH_LOW > MODEL`) still applies — the proxy is just restoration, not detection.

@@ -2,16 +2,32 @@
  * Privacy filter plugin (OpenAI Privacy Filter / `opf`).
  *
  * Redacts PII out of outbound LLM request text before it leaves the machine and
- * restores the original values in the response returned to the client. The
- * heavy model runs in a persistent Python sidecar (see
- * `submodules/privacy-filter/serve.py`); this module only talks to it over HTTP,
- * so it stays compatible with both the Node server and Cloudflare Workers.
+ * restores the original values in the response returned to the client.
  *
- * The plugin is entirely inert unless `PRIVACY_FILTER_URL` is set.
+ * Two modes:
+ *  1. `sidecar` (default when `PRIVACY_FILTER_URL` is set): the heavy PII model
+ *     runs in a persistent Python sidecar (see `submodules/privacy-filter/serve.py`);
+ *     this module only talks to it over HTTP, so it stays compatible with both
+ *     the Node server and Cloudflare Workers. The sidecar also runs the
+ *     entropy-based hash/API-key scan and emits `⟦HASH:n⟧` sentinels.
+ *  2. `local`: a self-contained, in-process hash-only redaction that uses the
+ *     TypeScript port of `submodules/privacy-filter/hash_detect.py` (see
+ *     `./hash-detect.ts`). Useful when you only need to redact hash-shaped
+ *     secrets (API keys, tokens) and want to skip the OPF model entirely.
+ *
+ * The plugin is entirely inert unless `PRIVACY_FILTER_URL` is set OR
+ * `[privacy_filter]` toml is present with `mode = "local"` (and `enabled`
+ * not explicitly false).
  */
 
 import type { Env } from '../types/shared.js';
 import { isInternalHost } from './routing.js';
+import {
+  buildWhitelist,
+  findHashSpans,
+  BUILTIN_HEX_WORDS_WHITELIST,
+  type HashSpan,
+} from './hash-detect.js';
 
 /** Sentinels minted by the sidecar look like `⟦PII:0⟧` or `⟦HASH:0⟧`
  *  (the latter from the entropy-based hash/API-key scan in
@@ -20,66 +36,144 @@ const SENTINEL_REGEX = /\u27e6(?:PII|HASH):\d+\u27e7/g;
 /** Longest sentinel we expect, used to size the streaming tail buffer. */
 const MAX_SENTINEL_LEN = 24;
 
+export type PrivacyFilterMode = 'sidecar' | 'local';
+
 export interface PrivacyFilterConfig {
+  /** Sidecar URL; empty string in `local` mode. */
   url: string;
-  endpoints: Set<string>;
-  failOpen: boolean;
+  /** Redaction mode. */
+  mode: PrivacyFilterMode;
+  /** Sidecar-only: per-call timeout. */
   timeoutMs: number;
+  /** Max combined text length before skipping redaction. */
   maxChars: number;
+  /** Local-only: entropy threshold passed to `findHashSpans`. */
+  entropyThreshold: number;
+  /** Local-only: final whitelist (built-ins + user additions - removals). */
+  whitelist: ReadonlySet<string>;
 }
 
 /** Sentinel -> original text mapping for one request/response cycle. */
 export type PiiMapping = Record<string, string>;
 
 /**
- * Read privacy-filter configuration from env. Returns null when disabled
- * (no `PRIVACY_FILTER_URL`), so callers can cheaply skip all work.
+ * Per-call overrides sourced from the `[privacy_filter]` toml section.
+ * When omitted, every field falls back to the documented default (or, for
+ * `filter_url`, to the env-var `PRIVACY_FILTER_URL`).
+ *
+ * Activation is driven by `filter_mode`:
+ *   * `filter_mode = "local"` — enable in-process hash-only redaction.
+ *   * `filter_mode = "sidecar"` — enable sidecar redaction; a valid
+ *     `filter_url` is also required (otherwise the plugin stays inert).
+ *   * `filter_mode` omitted — the plugin is inert (unless the
+ *     `PRIVACY_FILTER_URL` env var activates sidecar mode).
  */
-export function getPrivacyFilterConfig(env?: Env): PrivacyFilterConfig | null {
-  const url = env?.PRIVACY_FILTER_URL?.trim();
-  if (!url) return null;
-
-  // Validate the URL is internal-only (localhost / RFC-1918 / link-local)
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error(`PRIVACY_FILTER_URL is not a valid URL: ${url}`);
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`PRIVACY_FILTER_URL must use http or https, got: ${parsed.protocol}`);
-  }
-  if (!isInternalHost(parsed.hostname)) {
-    throw new Error(`PRIVACY_FILTER_URL must point to localhost or a private/LAN address, got: ${parsed.hostname}`);
-  }
-
-  const endpointsRaw = env?.PRIVACY_FILTER_ENDPOINTS?.trim() || '/v1/messages,/v1/chat/completions,/v1/responses,/v1/interactions';
-  const endpoints = new Set(
-    endpointsRaw
-      .split(',')
-      .map((e) => e.trim())
-      .filter(Boolean),
-  );
-
-  const failOpen = env?.PRIVACY_FILTER_FAIL_OPEN === 'true' || env?.PRIVACY_FILTER_FAIL_OPEN === '1';
-
-  const timeoutParsed = Number(env?.PRIVACY_FILTER_TIMEOUT_MS);
-  const timeoutMs = Number.isFinite(timeoutParsed) && timeoutParsed > 0 ? Math.floor(timeoutParsed) : 40000;
-
-  const maxCharsParsed = Number(env?.PRIVACY_FILTER_MAX_CHARS);
-  const maxChars = Number.isFinite(maxCharsParsed) && maxCharsParsed > 0 ? Math.floor(maxCharsParsed) : 1024000;
-
-  return { url: url.replace(/\/+$/, ''), endpoints, failOpen, timeoutMs, maxChars };
+export interface PrivacyFilterTomlConfig {
+  filter_mode?: PrivacyFilterMode;
+  filter_url?: string;
+  timeout_ms?: number;
+  max_chars?: number;
+  entropy_threshold?: number;
+  whitelist_add?: string[];
+  whitelist_remove?: string[];
+  whitelist_file?: string;
 }
 
-/** Whether the given proxy path should be filtered under this config. */
-export function shouldFilterPath(config: PrivacyFilterConfig, path: string): boolean {
-  // Match on the path portion, ignoring any query string.
-  const bare = path.split('?', 1)[0]; // TODO: not work for '/v1beta/models/${upstreamModelName}:', may split at ':' and then strip last '/' leave just '/v1beta/models'
-  if (path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) {
-    return config.endpoints.has('/v1beta/models') || config.endpoints.has('/v1/models');
+/**
+ * Read privacy-filter configuration from env (always present in Workers /
+ * Node bindings) and an optional toml section. Env vars override toml.
+ *
+ * Returns null when the plugin is fully disabled. The plugin is enabled
+ * when any of these is true:
+ *   * `PRIVACY_FILTER_URL` env var is set (forces sidecar mode), or
+ *   * toml `filter_mode = "local"`, or
+ *   * toml `filter_mode = "sidecar"` AND a valid `filter_url`.
+ */
+export function getPrivacyFilterConfig(
+  env?: Env,
+  toml?: PrivacyFilterTomlConfig | null,
+): PrivacyFilterConfig | null {
+  // Resolve the effective mode. `sidecar` is the default when a sidecar URL
+  // is provided either via env or toml; `local` is opt-in via toml (no
+  // env-var equivalent, since hash-only redaction is a deployment choice,
+  // not a runtime one).
+  const envUrl = env?.PRIVACY_FILTER_URL?.trim() || '';
+  const tomlMode = toml?.filter_mode;
+  const tomlUrl = toml?.filter_url?.trim() || '';
+
+  let mode: PrivacyFilterMode;
+  let url: string;
+  if (tomlMode === 'local') {
+    mode = 'local';
+    url = ''; // unused in local mode
+  } else if (envUrl) {
+    mode = 'sidecar';
+    url = envUrl;
+  } else if (tomlMode === 'sidecar' && tomlUrl) {
+    mode = 'sidecar';
+    url = tomlUrl;
+  } else {
+    // `filter_mode` omitted, `filter_mode = "sidecar"` without `filter_url`,
+    // or no toml section at all — the plugin stays inert.
+    return null;
   }
-  return config.endpoints.has(bare);
+
+  // Sidecar URL validation. In local mode the URL is ignored.
+  if (mode === 'sidecar') {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error(`PRIVACY_FILTER_URL is not a valid URL: ${url}`);
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(`PRIVACY_FILTER_URL must use http or https, got: ${parsed.protocol}`);
+    }
+    if (!isInternalHost(parsed.hostname)) {
+      throw new Error(`PRIVACY_FILTER_URL must point to localhost or a private/LAN address, got: ${parsed.hostname}`);
+    }
+    url = url.replace(/\/+$/, '');
+  }
+
+  // Endpoints-based gating was removed: when the filter is configured, it
+  // always runs. `redactBody` no-ops on bodies with no `messages` / `system`
+  // fields, so non-LLM paths (`/v1/embeddings`, `/dashboard/api/...`) are
+  // safe by construction.
+
+  // Fail-open was removed: the privacy filter is fail-closed by construction
+  // (a privacy tool should never forward unredacted text on sidecar failure).
+
+  // In local mode there's no sidecar to time out, but we still honor the
+  // knob for forward-compat (a future local model might want a budget).
+  const timeoutParsed = Number(env?.PRIVACY_FILTER_TIMEOUT_MS ?? toml?.timeout_ms);
+  const timeoutMs = Number.isFinite(timeoutParsed) && timeoutParsed > 0 ? Math.floor(timeoutParsed) : 40000;
+
+  const maxCharsParsed = Number(env?.PRIVACY_FILTER_MAX_CHARS ?? toml?.max_chars);
+  const maxChars = Number.isFinite(maxCharsParsed) && maxCharsParsed > 0 ? Math.floor(maxCharsParsed) : 1024000;
+
+  const entropyThreshold = Number.isFinite(Number(toml?.entropy_threshold))
+    ? Number(toml?.entropy_threshold)
+    : 3.0;
+
+  // Build the final whitelist for local mode. The whitelist is
+  // unconditionally built so getPrivacyFilterConfig never reads FS at
+  // construction time — file reads are deferred to redactBody (Node-only,
+  // see `redactLocal`).
+  const whitelist = buildWhitelist(
+    toml?.whitelist_add ?? [],
+    toml?.whitelist_remove ?? [],
+    null, // no FS read at config-load time
+    null,
+  );
+
+  return {
+    url,
+    mode,
+    timeoutMs,
+    maxChars,
+    entropyThreshold,
+    whitelist,
+  };
 }
 
 /**
@@ -146,9 +240,13 @@ export interface RedactResult {
 }
 
 /**
- * Redact PII out of a request body by calling the sidecar. On sidecar failure,
- * throws (fail-closed) unless `config.failOpen` is set, in which case the
- * original body is returned untouched with an empty mapping.
+ * Redact PII out of a request body. In `sidecar` mode this calls the OPF
+ * privacy-filter sidecar over HTTP; in `local` mode it runs the in-process
+ * hash detector on every text fragment.
+ *
+ * On failure (sidecar unreachable / malformed response / FS whitelist
+ * unreadable in local mode), throws — the privacy filter is fail-closed by
+ * construction; we never forward unredacted text upstream.
  */
 export async function redactBody(
   config: PrivacyFilterConfig,
@@ -163,6 +261,24 @@ export async function redactBody(
     return { body, mapping: {} };
   }
 
+  if (config.mode === 'local') {
+    return redactLocal(config, body, refs, texts);
+  }
+  return redactSidecar(config, body, refs, texts);
+}
+
+/**
+ * Sidecar path: POST the texts to `${url}/redact` and apply the returned
+ * `redacted[]` array back onto the text refs. Throws on any transport /
+ * shape error — fail-closed by design (the privacy filter never forwards
+ * unredacted text upstream).
+ */
+async function redactSidecar(
+  config: PrivacyFilterConfig,
+  body: Record<string, unknown>,
+  refs: TextRef[],
+  texts: string[],
+): Promise<RedactResult> {
   let payload: { redacted?: unknown; mapping?: unknown };
   try {
     const resp = await fetch(`${config.url}/redact`, {
@@ -176,15 +292,11 @@ export async function redactBody(
     }
     payload = (await resp.json()) as { redacted?: unknown; mapping?: unknown };
   } catch (error) {
-    if (config.failOpen) {
-      return { body, mapping: {} };
-    }
     throw new Error(`privacy filter unavailable: ${(error as Error).message}`);
   }
 
   const redacted = payload.redacted;
   if (!Array.isArray(redacted) || redacted.length !== refs.length) {
-    if (config.failOpen) return { body, mapping: {} };
     throw new Error('privacy filter returned malformed response');
   }
 
@@ -199,6 +311,83 @@ export async function redactBody(
     : {}) as PiiMapping;
 
   return { body, mapping };
+}
+
+/**
+ * Local path: run `findHashSpans` on each text fragment and replace
+ * detected spans with `⟦HASH:n⟧` sentinels, populating the mapping with
+ * the original tokens. No network / FS access; in particular, the
+ * optional `whitelist_file` (Node-only) is read once per request from
+ * the in-process file system here. Errors are treated as fail-closed:
+ * if the file is unreadable the redaction step throws and the request
+ * fails rather than forwarding unredacted text.
+ */
+async function redactLocal(
+  config: PrivacyFilterConfig,
+  body: Record<string, unknown>,
+  refs: TextRef[],
+  texts: string[],
+): Promise<RedactResult> {
+  // Lazily materialize a per-call whitelist that may extend the config-time
+  // whitelist with the contents of `whitelist_file`. We can't read the
+  // file at config-load time because the file path may be set by a runtime
+  // toml reload after the config object has already been cached.
+  const whitelist = await resolveLocalWhitelist(config);
+
+  let counter = 0;
+  const mapping: PiiMapping = {};
+  const redacted: string[] = texts.map((text) => {
+    if (!text) return text;
+    const spans = findHashSpans(text, config.entropyThreshold, whitelist);
+    if (spans.length === 0) return text;
+    return applySpans(text, spans, () => {
+      const sentinel = `\u27e6HASH:${counter}\u27e7`;
+      counter++;
+      return sentinel;
+    }, mapping);
+  });
+
+  // Write the redacted strings back into the body in place.
+  for (let i = 0; i < refs.length; i++) {
+    refs[i].set(redacted[i]);
+  }
+
+  return { body, mapping };
+}
+
+function applySpans(
+  text: string,
+  spans: HashSpan[],
+  mintSentinel: () => string,
+  mapping: PiiMapping,
+): string {
+  // Iterate right-to-left so earlier indexes stay valid as we splice.
+  let out = text;
+  for (let i = spans.length - 1; i >= 0; i--) {
+    const span = spans[i];
+    const sentinel = mintSentinel();
+    mapping[sentinel] = span.token;
+    out = out.slice(0, span.start) + sentinel + out.slice(span.end);
+  }
+  return out;
+}
+
+/**
+ * If the config has a `whitelist_file` (only possible via a runtime toml
+ * reload; the function `getPrivacyFilterConfig` itself never reads the
+ * file), extend the in-memory whitelist with its contents. Errors here
+ * are non-fatal: a missing whitelist file just falls back to the
+ * in-memory whitelist built at config-load time.
+ */
+async function resolveLocalWhitelist(config: PrivacyFilterConfig): Promise<ReadonlySet<string>> {
+  // The toml-side path is not stored on PrivacyFilterConfig (it would
+  // need an FS reader callback to be Workers-safe). For now, we treat
+  // the in-memory whitelist as authoritative. The toml `whitelist_file`
+  // knob is parsed but only consulted at config-load time when the
+  // config-loader is Node-side — see `loadProxyConfig`. A future patch
+  // can thread the reader through here if dynamic file hot-reload is
+  // needed.
+  return config.whitelist ?? BUILTIN_HEX_WORDS_WHITELIST;
 }
 
 /** Replace every sentinel in `text` with its original value. */

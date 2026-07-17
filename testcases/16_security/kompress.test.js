@@ -14,10 +14,11 @@
  * - TC2201: getKompressConfig returns null when KOMPRESS_URL unset (inert by default)
  * - TC2202: getKompressConfig rejects a non-internal (public) host
  * - TC2203: getKompressConfig accepts a localhost URL and applies documented defaults,
- *           including failOpen defaulting to true (opposite of the privacy filter)
+ *           including failOpen defaulting to true (opposite of the privacy filter,
+ *           which is fail-closed by construction with no opt-out)
  * - TC2204: KOMPRESS_FAIL_OPEN=false explicitly disables fail-open
- * - TC2205: shouldCompressPath matches the default endpoint set (no /v1/interactions
- *           unlike the privacy filter's default set)
+ * - TC2205: shouldCompressPath matches the default endpoint set (no /v1/interactions;
+ *           the privacy filter has no endpoints config as of 2026-07-17)
  * - TC2206: isCjkHeavy correctly classifies English vs CJK-heavy vs empty text
  * - TC2207: compressBody fails open by default — unreachable sidecar returns the
  *           original body unmodified with fragments:0/savedChars:0
@@ -87,7 +88,7 @@ async function testConfigAcceptsLocalhostWithDefaults() {
   const cfg = getKompressConfig({ KOMPRESS_URL: 'http://localhost:9600/' });
   assert(cfg !== null, 'Expected non-null config for a localhost URL');
   assert(cfg.url === 'http://localhost:9600', `Expected trailing slash stripped, got ${cfg.url}`);
-  assert(cfg.failOpen === true, 'Expected failOpen to default to true (opposite of the privacy filter)');
+  assert(cfg.failOpen === true, 'Expected failOpen to default to true (opposite of the privacy filter, which is fail-closed by construction)');
   assert(cfg.timeoutMs === 40000, `Expected default timeoutMs=40000, got ${cfg.timeoutMs}`);
   assert(cfg.maxChars === 1024000, `Expected default maxChars=1024000, got ${cfg.maxChars}`);
   assert(cfg.keepRatio === 0.5, `Expected default keepRatio=0.5, got ${cfg.keepRatio}`);

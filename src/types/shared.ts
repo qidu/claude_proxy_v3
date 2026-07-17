@@ -146,18 +146,6 @@ export interface Env {
     PRIVACY_FILTER_URL?: string;
 
     /**
-     * Comma-separated list of proxy request paths to run the privacy filter on.
-     * Default: "/v1/messages".
-     */
-    PRIVACY_FILTER_ENDPOINTS?: string;
-
-    /**
-     * When "true"/"1", if the sidecar is unreachable the original (unredacted) text
-     * is forwarded upstream instead of failing the request. Default: false (fail-closed).
-     */
-    PRIVACY_FILTER_FAIL_OPEN?: string;
-
-    /**
      * Per-call timeout in milliseconds for sidecar requests. Default: 30000.
      */
     PRIVACY_FILTER_TIMEOUT_MS?: string;

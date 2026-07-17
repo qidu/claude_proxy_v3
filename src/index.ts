@@ -71,7 +71,6 @@ import {
 import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
 import {
   getPrivacyFilterConfig,
-  shouldFilterPath,
   redactBody,
   restoreText,
   createRestoreTransformStream,
@@ -992,8 +991,8 @@ export default {
 
       // Privacy filter: sentinel -> original mapping for this request, restored
       // on the client-facing response. Empty unless redaction actually runs.
-      const privacyConfig = getPrivacyFilterConfig(env);
-      const privacyActive = !!privacyConfig && shouldFilterPath(privacyConfig, path);
+      const privacyConfig = getPrivacyFilterConfig(env, proxyConfig.privacy_filter);
+      const privacyActive = !!privacyConfig;
       let piiMapping: PiiMapping = {};
 
       // Kompress: lossy, one-directional compression of outbound request text.

@@ -9,6 +9,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, copyFileSync, exist
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { isInternalHost } from './routing.js';
+import { getPrivacyFilterConfig } from './privacy-filter.js';
 
 // Check if we're running in Node.js environment
 const isNodeEnvironment = (typeof process !== 'undefined' && process.versions?.node) ||
@@ -32,6 +33,38 @@ export interface ProxyConfig {
   };
   dashboard?: {
     api_key?: string;
+  };
+  /**
+   * Privacy filter plugin configuration. When omitted, the plugin is inert
+   * (no env-var sidecar URL set either).
+   *
+   * `mode`:
+   *   - "sidecar" (default when `PRIVACY_FILTER_URL` env var is set): redact
+   *     by calling the OPF privacy-filter sidecar over HTTP. The sidecar
+   *     handles both PII and HASH detection.
+   *   - "local": redact in-process using the TypeScript `hash-detect` port.
+   *     Useful when you only need hash/key detection (no PII model) and want
+   *     to skip the sidecar entirely.
+   *
+   * `enabled`: explicit on/off switch (default: true when `mode` is set or
+   *   any redact-related knob is configured).
+   *
+   * `whitelist_add` / `whitelist_remove`: extend or trim the built-in
+   *   hexspeak whitelist. See `submodules/privacy-filter/hash_detect.py`
+   *   for the format (one entry per line, `#` comments, `-token` to remove).
+   *
+   * `whitelist_file`: path to a whitelist override file (Node-only; ignored
+   *   on Cloudflare Workers).
+   */
+  privacy_filter?: {
+    filter_mode?: 'sidecar' | 'local';
+    filter_url?: string;
+    timeout_ms?: number;
+    max_chars?: number;
+    entropy_threshold?: number;
+    whitelist_add?: string[];
+    whitelist_remove?: string[];
+    whitelist_file?: string;
   };
 }
 
@@ -1853,6 +1886,19 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
     }
 
     cachedConfig = cleanedConfig;
+
+    // Privacy filter activation summary (once, at startup). Per-request
+    // redaction events are still logged separately by index.ts.
+    {
+      const startupPrivacy = getPrivacyFilterConfig(env, cleanedConfig.privacy_filter);
+      if (startupPrivacy) {
+        const modeDetail = startupPrivacy.mode === 'sidecar'
+          ? `url=${startupPrivacy.url}`
+          : `entropyThreshold=${startupPrivacy.entropyThreshold}`;
+        console.log(`[INFO] Privacy filter active: mode=${startupPrivacy.mode} ${modeDetail}`);
+      }
+    }
+
     return cachedConfig;
   } catch (error) {
     console.warn(`Failed to load proxy config: ${(error as Error).message}`);
@@ -1908,6 +1954,10 @@ export function parseSimpleToml(content: string): ProxyConfig {
         currentSection = 'dashboard';
         currentCategory = null;
         config.dashboard = {};
+      } else if (parts[0] === 'privacy_filter') {
+        currentSection = 'privacy_filter';
+        currentCategory = null;
+        config.privacy_filter = {};
       }
       continue;
     }
@@ -1932,6 +1982,12 @@ export function parseSimpleToml(content: string): ProxyConfig {
         (config.defaults as any)[cleanKey] = value;
       } else if (currentSection === 'dashboard' && config.dashboard && cleanKey === 'api_key') {
         config.dashboard.api_key = value;
+      } else if (currentSection === 'privacy_filter' && config.privacy_filter) {
+        // filter_mode, filter_url, whitelist_file are stored as strings;
+        // numeric thresholds are coerced in the unquoted branch below.
+        if (cleanKey === 'filter_mode' || cleanKey === 'filter_url' || cleanKey === 'whitelist_file') {
+          (config.privacy_filter as any)[cleanKey] = value;
+        }
       }
       continue;
     }
@@ -2009,6 +2065,10 @@ export function parseSimpleToml(content: string): ProxyConfig {
         const category = config.models[currentCategory] as ModelCategoryConfig;
         // Store raw array (1-4 elements: target, base_url, api_key, mode), no padding
         category[cleanKey] = elements as [string, string, string, string];
+      } else if (currentSection === 'privacy_filter' && config.privacy_filter) {
+        if (cleanKey === 'whitelist_add' || cleanKey === 'whitelist_remove') {
+          (config.privacy_filter as any)[cleanKey] = elements;
+        }
       }
       continue;
     }
@@ -2029,6 +2089,16 @@ export function parseSimpleToml(content: string): ProxyConfig {
         (config.upstream as any)[cleanKey] = normalizeUpstreamThresholdValue(cleanKey, cleanValue);
       } else if (currentSection === 'defaults' && config.defaults) {
         (config.defaults as any)[cleanKey] = cleanValue;
+      } else if (currentSection === 'privacy_filter' && config.privacy_filter) {
+        if (typeof cleanValue === 'number') {
+          if (cleanKey === 'entropy_threshold' || cleanKey === 'max_chars' || cleanKey === 'timeout_ms') {
+            (config.privacy_filter as any)[cleanKey] = cleanValue;
+          }
+        } else if (typeof cleanValue === 'string') {
+          if (cleanKey === 'filter_mode' || cleanKey === 'filter_url' || cleanKey === 'whitelist_file') {
+            (config.privacy_filter as any)[cleanKey] = cleanValue;
+          }
+        }
       }
       continue;
     }

@@ -81,8 +81,9 @@ Responsibilities:
     - OpenAI `messages[].content`.
   - Collects all text fragments, calls the sidecar once (`POST /redact` with the batch), and writes
     redacted fragments back into a cloned body. Returns the merged `mapping`.
-  - **Fail-open vs fail-closed** controlled by `PRIVACY_FILTER_FAIL_OPEN` (default fail-closed:
-    if the sidecar is unreachable, return an error rather than leak PII upstream).
+  - **Always fail-closed**: if the sidecar is unreachable, return an error rather than leak PII
+    upstream. A privacy tool must never forward unredacted text on sidecar failure, so there is
+    no opt-out flag for this.
 - `restoreText(text, mapping): string` — replace all sentinels with originals.
 - `createRestoreTransformStream(mapping): TransformStream` — for SSE responses; buffers a small
   tail so sentinels split across chunks are still matched before flushing.
@@ -118,8 +119,6 @@ Added to `src/server.ts` env wiring (and read in `privacy-filter.ts`):
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `PRIVACY_FILTER_URL` | (unset) | Sidecar base URL, e.g. `http://127.0.0.1:8799`. Unset = plugin off. |
-| `PRIVACY_FILTER_ENDPOINTS` | `/v1/messages` | Comma list of proxy paths to filter. |
-| `PRIVACY_FILTER_FAIL_OPEN` | `false` | If `true`, on sidecar error forward original text instead of failing. |
 | `PRIVACY_FILTER_TIMEOUT_MS` | `30000` | Per-call timeout to the sidecar. |
 | `PRIVACY_FILTER_MAX_CHARS` | `200000` | Skip redaction above this size (safety cap). |
 
@@ -144,8 +143,8 @@ Added to `src/server.ts` env wiring (and read in `privacy-filter.ts`):
    the original email restored.
 3. **Streaming**: same with `stream:true`; confirm sentinels are restored even when one is split
    across two SSE chunks.
-4. **Fail-closed**: stop the sidecar; request errors (no PII leaks). Set `FAIL_OPEN=true`; request
-   passes through with original text.
+4. **Fail-closed**: stop the sidecar; request errors (no PII leaks). There is no opt-out — a
+   privacy tool must never forward unredacted text on sidecar failure.
 5. **Disabled**: unset `PRIVACY_FILTER_URL`; behavior identical to today (regression check via
    existing `run-tests.js` against `./testcases`).
 6. `npm run typecheck` clean.
@@ -158,6 +157,6 @@ Added to `src/server.ts` env wiring (and read in `privacy-filter.ts`):
 | Sentinel collision with real text | Use rare-unicode sentinel `⟦PII:n⟧`; reject/escape if input already contains the bracket pair. |
 | Sentinel split across SSE chunks | Restore transform restores all *complete* sentinels each chunk and only holds back a trailing *unclosed* `⟦…` (within max sentinel length) until the next chunk. |
 | Over/under-redaction (model limitation) | Documented; `output_mode` and device tunable via sidecar flags; not a correctness guarantee. |
-| PII leak if sidecar down | Default **fail-closed**; `PRIVACY_FILTER_FAIL_OPEN` opt-in only. |
+| PII leak if sidecar down | **Always fail-closed** (no opt-out); error rather than forward unredacted text. |
 | Cloudflare Workers build (no Node child process) | Plugin is pure `fetch` to an external URL, so it remains Workers-compatible; only the sidecar is host-side. |
 ```

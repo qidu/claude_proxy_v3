@@ -1275,8 +1275,6 @@ LOG_LEVEL = "info"
 # Privacy Filter (PII redaction) plugin — see "Privacy Filter" section below.
 # Entirely inert unless PRIVACY_FILTER_URL is set (points at the local sidecar).
 # PRIVACY_FILTER_URL = "http://127.0.0.1:8799"
-# PRIVACY_FILTER_ENDPOINTS = "/v1/messages"   # comma list of proxy paths to filter
-# PRIVACY_FILTER_FAIL_OPEN = "false"          # false = fail-closed (never leak PII upstream)
 # PRIVACY_FILTER_TIMEOUT_MS = "40000"
 # PRIVACY_FILTER_MAX_CHARS = "1024000"
 
@@ -1331,8 +1329,6 @@ node dist/server.js
 | `JSON_STRINGIFY_METHOD` | `JSON_STRINGIFY_METHOD` | unset |
 | `TIKTOKEN_MODEL` | `TIKTOKEN_MODEL` | unset |
 | `PRIVACY_FILTER_URL` | `PRIVACY_FILTER_URL` | unset (plugin off) |
-| `PRIVACY_FILTER_ENDPOINTS` | `PRIVACY_FILTER_ENDPOINTS` | `"/v1/messages,/v1/chat/completions,/v1/responses,/v1/interactions"` |
-| `PRIVACY_FILTER_FAIL_OPEN` | `PRIVACY_FILTER_FAIL_OPEN` | `"false"` |
 | `PRIVACY_FILTER_TIMEOUT_MS` | `PRIVACY_FILTER_TIMEOUT_MS` | `"40000"` |
 | `PRIVACY_FILTER_MAX_CHARS` | `PRIVACY_FILTER_MAX_CHARS` | `"1024000"` |
 | `KOMPRESS_URL` | `KOMPRESS_URL` | unset (plugin off) |
@@ -1448,8 +1444,6 @@ Sidecar response — the model detected 2 PII spans and replaced them with senti
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `PRIVACY_FILTER_URL` | unset | Sidecar base URL, e.g. `http://127.0.0.1:8799`. **Unset = plugin off.** |
-| `PRIVACY_FILTER_ENDPOINTS` | `/v1/messages,/v1/chat/completions,/v1/responses,/v1/interactions,/v1beta/models` | Comma list of proxy paths to filter. |
-| `PRIVACY_FILTER_FAIL_OPEN` | `false` | `false` = **fail-closed** (if the sidecar is unreachable the request errors rather than leaking PII upstream). `true` = forward original text on sidecar error. |
 | `PRIVACY_FILTER_TIMEOUT_MS` | `40000` | Per-call timeout to the sidecar. A larger value is needed because AI agents (e.g. Claude Code) use long contexts — a full conversation history with dozens of messages and code files can easily reach 100K+ characters, which takes the OPF model several seconds to scan. The sidecar's `--timeout` should always be longer than this value so the proxy aborts first (clean 504 to the client) rather than closing the socket mid-inference (which would crash the sidecar thread). |
 | `PRIVACY_FILTER_MAX_CHARS` | `1024000` | Skip redaction above this total text size (safety cap). |
 
