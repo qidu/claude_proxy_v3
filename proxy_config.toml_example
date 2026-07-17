@@ -254,11 +254,13 @@ base_url = "https://openrouter.ai/api"
 # combination of `filter_mode` and `filter_url` is what turns the plugin on.
 #
 # [privacy_filter]
-# filter_mode = "local"       # "sidecar" (default when a filter_url is configured) | "local"
+# "sidecar" (default when a filter_url is configured) | "local"
+# filter_mode = "local"       
 # filter_url = "http://localhost:9500"   # required for sidecar, ignored in local mode
 # timeout_ms = 40000          # sidecar only: per-call timeout
 # max_chars = 1024000         # skip redaction above this total text size
 # entropy_threshold = 3.0     # local mode only: Shannon entropy cutoff for hash detection
 # whitelist_add = []          # additional hex tokens to skip (lowercased)
 # whitelist_remove = []       # tokens to remove from the built-in whitelist
-# whitelist_file = ""         # Node-only: one hex token per line, `#` starts a comment
+# Node-only: one hex token per line, `#` starts a comment
+# whitelist_file = ""         

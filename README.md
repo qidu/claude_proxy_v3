@@ -67,6 +67,16 @@ Copy the example config and edit it:
 cp proxy_config.toml_example proxy_config.toml
 ```
 
+> **Warning — inline `#` comments after values are unsafe.** `proxy_config.toml`
+> is parsed by a hand-rolled TOML reader (`src/utils/config-loader.ts →
+> parseSimpleToml`). Every value-matching regex is anchored with `$`, so a
+> trailing `# comment` on the same line never matches and the line is silently
+> dropped. If the comment contains `"`, it gets worse: the lazy `(.*?)` in the
+> value regex expands until it finds a `"` at end-of-line, so the captured
+> "value" swallows everything from the opening quote up to the **last** `"` on
+> the line, including the comment text. Standalone `#`-only lines are fine;
+> put comments on their own line, or before the value, not after it.
+
 A minimal `proxy_config.toml` looks like this:
 
 ```toml
