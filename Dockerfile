@@ -30,6 +30,9 @@ RUN echo "Building with version: ${VERSION}"
 
 RUN npm run build
 
+# Drop devDependencies (wrangler, claude/codex/genai SDKs, etc.) now that the build is done
+RUN npm prune --omit=dev
+
 # Production image - much smaller
 FROM node:20-alpine
 
