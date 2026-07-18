@@ -46,11 +46,16 @@
  * - TC2119: redactBody in local mode respects toml `whitelist_add` additions
  * - TC2120: redactBody in local mode does NOT throw when the sidecar URL is
  *           absent (the whole point of local mode is to skip the network call)
+ * - TC2123: redactBody in local mode feeds the entire proxy config file as
+ *           message content and asserts that at least one key is detected,
+ *           using the config's own [privacy_filter] settings (entropy_threshold,
+ *           whitelist_remove). Round-trips sentinels back to the original text.
  *
  * Reference: src/utils/privacy-filter.ts, src/index.ts (privacy-filter wiring),
  *            testcases/gaps-of-testcases-konwn-round-2.md gap #1
  */
 
+const fs = require('fs');
 const path = require('path');
 const {
   sendRequest,
@@ -60,6 +65,7 @@ const {
 
 let getPrivacyFilterConfig, restoreText, redactBody;
 let findHashSpans, detectHashPriority;
+let parseSimpleToml;
 
 async function loadModule() {
   const mod = await import(path.join(process.cwd(), 'dist/utils/privacy-filter.js'));
@@ -69,6 +75,8 @@ async function loadModule() {
   const hashMod = await import(path.join(process.cwd(), 'dist/utils/hash-detect.js'));
   findHashSpans = hashMod.findHashSpans;
   detectHashPriority = hashMod.detectHashPriority;
+  const cfgMod = await import(path.join(process.cwd(), 'dist/utils/config-loader.js'));
+  parseSimpleToml = cfgMod.parseSimpleToml;
 }
 
 // ---------------------------------------------------------------------------
@@ -433,6 +441,67 @@ async function testRedactBodyLocalModeRespectsTomlWhitelistAdd() {
 }
 
 // ---------------------------------------------------------------------------
+// TC2123: redactBody in local mode detects keys when given the entire proxy
+//         config file as message content. Uses the config's own
+//         [privacy_filter] settings. Asserts at least one key is detected.
+// ---------------------------------------------------------------------------
+async function testRedactBodyDetectsKeyFromProxyConfig() {
+  const TEST_CONFIG = process.env.TEST_CONFIG || 'test_';
+  const configPath = path.join(process.cwd(), `${TEST_CONFIG}proxy_config.toml`);
+  const fallbackPath = path.join(process.cwd(), 'proxy_config.toml');
+  const tomlPath = fs.existsSync(configPath) ? configPath : fallbackPath;
+
+  assert(fs.existsSync(tomlPath), `Proxy config not found at ${tomlPath}`);
+
+  const tomlText = fs.readFileSync(tomlPath, 'utf8');
+  const proxyConfig = parseSimpleToml(tomlText);
+
+  const privacyToml = proxyConfig.privacy_filter;
+  assert(
+    privacyToml && privacyToml.filter_mode === 'local',
+    `Expected [privacy_filter] filter_mode=local in proxy config, got: ${JSON.stringify(privacyToml)}`
+  );
+
+  const cfg = getPrivacyFilterConfig({}, privacyToml);
+  assert(cfg !== null, 'Expected non-null privacy filter config from proxy config toml');
+  assert(cfg.mode === 'local', `Expected local mode, got ${cfg.mode}`);
+
+  // Feed the entire config file text as the message body.
+  const body = {
+    messages: [{ role: 'user', content: tomlText }],
+  };
+  const result = await redactBody(cfg, body);
+  const detectedCount = Object.keys(result.mapping).length;
+
+  assert(
+    detectedCount > 0,
+    `Expected at least 1 key detected in proxy config file, got 0. Config file may have no hex-shaped API keys.`
+  );
+
+  // Sentinels must appear in the redacted content.
+  const content = result.body.messages[0].content;
+  assert(
+    content.includes('\u27e6HASH:'),
+    `Expected HASH sentinels in redacted content, got: ${content.slice(0, 200)}`
+  );
+
+  // Every original token must be absent from the redacted content.
+  for (const [sentinel, original] of Object.entries(result.mapping)) {
+    assert(
+      !content.includes(original),
+      `Original token for ${sentinel} should be replaced in content`
+    );
+  }
+
+  // Round-trip: restoring sentinels recovers the original config file text.
+  const restored = restoreText(content, result.mapping);
+  assert(
+    restored === tomlText,
+    `Round-trip restore should recover original config file text (first diff at char ${[...tomlText].findIndex((c, i) => c !== restored[i])})`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // TC2122: redactBody in local mode does not touch the network
 // (no sidecar URL, so a sidecar unreachable test does not apply)
 // ---------------------------------------------------------------------------
@@ -470,7 +539,8 @@ module.exports = {
   testRedactBodyLocalModeRoundTrip,
   testRedactBodyLocalModeRespectsBuiltinWhitelist,
   testRedactBodyLocalModeRespectsTomlWhitelistAdd,
-  testRedactBodyLocalModeNoNetwork
+  testRedactBodyLocalModeNoNetwork,
+  testRedactBodyDetectsKeyFromProxyConfig,
 };
 
 if (require.main === module) {
@@ -494,6 +564,7 @@ if (require.main === module) {
     { name: 'TC2117: redactBody local mode round trip', fn: testRedactBodyLocalModeRoundTrip },
     { name: 'TC2118: redactBody local mode respects built-in whitelist', fn: testRedactBodyLocalModeRespectsBuiltinWhitelist },
     { name: 'TC2119: redactBody local mode respects toml whitelist_add', fn: testRedactBodyLocalModeRespectsTomlWhitelistAdd },
-    { name: 'TC2120: redactBody local mode no network', fn: testRedactBodyLocalModeNoNetwork }
+    { name: 'TC2120: redactBody local mode no network', fn: testRedactBodyLocalModeNoNetwork },
+    { name: 'TC2123: redactBody detects key from proxy config whitelist_remove', fn: testRedactBodyDetectsKeyFromProxyConfig },
   ]));
 }
