@@ -1952,6 +1952,16 @@ export function getRequestStatusCodeFromUpstreamStatsDesc(): RequestStatusCodeSt
   return sortStatusCodeStatsDesc([...requestStatusCodeFromUpstreamStats.values()]);
 }
 
+let privacyKeysDetectedTotal = 0;
+
+export function recordPrivacyKeysDetected(count: number): void {
+  privacyKeysDetectedTotal += count;
+}
+
+export function getPrivacyKeysDetected(): number {
+  return privacyKeysDetectedTotal;
+}
+
 export function getUpstreamResponseToolStatsDesc(): UpstreamResponseToolStatsEntry[] {
   return [...upstreamResponseToolStats.values()].sort((a, b) => {
     if (b.tools !== a.tools) {

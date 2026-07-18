@@ -718,6 +718,18 @@ whitelist_remove = []         # built-in whitelist tokens to remove (so they get
 
 The `hash_min_len` and `entropy_threshold` knobs are also accepted by the Python sidecar via `--hash-min-len` and `--entropy-threshold` CLI flags (see [`submodules/privacy-filter/README.md`](./submodules/privacy-filter/README.md)).
 
+> **Note — "Keys filtered" counter:** whenever the privacy filter redacts one or more
+> spans from a request, the proxy increments an in-process cumulative counter.
+> The total is shown in two places:
+> - **TUI** — a `keys filtered: N` line appears above the *Custom Models* section,
+>   right-aligned to the Tokens Panel width. The line is hidden while the count is zero.
+> - **Dashboard** — the *Request Statistic* card contains a *Privacy Filter* sub-table
+>   with a "Keys filtered (total)" row, refreshed every 10 seconds alongside other stats.
+>
+> The counter is runtime-only and resets to zero when the proxy process restarts.
+> Each redacted span (one `⟦HASH:n⟧` sentinel) counts as one key, so a single request
+> carrying three API keys increments the counter by three.
+
 **Compression sidecar** (inert unless `KOMPRESS_URL` is set)
 
 | Variable | Default | Purpose |

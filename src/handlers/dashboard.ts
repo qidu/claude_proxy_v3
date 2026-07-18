@@ -46,6 +46,7 @@ import {
   getBlockedTools,
   blockTool,
   unblockTool,
+  getPrivacyKeysDetected,
 } from '../utils/dashboard-stats.js';
 import { formatApiKeyForUpstream } from '../utils/routing.js';
 
@@ -91,6 +92,7 @@ export interface DashboardSnapshot {
     model_timings: ReturnType<typeof getRequestModelTimingStatsDesc>;
   };
   tokenHeatmap: ReturnType<typeof getTokenHeatmapStatsDesc>;
+  privacyKeysDetected: number;
   compositeLimitWindows: ReturnType<typeof getCompositeLimitWindowsSnapshot>;
   compositeResolved: Array<{
     alias: string;
@@ -168,6 +170,7 @@ export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): Dashbo
       model_timings: getRequestModelTimingStatsDesc(),
     },
     tokenHeatmap: getTokenHeatmapStatsDesc(),
+    privacyKeysDetected: getPrivacyKeysDetected(),
     compositeLimitWindows: getCompositeLimitWindowsSnapshot(),
     compositeResolved,
     scheduleResolved,
@@ -514,7 +517,14 @@ export function handleDashboardPage(): Response {
     <section class="card" id="section-request">
       <h2>Request Statistic</h2>
 
-      
+      <div class="request-submodule">
+        <h3>Privacy Filter</h3>
+        <table>
+          <thead><tr><th>Metric</th><th class="num">Count</th></tr></thead>
+          <tbody><tr><td>Keys filtered (total)</td><td class="num" id="privacyKeysDetected">0</td></tr></tbody>
+        </table>
+      </div>
+
       <div class="request-submodule">
         <h3>Status Count</h3>
         <table id="requestUpstreamStats">
@@ -1603,6 +1613,9 @@ export function handleDashboardPage(): Response {
         const res = await dashboardFetch('/dashboard/api/stats/requests');
         const json = await res.json();
 
+        const privacyEl = document.getElementById('privacyKeysDetected');
+        if (privacyEl) privacyEl.textContent = fmtStat(json.privacy_keys_detected || 0);
+
         renderRows('#requestUpstreamStats', json.upstreams || [], (row) =>
           '<tr><td>' + row.upstream_base_url + '</td><td class="num">' + row.responses + '</td></tr>'
         );
@@ -1804,6 +1817,7 @@ export function handleDashboardRequestStats(): Response {
     status_codes_to_endpoints: getRequestStatusCodeToEndpointStatsDesc(),
     endpoint_timings: getRequestEndpointTimingStatsDesc(),
     model_timings: getRequestModelTimingStatsDesc(),
+    privacy_keys_detected: getPrivacyKeysDetected(),
   });
 }
 

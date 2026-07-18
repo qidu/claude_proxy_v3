@@ -67,6 +67,7 @@ import {
   incrementActiveRequests,
   attachActiveRequestRelease,
   getTokensInWindow,
+  recordPrivacyKeysDetected,
 } from './utils/dashboard-stats.js';
 import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
 import {
@@ -1037,6 +1038,7 @@ export default {
             piiMapping = mapping;
             if (Object.keys(mapping).length > 0) {
               bodyText = JSON.stringify(body);
+              recordPrivacyKeysDetected(Object.keys(mapping).length);
               logger.info(requestId, `Privacy filter redacted ${Object.keys(mapping).length} span(s) from ${path}`);
               logger.debug(requestId, `Found: ${Object.entries(mapping).map(([k, v]) => `${k}=${v}`).join(", ")}`);
             }

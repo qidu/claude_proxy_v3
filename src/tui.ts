@@ -297,6 +297,29 @@ function buildOpenAIToolRequest(upstreamMode: string): Record<string, unknown> {
   };
 }
 
+function generateTestKey(): string {
+  // Must be pure hex so the local privacy filter (hash-detect) can detect it.
+  const chars = '0123456789abcdefABCDEF';
+  const len = 8 + Math.floor(Math.random() * 25); // 8..32
+  let key = '';
+  for (let i = 0; i < len; i++) {
+    key += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return key;
+}
+
+function appendTestKeys(body: Record<string, unknown>): Record<string, unknown> {
+  const count = 1 + Math.floor(Math.random() * 3); // 1..3
+  const keys = Array.from({ length: count }, generateTestKey);
+  const keyBlock = '\n\n' + keys.join('\n');
+  const messages = body.messages;
+  if (!Array.isArray(messages) || messages.length === 0) return body;
+  const first = messages[0] as Record<string, unknown>;
+  if (typeof first.content !== 'string') return body;
+  const newMessages = [{ ...first, content: first.content + keyBlock }, ...messages.slice(1)];
+  return { ...body, messages: newMessages };
+}
+
 const TEST_TEXT_PROMPT = 'Reply with one short sentence.';
 
 export function buildTestTextRequest(upstreamMode: string): Record<string, unknown> {
@@ -1076,7 +1099,16 @@ class DashboardView implements Component {
       ? `${tokenHeader}${' '.repeat(Math.max(1, tokenPanelWidth - 1 - visibleWidth(tokenHeader) - visibleWidth(liveSuffix)))}${liveSuffix}`
       : tokenHeader;
     lines.push(...tokenHeatmapLines);
-    lines.push('');
+
+    const keysDetected = snap.privacyKeysDetected ?? 0;
+    if (keysDetected > 0) {
+      const keysLabel = dim('keys: ') + fmt(keysDetected);
+      lines.push(alignRight(keysLabel, tokenPanelWidth));
+    }
+    else {
+      lines.push('');
+    }
+
     const customModels = this.customModels();
     lines.push(`${bold('Custom Models')} (${fmt(customModels.length)})`);
     const modelTimingMap = new Map((snap.requestStats.model_timings || []).map((t) => [t.endpoint, t]));
@@ -1835,7 +1867,7 @@ class DashboardApp {
 
     const upstreamMode = modelConfig?.upstreamMode || 'openai-completions';
     const isFusionAlias = !!(snapshot?.config.composite?.[actualModelId] as { fusion_options?: unknown } | undefined)?.fusion_options;
-    const requestBody = isFusionAlias ? buildTestTextRequest(upstreamMode) : buildTestToolRequest(upstreamMode);
+    const requestBody = appendTestKeys(isFusionAlias ? buildTestTextRequest(upstreamMode) : buildTestToolRequest(upstreamMode));
     // For fusion aliases, send directly to the resolved panel target model (bypass fusion pipeline)
     const testModelId = modelConfig?.directModel ?? actualModelId;
     const isComposite = snapshot?.compositeResolved?.some((a) => a.alias === actualModelId) ?? false;
