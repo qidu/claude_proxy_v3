@@ -18,6 +18,12 @@
  * The plugin is entirely inert unless `PRIVACY_FILTER_URL` is set OR
  * `[privacy_filter]` toml is present with `mode = "local"` (and `enabled`
  * not explicitly false).
+ *
+ * Scope — text only. The following content block types are intentionally
+ * skipped (binary/opaque payloads that must not be mangled):
+ *   - Anthropic `type:"image"` / `type:"document"` → `source.data` (base64)
+ *   - OpenAI `type:"image_url"` → `image_url.url` (URL or data URI)
+ *   - Gemini `inlineData` part → `inlineData.data` (base64 media bytes)
  */
 
 import type { Env } from '../types/shared.js';
@@ -198,7 +204,9 @@ interface TextRef {
 /**
  * Collect editable references to every user-visible text fragment in a parsed
  * request body. Understands the Anthropic Messages shape (string or content
- * blocks, plus `system`) and the OpenAI chat shape (string content).
+ * blocks, plus `system`), the OpenAI chat shape, and the Gemini
+ * generateContent shape (contents[].parts[]). Non-text block types
+ * (image, document, image_url, inlineData) are skipped — see module docstring.
  */
 function collectTextRefs(body: Record<string, unknown>): TextRef[] {
   const refs: TextRef[] = [];
@@ -230,10 +238,29 @@ function collectTextRefs(body: Record<string, unknown>): TextRef[] {
         for (const part of content) {
           if (!part || typeof part !== 'object') continue;
           const p = part as Record<string, unknown>;
-          // Anthropic text block and OpenAI {type:'text', text} block.
+          // Only text blocks. image / document / image_url / inlineData blocks
+          // are skipped — their binary payloads must not be redacted.
           if (p.type === 'text' && typeof p.text === 'string') {
             refs.push({ get: () => p.text as string, set: (v) => { p.text = v; } });
           }
+        }
+      }
+    }
+  }
+
+  // Gemini generateContent / streamGenerateContent: contents[].parts[].text
+  const contents = body.contents;
+  if (Array.isArray(contents)) {
+    for (const turn of contents) {
+      if (!turn || typeof turn !== 'object') continue;
+      const t = turn as Record<string, unknown>;
+      if (!Array.isArray(t.parts)) continue;
+      for (const part of t.parts) {
+        if (!part || typeof part !== 'object') continue;
+        const p = part as Record<string, unknown>;
+        // Skip inlineData parts (base64 media bytes) — only collect plain text.
+        if (typeof p.text === 'string' && !('inlineData' in p)) {
+          refs.push({ get: () => p.text as string, set: (v) => { p.text = v; } });
         }
       }
     }

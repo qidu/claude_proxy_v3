@@ -37,7 +37,8 @@
  * - TC2115: findHashSpans flags API-key-shaped tokens (HIGH entropy, 16-256 chars,
  *           multiple of 8) and ignores whitelisted hexspeak words
  * - TC2116: detectHashPriority returns HASH_HIGH for 32-char hex with high entropy,
- *           HASH_LOW for short high-entropy hex, HASH_NO for whitelisted tokens
+ *           HASH_LOW for short high-entropy hex, HASH_NO for whitelisted tokens or
+ *           tokens under DEFAULT_HASH_MIN_LEN (strict: length < 8 → NO, length >= 8 eligible)
  * - TC2117: redactBody in local mode replaces detected hash spans with
  *           `⟦HASH:n⟧` sentinels and populates the mapping so restoreText
  *           returns the original token
@@ -64,7 +65,7 @@ const {
 } = require('../utils/test_helpers');
 
 let getPrivacyFilterConfig, restoreText, redactBody;
-let findHashSpans, detectHashPriority;
+let findHashSpans, detectHashPriority, detectB64Priority;
 let parseSimpleToml;
 
 async function loadModule() {
@@ -75,6 +76,7 @@ async function loadModule() {
   const hashMod = await import(path.join(process.cwd(), 'dist/utils/hash-detect.js'));
   findHashSpans = hashMod.findHashSpans;
   detectHashPriority = hashMod.detectHashPriority;
+  detectB64Priority = hashMod.detectB64Priority;
   const cfgMod = await import(path.join(process.cwd(), 'dist/utils/config-loader.js'));
   parseSimpleToml = cfgMod.parseSimpleToml;
 }
@@ -326,8 +328,8 @@ async function testFindHashSpansFlagsApiKeys() {
   assert(findHashSpans('marker=deadbeef').length === 0, 'deadbeef should be whitelisted');
   assert(findHashSpans('marker=cafebabe').length === 0, 'cafebabe should be whitelisted');
 
-  // Tokens under the 9-char threshold are not hash candidates.
-  assert(findHashSpans('short=abcdef1').length === 0, '8-char hex should not match');
+  // Tokens under DEFAULT_HASH_MIN_LEN (8) are not hash candidates.
+  assert(findHashSpans('short=abcdef1').length === 0, '7-char hex should not match');
 
   // Non-hex text is not a hash.
   assert(findHashSpans('hello world').length === 0, 'non-hex text should not match');
@@ -349,8 +351,8 @@ async function testDetectHashPriorityClassification() {
   assert(detectHashPriority('1234567ab') === 'LOW', '9-char high-entropy hex should be LOW');
   // Whitelisted -> NO.
   assert(detectHashPriority('deadbeefdeadbeef') === 'NO', 'whitelisted token should be NO');
-  // 8-char hex -> NO (under threshold).
-  assert(detectHashPriority('abcdef12') === 'NO', '8-char hex should be NO');
+  // 7-char hex -> NO (under minimum length: 7 < DEFAULT_HASH_MIN_LEN=8).
+  assert(detectHashPriority('abcdef1') === 'NO', 'hex token under minimum length should be NO');
 }
 
 // ---------------------------------------------------------------------------
@@ -519,6 +521,75 @@ async function testRedactBodyLocalModeNoNetwork() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// TC2124: detectB64Priority classifies base64url API keys correctly
+// ---------------------------------------------------------------------------
+async function testDetectB64PriorityClassification() {
+  // High-entropy base64url token with uppercase — must be HIGH.
+  assert(
+    detectB64Priority('ouV7bwSqBiabj9kei4_ZiIlcQW90nsx') === 'HIGH',
+    'ouV7bwSqBiabj9kei4_ZiIlcQW90nsx should be HIGH'
+  );
+  // sk- prefixed OpenAI-style token (mixed case, non-hex chars).
+  assert(
+    detectB64Priority('sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz') === 'HIGH',
+    'sk-proj-... style token should be HIGH'
+  );
+  // Pure-hex token must be HASH_NO (handled by the hex scanner, not the b64 scanner).
+  assert(
+    detectB64Priority('5d41402abc4b2a76b9719d911017c592') === 'NO',
+    'pure-hex token should be NO (handled by hex scanner)'
+  );
+  // Short token (< 20 chars) must be NO.
+  assert(
+    detectB64Priority('ShortToken123') === 'NO',
+    'token under 20 chars should be NO'
+  );
+  // Low-entropy token (all same char repeated) must be NO.
+  assert(
+    detectB64Priority('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA') === 'NO',
+    'low-entropy repeated token should be NO'
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC2125: findHashSpans detects base64url API keys alongside hex spans
+// ---------------------------------------------------------------------------
+async function testFindHashSpansDetectsB64Tokens() {
+  // The key from the original question — must be detected.
+  const b64Key = 'ouV7bwSqBiabj9kei4_ZiIlcQW90nsx';
+  const spans = findHashSpans('my key is ' + b64Key + ' thanks');
+  assert(spans.length === 1, `Expected 1 span for base64url key, got ${spans.length}`);
+  assert(spans[0].token === b64Key, `Expected token=${b64Key}, got ${spans[0].token}`);
+  assert(spans[0].priority === 'HIGH', `Expected HIGH priority, got ${spans[0].priority}`);
+
+  // Mixed text: one base64url key + one hex hash — both must be detected.
+  const hexHash = '5d41402abc4b2a76b9719d911017c592';
+  const mixed = `hex=${hexHash} b64=${b64Key}`;
+  const mixedSpans = findHashSpans(mixed);
+  assert(mixedSpans.length === 2, `Expected 2 spans in mixed text, got ${mixedSpans.length}`);
+  const tokens = mixedSpans.map((s) => s.token).sort();
+  assert(tokens.includes(hexHash), `Expected hex hash in spans`);
+  assert(tokens.includes(b64Key), `Expected b64 key in spans`);
+
+  // Plain English text must not trigger b64 detection.
+  assert(findHashSpans('hello world this is a normal sentence').length === 0,
+    'plain text should produce no spans');
+
+  // Round-trip: redactBody in local mode must redact a base64url key from a message.
+  const cfg = getPrivacyFilterConfig({}, { filter_mode: 'local' });
+  const body = { messages: [{ role: 'user', content: 'token=' + b64Key }] };
+  const result = await redactBody(cfg, body);
+  const content = result.body.messages[0].content;
+  assert(
+    content.includes('\u27e6HASH:0\u27e7'),
+    `Expected HASH sentinel for b64url key, got: ${content}`
+  );
+  assert(!content.includes(b64Key), `Original b64url key should be replaced, got: ${content}`);
+  const restored = restoreText(content, result.mapping);
+  assert(restored === 'token=' + b64Key, `Round-trip failed, got: ${restored}`);
+}
+
 module.exports = {
   testConfigNullWhenUnset,
   testConfigRejectsExternalHost,
@@ -541,6 +612,8 @@ module.exports = {
   testRedactBodyLocalModeRespectsTomlWhitelistAdd,
   testRedactBodyLocalModeNoNetwork,
   testRedactBodyDetectsKeyFromProxyConfig,
+  testDetectB64PriorityClassification,
+  testFindHashSpansDetectsB64Tokens,
 };
 
 if (require.main === module) {
@@ -566,5 +639,7 @@ if (require.main === module) {
     { name: 'TC2119: redactBody local mode respects toml whitelist_add', fn: testRedactBodyLocalModeRespectsTomlWhitelistAdd },
     { name: 'TC2120: redactBody local mode no network', fn: testRedactBodyLocalModeNoNetwork },
     { name: 'TC2123: redactBody detects key from proxy config whitelist_remove', fn: testRedactBodyDetectsKeyFromProxyConfig },
+    { name: 'TC2124: detectB64Priority classification', fn: testDetectB64PriorityClassification },
+    { name: 'TC2125: findHashSpans detects base64url API keys', fn: testFindHashSpansDetectsB64Tokens },
   ]));
 }

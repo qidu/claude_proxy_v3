@@ -1,29 +1,38 @@
 /**
- * Detect likely-cryptographic-hash strings in text.
+ * Detect likely-cryptographic-hash and API-key strings in text.
  *
  * TypeScript port of `submodules/privacy-filter/hash_detect.py`. The algorithm
  * is identical (entropy-based scan + hexspeak / ordered-sequence filters), but
  * this module is Workers-safe: no `fs`, no `child_process`, no Python — just
  * a regex pass and a per-token priority classifier.
  *
- * Identifies contiguous hex strings whose length and entropy profile match
- * real cryptographic digests (MD5, SHA-1, SHA-256, their truncations, Git
- * short hashes), while filtering out:
+ * Two complementary scanners run on every token:
  *
+ * **Hex scanner** — identifies contiguous hex strings whose length and entropy
+ * profile match real cryptographic digests (MD5, SHA-1, SHA-256, their
+ * truncations, Git short hashes), while filtering out:
  *   * Hexspeak magic numbers (`deadbeef`, `cafebabe`, ...).
  *   * Repetitive / ordered sequences (`ffffffff`, `1234567890abcdef`).
  *   * English dictionary words that happen to be valid hex (`fabaceae`).
  *
- * Use case: pre-redacting API keys, tokens and other hex-shaped secrets
+ * **Base64url scanner** — identifies high-entropy tokens drawn from the
+ * base64url alphabet `[A-Za-z0-9+/=_-]` that contain at least one uppercase
+ * letter or digit not in `[a-f0-9]`, so they are not pure-hex. This catches
+ * API keys like `ouV7bwSqBiabj9kei4_ZiIlcQW90nsx` that the hex scanner misses.
+ * Minimum length: 20 chars. Entropy threshold: same as hex (default 3.0 bits,
+ * computed over the full alphabet so the effective bar is higher).
+ *
+ * Use case: pre-redacting API keys, tokens and other hash-shaped secrets
  * before forwarding text to a downstream LLM, because sequence-labeling PII
  * models tend to miss them.
  *
  * Public API
  * ----------
- * * `HashSpan`         — frozen `{start, end, token, priority}`.
- * * `shannonEntropy`   — bits/symbol; theoretical max for hex is 4.0.
- * * `detectHashPriority`— classify a single token ("HIGH" | "LOW" | "NO").
- * * `findHashSpans`    — find all hash spans in a string.
+ * * `HashSpan`          — frozen `{start, end, token, priority}`.
+ * * `shannonEntropy`    — bits/symbol; theoretical max for hex is 4.0.
+ * * `detectHashPriority`— classify a single hex token ("HIGH" | "LOW" | "NO").
+ * * `detectB64Priority` — classify a single base64url token ("HIGH" | "NO").
+ * * `findHashSpans`     — find all hash/key spans (hex + base64url) in a string.
  *
  * Constants
  * ---------
@@ -163,10 +172,58 @@ export function detectHashPriority(
 }
 
 /**
+ * Hard floor for the base64url scanner: even if `hash_min_len` config is set
+ * lower, we never match base64url tokens shorter than this to avoid common
+ * false positives (short identifiers, words, etc.).
+ */
+const B64_MIN_LEN = 20;
+
+/**
+ * Build a base64url token regex requiring at least `effectiveMin` chars.
+ * Alphabet: `[A-Za-z0-9_-]` — URL-safe subset (no `=`, `+`, `/`) so that
+ * punctuation like `key=VALUE` is never absorbed into the token.
+ */
+function buildB64TokenRe(effectiveMin: number): RegExp {
+  return new RegExp(
+    `(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{${effectiveMin},}(?![A-Za-z0-9_-])`,
+    'g',
+  );
+}
+
+/**
+ * Classify a single base64url token.
+ *
+ * Returns `HASH_HIGH` when:
+ *   1. The token length meets `Math.max(B64_MIN_LEN, minLen)`.
+ *   2. It contains at least one character outside `[a-f0-9]` (i.e. is not a
+ *      pure-hex string — those are already handled by the hex scanner).
+ *   3. Shannon entropy meets `entropyThreshold`.
+ *
+ * Returns `HASH_NO` otherwise.
+ *
+ * There is no `HASH_LOW` tier for base64url tokens: the longer minimum length
+ * (floor 20) already provides sufficient precision that every match above the
+ * entropy bar is treated as HIGH.
+ */
+export function detectB64Priority(
+  token: string,
+  entropyThreshold: number = 3.0,
+  minLen: number = DEFAULT_HASH_MIN_LEN,
+): string {
+  if (token.length < Math.max(B64_MIN_LEN, minLen)) return HASH_NO;
+  // Skip pure-hex tokens — the hex scanner handles them with finer-grained
+  // priority classification (HIGH/LOW) and the hexspeak whitelist.
+  if (/^[a-fA-F0-9]+$/.test(token)) return HASH_NO;
+  if (shannonEntropy(token) < entropyThreshold) return HASH_NO;
+  return HASH_HIGH;
+}
+
+/**
  * Find hash-shaped spans in `text`.
  *
- * Spans are returned in left-to-right order. `HASH_NO` candidates are
- * omitted; only `HASH_HIGH` and `HASH_LOW` spans are returned.
+ * Runs both the hex scanner and the base64url scanner. Spans from both are
+ * merged, de-overlapped (hex spans take priority), and returned in
+ * left-to-right order. `HASH_NO` candidates are omitted.
  */
 export function findHashSpans(
   text: string,
@@ -176,6 +233,8 @@ export function findHashSpans(
 ): HashSpan[] {
   if (!text) return [];
   const spans: HashSpan[] = [];
+
+  // --- Hex scanner ---
   const tokenRe = buildTokenRe(minLen);
   let match: RegExpExecArray | null;
   while ((match = tokenRe.exec(text)) !== null) {
@@ -189,6 +248,23 @@ export function findHashSpans(
       priority,
     });
   }
+
+  // --- Base64url scanner ---
+  const b64TokenRe = buildB64TokenRe(Math.max(B64_MIN_LEN, minLen));
+  while ((match = b64TokenRe.exec(text)) !== null) {
+    const token = match[0];
+    const priority = detectB64Priority(token, entropyThreshold, minLen);
+    if (priority === HASH_NO) continue;
+    const start = match.index;
+    const end = start + token.length;
+    // Skip if this range is already fully covered by a hex span (no duplicate).
+    const overlaps = spans.some((s) => s.start <= start && s.end >= end);
+    if (overlaps) continue;
+    spans.push({ start, end, token, priority });
+  }
+
+  // Sort left-to-right for the caller (applySpans iterates right-to-left).
+  spans.sort((a, b) => a.start - b.start);
   return spans;
 }
 
