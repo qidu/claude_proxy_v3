@@ -67,15 +67,13 @@ Copy the example config and edit it:
 cp proxy_config.toml_example proxy_config.toml
 ```
 
-> **Warning — inline `#` comments after values are unsafe.** `proxy_config.toml`
-> is parsed by a hand-rolled TOML reader (`src/utils/config-loader.ts →
-> parseSimpleToml`). Every value-matching regex is anchored with `$`, so a
-> trailing `# comment` on the same line never matches and the line is silently
-> dropped. If the comment contains `"`, it gets worse: the lazy `(.*?)` in the
-> value regex expands until it finds a `"` at end-of-line, so the captured
-> "value" swallows everything from the opening quote up to the **last** `"` on
-> the line, including the comment text. Standalone `#`-only lines are fine;
-> put comments on their own line, or before the value, not after it.
+> **Note — inline `#` comments are supported.** `proxy_config.toml` is parsed
+> by a hand-rolled TOML reader (`src/utils/config-loader.ts → parseSimpleToml`)
+> that strips trailing comments before matching values. Comments must be preceded
+> by at least one space (standard TOML convention), e.g.
+> `filter_mode = "local"  # sidecar | local`. A bare `#` with no leading space
+> inside a quoted value (e.g. `api_key = "abc#def"`) is preserved correctly.
+> Standalone `#`-only lines are always fine.
 
 A minimal `proxy_config.toml` looks like this:
 
@@ -703,16 +701,22 @@ entry can set `base_url = "sdk://chatjimmy.ai/api"` and keep the appropriate
 
 When the sidecar is `serve.py` from [`submodules/privacy-filter`](./submodules/privacy-filter/), it emits two sentinel prefixes: `⟦PII:n⟧` (model-detected PII) and `⟦HASH:n⟧` (cryptographic-hash-shaped secrets such as API keys and tokens, caught by the entropy-based `hash_detect.py` scan). The proxy restores both prefixes transparently on the response, including for streaming SSE.
 
-**Local hash-only mode** (in-process, no sidecar). If you only need to redact hex-shaped secrets (API keys, tokens) and want to skip the OPF PII model entirely, add a `[privacy_filter]` section to `proxy_config.toml` with `filter_mode = "local"`. The proxy then runs an in-process TypeScript port of `hash_detect.py` (`src/utils/hash-detect.ts`) on every text fragment; no HTTP call, no Python sidecar. Detected spans are replaced with `⟦HASH:n⟧` sentinels and restored on the response, exactly as in sidecar mode. The plugin is enabled when `filter_mode = "local"` (no URL needed), or when `filter_mode = "sidecar"` is paired with a valid `filter_url`; otherwise it stays inert. All other knobs (`max_chars`, `whitelist_add`, `whitelist_remove`) work the same way; the sidecar-only knobs (`filter_url`, `timeout_ms`) are ignored in local mode. Env vars override toml values.
+**Local hash-only mode** (in-process, no sidecar). If you only need to redact hex-shaped secrets (API keys, tokens) and want to skip the OPF PII model entirely, add a `[privacy_filter]` section to `proxy_config.toml` with `filter_mode = "local"`. The proxy then runs an in-process TypeScript port of `hash_detect.py` (`src/utils/hash-detect.ts`) on every text fragment; no HTTP call, no Python sidecar. Detected spans are replaced with `⟦HASH:n⟧` sentinels and restored on the response, exactly as in sidecar mode. The plugin is enabled when `filter_mode = "local"` (no URL needed), or when `filter_mode = "sidecar"` is paired with a valid `filter_url`; otherwise it stays inert. Env vars override toml values.
 
 ```toml
 [privacy_filter]
-filter_mode = "local"             # "sidecar" (default when a filter_url is configured) | "local"
-max_chars = 1024000
-entropy_threshold = 3.0       # local mode only
-whitelist_add = []            # additional hex tokens to skip
-whitelist_remove = []         # tokens to remove from the built-in whitelist
+filter_mode = "local"         # "sidecar" (default when a filter_url is configured) | "local"
+# filter_url = "http://127.0.0.1:8799"  # required for sidecar mode
+# timeout_ms = 40000          # sidecar only: per-call timeout
+max_chars = 1024000           # skip redaction above this total text size
+entropy_threshold = 3.0       # local mode only: Shannon entropy cutoff for hash detection
+hash_min_len = 8              # local mode only: minimum hex token length to classify as a hash
+whitelist_add = []            # hex tokens to add to the built-in skip-list
+whitelist_remove = []         # built-in whitelist tokens to remove (so they get detected)
+# whitelist_file = ""         # Node-only: path to a whitelist-override file
 ```
+
+The `hash_min_len` and `entropy_threshold` knobs are also accepted by the Python sidecar via `--hash-min-len` and `--entropy-threshold` CLI flags (see [`submodules/privacy-filter/README.md`](./submodules/privacy-filter/README.md)).
 
 **Compression sidecar** (inert unless `KOMPRESS_URL` is set)
 

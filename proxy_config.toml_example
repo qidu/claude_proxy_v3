@@ -260,6 +260,7 @@ base_url = "https://openrouter.ai/api"
 # timeout_ms = 40000          # sidecar only: per-call timeout
 # max_chars = 1024000         # skip redaction above this total text size
 # entropy_threshold = 3.0     # local mode only: Shannon entropy cutoff for hash detection
+# hash_min_len = 8            # local mode only: minimum hex token length to classify as a hash (default 8)
 # whitelist_add = []          # additional hex tokens to skip (lowercased)
 # whitelist_remove = []       # tokens to remove from the built-in whitelist
 # Node-only: one hex token per line, `#` starts a comment

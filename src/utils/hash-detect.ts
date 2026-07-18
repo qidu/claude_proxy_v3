@@ -75,13 +75,17 @@ export const BUILTIN_HEX_WORDS_WHITELIST: ReadonlySet<string> = new Set(
     .filter((w) => w.length >= MIN_WHITELIST_LEN),
 );
 
+/** Default minimum hex token length to consider for hash detection. */
+export const DEFAULT_HASH_MIN_LEN = 8;
+
 /**
- * A token of >= 9 hex chars is worth classifying. We require non-hex
- * boundaries on both sides so we don't slice into UUIDs / hex paths
- * like `.../deadbeef/...` mid-string, and so we don't double-match
- * the same hex run twice.
+ * Build a token regex that captures hex runs of at least `minLen` chars.
+ * We require non-hex boundaries on both sides so we don't slice into UUIDs
+ * or hex paths like `.../deadbeef/...` mid-string.
  */
-const TOKEN_RE = /(?<![a-fA-F0-9])[a-fA-F0-9]{8,}(?![a-fA-F0-9])/g;
+function buildTokenRe(minLen: number): RegExp {
+  return new RegExp(`(?<![a-fA-F0-9])[a-fA-F0-9]{${minLen},}(?![a-fA-F0-9])`, 'g');
+}
 
 /**
  * Reference ordering for sequence detection. Strings whose sorted chars
@@ -145,12 +149,13 @@ export function detectHashPriority(
   token: string,
   entropyThreshold: number = 3.0,
   whitelist: ReadonlySet<string> = BUILTIN_HEX_WORDS_WHITELIST,
+  minLen: number = DEFAULT_HASH_MIN_LEN,
 ): string {
   if (!/^[a-fA-F0-9]+$/.test(token)) return HASH_NO;
   if (whitelist.has(token.toLowerCase())) return HASH_NO;
 
   const length = token.length;
-  if (length < 8) return HASH_NO;
+  if (length < minLen) return HASH_NO;
   if (isOrderedHexSequence(token)) return HASH_NO;
   if (shannonEntropy(token) < entropyThreshold) return HASH_NO;
   if (16 <= length && length <= 256 && length % 8 === 0) return HASH_HIGH;
@@ -167,15 +172,15 @@ export function findHashSpans(
   text: string,
   entropyThreshold: number = 3.0,
   whitelist: ReadonlySet<string> = BUILTIN_HEX_WORDS_WHITELIST,
+  minLen: number = DEFAULT_HASH_MIN_LEN,
 ): HashSpan[] {
   if (!text) return [];
   const spans: HashSpan[] = [];
-  // Reset the regex (it has the /g flag and is module-level to avoid re-allocation).
-  TOKEN_RE.lastIndex = 0;
+  const tokenRe = buildTokenRe(minLen);
   let match: RegExpExecArray | null;
-  while ((match = TOKEN_RE.exec(text)) !== null) {
+  while ((match = tokenRe.exec(text)) !== null) {
     const token = match[0];
-    const priority = detectHashPriority(token, entropyThreshold, whitelist);
+    const priority = detectHashPriority(token, entropyThreshold, whitelist, minLen);
     if (priority === HASH_NO) continue;
     spans.push({
       start: match.index,

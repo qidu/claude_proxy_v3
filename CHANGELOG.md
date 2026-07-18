@@ -29,11 +29,13 @@ shared.
   combination of `filter_mode` and `filter_url` is what turns the
   filter on.
 - **Detection semantics**: identical to the Python reference — Shannon
-  entropy ≥ `entropy_threshold` (default `3.0`), 9+ contiguous hex chars
+  entropy ≥ `entropy_threshold` (default `3.0`), 8+ contiguous hex chars
   with non-hex boundaries, length multiple of 8 ⇒ `HIGH` (16–256 chars),
   otherwise `LOW`. A built-in whitelist (`deadbeef`, `cafebabe`, etc.)
   is always applied and can be extended with `whitelist_add` /
-  `whitelist_remove`.
+  `whitelist_remove`. The minimum token length is configurable via
+  `hash_min_len` (default `8`); the Python `hash_detect.py` was updated
+  to match (`<= 8` → `< 8`).
 - **Sidecar mode is unchanged**; setting `[privacy_filter] filter_mode = "sidecar"`
   + `filter_url = "..."` activates the OPF Python sidecar via toml, in
   addition to the legacy `PRIVACY_FILTER_URL` env-var path.

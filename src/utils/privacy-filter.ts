@@ -26,6 +26,7 @@ import {
   buildWhitelist,
   findHashSpans,
   BUILTIN_HEX_WORDS_WHITELIST,
+  DEFAULT_HASH_MIN_LEN,
   type HashSpan,
 } from './hash-detect.js';
 
@@ -49,6 +50,8 @@ export interface PrivacyFilterConfig {
   maxChars: number;
   /** Local-only: entropy threshold passed to `findHashSpans`. */
   entropyThreshold: number;
+  /** Local-only: minimum hex token length to classify as a hash. */
+  hashMinLen: number;
   /** Local-only: final whitelist (built-ins + user additions - removals). */
   whitelist: ReadonlySet<string>;
 }
@@ -74,6 +77,7 @@ export interface PrivacyFilterTomlConfig {
   timeout_ms?: number;
   max_chars?: number;
   entropy_threshold?: number;
+  hash_min_len?: number;
   whitelist_add?: string[];
   whitelist_remove?: string[];
   whitelist_file?: string;
@@ -155,6 +159,11 @@ export function getPrivacyFilterConfig(
     ? Number(toml?.entropy_threshold)
     : 3.0;
 
+  const hashMinLenParsed = Number(toml?.hash_min_len);
+  const hashMinLen = Number.isFinite(hashMinLenParsed) && hashMinLenParsed >= 1
+    ? Math.floor(hashMinLenParsed)
+    : DEFAULT_HASH_MIN_LEN;
+
   // Build the final whitelist for local mode. The whitelist is
   // unconditionally built so getPrivacyFilterConfig never reads FS at
   // construction time — file reads are deferred to redactBody (Node-only,
@@ -172,6 +181,7 @@ export function getPrivacyFilterConfig(
     timeoutMs,
     maxChars,
     entropyThreshold,
+    hashMinLen,
     whitelist,
   };
 }
@@ -338,7 +348,7 @@ async function redactLocal(
   const mapping: PiiMapping = {};
   const redacted: string[] = texts.map((text) => {
     if (!text) return text;
-    const spans = findHashSpans(text, config.entropyThreshold, whitelist);
+    const spans = findHashSpans(text, config.entropyThreshold, whitelist, config.hashMinLen);
     if (spans.length === 0) return text;
     return applySpans(text, spans, () => {
       const sentinel = `\u27e6HASH:${counter}\u27e7`;
