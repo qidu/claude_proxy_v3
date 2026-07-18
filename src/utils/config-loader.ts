@@ -1963,8 +1963,13 @@ export function parseSimpleToml(content: string): ProxyConfig {
     }
 
     // Key-value pairs
+    // Strip inline comments before matching. TOML inline comments always start
+    // with whitespace + '#'. Using \s+# (rather than bare #) avoids corrupting
+    // values that contain '#' with no preceding space (e.g. api_key = "abc#def").
+    // e.g. `filter_mode = "local"  # "sidecar" | "local"` → `filter_mode = "local"`
+    const trimmedNoComment = trimmed.replace(/\s+#.*$/, '');
     // Handle simple strings: key = "value"
-    const stringMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*(["'])(.*?)\2$/);
+    const stringMatch = trimmedNoComment.match(/^"?([^"=]+)"?\s*=\s*(["'])(.*?)\2$/);
     if (stringMatch) {
       const [, key, , value] = stringMatch;
       const cleanKey = key.trim().replace(/^"|"$/g, '');
@@ -1996,7 +2001,7 @@ export function parseSimpleToml(content: string): ProxyConfig {
     // This is the spec-compliant replacement for the old array form.
     // Must be checked before compositeObjectMatch so [models.*] sections take priority.
     if (currentSection === 'models' && currentCategory && config.models) {
-      const modelTableMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*(\{[^{}]*\})$/);
+      const modelTableMatch = trimmedNoComment.match(/^"?([^"=]+)"?\s*=\s*(\{[^{}]*\})$/);
       if (modelTableMatch) {
         const cleanKey = modelTableMatch[1].trim().replace(/^"|"$/g, '');
         const tableBody = modelTableMatch[2].slice(1, -1); // strip outer braces
@@ -2018,7 +2023,7 @@ export function parseSimpleToml(content: string): ProxyConfig {
     // Handle composite inline object values: "alias" = {"m1": {...}, "m2": {...}}
     // Note: allow an empty object {} (newly added alias with no targets yet) by
     // using .* instead of .+ so the alias is preserved on round-trip.
-    const compositeObjectMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*(\{.*\})$/);
+    const compositeObjectMatch = trimmedNoComment.match(/^"?([^"=]+)"?\s*=\s*(\{.*\})$/);
     if (compositeObjectMatch && currentSection === 'composite' && config.composite) {
       const [, key, value] = compositeObjectMatch;
       const cleanKey = key.trim().replace(/^"|"$/g, '');
@@ -2027,7 +2032,7 @@ export function parseSimpleToml(content: string): ProxyConfig {
     }
 
     // Handle schedule inline object values: "saver" = {"target1" = [{from=..,to=..}], "target2" = []}
-    const scheduleObjectMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*(\{.*\})$/);
+    const scheduleObjectMatch = trimmedNoComment.match(/^"?([^"=]+)"?\s*=\s*(\{.*\})$/);
     if (scheduleObjectMatch && currentSection === 'schedule' && config.schedule) {
       const [, key, value] = scheduleObjectMatch;
       const cleanKey = key.trim().replace(/^"|"$/g, '');
@@ -2037,7 +2042,7 @@ export function parseSimpleToml(content: string): ProxyConfig {
 
     // Handle arrays: "model-id" = ["alias", "url", "key"]
     // Must be checked before unquotedMatch to avoid greedy (.+) capture stealing array values.
-    const arrayMatch = trimmed.match(/^"?([^"=]+)"?\s*=\s*\[([^\]]*)\]/);
+    const arrayMatch = trimmedNoComment.match(/^"?([^"=]+)"?\s*=\s*\[([^\]]*)\]/);
     if (arrayMatch) {
       const [, key, arrayContent] = arrayMatch;
       const cleanKey = key.trim().replace(/^"|"$/g, '');
@@ -2074,7 +2079,7 @@ export function parseSimpleToml(content: string): ProxyConfig {
     }
 
     // Handle unquoted numbers and other values: key = value
-    const unquotedMatch = trimmed.match(/^([a-zA-Z0-9_-]+)\s*=\s*(.+)$/);
+    const unquotedMatch = trimmedNoComment.match(/^([a-zA-Z0-9_-]+)\s*=\s*(.+)$/);
     if (unquotedMatch) {
       const [, key, value] = unquotedMatch;
       const cleanKey = key.trim();
@@ -2091,7 +2096,7 @@ export function parseSimpleToml(content: string): ProxyConfig {
         (config.defaults as any)[cleanKey] = cleanValue;
       } else if (currentSection === 'privacy_filter' && config.privacy_filter) {
         if (typeof cleanValue === 'number') {
-          if (cleanKey === 'entropy_threshold' || cleanKey === 'max_chars' || cleanKey === 'timeout_ms') {
+          if (cleanKey === 'entropy_threshold' || cleanKey === 'max_chars' || cleanKey === 'timeout_ms' || cleanKey === 'hash_min_len') {
             (config.privacy_filter as any)[cleanKey] = cleanValue;
           }
         } else if (typeof cleanValue === 'string') {

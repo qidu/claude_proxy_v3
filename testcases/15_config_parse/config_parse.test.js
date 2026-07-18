@@ -17,6 +17,13 @@
  * - TC1511: composite target resolves through full routing chain (composite → composite, no cycle)
  * - TC1512: A → B → A composite cycle throws "Routing cycle detected"
  *
+ * Inline-comment stripping (parseSimpleToml):
+ * - TC1513: quoted string value with trailing # comment parses correctly
+ * - TC1514: numeric value with trailing # comment parses correctly
+ * - TC1515: array value with trailing # comment parses correctly
+ * - TC1516: comment text containing a quote char does not corrupt the value
+ * - TC1517: full [privacy_filter] block with inline comments on every line parses all fields
+ *
  * Reference: README §"Per-Model Configuration Array Format", §"Model Routing Priority"
  */
 
@@ -410,6 +417,116 @@ base_url = "https://x.test"
 }
 
 // ---------------------------------------------------------------------------
+// TC1513: quoted string with trailing inline comment
+// ---------------------------------------------------------------------------
+async function testInlineCommentOnString() {
+  const cfg = parse(`
+[privacy_filter]
+filter_mode = "local"  # "sidecar" (default when a filter_url is configured) | "local"
+`);
+  assert(
+    cfg.privacy_filter?.filter_mode === 'local',
+    `filter_mode should be "local", got "${cfg.privacy_filter?.filter_mode}"`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC1514: numeric value with trailing inline comment
+// ---------------------------------------------------------------------------
+async function testInlineCommentOnNumber() {
+  const cfg = parse(`
+[privacy_filter]
+filter_mode = "local"
+max_chars = 1024000  # skip redaction above this total text size
+entropy_threshold = 3.0  # Shannon entropy cutoff
+hash_min_len = 8  # minimum hex token length
+`);
+  assert(
+    cfg.privacy_filter?.max_chars === 1024000,
+    `max_chars should be 1024000, got "${cfg.privacy_filter?.max_chars}"`
+  );
+  assert(
+    cfg.privacy_filter?.entropy_threshold === 3.0,
+    `entropy_threshold should be 3.0, got "${cfg.privacy_filter?.entropy_threshold}"`
+  );
+  assert(
+    cfg.privacy_filter?.hash_min_len === 8,
+    `hash_min_len should be 8, got "${cfg.privacy_filter?.hash_min_len}"`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC1515: array value with trailing inline comment
+// ---------------------------------------------------------------------------
+async function testInlineCommentOnArray() {
+  const cfg = parse(`
+[privacy_filter]
+filter_mode = "local"
+whitelist_add = ["deadcode", "cafedead"]  # hex tokens to skip
+whitelist_remove = ["fabaceae"]  # remove from built-in whitelist
+`);
+  assert(
+    Array.isArray(cfg.privacy_filter?.whitelist_add),
+    'whitelist_add should be an array'
+  );
+  assert(
+    cfg.privacy_filter?.whitelist_add?.length === 2,
+    `whitelist_add should have 2 elements, got ${cfg.privacy_filter?.whitelist_add?.length}`
+  );
+  assert(
+    cfg.privacy_filter?.whitelist_add?.[0] === 'deadcode',
+    `whitelist_add[0] should be "deadcode", got "${cfg.privacy_filter?.whitelist_add?.[0]}"`
+  );
+  assert(
+    cfg.privacy_filter?.whitelist_remove?.[0] === 'fabaceae',
+    `whitelist_remove[0] should be "fabaceae", got "${cfg.privacy_filter?.whitelist_remove?.[0]}"`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC1516: comment text containing a quote does not corrupt the string value
+// ---------------------------------------------------------------------------
+async function testInlineCommentWithQuoteChar() {
+  const cfg = parse(`
+[privacy_filter]
+filter_mode = "sidecar"  # use "sidecar" for full PII model
+filter_url = "http://127.0.0.1:8799"  # required for "sidecar" mode
+`);
+  assert(
+    cfg.privacy_filter?.filter_mode === 'sidecar',
+    `filter_mode should be "sidecar", got "${cfg.privacy_filter?.filter_mode}"`
+  );
+  assert(
+    cfg.privacy_filter?.filter_url === 'http://127.0.0.1:8799',
+    `filter_url should be "http://127.0.0.1:8799", got "${cfg.privacy_filter?.filter_url}"`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TC1517: full [privacy_filter] block with inline comments on every line
+// ---------------------------------------------------------------------------
+async function testPrivacyFilterBlockWithComments() {
+  const cfg = parse(`
+[privacy_filter]
+filter_mode = "local"         # "sidecar" | "local"
+max_chars = 512000            # skip redaction above this total text size
+entropy_threshold = 3.5       # local mode only: Shannon entropy cutoff
+hash_min_len = 10             # local mode only: minimum hex token length
+whitelist_add = ["badcafe12"] # hex tokens to add to the built-in skip-list
+whitelist_remove = []         # built-in whitelist tokens to remove
+`);
+  const pf = cfg.privacy_filter;
+  assert(pf?.filter_mode === 'local',        `filter_mode: expected "local", got "${pf?.filter_mode}"`);
+  assert(pf?.max_chars === 512000,           `max_chars: expected 512000, got ${pf?.max_chars}`);
+  assert(pf?.entropy_threshold === 3.5,      `entropy_threshold: expected 3.5, got ${pf?.entropy_threshold}`);
+  assert(pf?.hash_min_len === 10,            `hash_min_len: expected 10, got ${pf?.hash_min_len}`);
+  assert(Array.isArray(pf?.whitelist_add) && pf.whitelist_add[0] === 'badcafe12',
+    `whitelist_add[0]: expected "badcafe12", got "${pf?.whitelist_add?.[0]}"`);
+  assert(Array.isArray(pf?.whitelist_remove) && pf.whitelist_remove.length === 1 && pf.whitelist_remove[0] === '',
+    `whitelist_remove: expected [""], got ${JSON.stringify(pf?.whitelist_remove)}`);
+}
+
+// ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
 
@@ -426,6 +543,11 @@ const tests = [
   { name: 'TC1510: "claude-* = {}" ≡ "claude-* = {target=\\"claude-*\\"}"', fn: testWildcardEquivalence },
   { name: 'TC1511: composite → composite resolves (no cycle)', fn: testCompositeToCompositeNoCycle },
   { name: 'TC1512: A → B → A cycle throws', fn: testCompositeCycle },
+  { name: 'TC1513: quoted string with trailing inline comment', fn: testInlineCommentOnString },
+  { name: 'TC1514: numeric values with trailing inline comments', fn: testInlineCommentOnNumber },
+  { name: 'TC1515: array value with trailing inline comment', fn: testInlineCommentOnArray },
+  { name: 'TC1516: comment containing quote char does not corrupt string value', fn: testInlineCommentWithQuoteChar },
+  { name: 'TC1517: full [privacy_filter] block with inline comments on every line', fn: testPrivacyFilterBlockWithComments },
 ];
 
 module.exports = {
@@ -441,6 +563,11 @@ module.exports = {
   testWildcardEquivalence,
   testCompositeToCompositeNoCycle,
   testCompositeCycle,
+  testInlineCommentOnString,
+  testInlineCommentOnNumber,
+  testInlineCommentOnArray,
+  testInlineCommentWithQuoteChar,
+  testPrivacyFilterBlockWithComments,
 };
 
 if (require.main === module) {
