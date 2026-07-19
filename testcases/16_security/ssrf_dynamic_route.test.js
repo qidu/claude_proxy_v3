@@ -17,7 +17,7 @@
  *     -> on throw: 400 "Invalid dynamic route."
  *   allowedHosts = getAllowedHostsFromConfig(proxyConfig)  // NOT the ALLOWED_HOSTS
  *     env var — hosts are derived from proxy_config.toml's
- *     [upstream].default_base_url and every [models.*].base_url / per-model
+ *     [default_upstream].default_base_url and every [models.*].base_url / per-model
  *     base_url override.
  *   isHostAllowed(parsedHost, allowedHosts.join(',')) -> false: 403 "Target host not allowed."
  *

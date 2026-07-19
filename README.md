@@ -78,12 +78,19 @@ cp proxy_config.toml_example proxy_config.toml
 A minimal `proxy_config.toml` looks like this:
 
 ```toml
+# Global settings not tied to a specific upstream.
+[general]
+# upstream_auth_by = "user_key"   # "user_key" (default): forward caller's key upstream;
+                                   # "config_key": use configured api_key for every section,
+                                   #   falling back to [default_upstream].default_api_key.
+# auth_url = "https://auth.example.com/validate"  # if set, validate caller's key here first
+
 # Global upstream defaults — applied ONLY to models that are NOT claimed by
 # any `[models.*]` category section below. A model name that falls through
 # every section's exact / wildcard / catch-all lookup gets routed here.
-[upstream]
+[default_upstream]
 default_base_url = "https://api.your-provider.com"
-# default_api_key = "your-key"   # config fallback; caller auth still wins outside [models.free]
+# default_api_key = "your-key"   # used in config_key mode or as fallback for [models.free]
 
 # Claude models, spoken to in native Anthropic format
 [models.claude]
@@ -101,10 +108,10 @@ api_key = "your-gemini-key"
 "gemini-*" = {}
 
 # Everything else goes here (OpenAI-compatible). Empty entry fields inherit
-# from the section, then from `[upstream]` defaults.
+# from the section, then from `[default_upstream]` defaults.
 [models.default]
 upstream_mode = "openai-completions"
-base_url = "https://api.your-provider.com"   # section base_url overrides [upstream].default_base_url
+base_url = "https://api.your-provider.com"   # section base_url overrides [default_upstream].default_base_url
 "*" = {}                                     # final catch-all for this section
 "deepseek/deepseek-v3.2" = {}
 ```
@@ -143,7 +150,7 @@ Key ideas:
 > `kimi-k2.7-code` maps `reasoning_effort: "medium"` to a fixed
 > `thinking_budget = 32768`, so any request with `max_tokens ≤ 32768` fails with
 > `InvalidParameter: max_completion_tokens [N] must be greater than thinking_budget [32768]`.
-> Under `[upstream]`, set `budget_to_effort_high = 0` — the proxy then emits
+> Under `[general]`, set `budget_to_effort_high = 0` — the proxy then emits
 > `reasoning_effort: "high"` for any thinking budget. if set 
 > `budget_to_effort_low = 32768`
 > `budget_to_effort_medium = 65536`
@@ -382,17 +389,17 @@ resolved against the configured sections in three priority levels (highest first
 Each model entry is an inline table `{target, base_url, api_key}`. Resolution walks an
 inheritance chain — anything left empty falls back to the level above:
 
-- **`base_url`**: per-entry override → section `base_url` → `[upstream] default_base_url`
+- **`base_url`**: per-entry override → section `base_url` → `[default_upstream] default_base_url`
   → `http://localhost`.
-- **Configured `api_key`**: per-entry override → section `api_key` → `[upstream] default_api_key`.
+- **Configured `api_key`**: per-entry override → section `api_key` → `[default_upstream] default_api_key`.
   This only resolves the configured fallback key; runtime caller-vs-config priority is section-specific below.
-- **`upstream_mode`**: per-entry `mode` → section `upstream_mode` → `[upstream] upstream_mode`
+- **`upstream_mode`**: per-entry `mode` → section `upstream_mode` → `[default_upstream] upstream_mode`
   → `"openai-completions"`.
 - The target-only form (`opus48 = {target = "..."}`) inherits `base_url` from the section,
-  then `[upstream] default_base_url`; `api_key` may be inherited from the section or
-  `[upstream] default_api_key`, or supplied by the caller for non-`free` sections.
+  then `[default_upstream] default_base_url`; `api_key` may be inherited from the section or
+  `[default_upstream] default_api_key`, or supplied by the caller for non-`free` sections.
 
-> **What `[upstream] default_base_url` is for:** it is the global upstream endpoint used
+> **What `[default_upstream] default_base_url` is for:** it is the global upstream endpoint used
 > when no per-entry or section `base_url` is configured, including models that fall through
 > every section's exact / wildcard / catch-all lookup.
 
@@ -407,14 +414,27 @@ inheritance chain — anything left empty falls back to the level above:
 > `/v1beta/models/{model}:generateContent` (`:streamGenerateContent`, `:countTokens`).
 
 
-**Who wins — caller's key vs. configured `api_key`** — this depends on the section:
+**Who wins — caller's key vs. configured `api_key`** — controlled by `[general] upstream_auth_by`:
+
+`upstream_auth_by = "user_key"` *(default)*
 
 | Section | Caller's auth header | Configured `api_key` |
 |:--------|:---------------------|:---------------------|
 | `[models.free]` | **Ignored** | Section/per-entry key **always wins** — the proxy authenticates upstream on the caller's behalf (this is what makes the FREE tier work). |
-| `[models.default]` | **Wins** | Used only when the caller sends no key. May come from the entry, section, or `[upstream] default_api_key`. |
-| `[models.claude]`, `[models.gemini]` | **Wins** | Same as `default` — caller's key passes through; configured keys are fallbacks only. |
+| `[models.default]` | **Wins** | Used only when the caller sends no key. May come from the entry, section, or `[default_upstream] default_api_key`. |
+| `[models.claude]`, `[models.gemini]` | **Wins** | Caller's key passes through; configured keys are not used. |
 | `[models.embedding]` | **Overridden for embeddings** | Section `api_key` wins for `/v1/embeddings` requests when configured. |
+
+`upstream_auth_by = "config_key"`
+
+| Section | Caller's auth header | Configured `api_key` |
+|:--------|:---------------------|:---------------------|
+| `[models.free]` | **Ignored** | Section/per-entry key always wins (unchanged). |
+| `[models.default]`, `[models.claude]`, `[models.gemini]`, etc. | **Replaced** | Configured key **always wins** — per-entry → section → `[default_upstream] default_api_key`. |
+| Models hitting `[default_upstream]` (no section match) | **Replaced** | `[default_upstream] default_api_key` is used if set. |
+| `[models.embedding]` | **Overridden for embeddings** | Section `api_key` wins for `/v1/embeddings` requests when configured. |
+
+Use `config_key` when the proxy is a shared gateway and callers should not supply their own upstream credentials.
 
 Composite and fusion aliases don't route directly: each target is resolved through its own
 `[models.*]` section, so the rules above apply per target. The rule is keyed on
@@ -559,7 +579,7 @@ Direct routing to an upstream. Three lookup modes, tried in priority order:
   that wasn't claimed by an earlier mode, preserving the original model name.
 
 Each entry picks its `upstream_mode` / `base_url` / `api_key` from an inheritance
-chain (per-entry → section → `[upstream]` defaults). Custom/target models are the
+chain (per-entry → section → `[default_upstream]` defaults). Custom/target models are the
 *only* level that actually talks to an upstream — Levels 2 and 3 must always
 resolve down to a Level-1 entry before a single byte is sent.
 
@@ -642,16 +662,24 @@ Most users only need `proxy_config.toml`. Optional environment variables tune be
 On the Node server (`npm run server` / `dist/server.js`) these come from the process
 environment; on Cloudflare Workers they come from `[vars]` in `wrangler.toml`.
 
-**`[upstream]` config fields**
+**`[general]` config fields**
 
 | Field | Example | Purpose |
 |---|---|---|
-| `default_base_url` | `"https://api.example.com"` | Global upstream endpoint fallback when a route has no per-entry or section `base_url`, and for models not claimed by any `[models.*]` section. |
-| `default_api_key` | `"sk-..."` | Global configured-key fallback when a route has no per-entry or section `api_key`. For non-`free` sections, caller auth headers still win at request time; for `[models.free]`, the configured key wins. Typically left unset in production. |
+| `auth_url` | `"https://auth.example.com/validate"` | If set, every inbound request's auth headers are validated by a `GET` to this URL before routing. HTTP 200 = pass; 4xx/5xx = 401 to client; network error = 503. |
+| `upstream_auth_by` | `"user_key"` | `"user_key"` (default): forward the caller's key upstream. `"config_key"`: always use the configured `api_key`, ignoring the caller's key for upstream calls. |
 | `global_token_limit` | `"1B 1d"` | Rolling-window token cap across all models. Format: `"<num><K/M/B> <duration>"` where duration is `1h`/`1d`/`1w`/`1m`. Returns HTTP 429 when exceeded. |
 | `budget_to_effort_low` | `32768` | Thinking-budget threshold (tokens) below which `reasoning_effort: "low"` is emitted for upstreams that use effort levels instead of token budgets. |
 | `budget_to_effort_medium` | `65536` | Threshold above `low` and below this → `reasoning_effort: "medium"`. |
 | `budget_to_effort_high` | `128000` | Threshold above `medium` → `reasoning_effort: "high"`. Set to `0` to always emit `"high"`. |
+
+**`[default_upstream]` config fields**
+
+| Field | Example | Purpose |
+|---|---|---|
+| `default_base_url` | `"https://api.example.com"` | Global upstream endpoint fallback when a route has no per-entry or section `base_url`, and for models not claimed by any `[models.*]` section. |
+| `default_api_key` | `"sk-..."` | Global configured-key fallback. In `user_key` mode (default): wins only for `[models.free]`, acts as a fallback for other sections when the caller sends no key. In `config_key` mode: used for all models that have no per-entry or section `api_key`. Typically left unset in production. |
+| `upstream_mode` | `"openai-completions"` | Default protocol for models not claimed by any `[models.*]` section. |
 
 **Core / server**
 

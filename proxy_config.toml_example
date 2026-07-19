@@ -3,7 +3,19 @@
 # If omitted or empty, dashboard APIs remain loopback-only.
 api_key = "test"
 
-[upstream]
+[general]
+# auth_url: if set, proxy forwards Authorization/x-api-key/x-goog-api-key and
+# User-Agent headers to this URL (GET, follows 301/302). HTTP 200 = success;
+# any 4xx/5xx = 401 to the client; network error = 503. If unset, the proxy
+# only checks that at least one auth header is present.
+# auth_url = "https://auth.example.com/validate"
+# upstream_auth_by = "user_key"  # "user_key" (default): forward client's key; "config_key": use configured api_key
+budget_to_effort_low = 32768
+budget_to_effort_medium = 65536
+budget_to_effort_high = 128000
+global_token_limit = "700M 1w"
+
+[default_upstream]
 # `default_base_url` is the *global* upstream endpoint applied **only** to models
 # that are NOT claimed by any `[models.*]` category section — i.e. a model name
 # that falls through every section's exact / wildcard / catch-all lookup gets
@@ -13,11 +25,9 @@ api_key = "test"
 # does neither will fail to resolve at routing time rather than silently
 # inheriting from this global default.
 default_base_url = "https://api.qnaigc.com"
-# default_api_key = "-" # NEVER defined in production.
-budget_to_effort_low = 32768
-budget_to_effort_medium = 65536
-budget_to_effort_high = 128000
-global_token_limit = "700M 1w"
+# default_api_key = "sk-..."  # In user_key mode (default): fallback for [models.free] and models
+                               # with no configured key. In config_key mode: used for all models.
+                               # Typically left unset in production.
 
 [models.claude]
 # For the `claude` model category:

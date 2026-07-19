@@ -168,7 +168,7 @@ server.listen(port, '0.0.0.0', async () => {
         const cfg = loadProxyConfigFromPath(configPath);
         const durationDays = (d: string): number => Math.ceil(getWindowMs(d as '1h' | '1d' | '1w' | '1m') / (24 * 60 * 60 * 1000));
         let maxDays = 7; // 7d heatmap baseline
-        const globalRaw = cfg.upstream?.global_token_limit;
+        const globalRaw = cfg.general?.global_token_limit;
         if (globalRaw) {
           const parsed = parseHumanTokenLimit(globalRaw.trim());
           if (parsed) maxDays = Math.max(maxDays, durationDays(parsed.duration));

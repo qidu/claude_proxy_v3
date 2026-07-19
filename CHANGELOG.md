@@ -7,6 +7,47 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### `[general]` section; `[upstream]` renamed to `[default_upstream]`; `upstream_auth_by` and `auth_url`
+
+Three related config-layer changes landed together.
+
+**`[upstream]` → `[default_upstream]`**
+
+The TOML section that holds global upstream defaults (`default_base_url`,
+`default_api_key`, `upstream_mode`) is renamed from `[upstream]` to
+`[default_upstream]` to make its scope clearer — it applies only to models
+that fall through every `[models.*]` section. Existing configs must rename
+the section header; all other keys inside it are unchanged.
+
+**New `[general]` section**
+
+A top-level `[general]` section collects settings that are not tied to a
+specific upstream:
+
+- `global_token_limit` and `budget_to_effort_low/medium/high` (previously
+  in `[upstream]`) have moved here.
+- `auth_url` (optional): if set, the proxy validates every inbound auth
+  header by forwarding it (plus `User-Agent`) to this URL via `GET`. HTTP
+  200 (or a 301/302 chain that resolves to 200) = success; any 4xx/5xx
+  = 401 to the client; network error = 503.
+- `upstream_auth_by` (optional, default `"user_key"`): controls which
+  credentials the proxy sends to the upstream provider.
+
+**`upstream_auth_by`**
+
+| Value | Behaviour |
+|:------|:----------|
+| `"user_key"` *(default)* | Caller's auth header is forwarded upstream for all sections except `[models.free]`, which always uses its configured key. Unchanged from prior behaviour. |
+| `"config_key"` | Configured `api_key` wins for every section — per-entry → section → `[default_upstream] default_api_key`. Callers can still send a key (needed for the `auth_url` validation step) but it is not forwarded upstream. |
+
+`config_key` is intended for shared-gateway deployments where callers must
+not supply their own upstream credentials.
+
+**Files changed:** `proxy_config.toml`, `proxy_config.toml_example`,
+`src/utils/config-loader.ts` (interface + TOML parser + Consul loader +
+serializer), `src/index.ts` (five auth-header sites), `src/server.ts`,
+`src/tui.ts`, `src/handlers/dashboard.ts`, `README.md`.
+
 ### Privacy filter: local hash-only mode (no sidecar)
 
 The proxy now ports the entropy-based hash/API-key scanner from

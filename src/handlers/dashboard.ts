@@ -1970,13 +1970,13 @@ export async function handleDashboardTestModel(
       // fall back to the proxy-wide default. The proxy's auth check just
       // needs any non-empty value, and this same key is what the upstream
       // call will use.
-      testApiKey = proxyConfig.upstream?.default_api_key;
+      testApiKey = proxyConfig.default_upstream?.default_api_key;
     } else {
       // Use getModelRouteConfig to correctly resolve the per-model mode (e.g. mode = "anthropic-messages"
       // on an entry inside models.free which has upstream_mode = "openai-completions").
       const route = getModelRouteConfig(modelId, proxyConfig);
       upstreamMode = route.upstreamMode;
-      testApiKey = route.apiKey || proxyConfig.upstream?.default_api_key;
+      testApiKey = route.apiKey || proxyConfig.default_upstream?.default_api_key;
     }
 
     const requestBody = buildTestToolRequest(upstreamMode);

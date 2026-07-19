@@ -16,14 +16,18 @@ const isNodeEnvironment = (typeof process !== 'undefined' && process.versions?.n
                           (typeof globalThis !== 'undefined' && (globalThis as any).process?.versions?.node);
 
 export interface ProxyConfig {
-  upstream?: {
-    upstream_mode?: string;
-    default_base_url?: string;
-    default_api_key?: string;
+  general?: {
+    auth_url?: string;
+    upstream_auth_by?: 'user_key' | 'config_key';
     budget_to_effort_low?: number | string;
     budget_to_effort_medium?: number | string;
     budget_to_effort_high?: number | string;
     global_token_limit?: string;
+  };
+  default_upstream?: {
+    upstream_mode?: string;
+    default_base_url?: string;
+    default_api_key?: string;
   };
   models?: Record<string, ModelCategoryConfig | ModelArrayConfig>;
   composite?: Record<string, CompositeModelConfig>;
@@ -216,14 +220,14 @@ function resolveModelRouteFromEntry(
   sectionName?: string,
 ): ModelRouteConfig {
   const categoryUpstreamMode = categoryConfig.upstream_mode ||
-                               proxyConfig.upstream?.upstream_mode ||
+                               proxyConfig.default_upstream?.upstream_mode ||
                                'openai-completions';
   const categoryBaseUrl = categoryConfig.base_url ||
-                          proxyConfig.upstream?.default_base_url ||
+                          proxyConfig.default_upstream?.default_base_url ||
                           'http://localhost';
 
   const categoryApiKey = categoryConfig.api_key ||
-                        proxyConfig.upstream?.default_api_key;
+                        proxyConfig.default_upstream?.default_api_key;
 
   if (Array.isArray(modelEntry)) {
     const [modelAlias, modelBaseUrl, modelApiKey, modelMode] = modelEntry;
@@ -418,14 +422,14 @@ function getDefaultModelRoute(proxyConfig: ProxyConfig): ModelRouteConfig {
   const defaultCategory = proxyConfig.models?.default;
   const defaultCategoryConfig = defaultCategory && !Array.isArray(defaultCategory) ? defaultCategory : undefined;
   const defaultMode = defaultCategoryConfig?.upstream_mode ||
-                     proxyConfig.upstream?.upstream_mode ||
+                     proxyConfig.default_upstream?.upstream_mode ||
                      'openai-completions';
   const defaultBaseUrl = defaultCategoryConfig?.base_url ||
-                        proxyConfig.upstream?.default_base_url ||
+                        proxyConfig.default_upstream?.default_base_url ||
                         'http://localhost';
 
   const defaultApiKey = defaultCategoryConfig?.api_key ||
-                       proxyConfig.upstream?.default_api_key;
+                       proxyConfig.default_upstream?.default_api_key;
 
   return {
     targetUrl: defaultBaseUrl,
@@ -777,10 +781,17 @@ function applyConsulKvEntry(config: ProxyConfig, entry: ConsulKvEntry): void {
   const rawValue = decodeBase64(entry.Value).trim();
   const section = parts[0];
 
-  if (section === 'upstream' && parts.length >= 2) {
-    config.upstream ??= {};
+  if (section === 'general' && parts.length >= 2) {
+    config.general ??= {};
     const key = parts.slice(1).join('/');
-    (config.upstream as any)[key] = parseConsulScalarValue(rawValue);
+    (config.general as any)[key] = parseConsulScalarValue(rawValue);
+    return;
+  }
+
+  if (section === 'default_upstream' && parts.length >= 2) {
+    config.default_upstream ??= {};
+    const key = parts.slice(1).join('/');
+    (config.default_upstream as any)[key] = parseConsulScalarValue(rawValue);
     return;
   }
 
@@ -1661,9 +1672,15 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
 export function serializeProxyConfigToml(config: ProxyConfig): string {
   const lines: string[] = [];
 
-  if (config.upstream) {
-    lines.push('[upstream]');
-    lines.push(...serializeTomlSection(config.upstream as Record<string, unknown>));
+  if (config.general) {
+    lines.push('[general]');
+    lines.push(...serializeTomlSection(config.general as Record<string, unknown>));
+    lines.push('');
+  }
+
+  if (config.default_upstream) {
+    lines.push('[default_upstream]');
+    lines.push(...serializeTomlSection(config.default_upstream as Record<string, unknown>));
     lines.push('');
   }
 
@@ -1759,8 +1776,8 @@ export function getAllowedHostsFromConfig(config: ProxyConfig): string[] {
   const hosts = new Set<string>();
 
   // [upstream].default_base_url
-  if (config.upstream?.default_base_url) {
-    try { hosts.add(new URL(config.upstream.default_base_url).host); } catch { /* ignore */ }
+  if (config.default_upstream?.default_base_url) {
+    try { hosts.add(new URL(config.default_upstream.default_base_url).host); } catch { /* ignore */ }
   }
 
   // [models.*].base_url and per-model base_url overrides in array entries
@@ -1927,10 +1944,14 @@ export function parseSimpleToml(content: string): ProxyConfig {
       const section = trimmed.slice(1, -1);
       const parts = section.split('.');
       
-      if (parts[0] === 'upstream') {
-        currentSection = 'upstream';
+      if (parts[0] === 'general') {
+        currentSection = 'general';
         currentCategory = null;
-        config.upstream = {};
+        config.general = {};
+      } else if (parts[0] === 'default_upstream') {
+        currentSection = 'default_upstream';
+        currentCategory = null;
+        config.default_upstream = {};
       } else if (parts[0] === 'models') {
         currentSection = 'models';
         currentCategory = parts[1] || null;
@@ -1974,8 +1995,12 @@ export function parseSimpleToml(content: string): ProxyConfig {
       const [, key, , value] = stringMatch;
       const cleanKey = key.trim().replace(/^"|"$/g, '');
 
-      if (currentSection === 'upstream' && config.upstream) {
-        (config.upstream as any)[cleanKey] = normalizeUpstreamThresholdValue(cleanKey, value);
+      if (currentSection === 'general' && config.general) {
+        if (cleanKey === 'auth_url' || cleanKey === 'global_token_limit' || cleanKey === 'upstream_auth_by') {
+          (config.general as any)[cleanKey] = value;
+        }
+      } else if (currentSection === 'default_upstream' && config.default_upstream) {
+        (config.default_upstream as any)[cleanKey] = normalizeUpstreamThresholdValue(cleanKey, value);
       } else if (currentSection === 'models' && currentCategory && config.models) {
         const category = config.models[currentCategory] as ModelCategoryConfig;
         if (cleanKey === 'upstream_mode' || cleanKey === 'base_url' || cleanKey === 'api_key') {
@@ -2090,8 +2115,10 @@ export function parseSimpleToml(content: string): ProxyConfig {
         cleanValue = Number(cleanValue);
       }
 
-      if (currentSection === 'upstream' && config.upstream) {
-        (config.upstream as any)[cleanKey] = normalizeUpstreamThresholdValue(cleanKey, cleanValue);
+      if (currentSection === 'general' && config.general) {
+        (config.general as any)[cleanKey] = normalizeUpstreamThresholdValue(cleanKey, cleanValue);
+      } else if (currentSection === 'default_upstream' && config.default_upstream) {
+        (config.default_upstream as any)[cleanKey] = normalizeUpstreamThresholdValue(cleanKey, cleanValue);
       } else if (currentSection === 'defaults' && config.defaults) {
         (config.defaults as any)[cleanKey] = cleanValue;
       } else if (currentSection === 'privacy_filter' && config.privacy_filter) {
@@ -2367,7 +2394,7 @@ export function toDashboardConfigPayload(config: ProxyConfig): DashboardConfigPa
     schedule: sanitizeScheduleConfig(config.schedule),
     config_errors: (config as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors ?? [],
     config_warnings: (config as unknown as { _validationWarnings?: ConfigValidationError[] })._validationWarnings ?? [],
-    global_token_limit: config.upstream?.global_token_limit,
+    global_token_limit: config.general?.global_token_limit,
   };
 }
 
@@ -2831,12 +2858,12 @@ export function upsertGlobalTokenLimit(
 ): ProxyConfig {
   const nextConfig: ProxyConfig = {
     ...baseConfig,
-    upstream: { ...baseConfig.upstream },
+    general: { ...baseConfig.general },
   };
   if (rawLimit === null || rawLimit.trim() === '') {
-    delete nextConfig.upstream!.global_token_limit;
+    delete nextConfig.general!.global_token_limit;
   } else {
-    nextConfig.upstream!.global_token_limit = normalizeHumanTokenLimit(rawLimit.trim());
+    nextConfig.general!.global_token_limit = normalizeHumanTokenLimit(rawLimit.trim());
   }
   return nextConfig;
 }

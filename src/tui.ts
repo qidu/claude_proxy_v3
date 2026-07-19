@@ -1886,7 +1886,7 @@ class DashboardApp {
     //   gemini-*            -> x-goog-api-key: <key>
     // For composite aliases we fall back to the proxy-wide default_api_key
     // (read from the unsanitized config).
-    const testApiKey = modelConfig?.apiKey || this.proxyConfig?.upstream?.default_api_key;
+    const testApiKey = modelConfig?.apiKey || this.proxyConfig?.default_upstream?.default_api_key;
     const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
     if (testApiKey) {
       Object.assign(authHeaders, formatApiKeyForUpstream(testApiKey, upstreamMode));
@@ -2733,15 +2733,15 @@ function resolveModelTestConfig(
         // Dashboard sanitized format: [target, base_url, mode] (3 elements, mode at index 2)
         const modelMode = (value.length >= 3 ? value[2] : undefined) as string | undefined;
         return {
-          upstreamMode: modelMode || categoryConfig.upstream_mode || config.upstream?.upstream_mode || 'openai-completions',
-          targetUrl: modelBaseUrl || categoryConfig.base_url || config.upstream?.default_base_url || "http://localhost",
-          apiKey: categoryConfig.api_key || config.upstream?.default_api_key,
+          upstreamMode: modelMode || categoryConfig.upstream_mode || config.default_upstream?.upstream_mode || 'openai-completions',
+          targetUrl: modelBaseUrl || categoryConfig.base_url || config.default_upstream?.default_base_url || "http://localhost",
+          apiKey: categoryConfig.api_key || config.default_upstream?.default_api_key,
         };
       }
       return {
-        upstreamMode: categoryConfig.upstream_mode || config.upstream?.upstream_mode || 'openai-completions',
-        targetUrl: categoryConfig.base_url || config.upstream?.default_base_url || "http://localhost",
-        apiKey: categoryConfig.api_key || config.upstream?.default_api_key,
+        upstreamMode: categoryConfig.upstream_mode || config.default_upstream?.upstream_mode || 'openai-completions',
+        targetUrl: categoryConfig.base_url || config.default_upstream?.default_base_url || "http://localhost",
+        apiKey: categoryConfig.api_key || config.default_upstream?.default_api_key,
       };
     }
   }

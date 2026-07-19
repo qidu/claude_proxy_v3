@@ -322,7 +322,7 @@ function isDynamicRoute(path: string): boolean {
 /**
  * Parse fixed route and return target configuration
  * Fixed route: /v1/messages -> /v1/chat/completions
- * Uses [models.default] and [upstream] from proxy_config.toml
+ * Uses [models.default] and [default_upstream] from proxy_config.toml
  */
 function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
   targetUrl: string;
@@ -332,14 +332,14 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
   modelId?: string;
   forceStreaming?: boolean;
 } {
-  // Get default config from [models.default] or [upstream]
+  // Get default config from [models.default] or [default_upstream]
   const defaultCategory = proxyConfig.models?.default;
   const defaultCategoryConfig = defaultCategory && !Array.isArray(defaultCategory) ? defaultCategory : undefined;
   const defaultMode = defaultCategoryConfig?.upstream_mode || 
-                      proxyConfig.upstream?.upstream_mode || 
+                      proxyConfig.default_upstream?.upstream_mode || 
                       'openai-completions';
   const defaultBaseUrl = defaultCategoryConfig?.base_url || 
-                        proxyConfig.upstream?.default_base_url;
+                        proxyConfig.default_upstream?.default_base_url;
 
   // 1. /v1/messages → multiple upstream modes
   if (path === '/v1/messages' || path.startsWith('/v1/messages?')) {
@@ -734,8 +734,8 @@ export default {
     // the body finishes streaming, rather than when the handler returns.
     let releaseActiveRequest: (() => void) | undefined;
 
-    if (!hasLoggedUpstreamConfig && proxyConfig.upstream) {
-      logger.debug(requestId, `Upstream config: \n\tbudget_to_effort_low=${proxyConfig.upstream.budget_to_effort_low}, \n\tbudget_to_effort_medium=${proxyConfig.upstream.budget_to_effort_medium}, \n\tbudget_to_effort_high=${proxyConfig.upstream.budget_to_effort_high}`);
+    if (!hasLoggedUpstreamConfig && proxyConfig.general) {
+      logger.debug(requestId, `General config: \n\tbudget_to_effort_low=${proxyConfig.general?.budget_to_effort_low}, \n\tbudget_to_effort_medium=${proxyConfig.general?.budget_to_effort_medium}, \n\tbudget_to_effort_high=${proxyConfig.general?.budget_to_effort_high}`);
       hasLoggedUpstreamConfig = true;
     }
 
@@ -847,7 +847,7 @@ export default {
         const defaultCategory = proxyConfig.models?.default;
         const defaultCategoryConfig = defaultCategory && !Array.isArray(defaultCategory) ? defaultCategory : undefined;
         const healthBaseUrl = defaultCategoryConfig?.base_url ||
-                             proxyConfig.upstream?.default_base_url;
+                             proxyConfig.default_upstream?.default_base_url;
         const healthUrl = `${healthBaseUrl}/v1/models`;
         const healthAuth = extractAuthHeaders(request);
 
@@ -893,8 +893,43 @@ export default {
         );
       }
 
+      // If auth_url is configured, validate the client's auth headers against it.
+      const authUrl = proxyConfig.general?.auth_url?.trim();
+      if (authUrl) {
+        const authForwardHeaders: Record<string, string> = {};
+        if (authHeader) authForwardHeaders['Authorization'] = authHeader;
+        if (xApiKey) authForwardHeaders['x-api-key'] = xApiKey;
+        if (xGoogApiKey) authForwardHeaders['x-goog-api-key'] = xGoogApiKey;
+        const ua = request.headers.get('user-agent');
+        if (ua) authForwardHeaders['user-agent'] = ua;
+
+        let authStatus: number;
+        try {
+          const authResp = await fetch(authUrl, {
+            method: 'GET',
+            headers: authForwardHeaders,
+            redirect: 'follow',
+          });
+          authStatus = authResp.status;
+        } catch (err) {
+          logger.warn(requestId, `Auth URL fetch failed: ${(err as Error).message}`);
+          return createErrorResponse(new Error('Authentication service unavailable.'), requestId, 503);
+        }
+
+        if (authStatus !== 200) {
+          logger.warn(requestId, `Auth URL rejected request with status ${authStatus} for ${path}`);
+          return createErrorResponse(
+            new Error('Authentication failed.'),
+            requestId,
+            401
+          );
+        }
+      }
+
+      const useConfigKey = proxyConfig.general?.upstream_auth_by === 'config_key';
+
       // Global token limit check: only applies to model API requests, not dashboard/health
-      const globalTokenLimitRaw = proxyConfig.upstream?.global_token_limit;
+      const globalTokenLimitRaw = proxyConfig.general?.global_token_limit;
       if (globalTokenLimitRaw) {
         const parsedGlobal = parseHumanTokenLimit(globalTokenLimitRaw.trim());
         if (parsedGlobal && parsedGlobal.num > 0) {
@@ -1118,9 +1153,9 @@ export default {
                 body: bodyText,
               });
 
-              // Transform auth headers, then override with model-specific api_key if configured
+              // Transform auth headers, then override with model-specific api_key if config_key mode
               modelAuthHeaders = transformAuthHeadersForUpstream(request, upstreamMode || 'openai-completions', path, requestId, env as Record<string, unknown>);
-              if (modelRoute?.apiKey) {
+              if (useConfigKey && modelRoute?.apiKey) {
                 modelAuthHeaders = { ...modelAuthHeaders, ...formatApiKeyForUpstream(modelRoute.apiKey, upstreamMode || 'openai-completions') };
               }
             }
@@ -1200,16 +1235,13 @@ export default {
 
               let candidateAuthHeaders = transformAuthHeadersForUpstream(candidateRequest, route.upstreamMode, path, requestId, env as Record<string, unknown>);
 
-              // Only override with config api_key for free section; user key takes priority for paid sections
-              if (route.section === 'free' && route.apiKey) {
+              if (route.apiKey && (route.section === 'free' || useConfigKey)) {
                 if (route.upstreamMode === 'openai-completions') {
                   if (route.modelAlias) {
-                    const configHeaders = formatApiKeyForUpstream(route.apiKey, route.upstreamMode);
-                    candidateAuthHeaders = { ...candidateAuthHeaders, ...configHeaders };
+                    candidateAuthHeaders = { ...candidateAuthHeaders, ...formatApiKeyForUpstream(route.apiKey, route.upstreamMode) };
                   }
                 } else {
-                  const configHeaders = formatApiKeyForUpstream(route.apiKey, route.upstreamMode);
-                  candidateAuthHeaders = { ...candidateAuthHeaders, ...configHeaders };
+                  candidateAuthHeaders = { ...candidateAuthHeaders, ...formatApiKeyForUpstream(route.apiKey, route.upstreamMode) };
                 }
               }
 
@@ -1378,13 +1410,25 @@ export default {
             upstreamMode = fixedRoute.upstreamMode;
             modelId = fixedRoute.modelId;
             forceStreaming = fixedRoute.forceStreaming || false;
-            
+
             // Recreate request with body
             request = new Request(request.url, {
               method: request.method,
               headers: request.headers,
               body: bodyText,
             });
+
+            // In config_key mode, apply default_upstream.default_api_key for models
+            // that fall through to the default route (no model-specific entry).
+            if (useConfigKey) {
+              const defaultApiKey = proxyConfig.default_upstream?.default_api_key;
+              if (defaultApiKey && upstreamMode) {
+                modelAuthHeaders = {
+                  ...transformAuthHeadersForUpstream(request, upstreamMode, path, requestId, env as Record<string, unknown>),
+                  ...formatApiKeyForUpstream(defaultApiKey, upstreamMode),
+                };
+              }
+            }
           }
         } catch (error) {
           // Re-raise typed proxy errors (e.g. OverLimitError from composite /
@@ -1443,12 +1487,12 @@ export default {
             logger.debug(requestId, `No auth headers found for fixed routing ${upstreamMode}`);
           }
 
-          // For openai-completions upstream in fixed routing, always use client headers
-          // Config API keys should NOT override client headers for openai-completions upstream
-          if (upstreamMode === 'openai-completions') {
-            // Always use transformed client headers for openai-completions upstream
-            // Do NOT use config API key even if present
-            logger.debug(requestId, `Using client API key for openai-completions upstream in fixed routing`);
+          // In config_key mode, override with default_upstream.default_api_key for fixed routing
+          if (useConfigKey) {
+            const defaultApiKey = proxyConfig.default_upstream?.default_api_key;
+            if (defaultApiKey) {
+              modelAuthHeaders = { ...modelAuthHeaders, ...formatApiKeyForUpstream(defaultApiKey, upstreamMode) };
+            }
           }
         }
 
@@ -1485,8 +1529,7 @@ export default {
         });
 
         let candidateAuthHeaders = transformAuthHeadersForUpstream(candidateRequest, route.upstreamMode, path, requestId, env as Record<string, unknown>);
-        // Only override with config api_key for free section; user key takes priority for paid sections
-        if (route.section === 'free' && route.apiKey) {
+        if (route.apiKey && (route.section === 'free' || useConfigKey)) {
           if (route.upstreamMode === 'openai-completions') {
             if (route.modelAlias) {
               candidateAuthHeaders = { ...candidateAuthHeaders, ...formatApiKeyForUpstream(route.apiKey, route.upstreamMode) };
@@ -1927,18 +1970,18 @@ export default {
         // through openai-completions and strip thinking → reasoning_effort).
         const conversionOptions: ThinkingConversionOptions = {};
         {
-          const upstream = proxyConfig.upstream;
-          const low = upstream?.budget_to_effort_low;
+          const general = proxyConfig.general;
+          const low = general?.budget_to_effort_low;
           if (low !== undefined && low !== '') {
             const val = parseInt(String(low));
             if (!isNaN(val)) conversionOptions.budget_to_effort_low = val;
           }
-          const medium = upstream?.budget_to_effort_medium;
+          const medium = general?.budget_to_effort_medium;
           if (medium !== undefined && medium !== '') {
             const val = parseInt(String(medium));
             if (!isNaN(val)) conversionOptions.budget_to_effort_medium = val;
           }
-          const high = upstream?.budget_to_effort_high;
+          const high = general?.budget_to_effort_high;
           if (high !== undefined && high !== '') {
             const val = parseInt(String(high));
             if (!isNaN(val)) conversionOptions.budget_to_effort_high = val;
