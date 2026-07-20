@@ -9,6 +9,11 @@ api_key = "test"
 # any 4xx/5xx = 401 to the client; network error = 503. If unset, the proxy
 # only checks that at least one auth header is present.
 # auth_url = "https://auth.example.com/validate"
+# auth_with_model: when true, the auth call is deferred until after the request
+# body is parsed, and the requested model id is forwarded as x-resource-for
+# header to the auth server. Allows the auth server to make per-model decisions.
+# Default: false (auth runs before body parsing, no x-resource-for header).
+# auth_with_model = false
 # upstream_auth_by = "user_key"  # "user_key" (default): forward client's key; "config_key": use configured api_key
 budget_to_effort_low = 32768
 budget_to_effort_medium = 65536

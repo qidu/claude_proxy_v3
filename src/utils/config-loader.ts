@@ -18,6 +18,7 @@ const isNodeEnvironment = (typeof process !== 'undefined' && process.versions?.n
 export interface ProxyConfig {
   general?: {
     auth_url?: string;
+    auth_with_model?: boolean;
     upstream_auth_by?: 'user_key' | 'config_key';
     budget_to_effort_low?: number | string;
     budget_to_effort_medium?: number | string;
@@ -1998,6 +1999,8 @@ export function parseSimpleToml(content: string): ProxyConfig {
       if (currentSection === 'general' && config.general) {
         if (cleanKey === 'auth_url' || cleanKey === 'global_token_limit' || cleanKey === 'upstream_auth_by') {
           (config.general as any)[cleanKey] = value;
+        } else if (cleanKey === 'auth_with_model') {
+          (config.general as any)[cleanKey] = value === 'true';
         }
       } else if (currentSection === 'default_upstream' && config.default_upstream) {
         (config.default_upstream as any)[cleanKey] = normalizeUpstreamThresholdValue(cleanKey, value);
@@ -2110,13 +2113,18 @@ export function parseSimpleToml(content: string): ProxyConfig {
       const cleanKey = key.trim();
       let cleanValue: string | number = value.trim();
 
-      // Try to parse as number
-      if (!isNaN(Number(cleanValue)) && cleanValue !== '') {
-        cleanValue = Number(cleanValue);
+      // Try to parse as boolean or number
+      let cleanValueAny: string | number | boolean = cleanValue;
+      if (cleanValue === 'true') {
+        cleanValueAny = true;
+      } else if (cleanValue === 'false') {
+        cleanValueAny = false;
+      } else if (!isNaN(Number(cleanValue)) && cleanValue !== '') {
+        cleanValueAny = Number(cleanValue);
       }
 
       if (currentSection === 'general' && config.general) {
-        (config.general as any)[cleanKey] = normalizeUpstreamThresholdValue(cleanKey, cleanValue);
+        (config.general as any)[cleanKey] = typeof cleanValueAny === 'boolean' ? cleanValueAny : normalizeUpstreamThresholdValue(cleanKey, cleanValueAny as string | number);
       } else if (currentSection === 'default_upstream' && config.default_upstream) {
         (config.default_upstream as any)[cleanKey] = normalizeUpstreamThresholdValue(cleanKey, cleanValue);
       } else if (currentSection === 'defaults' && config.defaults) {

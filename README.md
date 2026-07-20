@@ -84,6 +84,9 @@ A minimal `proxy_config.toml` looks like this:
                                    # "config_key": use configured api_key for every section,
                                    #   falling back to [default_upstream].default_api_key.
 # auth_url = "https://auth.example.com/validate"  # if set, validate caller's key here first
+# auth_with_model = false          # when true, defers the auth_url call until after body
+                                   # parsing and forwards the requested model id as
+                                   # x-resource-for header (allows per-model auth decisions)
 
 # Global upstream defaults — applied ONLY to models that are NOT claimed by
 # any `[models.*]` category section below. A model name that falls through
@@ -667,6 +670,7 @@ environment; on Cloudflare Workers they come from `[vars]` in `wrangler.toml`.
 | Field | Example | Purpose |
 |---|---|---|
 | `auth_url` | `"https://auth.example.com/validate"` | If set, every inbound request's auth headers are validated by a `GET` to this URL before routing. HTTP 200 = pass; 4xx/5xx = 401 to client; network error = 503. |
+| `auth_with_model` | `false` | When `true`, the `auth_url` call is deferred until after the request body is parsed so the requested model id can be forwarded as `x-resource-for` header. Allows the auth server to make per-model decisions. Default: `false` (auth runs before body parsing). |
 | `upstream_auth_by` | `"user_key"` | `"user_key"` (default): forward the caller's key upstream. `"config_key"`: always use the configured `api_key`, ignoring the caller's key for upstream calls. |
 | `global_token_limit` | `"1B 1d"` | Rolling-window token cap across all models. Format: `"<num><K/M/B> <duration>"` where duration is `1h`/`1d`/`1w`/`1m`. Returns HTTP 429 when exceeded. |
 | `budget_to_effort_low` | `32768` | Thinking-budget threshold (tokens) below which `reasoning_effort: "low"` is emitted for upstreams that use effort levels instead of token budgets. |

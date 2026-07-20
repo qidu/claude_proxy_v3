@@ -894,14 +894,19 @@ export default {
       }
 
       // If auth_url is configured, validate the client's auth headers against it.
+      // When auth_with_model is true, defer the auth call until after body parsing
+      // so the requested model id can be forwarded as x-resource-for.
       const authUrl = proxyConfig.general?.auth_url?.trim();
-      if (authUrl) {
+      const authWithModel = proxyConfig.general?.auth_with_model === true;
+      const doAuthRequest = async (modelNameForAuth?: string): Promise<Response | null> => {
+        if (!authUrl) return null;
         const authForwardHeaders: Record<string, string> = {};
         if (authHeader) authForwardHeaders['Authorization'] = authHeader;
         if (xApiKey) authForwardHeaders['x-api-key'] = xApiKey;
         if (xGoogApiKey) authForwardHeaders['x-goog-api-key'] = xGoogApiKey;
         const ua = request.headers.get('user-agent');
         if (ua) authForwardHeaders['user-agent'] = ua;
+        if (modelNameForAuth) authForwardHeaders['x-resource-for'] = modelNameForAuth;
 
         let authStatus: number;
         try {
@@ -918,12 +923,14 @@ export default {
 
         if (authStatus !== 200) {
           logger.warn(requestId, `Auth URL rejected request with status ${authStatus} for ${path}`);
-          return createErrorResponse(
-            new Error('Authentication failed.'),
-            requestId,
-            401
-          );
+          return createErrorResponse(new Error('Authentication failed.'), requestId, 401);
         }
+        return null;
+      };
+
+      if (authUrl && !authWithModel) {
+        const authError = await doAuthRequest();
+        if (authError) return authError;
       }
 
       const useConfigKey = proxyConfig.general?.upstream_auth_by === 'config_key';
@@ -1122,6 +1129,12 @@ export default {
               logger.debug(requestId, `Schedule routing: ${modelName} -> ${scheduledTarget}`);
               modelName = scheduledTarget;
             }
+          }
+
+          // Deferred auth: when auth_with_model is true, run auth after model is known.
+          if (authUrl && authWithModel) {
+            const authError = await doAuthRequest(modelName);
+            if (authError) return authError;
           }
 
           // Passthrough for /v1/chat/completions: use fixed routing but extract model name for stats.
@@ -1464,6 +1477,12 @@ export default {
         // Auth headers forwarded as-is for dynamic routes
         modelAuthHeaders = authHeaders;
       } else {
+        // Deferred auth for non-body-parsed paths: no model available, auth without x-resource-for.
+        if (authUrl && authWithModel) {
+          const authError = await doAuthRequest();
+          if (authError) return authError;
+        }
+
         // Fixed routing: /v1/messages -> /v1/chat/completions
         const fixedRoute = parseFixedRoute(path, proxyConfig, env);
         targetUrl = fixedRoute.targetUrl;
