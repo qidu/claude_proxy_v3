@@ -127,7 +127,9 @@ Recognised full-endpoint markers (case-insensitive):
 - `/v1/messages`, `/anthropic/messages` (anthropic-messages)
 - `/v1/chat/completions`, `/v1/interactions` (openai-completions / interactions)
 - `/v1/responses`, `/openai/responses` (openai-responses, including Azure)
-- `/v1beta/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens`
+- `/v1beta/models/{model}:generateContent`, `/v1/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens`
+
+Gemini `base_url` can also stop at the API version or models collection, such as `https://generativelanguage.googleapis.com/v1beta` or `https://generativelanguage.googleapis.com/v1beta/models`; the proxy appends `{model}:generateContent` without duplicating `/v1beta` or `/models`.
 
 For example, a model configured with `base_url = "https://api.anthropic.com/v1/messages"` and `upstream_mode = "anthropic-messages"` will forward `/v1/messages` requests to that exact URL, rather than `https://api.anthropic.com/v1/messages/v1/messages`.
 

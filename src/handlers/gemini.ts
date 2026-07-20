@@ -254,13 +254,14 @@ async function handleGeminiInteractionsRequest(
 
     activeLogger.debug(requestId, `Using auth headers: ${Object.keys(geminiHeaders).join(', ')}`);
     geminiHeaders = addForwardedHeaders(geminiHeaders, request);
-    const response = await fetch(targetUrl, {
+    const fullTargetUrl = constructGeminiUrl(targetUrl, request, geminiRequest, modelId || requestBody.model as string | undefined);
+    const response = await fetch(fullTargetUrl, {
         method: 'POST',
         headers: geminiHeaders,
         body: JSON.stringify(geminiRequest),
         signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
-    
+
     activeLogger.debug(requestId, `Response status: ${response.status}`);
     recordResponseStatusCodeFromUpstream(response.status);
 
@@ -268,7 +269,7 @@ async function handleGeminiInteractionsRequest(
         const errorText = await response.text();
         activeLogger.error(requestId, `Gemini API error: ${errorText}`);
         const bodyPreview = JSON.stringify(geminiRequest).substring(0, 1000);
-        handleTargetApiError(response, 'Gemini API', { url: targetUrl, body: bodyPreview, upstreamBody: errorText });
+        handleTargetApiError(response, 'Gemini API', { url: fullTargetUrl, body: bodyPreview, upstreamBody: errorText });
     }
     
     // Handle streaming response
@@ -702,19 +703,27 @@ function determineGeminiEndpoint(request: Request, geminiRequest: Record<string,
  */
 function constructGeminiUrl(targetUrl: string, request: Request, geminiRequest: Record<string, unknown>, effectiveModelId?: string): string {
     // Extract model from targetUrl if it contains :generateContent
-    const urlMatch = targetUrl.match(/\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
+    const urlMatch = targetUrl.match(/\/(v1beta|v1)\/models\/([^:?]+):(stream)?[Gg]enerateContent/);
     if (urlMatch) {
-        // URL already contains model and endpoint, reconstruct with correct base
-        const urlModel = urlMatch[1];
-        const isStream = urlMatch[2] === 'stream';
+        // URL already contains model and endpoint, reconstruct with the same API version
+        const apiVersion = urlMatch[1];
+        const urlModel = urlMatch[2];
+        const isStream = urlMatch[3] === 'stream';
         const endpoint = isStream ? 'streamGenerateContent' : 'generateContent';
         const queryString = targetUrl.includes('?') ? targetUrl.substring(targetUrl.indexOf('?')) : '';
-        // Remove the path part and reconstruct with /v1/models/
-        const baseOnly = targetUrl.split('/v1')[0].split('/models')[0];
-        return `${baseOnly}/v1/models/${urlModel}:${endpoint}${queryString}`;
+        const baseOnly = targetUrl.split(`/${apiVersion}/models`)[0];
+        return `${baseOnly}/${apiVersion}/models/${urlModel}:${endpoint}${queryString}`;
     } else {
-        // Need to add endpoint
-        return `${targetUrl}${determineGeminiEndpoint(request, geminiRequest, effectiveModelId)}`;
+        // Need to add endpoint. /v1/responses and /v1/interactions pass targetUrl as .../v1beta;
+        // /v1/messages may pass .../v1beta/models.
+        const model = effectiveModelId || (geminiRequest.model as string) || 'gemini-no-id-at-proxy';
+        const normalizedTargetUrl = targetUrl.replace(/\/$/, '');
+        const endpoint = normalizedTargetUrl.match(/\/(v1beta|v1)$/)
+            ? `/models/${model}:generateContent`
+            : normalizedTargetUrl.match(/\/(v1beta|v1)\/models$/)
+                ? `/${model}:generateContent`
+                : determineGeminiEndpoint(request, geminiRequest, effectiveModelId);
+        return `${normalizedTargetUrl}${endpoint}`;
     }
 }
 

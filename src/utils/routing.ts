@@ -274,6 +274,11 @@ export function buildUpstreamUrl(baseUrl: string, suffix: string): string {
     }
   }
 
+  const suffixMatch = suffix.match(/^(v1beta|v1)\/(.*)$/i);
+  if (suffixMatch && lowerBase.match(new RegExp(`/${suffixMatch[1].toLowerCase()}/?$`))) {
+    return `${baseUrl.replace(/\/$/, '')}/${suffixMatch[2]}`;
+  }
+
   // Defensive: exact suffix already present — don't duplicate.
   if (lowerBase.includes(`/${suffix.toLowerCase()}`)) {
     return baseUrl;

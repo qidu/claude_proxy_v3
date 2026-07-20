@@ -415,7 +415,10 @@ inheritance chain — anything left empty falls back to the level above:
 > `.../v1/messages/v1/messages`. Recognised full-endpoint markers (case-insensitive):
 > `/v1/messages`, `/anthropic/messages`, `/v1/chat/completions`, `/chat/completions`, `/v1/interactions`,
 > `/v1/responses`, `/openai/responses`, and
-> `/v1beta/models/{model}:generateContent` (`:streamGenerateContent`, `:countTokens`).
+> `/v1beta/models/{model}:generateContent` or `/v1/models/{model}:generateContent`
+> (`:streamGenerateContent`, `:countTokens`). For Gemini, `base_url` may also end
+> at the API version or models collection (for example `/v1beta` or `/v1beta/models`);
+> the proxy appends the model endpoint without duplicating the version path.
 
 
 **Who wins — caller's key vs. configured `api_key`** — controlled by `[general] auth_passthrough_with`:

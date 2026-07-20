@@ -189,6 +189,34 @@ describe('buildUpstreamUrl', () => {
     );
   });
 
+  it('does not duplicate version for Gemini generateContent suffixes', () => {
+    assert.equal(
+      buildUpstreamUrl('https://generativelanguage.googleapis.com/v1beta', 'v1beta/models/gemini-pro:generateContent'),
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent'
+    );
+  });
+
+  it('does not duplicate version for Gemini streamGenerateContent suffixes', () => {
+    assert.equal(
+      buildUpstreamUrl('https://generativelanguage.googleapis.com/v1beta', 'v1beta/models/gemini-pro:streamGenerateContent?alt=sse'),
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:streamGenerateContent?alt=sse'
+    );
+  });
+
+  it('does not duplicate version for Gemini countTokens suffixes', () => {
+    assert.equal(
+      buildUpstreamUrl('https://generativelanguage.googleapis.com/v1beta', 'v1beta/models/gemini-pro:countTokens'),
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:countTokens'
+    );
+  });
+
+  it('keeps matching Gemini API versions when base is already versioned', () => {
+    assert.equal(
+      buildUpstreamUrl('https://generativelanguage.googleapis.com/v1', 'v1/models/gemini-pro:generateContent'),
+      'https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent'
+    );
+  });
+
   it('performs case-insensitive matching', () => {
     assert.equal(
       buildUpstreamUrl('https://api.example.com/V1/Messages', 'v1/messages'),
