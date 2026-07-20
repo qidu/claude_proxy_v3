@@ -19,7 +19,7 @@ export interface ProxyConfig {
   general?: {
     auth_url?: string;
     auth_with_model?: boolean;
-    upstream_auth_by?: 'user_key' | 'config_key';
+    auth_passthrough_with?: 'user_key' | 'config_key';
     budget_to_effort_low?: number | string;
     budget_to_effort_medium?: number | string;
     budget_to_effort_high?: number | string;
@@ -1997,7 +1997,7 @@ export function parseSimpleToml(content: string): ProxyConfig {
       const cleanKey = key.trim().replace(/^"|"$/g, '');
 
       if (currentSection === 'general' && config.general) {
-        if (cleanKey === 'auth_url' || cleanKey === 'global_token_limit' || cleanKey === 'upstream_auth_by') {
+        if (cleanKey === 'auth_url' || cleanKey === 'global_token_limit' || cleanKey === 'auth_passthrough_with') {
           (config.general as any)[cleanKey] = value;
         } else if (cleanKey === 'auth_with_model') {
           (config.general as any)[cleanKey] = value === 'true';

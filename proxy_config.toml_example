@@ -4,17 +4,20 @@
 api_key = "test"
 
 [general]
-# auth_url: if set, proxy forwards Authorization/x-api-key/x-goog-api-key and
-# User-Agent headers to this URL (GET, follows 301/302). HTTP 200 = success;
-# any 4xx/5xx = 401 to the client; network error = 503. If unset, the proxy
-# only checks that at least one auth header is present.
+# auth_url: if set, proxy forwards the request auth headers used by proxy API
+# endpoints (Authorization, x-api-key, x-goog-api-key) plus User-Agent to this
+# URL (GET, follows 301/302). HTTP 200 = success; any 4xx/5xx = 401 to the
+# client; network error = 503. If unset, the proxy only checks that at least
+# one auth header is present.
 # auth_url = "https://auth.example.com/validate"
 # auth_with_model: when true, the auth call is deferred until after the request
 # body is parsed, and the requested model id is forwarded as x-resource-for
 # header to the auth server. Allows the auth server to make per-model decisions.
 # Default: false (auth runs before body parsing, no x-resource-for header).
 # auth_with_model = false
-# upstream_auth_by = "user_key"  # "user_key" (default): forward client's key; "config_key": use configured api_key
+# auth_passthrough_with is separate from auth_url/auth_with_model: it only controls
+# which key is passed to the upstream provider, not the remote auth sidecar server.
+# auth_passthrough_with = "user_key"  # "user_key" (default): forward client's key; "config_key": use configured api_key
 budget_to_effort_low = 32768
 budget_to_effort_medium = 65536
 budget_to_effort_high = 128000

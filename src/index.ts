@@ -933,7 +933,7 @@ export default {
         if (authError) return authError;
       }
 
-      const useConfigKey = proxyConfig.general?.upstream_auth_by === 'config_key';
+      const useConfigKey = proxyConfig.general?.auth_passthrough_with === 'config_key';
 
       // Global token limit check: only applies to model API requests, not dashboard/health
       const globalTokenLimitRaw = proxyConfig.general?.global_token_limit;

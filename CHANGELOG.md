@@ -7,7 +7,7 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
-### `[general]` section; `[upstream]` renamed to `[default_upstream]`; `upstream_auth_by` and `auth_url`
+### `[general]` section; `[upstream]` renamed to `[default_upstream]`; `auth_passthrough_with` and `auth_url`
 
 Three related config-layer changes landed together.
 
@@ -30,10 +30,10 @@ specific upstream:
   header by forwarding it (plus `User-Agent`) to this URL via `GET`. HTTP
   200 (or a 301/302 chain that resolves to 200) = success; any 4xx/5xx
   = 401 to the client; network error = 503.
-- `upstream_auth_by` (optional, default `"user_key"`): controls which
+- `auth_passthrough_with` (optional, default `"user_key"`): controls which
   credentials the proxy sends to the upstream provider.
 
-**`upstream_auth_by`**
+**`auth_passthrough_with`**
 
 | Value | Behaviour |
 |:------|:----------|
