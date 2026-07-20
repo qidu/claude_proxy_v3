@@ -171,6 +171,16 @@ function convertGeminiGenerateContentToOpenAI(geminiRequest: Record<string, unkn
   throw new Error('Invalid Gemini generateContent request format');
 }
 
+function defaultMissingOpenAIMessageRoles(openaiRequest: Record<string, unknown>): void {
+  if (!Array.isArray(openaiRequest.messages)) return;
+
+  openaiRequest.messages = openaiRequest.messages.map(message => {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return message;
+    const msg = message as Record<string, unknown>;
+    return msg.role == null ? { ...msg, role: 'user' } : msg;
+  });
+}
+
 function openAIContentToText(content: OpenAIContent | null | undefined): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -755,6 +765,10 @@ export async function handleOpenAIRequest(
     if (forceStreaming || isStreamRequest) {
       openaiRequest.stream = true;
       isStreaming = true;
+    }
+
+    if (isGeminiEndpoint && (!upstreamMode || upstreamMode === 'openai-completions')) {
+      defaultMissingOpenAIMessageRoles(openaiRequest);
     }
 
     // Cross-mode routes: re-target the converted Completions body to a different
