@@ -6,6 +6,8 @@ import { createGeminiStreamTransformer } from '../../src/converters/gemini-strea
 import { extractTokenCounts } from '../../src/converters/openai-to-claude.js';
 import { countClaudeRequestTokens } from '../../src/utils/token-counting.js';
 import { handleMessagesRequest } from '../../src/handlers/messages.js';
+import { createUsageTrackingTransformStream } from '../../src/utils/dashboard-stats.js';
+import { buildModelUsageRecordPayload, recordModelUsageToRemote } from '../../src/utils/model-usage-recorder.js';
 
 async function streamToText(stream: ReadableStream<Uint8Array>): Promise<string> {
   const reader = stream.getReader();
@@ -127,6 +129,80 @@ describe('streaming usage propagation', () => {
     assert.equal(messageDelta.usage.input_tokens, 13);
     assert.equal(messageDelta.usage.output_tokens, 8);
     assert.equal(messageDelta.usage.cache_read_input_tokens, 5);
+  });
+});
+
+describe('remote usage recording', () => {
+  it('builds payload with raw user key and all token counters', () => {
+    const payload = buildModelUsageRecordPayload('req-1', '/v1/messages', 'sk-user', 'claude-test', {
+      input_tokens: 11,
+      cached_tokens: 3,
+      cache_written_tokens: 5,
+      output_tokens: 7,
+      total_tokens: 26,
+    });
+
+    assert.equal(payload.request_id, 'req-1');
+    assert.equal(payload.endpoint, '/v1/messages');
+    assert.equal(payload.user_key, 'sk-user');
+    assert.equal(payload.model, 'claude-test');
+    assert.equal(payload.input_tokens, 11);
+    assert.equal(payload.cached_tokens, 3);
+    assert.equal(payload.cache_written_tokens, 5);
+    assert.equal(payload.output_tokens, 7);
+    assert.equal(payload.total_tokens, 26);
+    assert.match(payload.timestamp, /^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('posts payload only when record_url is configured', async () => {
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string; headers: Record<string, string>; body: any }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        headers: init?.headers as Record<string, string>,
+        body: JSON.parse(init?.body as string),
+      });
+      return new Response('{}', { status: 204 });
+    }) as typeof fetch;
+
+    try {
+      const payload = buildModelUsageRecordPayload('req-2', '/v1/messages', 'sk-user', 'gpt-test', { total_tokens: 9 });
+      recordModelUsageToRemote(undefined, payload);
+      recordModelUsageToRemote('http://collector.test/usage', payload, undefined, 'one-time-token');
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].url, 'http://collector.test/usage');
+      assert.equal(calls[0].headers.access_token, 'one-time-token');
+      assert.equal(calls[0].body.user_key, 'sk-user');
+      assert.equal(calls[0].body.total_tokens, 9);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('invokes streaming usage callback with final counters', async () => {
+    let captured: any;
+    const input = sseStream([
+      'event: message_start',
+      'data: {"message":{"usage":{"input_tokens":10,"cache_read_input_tokens":4,"cache_creation_input_tokens":2}}}',
+      '',
+      'event: message_delta',
+      'data: {"usage":{"output_tokens":6}}',
+      '',
+      '',
+    ].join('\n'));
+
+    await streamToText(input.pipeThrough(createUsageTrackingTransformStream('claude-test', undefined, usage => {
+      captured = usage;
+    })));
+
+    assert.equal(captured.input_tokens, 10);
+    assert.equal(captured.cached_tokens, 4);
+    assert.equal(captured.cache_written_tokens, 2);
+    assert.equal(captured.output_tokens, 6);
+    assert.equal(captured.total_tokens, 22);
   });
 });
 

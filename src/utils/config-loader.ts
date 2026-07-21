@@ -39,6 +39,9 @@ export interface ProxyConfig {
   dashboard?: {
     api_key?: string;
   };
+  model_usage?: {
+    record_url?: string;
+  };
   /**
    * Privacy filter plugin configuration. When omitted, the plugin is inert
    * (no env-var sidecar URL set either).
@@ -1691,6 +1694,12 @@ export function serializeProxyConfigToml(config: ProxyConfig): string {
     lines.push('');
   }
 
+  if (config.model_usage) {
+    lines.push('[model_usage]');
+    lines.push(...serializeTomlSection(config.model_usage as Record<string, unknown>));
+    lines.push('');
+  }
+
   if (config.models) {
     for (const [categoryName, categoryConfig] of Object.entries(config.models)) {
       if (Array.isArray(categoryConfig)) {
@@ -1976,6 +1985,10 @@ export function parseSimpleToml(content: string): ProxyConfig {
         currentSection = 'dashboard';
         currentCategory = null;
         config.dashboard = {};
+      } else if (parts[0] === 'model_usage') {
+        currentSection = 'model_usage';
+        currentCategory = null;
+        config.model_usage = {};
       } else if (parts[0] === 'privacy_filter') {
         currentSection = 'privacy_filter';
         currentCategory = null;
@@ -2015,6 +2028,8 @@ export function parseSimpleToml(content: string): ProxyConfig {
         (config.defaults as any)[cleanKey] = value;
       } else if (currentSection === 'dashboard' && config.dashboard && cleanKey === 'api_key') {
         config.dashboard.api_key = value;
+      } else if (currentSection === 'model_usage' && config.model_usage && cleanKey === 'record_url') {
+        config.model_usage.record_url = value;
       } else if (currentSection === 'privacy_filter' && config.privacy_filter) {
         // filter_mode, filter_url, whitelist_file are stored as strings;
         // numeric thresholds are coerced in the unquoted branch below.
@@ -2130,13 +2145,13 @@ export function parseSimpleToml(content: string): ProxyConfig {
       } else if (currentSection === 'defaults' && config.defaults) {
         (config.defaults as any)[cleanKey] = cleanValue;
       } else if (currentSection === 'privacy_filter' && config.privacy_filter) {
-        if (typeof cleanValue === 'number') {
+        if (typeof cleanValueAny === 'number') {
           if (cleanKey === 'entropy_threshold' || cleanKey === 'max_chars' || cleanKey === 'timeout_ms' || cleanKey === 'hash_min_len') {
-            (config.privacy_filter as any)[cleanKey] = cleanValue;
+            (config.privacy_filter as any)[cleanKey] = cleanValueAny;
           }
-        } else if (typeof cleanValue === 'string') {
+        } else if (typeof cleanValueAny === 'string') {
           if (cleanKey === 'filter_mode' || cleanKey === 'filter_url' || cleanKey === 'whitelist_file') {
-            (config.privacy_filter as any)[cleanKey] = cleanValue;
+            (config.privacy_filter as any)[cleanKey] = cleanValueAny;
           }
         }
       }

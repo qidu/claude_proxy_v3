@@ -79,6 +79,7 @@ import {
 } from './utils/privacy-filter.js';
 import { getKompressConfig, shouldCompressPath, compressBody } from './utils/kompress.js';
 import { eraseBlockedTools } from './utils/tool-blocklist.js';
+import { buildModelUsageRecordPayload, recordModelUsageToRemote } from './utils/model-usage-recorder.js';
 
 let hasLoggedUpstreamConfig = false;
 
@@ -281,6 +282,14 @@ function applyCorsHeaders(response: Response, request: Request, env: Env): Respo
     statusText: response.statusText,
     headers: newHeaders,
   });
+}
+
+function getRawEndpointUserKey(authHeaders: Record<string, string>): string {
+  const authorization = authHeaders['Authorization'] || authHeaders['authorization'];
+  if (authorization) {
+    return authorization.replace(/^Bearer\s+/i, '');
+  }
+  return authHeaders['x-goog-api-key'] || '';
 }
 
 function validateDashboardApiAuth(request: Request, proxyConfig: ProxyConfig): Response | null {
@@ -898,6 +907,7 @@ export default {
       // so the requested model id can be forwarded as x-resource-for.
       const authUrl = proxyConfig.general?.auth_url?.trim();
       const authWithModel = proxyConfig.general?.auth_with_model === true;
+      let modelUsageAccessToken: string | undefined;
       const doAuthRequest = async (modelNameForAuth?: string): Promise<Response | null> => {
         if (!authUrl) return null;
         const authForwardHeaders: Record<string, string> = {};
@@ -906,6 +916,8 @@ export default {
         if (xGoogApiKey) authForwardHeaders['x-goog-api-key'] = xGoogApiKey;
         const ua = request.headers.get('user-agent');
         if (ua) authForwardHeaders['user-agent'] = ua;
+        authForwardHeaders.request_id = requestId;
+        authForwardHeaders.endpoint = path;
         if (modelNameForAuth) authForwardHeaders['x-resource-for'] = modelNameForAuth;
 
         let authStatus: number;
@@ -916,6 +928,7 @@ export default {
             redirect: 'follow',
           });
           authStatus = authResp.status;
+          modelUsageAccessToken = authResp.headers.get('access_token') || undefined;
         } catch (err) {
           logger.warn(requestId, `Auth URL fetch failed: ${(err as Error).message}`);
           return createErrorResponse(new Error('Authentication service unavailable.'), requestId, 503);
@@ -1045,6 +1058,8 @@ export default {
 
       // Extract authentication headers early
       const authHeaders = extractAuthHeaders(request);
+      const endpointUserKey = getRawEndpointUserKey(authHeaders);
+      const modelUsageRecordUrl = proxyConfig.model_usage?.record_url?.trim();
       let modelAuthHeaders = authHeaders;
 
       // For endpoints that need model-specific routing, extract model from request body
@@ -2090,6 +2105,14 @@ export default {
               const usage = extractUsageFromResponsePayload(payload);
               if (usage) {
                 recordModelUsage(attemptModelId, usage);
+                if (modelUsageRecordUrl) {
+                  recordModelUsageToRemote(
+                    modelUsageRecordUrl,
+                    buildModelUsageRecordPayload(requestId, path, endpointUserKey, attemptModelId, usage),
+                    logger,
+                    modelUsageAccessToken,
+                  );
+                }
                 if (compositeAliasName && usage.total_tokens) {
                   recordCompositeTokenUsage(compositeAliasName, attemptModelId, usage.total_tokens);
                 }
@@ -2103,7 +2126,18 @@ export default {
             // For streaming responses, intercept the SSE stream to capture token usage
             // from Claude SSE events (message_start.usage.input_tokens,
             // message_delta.usage.output_tokens)
-            const usageStream = createUsageTrackingTransformStream(attemptModelId, compositeAliasName);
+            const usageStream = createUsageTrackingTransformStream(
+              attemptModelId,
+              compositeAliasName,
+              modelUsageRecordUrl
+                ? usage => recordModelUsageToRemote(
+                  modelUsageRecordUrl,
+                  buildModelUsageRecordPayload(requestId, path, endpointUserKey, attemptModelId, usage),
+                  logger,
+                  modelUsageAccessToken,
+                )
+                : undefined,
+            );
             const toolStream = createResponseToolTrackingTransformStream((names, agent) => recordUpstreamResponseToolNames(names, agent), attempt.agent);
             response = new Response(response.body!.pipeThrough(usageStream).pipeThrough(toolStream), response);
           }

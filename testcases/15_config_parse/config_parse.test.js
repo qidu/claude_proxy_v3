@@ -526,6 +526,24 @@ whitelist_remove = []         # built-in whitelist tokens to remove
     `whitelist_remove: expected [""], got ${JSON.stringify(pf?.whitelist_remove)}`);
 }
 
+async function testModelUsageRoundTrip() {
+  const cfg = parse(`
+[model_usage]
+record_url = "http://127.0.0.1:8080/model-usage"
+`);
+  assert(
+    cfg.model_usage?.record_url === 'http://127.0.0.1:8080/model-usage',
+    `record_url should parse, got "${cfg.model_usage?.record_url}"`
+  );
+
+  const serialized = serializeProxyConfigToml(cfg);
+  const reparsed = parse(serialized);
+  assert(
+    reparsed.model_usage?.record_url === 'http://127.0.0.1:8080/model-usage',
+    `record_url should survive round-trip, got "${reparsed.model_usage?.record_url}"`
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
@@ -548,6 +566,7 @@ const tests = [
   { name: 'TC1515: array value with trailing inline comment', fn: testInlineCommentOnArray },
   { name: 'TC1516: comment containing quote char does not corrupt string value', fn: testInlineCommentWithQuoteChar },
   { name: 'TC1517: full [privacy_filter] block with inline comments on every line', fn: testPrivacyFilterBlockWithComments },
+  { name: 'TC1518: [model_usage] record_url round-trip', fn: testModelUsageRoundTrip },
 ];
 
 module.exports = {
@@ -568,6 +587,7 @@ module.exports = {
   testInlineCommentOnArray,
   testInlineCommentWithQuoteChar,
   testPrivacyFilterBlockWithComments,
+  testModelUsageRoundTrip,
 };
 
 if (require.main === module) {

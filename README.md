@@ -89,6 +89,11 @@ A minimal `proxy_config.toml` looks like this:
                                        # which key is passed upstream: caller key (default)
                                        # or configured api_key for every section
 
+# Optional: POST model usage records to an HTTP collector.
+# Includes request_id, endpoint, raw user_key, model, and token usage counters.
+# [model_usage]
+# record_url = "http://127.0.0.1:8080/model-usage"
+
 # Global upstream defaults — applied ONLY to models that are NOT claimed by
 # any `[models.*]` category section below. A model name that falls through
 # every section's exact / wildcard / catch-all lookup gets routed here.
@@ -689,6 +694,12 @@ environment; on Cloudflare Workers they come from `[vars]` in `wrangler.toml`.
 | `default_base_url` | `"https://api.example.com"` | Global upstream endpoint fallback when a route has no per-entry or section `base_url`, and for models not claimed by any `[models.*]` section. |
 | `default_api_key` | `"sk-..."` | Global configured-key fallback. In `user_key` mode (default): wins only for `[models.free]`, acts as a fallback for other sections when the caller sends no key. In `config_key` mode: used for all models that have no per-entry or section `api_key`. Typically left unset in production. |
 | `upstream_mode` | `"openai-completions"` | Default protocol for models not claimed by any `[models.*]` section. |
+
+**`[model_usage]` config fields**
+
+| Field | Example | Purpose |
+|---|---|---|
+| `record_url` | `"http://127.0.0.1:8080/model-usage"` | Optional HTTP collector. When set, the proxy POSTs per-request usage records with `request_id`, `endpoint`, raw `user_key`, `model`, and token counters (`input_tokens`, `cached_tokens`, `cache_written_tokens`, `output_tokens`, `total_tokens`). |
 
 **Core / server**
 

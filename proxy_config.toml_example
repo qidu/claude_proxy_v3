@@ -3,6 +3,12 @@
 # If omitted or empty, dashboard APIs remain loopback-only.
 api_key = "test"
 
+[model_usage]
+# Optional: POST per-request model usage records to an HTTP collector.
+# Payload includes request_id, endpoint, raw user_key, model, and token usage
+# counters: input/cached/cache_written/output/total.
+# record_url = "http://127.0.0.1:8080/model-usage"
+
 [general]
 # auth_url: if set, proxy forwards the request auth headers used by proxy API
 # endpoints (Authorization, x-api-key, x-goog-api-key) plus User-Agent to this

@@ -139,6 +139,8 @@ describe('auth_with_model = false (default)', () => {
     const resp = await handler.fetch(makeRequest('claude-sonnet-4-6'), makeEnv(configPath) as any);
     assert.equal(authCalls.length, 1, 'auth must be called once');
     assert.equal(authCalls[0].headers['x-resource-for'], undefined, 'must not send x-resource-for');
+    assert.match(authCalls[0].headers.request_id, /^req_/);
+    assert.equal(authCalls[0].headers.endpoint, '/v1/messages');
     assert.equal(resp.status, 200);
   });
 
@@ -183,6 +185,8 @@ describe('auth_with_model = true', () => {
     const resp = await handler.fetch(makeRequest('claude-sonnet-4-6'), makeEnv(configPath) as any);
     assert.equal(authCalls.length, 1, 'auth must be called once');
     assert.equal(authCalls[0].headers['x-resource-for'], 'claude-sonnet-4-6');
+    assert.match(authCalls[0].headers.request_id, /^req_/);
+    assert.equal(authCalls[0].headers.endpoint, '/v1/messages');
     assert.equal(resp.status, 200);
   });
 

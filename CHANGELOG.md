@@ -7,6 +7,18 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Model usage HTTP recording and auth context headers
+
+The proxy can now optionally POST per-request model usage records to an HTTP collector configured with `[model_usage] record_url`.
+
+- Usage records include `request_id`, `endpoint`, raw `user_key`, `model`, and token counters (`input_tokens`, `cached_tokens`, `cache_written_tokens`, `output_tokens`, `total_tokens`).
+- JSON and streaming responses reuse the existing token accounting path, so both non-streaming usage payloads and final streaming usage chunks are reported.
+- If `auth_url` returns an `access_token` response header, that one-request token is forwarded to `record_url` as an `access_token` request header.
+- Requests to `auth_url` now also include `request_id` and `endpoint` headers, plus the existing auth headers and optional `x-resource-for` when `auth_with_model = true`.
+- `proxy_config.toml_example` and `README.md` document the new optional `[model_usage]` section.
+
+**Files changed:** `src/index.ts`, `src/utils/model-usage-recorder.ts`, `src/utils/config-loader.ts`, `src/utils/dashboard-stats.ts`, `tests/unit/token-usage.test.ts`, `tests/unit/auth-with-model.test.ts`, `testcases/15_config_parse/config_parse.test.js`, `README.md`, `proxy_config.toml_example`.
+
 ### TUI statistics overlay and compact tool names
 
 The proxy TUI now has a `D` hotkey that opens a scrollable statistics overlay,

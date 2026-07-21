@@ -4,7 +4,7 @@ import { dirname } from 'path';
 import { stringify } from './stringify.js';
 import type { TokenLimitDuration } from './config-loader.js';
 
-type UsageStats = {
+export type UsageStats = {
   input_tokens?: number;
   cached_tokens?: number;
   cache_written_tokens?: number;
@@ -1353,6 +1353,7 @@ export function getModelStatsDesc(): ModelStatsEntry[] {
 export function createUsageTrackingTransformStream(
   model: string,
   compositeAlias?: string,
+  onUsage?: (usage: UsageStats) => void,
 ): TransformStream<Uint8Array, Uint8Array> {
   let inputTokens = 0;
   let cachedTokens = 0;
@@ -1461,6 +1462,7 @@ export function createUsageTrackingTransformStream(
           total_tokens: totalTokens > 0 ? totalTokens : (computedTotal > 0 ? computedTotal : undefined),
         };
         recordModelUsage(model, usageObj);
+        onUsage?.(usageObj);
         if (compositeAlias && usageObj.total_tokens) {
           recordCompositeTokenUsage(compositeAlias, model, usageObj.total_tokens);
         }
