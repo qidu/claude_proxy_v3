@@ -7,6 +7,21 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### TUI statistics overlay and compact tool names
+
+The proxy TUI now has a `D` hotkey that opens a scrollable statistics overlay,
+matching the existing overlay style used by `P` Tool Blocklist. The panel shows
+all rows from `Top Models`, `Tools Used`, and `Top Endpoints` instead of the
+main view's first-five-row summaries.
+
+- `Top Models` keeps the full token/accounting column set.
+- `Tools Used` and `Top Endpoints` use their own shorter column sets, with
+  separator lines between modules.
+- Long tool names are compacted in both the statistics overlay and Tool
+  Blocklist panel using a prefix/suffix form to preserve recognizable endings.
+
+**Files changed:** `src/tui.ts`.
+
 ### Token usage propagation across streaming and cache-aware routes
 
 Token accounting is now more complete across transformed streaming routes:

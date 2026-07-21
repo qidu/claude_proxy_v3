@@ -418,8 +418,8 @@ function stripHttps(s: string): string {
   return s.replace(/^https?:\/\//, '');
 }
 
-function frame(title: string, body: string[], width: number): string[] {
-  const boxWidth = Math.min(Math.max(width, 10), 88);
+function frame(title: string, body: string[], width: number, maxWidth = 88): string[] {
+  const boxWidth = Math.min(Math.max(width, 10), maxWidth);
   const inner = Math.max(1, boxWidth - 2);
   const lines: string[] = [];
   lines.push(`┌${'─'.repeat(inner)}┐`);
@@ -485,6 +485,7 @@ class ListOverlay implements Component {
     maxVisible = 8,
     onExtraKey?: (data: string) => boolean,
     layout?: SelectListLayoutOptions,
+    private readonly maxWidth = 78,
   ) {
     // Default layout matches the prior inline config so non-test callers
     // (delete confirms, schedule windows, …) keep their existing column
@@ -519,10 +520,10 @@ class ListOverlay implements Component {
   }
 
   render(width: number): string[] {
-    const innerWidth = Math.max(1, Math.min(width - 2, 76));
+    const innerWidth = Math.max(1, Math.min(width - 2, this.maxWidth));
     const bodyWidth = Math.max(1, innerWidth - 2);
     const listLines = this.list.render(bodyWidth).map((line) => clip(line, bodyWidth));
-    return frame(this.title, [clip(this.subtitle, bodyWidth), ...listLines], innerWidth);
+    return frame(this.title, [clip(this.subtitle, bodyWidth), ...listLines], innerWidth, this.maxWidth);
   }
 }
 
@@ -1018,6 +1019,10 @@ class DashboardView implements Component {
       void this.app.openEditGlobalTokenLimitPrompt();
       return;
     }
+    if (matchesKey(data, 'd') || matchesKey(data, 'shift+d')) {
+      this.app.openStatisticsOverlay();
+      return;
+    }
     if (matchesKey(data, 'p') || matchesKey(data, 'shift+p')) {
       this.app.openToolBlocklistOverlay();
       return;
@@ -1125,7 +1130,7 @@ class DashboardView implements Component {
         lines.push(`  ${dim(row.modelId)} ${tag}${extra}${timingStr}`);
       }
       if (hiddenCount > 0) {
-        lines.push(dim(`  ... +${hiddenCount} more. press`) + ' C' + dim(' expand composite'));
+        lines.push(dim(`  ... +${hiddenCount} more. press`) + ' C' + dim(' to config composite models, alias.'));
       }
     }
     lines.push(`${bold('Top Models')} (${fmt(snap.modelStats.length)})`);
@@ -1155,7 +1160,7 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(`C ${dim('composite & fusion')}  S ${dim('schedule')}  T ${dim('test')}  R ${dim('reload')}  L ${dim('token limit')}  P ${dim('tool block')}  Ctrl+U ${dim('dump usage')}  Ctrl+C ${dim('quit')}`);
+    lines.push(`C ${dim('composite,fusion')}  S ${dim('schedule')}  T ${dim('models test')}  R ${dim('reload')}  L ${dim('token limit')}  D ${dim('stats')}  P ${dim('tools block')}  Ctrl+U ${dim('dump usage')}`);
     lines.push(this.message ? yellow(this.message) : dim('Ready'));
 
     return lines.map((line) => clip(line, width));
@@ -1391,6 +1396,82 @@ class DashboardApp {
     this.requestRender();
   }
 
+  openStatisticsOverlay(): void {
+    const snap = this.viewSnapshot();
+    if (!snap) return;
+
+    const formatStatRow = (name: string, values: string[], columnCount = 7): string => {
+      const cols = [...values, ...Array(Math.max(0, columnCount - values.length)).fill('-')].slice(0, columnCount);
+      return `  ${name.padEnd(30)}${alignRight(cols[0] ?? '-', 5)} ${alignRight(cols[1] ?? '-', 8)}  ${alignRight(cols[2] ?? '-', 8)}${cols[3] !== undefined ? `  ${alignRight(cols[3], 8)}` : ''}${cols[4] !== undefined ? ` ${alignRight(cols[4], 8)}` : ''}${cols[5] !== undefined ? ` ${alignRight(cols[5], 8)}` : ''}${cols[6] !== undefined ? `  ${alignRight(cols[6], 8)}` : ''}`;
+    };
+    const shortToolName = (name: string): string => name.length <= 24 ? name : `${name.slice(0, 3)}...${name.slice(-18)}`;
+    const section = (title: string, count: number): SelectItem => ({
+      value: `${title}\0header`,
+      label: dim(`${title} (${fmt(count)})`),
+    });
+    const separator = (value: string): SelectItem => ({ value, label: dim('─'.repeat(98)) });
+
+    const endpointRows = new Map(snap.requestStats.endpoints.map((row) => [row.endpoint, row]));
+    const items: SelectItem[] = [
+      section('Top Models', snap.modelStats.length),
+      { value: 'models\0columns', label: dim(`  ${'model'.padEnd(32)}req   failed | token in    cached    wrote     out     total`) },
+      ...snap.modelStats.map((row) => ({
+        value: `model\0${row.model}`,
+        label: formatStatRow(row.model.split('/').pop() || row.model, [
+          fmt(row.requests),
+          fmt(row.failed_requests),
+          fmt(row.input_tokens),
+          fmt(row.cached_tokens),
+          fmt(row.cache_written_tokens),
+          fmt(row.output_tokens),
+          fmt(row.total_tokens),
+        ]),
+      })),
+      separator('separator\0tools'),
+      section('Tools Used', (snap.toolStats || []).length),
+      { value: 'tools\0columns', label: dim(`  ${'tool'.padEnd(32)}in req  in resp | total len`) },
+      ...(snap.toolStats || []).map((row) => ({
+        value: `tool\0${row.tool_name}`,
+        label: formatStatRow(shortToolName(row.tool_name), [fmt(row.in_requests), fmt(row.in_responses), fmt(row.in_request_chars)], 3),
+      })),
+      separator('separator\0endpoints'),
+      section('Top Endpoints', snap.requestStats.endpoints.length),
+      { value: 'endpoints\0columns', label: dim(`  ${'endpoint'.padEnd(32)}req   min(s) |   avg(s)   max(s)        -        -        -`) },
+      ...snap.requestStats.endpoint_timings.map((row) => {
+        const requestRow = endpointRows.get(row.endpoint);
+        return {
+          value: `endpoint\0${row.endpoint}`,
+          label: formatStatRow(row.endpoint, [fmt(requestRow?.requests ?? 0), fmtSeconds(row.min_time_ms), fmtSeconds(row.avg_time_ms), fmtSeconds(row.max_time_ms)]),
+        };
+      }),
+    ];
+
+    if (this.overlay) this.hideOverlay();
+    const overlay = new ListOverlay(
+      'Statistics Data',
+      `↑↓ ${dim('move')}  D/Esc ${dim('close')}`,
+      items,
+      () => {},
+      () => {
+        this.hideOverlay();
+        this.requestRender();
+      },
+      20,
+      (data) => {
+        if (matchesKey(data, 'd') || matchesKey(data, 'shift+d')) {
+          this.hideOverlay();
+          this.requestRender();
+          return true;
+        }
+        return false;
+      },
+      undefined,
+      110,
+    );
+    this.overlay = this.tui.showOverlay(overlay, { width: '98%', maxHeight: '70%', anchor: 'center' });
+    this.overlay.focus();
+  }
+
   openToolBlocklistOverlay(): void {
     const snap = this.viewSnapshot();
     if (!snap) return;
@@ -1426,7 +1507,7 @@ class DashboardApp {
     // `selectedText: green(...)` wrap mid-line and break the selected-line
     // highlighting that the Test custom model list gets for free.
     const formatLabel = (item: ToolItem): string => {
-      const name = item.tool_name.slice(-24);
+      const name = item.tool_name.length <= 21 ? item.tool_name : `${item.tool_name.slice(0, 3)}...${item.tool_name.slice(-15)}`;
       return `${isToolBlocked(item.tool_name) ? '✗' : '·'} ${name.padEnd(30)}${formatAgent(item).padEnd(12)}${alignRight(fmt(item.in_requests), 4)} ${alignRight(fmt(item.in_responses), 5)} ${alignRight(fmt(item.in_request_chars), 10)}`;
     };
 
@@ -1452,7 +1533,7 @@ class DashboardApp {
 
     if (this.overlay) this.hideOverlay();
     const overlay = new ListOverlay(
-      'Tool Blocklist',
+      'Tools Statitic and tool blocklist',
       `↑↓ ${dim('move')}  Enter ${dim('toggle block')}  P/Esc ${dim('close')}`,
       items,
       (item) => {
@@ -1762,14 +1843,14 @@ class DashboardApp {
     const subtitle = this.testPickerSubtitle();
     this.hideOverlay();
     const overlay = new ListOverlay(
-      'Test custom model',
+      'Test Custom models and Composite Aliases',
       subtitle,
       allChoices,
       (item) => {
         this.hideOverlay();
         if (item.value === OTHER_MODEL_ID) {
           this.openPrompt(
-            'Test custom model',
+            'Test Custom models and Composite Aliases',
             this.wildcardModelHint('model id'),
             '',
             (value) => {
