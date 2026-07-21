@@ -159,8 +159,10 @@ export function countTokensWithTiktoken(
  * @param options - Counting options
  * @returns Token count for the message
  */
+type CountableContentBlock = Record<string, any> & { type: string };
+
 export function countMessageTokens(
-  message: { role: string; content: string | Array<{ type: string; text?: string }> },
+  message: { role: string; content: string | CountableContentBlock[] },
   options: TokenCountingOptions = DEFAULT_OPTIONS
 ): number {
   let tokenCount = 0;
@@ -183,14 +185,7 @@ export function countMessageTokens(
     }
   } else if (Array.isArray(message.content)) {
     for (const block of message.content) {
-      if (block.type === 'text' && block.text) {
-        if (useTiktoken) {
-          tokenCount += countTokensWithTiktoken(block.text, options);
-        } else {
-          tokenCount += estimateTokenCount(block.text, options);
-        }
-      }
-      // Skip non-text blocks for local counting
+      tokenCount += countContentBlockTokens(block, options);
     }
   }
 
@@ -208,7 +203,7 @@ export function countMessageTokens(
  * @returns Total token count
  */
 export function countMessagesTokens(
-  messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>,
+  messages: Array<{ role: string; content: string | CountableContentBlock[] }>,
   options: TokenCountingOptions = DEFAULT_OPTIONS
 ): number {
   let totalTokens = 0;
@@ -231,7 +226,7 @@ export function countMessagesTokens(
  * @returns Token count for system prompt
  */
 export function countSystemTokens(
-  system: string | Array<{ type: string; text?: string }>,
+  system: string | CountableContentBlock[],
   options: TokenCountingOptions = DEFAULT_OPTIONS
 ): number {
   if (!system) {
@@ -249,16 +244,44 @@ export function countSystemTokens(
 
   let tokenCount = 0;
   for (const block of system) {
-    if (block.type === 'text' && block.text) {
-      if (useTiktoken) {
-        tokenCount += countTokensWithTiktoken(block.text, options);
-      } else {
-        tokenCount += estimateTokenCount(block.text, options);
-      }
-    }
+    tokenCount += countContentBlockTokens(block, options);
   }
 
   return tokenCount;
+}
+
+function countContentBlockTokens(block: CountableContentBlock, options: TokenCountingOptions): number {
+  switch (block.type) {
+    case 'text':
+      return block.text ? countStringTokens(block.text, options) : 0;
+    case 'tool_result': {
+      let content = `tool_result: ${block.tool_use_id ?? ''}`;
+      if (typeof block.content === 'string') {
+        content += `\n${block.content}`;
+        return countStringTokens(content, options);
+      }
+      if (Array.isArray(block.content)) {
+        return countStringTokens(content, options) + block.content.reduce((sum: number, nested: CountableContentBlock) => sum + countContentBlockTokens(nested, options), 0);
+      }
+      return countStringTokens(`${content}\n${JSON.stringify(block.content ?? '')}`, options);
+    }
+    case 'tool_use':
+      return countStringTokens(`tool_use: ${block.id ?? ''}\nname: ${block.name ?? ''}\ninput: ${JSON.stringify(block.input ?? {})}`, options);
+    case 'image': {
+      const source = block.source ?? {};
+      return countStringTokens(`image: ${source.type ?? ''}\nmedia_type: ${source.media_type ?? ''}\nurl: ${source.url ?? ''}\ndata: ${source.data ?? ''}`, options) + 20;
+    }
+    case 'document': {
+      const source = block.source ?? {};
+      return countStringTokens(`document: ${block.title ?? ''}\nmedia_type: ${source.media_type ?? ''}\ntype: ${source.type ?? ''}\ndata: ${source.data ?? ''}`, options) + 10;
+    }
+    case 'thinking':
+      return countStringTokens(`thinking: ${block.thinking ?? ''}\nsignature: ${block.signature ?? ''}`, options);
+    case 'web_search_result':
+      return countStringTokens(`web_search_result: ${JSON.stringify(block)}`, options);
+    default:
+      return countStringTokens(JSON.stringify(block), options);
+  }
 }
 
 /**
@@ -282,8 +305,8 @@ function countStringTokens(text: string, options: TokenCountingOptions): number 
 export function countClaudeRequestTokens(
   requestBody: {
     model?: string;
-    messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
-    system?: string | Array<{ type: string; text?: string }>;
+    messages: Array<{ role: string; content: string | CountableContentBlock[] }>;
+    system?: string | CountableContentBlock[];
     tools?: Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>;
     tool_choice?: { type: string; name?: string };
     thinking?: ThinkingConfigParam;

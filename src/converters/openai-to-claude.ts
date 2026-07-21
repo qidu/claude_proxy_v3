@@ -51,22 +51,24 @@ export async function extractTokenCounts(
     // QNAIGC non-standard format: input, output
     const inputTokens = usage.prompt_tokens ?? usage.input;
     const outputTokens = usage.completion_tokens ?? usage.output;
+    const cacheReadTokens = usage.prompt_cache_hit_tokens ?? usage.input_tokens_details?.cached_tokens;
+    const cacheCreationTokens = usage.prompt_cache_miss_tokens;
 
     // If local token counting is enabled and upstream returned 0 or undefined, use local counting
     if (config?.enabled && (inputTokens === undefined || inputTokens === 0 || outputTokens === undefined || outputTokens === 0)) {
         return {
             input_tokens: await calculateLocalTokens(requestBody, config, 'input'),
             output_tokens: await calculateLocalTokens(requestBody, config, 'output'),
-            cache_creation_input_tokens: usage.prompt_cache_miss_tokens,
-            cache_read_input_tokens: usage.prompt_cache_hit_tokens,
+            cache_creation_input_tokens: cacheCreationTokens,
+            cache_read_input_tokens: cacheReadTokens,
         };
     }
 
     return {
         input_tokens: inputTokens ?? 0,
         output_tokens: outputTokens ?? 0,
-        cache_creation_input_tokens: usage.prompt_cache_miss_tokens,
-        cache_read_input_tokens: usage.prompt_cache_hit_tokens,
+        cache_creation_input_tokens: cacheCreationTokens,
+        cache_read_input_tokens: cacheReadTokens,
     };
 }
 

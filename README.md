@@ -274,6 +274,7 @@ On startup, the proxy avoids double-counting persisted stats as follows:
 A Gemini `/v1/models/{model}:...` variant exists for each `/v1beta/models/{model}:...`
 endpoint. `:countTokens` is supported too: native Gemini routes forward to Gemini
 `countTokens`, while non-Gemini upstream modes are bridged through the proxy's token-counting path.
+For streaming conversions, the proxy forwards final upstream usage where the upstream emits it: OpenAI Chat Completions uses `stream_options.include_usage`, Gemini streams use final `usageMetadata` / interaction usage, and cache-read tokens are preserved through Claude/Responses usage fields when available.
 Full request/response examples live in the [API reference docs](#documentation).
 
 ### Supported `upstream_mode`
@@ -717,7 +718,7 @@ entry can set `base_url = "sdk://chatjimmy.ai/api"` and keep the appropriate
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `LOCAL_TIKTOKEN` | `false` | Count tokens locally instead of calling upstream |
+| `LOCAL_TIKTOKEN` | `false` | Count tokens locally instead of calling upstream. Local counts are best-effort estimates and include text, tool results, tool use, images, documents, thinking, and web-search result blocks. |
 | `TIKTOKEN_MODEL` | unset | tiktoken encoding to use, e.g. `o200k_base` |
 | `UPSTREAM_BODY_TIMEOUT_MS` | `600000` | Upstream body timeout (also judge/synth timeout in fusion) |
 | `MODELS_CACHE_TTL` | unset | Seconds to cache the upstream `/v1/models` list |

@@ -243,6 +243,11 @@ export async function handleMessagesRequest(
 
     const model = (openaiRequestBody.model as string) || modelId || 'unknown';
 
+    if (isStreaming) {
+      const streamOptions = openaiRequestBody.stream_options as Record<string, unknown> | undefined;
+      openaiRequestBody.stream_options = { ...streamOptions, include_usage: true };
+    }
+
     // Log request info
     activeLogger.info(requestId, `Upstream (stream=${isStreaming}): /v1/chat/completions → ${model}`);
 
@@ -340,6 +345,7 @@ export async function handleMessagesRequest(
           prompt_tokens: responsesJson.usage.input_tokens,
           completion_tokens: responsesJson.usage.output_tokens,
           total_tokens: responsesJson.usage.total_tokens,
+          prompt_cache_hit_tokens: responsesJson.usage.input_tokens_details?.cached_tokens,
         } : undefined,
       };
       const claudeResponse = await convertOpenAIToClaudeResponse(syntheticCompletions, model, requestId, requestBody, tokenCountingConfig);

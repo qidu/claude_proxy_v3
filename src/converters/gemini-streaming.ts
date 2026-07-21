@@ -6,6 +6,37 @@
 import { GeminiSSEEvent, GeminiContent } from '../types/gemini.js';
 import { stringify } from '../utils/stringify.js';
 
+type ClaudeUsage = {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens?: number;
+};
+
+function toNumber(value: unknown): number | undefined {
+    return typeof value === 'number' ? value : undefined;
+}
+
+function convertGeminiUsageToClaudeUsage(usage: Record<string, unknown> | undefined): ClaudeUsage | undefined {
+    if (!usage) return undefined;
+
+    const inputTokens = toNumber(usage.total_input_tokens) ?? toNumber(usage.promptTokenCount);
+    const outputTokens = toNumber(usage.total_output_tokens) ?? toNumber(usage.candidatesTokenCount);
+    const cachedTokens = toNumber(usage.total_cached_tokens) ?? toNumber(usage.cachedContentTokenCount);
+
+    if (inputTokens === undefined && outputTokens === undefined && cachedTokens === undefined) {
+        return undefined;
+    }
+
+    const claudeUsage: ClaudeUsage = {
+        input_tokens: inputTokens ?? 0,
+        output_tokens: outputTokens ?? 0,
+    };
+    if (cachedTokens !== undefined) {
+        claudeUsage.cache_read_input_tokens = cachedTokens;
+    }
+    return claudeUsage;
+}
+
 /**
  * State for streaming conversion
  */
@@ -67,30 +98,52 @@ export function createGeminiStreamTransformer(
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
     let buffer = '';
-    
+    const state: StreamingState = {
+        currentId: requestId || `msg_${Date.now()}`,
+        currentRole: 'model',
+        contentIndex: 0,
+        accumulatedText: '',
+        hasStarted: false,
+        hasEnded: false,
+    };
+
+    const parseMessage = (message: string, controller: TransformStreamDefaultController<Uint8Array>) => {
+        const stringController = {
+            enqueue: (value: string) => controller.enqueue(encoder.encode(value)),
+        } as TransformStreamDefaultController<string>;
+
+        for (const line of message.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            const data = line.substring(6).trim();
+            if (!data || data === '[DONE]') continue;
+            try {
+                const parsed = JSON.parse(data);
+                if (parsed.event_type) {
+                    handleGeminiEvent(parsed, stringController, model, requestId, state);
+                } else {
+                    handleNativeGeminiChunk(parsed, stringController, model, requestId, state);
+                }
+            } catch {
+                continue;
+            }
+        }
+    };
+
     return new TransformStream({
         transform(chunk: Uint8Array, controller: TransformStreamDefaultController<Uint8Array>) {
-            // Decode chunk and add to buffer
             buffer += decoder.decode(chunk, { stream: true });
-            
-            // Split by double newline (SSE message boundary)
             const messages = buffer.split('\n\n');
-            
-            // Keep last incomplete message in buffer
             buffer = messages.pop() || '';
-            
-            // Enqueue complete messages
             for (const message of messages) {
                 if (message.trim()) {
-                    controller.enqueue(encoder.encode(message + '\n\n'));
+                    parseMessage(message, controller);
                 }
             }
         },
-        
+
         flush(controller: TransformStreamDefaultController<Uint8Array>) {
-            // Flush remaining buffer
             if (buffer.trim()) {
-                controller.enqueue(encoder.encode(buffer + '\n\n'));
+                parseMessage(buffer, controller);
             }
         }
     });
@@ -99,6 +152,78 @@ export function createGeminiStreamTransformer(
 /**
  * Handle Gemini SSE event
  */
+function sendClaudeEvent(controller: TransformStreamDefaultController<string>, event: string, data: object) {
+    controller.enqueue(`event: ${event}\ndata: ${stringify(data)}\n\n`);
+}
+
+function ensureMessageStarted(
+    controller: TransformStreamDefaultController<string>,
+    model: string,
+    requestId: string,
+    state: StreamingState
+) {
+    if (state.hasStarted) return;
+    const messageStart = {
+        type: 'message_start',
+        message: {
+            id: state.currentId || requestId || `msg_${Date.now()}`,
+            type: 'message',
+            role: 'assistant',
+            model,
+            content: [] as any[],
+            stop_reason: null,
+            usage: { input_tokens: 0, output_tokens: 0 },
+        },
+    };
+    sendClaudeEvent(controller, 'message_start', messageStart);
+    state.hasStarted = true;
+}
+
+function handleNativeGeminiChunk(
+    chunk: Record<string, unknown>,
+    controller: TransformStreamDefaultController<string>,
+    model: string,
+    requestId: string,
+    state: StreamingState
+) {
+    ensureMessageStarted(controller, model, requestId, state);
+
+    const candidates = chunk.candidates as Array<Record<string, any>> | undefined;
+    const candidate = candidates?.[0];
+    const parts = candidate?.content?.parts as Array<Record<string, unknown>> | undefined;
+    if (parts?.length) {
+        if (state.contentIndex === 0 && !state.accumulatedText) {
+            sendClaudeEvent(controller, 'content_block_start', {
+                type: 'content_block_start',
+                index: 0,
+                content_block: { type: 'text', text: '' },
+            });
+        }
+        for (const part of parts) {
+            if (typeof part.text === 'string' && part.text) {
+                state.accumulatedText += part.text;
+                sendClaudeEvent(controller, 'content_block_delta', {
+                    type: 'content_block_delta',
+                    index: 0,
+                    delta: { type: 'text_delta', text: part.text },
+                });
+            }
+        }
+    }
+
+    const usage = convertGeminiUsageToClaudeUsage(chunk.usageMetadata as Record<string, unknown> | undefined);
+    if (candidate?.finishReason || usage) {
+        sendClaudeEvent(controller, 'content_block_stop', { type: 'content_block_stop', index: 0 });
+        sendClaudeEvent(controller, 'message_delta', {
+            type: 'message_delta',
+            delta: { stop_reason: candidate?.finishReason === 'MAX_TOKENS' ? 'max_tokens' : 'end_turn' },
+            ...(usage ? { usage } : {}),
+        });
+        sendClaudeEvent(controller, 'message_stop', { type: 'message_stop' });
+        state.hasEnded = true;
+    }
+}
+
 function handleGeminiEvent(
     event: GeminiSSEEvent,
     controller: TransformStreamDefaultController<string>,
@@ -199,10 +324,15 @@ function handleGeminiEvent(
         case 'interaction.complete':
             // Handle interaction complete
             state.hasEnded = true;
-            // Send message delta with stop reason
+            // Send message delta with stop reason and final usage when available
+            const usage = convertGeminiUsageToClaudeUsage(
+                (event.interaction?.usage as unknown as Record<string, unknown> | undefined) ??
+                ((event as unknown as Record<string, unknown>).usageMetadata as Record<string, unknown> | undefined)
+            );
             const messageDelta = {
                 type: 'message_delta',
                 delta: { stop_reason: 'end_turn' },
+                ...(usage ? { usage } : {}),
             };
             controller.enqueue(`event: message_delta\ndata: ${stringify(messageDelta)}\n\n`);
             // Send message stop

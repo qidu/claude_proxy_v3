@@ -7,6 +7,18 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Token usage propagation across streaming and cache-aware routes
+
+Token accounting is now more complete across transformed streaming routes:
+
+- OpenAI Chat Completions streaming requests now force `stream_options.include_usage = true` in both Claude-format conversion and OpenAI passthrough paths, so final upstream usage chunks can be propagated.
+- Gemini streaming conversion now parses final `interaction.usage` / `usageMetadata` and emits Claude `message_delta.usage`, allowing `/v1/messages` and `/v1/responses` Gemini streaming routes to report final input/output/cache-read token counts.
+- OpenAI Responses `usage.input_tokens_details.cached_tokens` is preserved through Claude and Responses conversion paths instead of being dropped or hardcoded to zero when available.
+- Local token counting now includes tool results and other non-text blocks with best-effort serialization instead of silently skipping them.
+- Unit tests cover streaming usage propagation, cache-token mapping, and local non-text token counting.
+
+**Files changed:** `src/converters/gemini-streaming.ts`, `src/converters/openai-to-claude.ts`, `src/handlers/messages.ts`, `src/handlers/responses.ts`, `src/utils/token-counting.ts`, `tests/unit/token-usage.test.ts`, `README.md`.
+
 ### `[general]` section; `[upstream]` renamed to `[default_upstream]`; `auth_passthrough_with` and `auth_url`
 
 Three related config-layer changes landed together.

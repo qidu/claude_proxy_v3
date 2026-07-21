@@ -186,6 +186,7 @@ function claudeResponseToResponses(claudeJson: Record<string, unknown>, model: s
   }
 
   const usage = claudeJson.usage as Record<string, unknown> | undefined;
+  const cachedTokens = (usage?.cache_read_input_tokens as number | undefined) ?? 0;
   return {
     id: responseId,
     object: 'response',
@@ -203,7 +204,7 @@ function claudeResponseToResponses(claudeJson: Record<string, unknown>, model: s
       input_tokens: usage.input_tokens ?? 0,
       output_tokens: usage.output_tokens ?? 0,
       total_tokens: ((usage.input_tokens as number) ?? 0) + ((usage.output_tokens as number) ?? 0),
-      input_tokens_details: { cached_tokens: 0 },
+      input_tokens_details: { cached_tokens: cachedTokens },
     } : undefined,
   };
 }
@@ -248,6 +249,7 @@ function streamClaudeAsResponses(
       let accumulatedText = '';
       let inputTokens = 0;
       let outputTokens = 0;
+      let cachedTokens = 0;
       let buffer = '';
       // Map from Claude block index → whether it's a tool_use block
       const toolBlocks = new Map<number, { id: string; name: string; arguments: string; outputIndex: number }>();
@@ -277,6 +279,7 @@ function streamClaudeAsResponses(
             const msg = evt.message as Record<string, unknown> | undefined;
             const usage = msg?.usage as Record<string, unknown> | undefined;
             if (usage?.input_tokens) inputTokens = usage.input_tokens as number;
+            if (usage?.cache_read_input_tokens) cachedTokens = usage.cache_read_input_tokens as number;
           } else if (type === 'content_block_start') {
             const block = evt.content_block as Record<string, unknown> | undefined;
             const idx = evt.index as number;
@@ -359,7 +362,9 @@ function streamClaudeAsResponses(
             }
           } else if (type === 'message_delta') {
             const usage = evt.usage as Record<string, unknown> | undefined;
+            if (usage?.input_tokens) inputTokens = usage.input_tokens as number;
             if (usage?.output_tokens) outputTokens = usage.output_tokens as number;
+            if (usage?.cache_read_input_tokens) cachedTokens = usage.cache_read_input_tokens as number;
           }
         }
       }
@@ -402,7 +407,7 @@ function streamClaudeAsResponses(
           status: 'completed',
           model,
           output: outputItems,
-          usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens, input_tokens_details: { cached_tokens: 0 } },
+          usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens, input_tokens_details: { cached_tokens: cachedTokens } },
         },
       })));
 
@@ -707,7 +712,7 @@ function streamCompletionsAsResponses(
       let accumulatedReasoning = ''; // reasoning_content / thinking tokens from upstream
       let textPartOpened = false;
       let textOutputIndex = -1; // set when text item is opened
-      let usageData: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
+      let usageData: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; prompt_tokens_details?: { cached_tokens?: number }; prompt_cache_hit_tokens?: number } | undefined;
       let upstreamModel = model;
       let buffer = '';
       let rawUpstreamBody = ''; // accumulate for debug logging
@@ -983,7 +988,7 @@ function streamCompletionsAsResponses(
         input_tokens: usageData.prompt_tokens ?? 0,
         output_tokens: usageData.completion_tokens ?? 0,
         total_tokens: usageData.total_tokens ?? 0,
-        input_tokens_details: { cached_tokens: 0 },
+        input_tokens_details: { cached_tokens: usageData.prompt_cache_hit_tokens ?? usageData.prompt_tokens_details?.cached_tokens ?? 0 },
       } : undefined;
 
       // Save conversation entry before emitting the completed event
