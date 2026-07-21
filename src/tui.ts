@@ -1489,15 +1489,14 @@ class DashboardApp {
       in_request_chars: number;
     };
 
-    // Format the agent column as "<prefix>/<ua>" (or whichever half is
-    // present). Falls back to the legacy `agent` field for snapshot rows
-    // emitted before the prefix/ua split landed.
+    // Format both agent dimensions so rows that used to collapse to the same
+    // label (e.g. "claude-cli") remain distinguishable.
     const formatAgent = (item: ToolItem): string => {
       if (item.agent_prefix || item.agent_ua) {
-        const p = item.agent_prefix && item.agent_prefix !== 'unknown' ? item.agent_prefix : '';
-        const u = item.agent_ua && item.agent_ua !== 'unknown' ? item.agent_ua : '';
-        if (p && u && p !== u) return `${p}/${u}`;
-        return p || u || 'unknown';
+        const p = item.agent_prefix && item.agent_prefix !== 'unknown' ? item.agent_prefix : '-';
+        const u = item.agent_ua && item.agent_ua !== 'unknown' ? item.agent_ua : '-';
+        if (p === u && p !== '-') return `${p}/=`;
+        return `${p}/${u}`;
       }
       return (item as unknown as { agent?: string }).agent || 'unknown';
     };
@@ -1508,7 +1507,7 @@ class DashboardApp {
     // highlighting that the Test custom model list gets for free.
     const formatLabel = (item: ToolItem): string => {
       const name = item.tool_name.length <= 21 ? item.tool_name : `${item.tool_name.slice(0, 3)}...${item.tool_name.slice(-15)}`;
-      return `${isToolBlocked(item.tool_name) ? '✗' : '·'} ${name.padEnd(30)}${formatAgent(item).padEnd(12)}${alignRight(fmt(item.in_requests), 4)} ${alignRight(fmt(item.in_responses), 5)} ${alignRight(fmt(item.in_request_chars), 10)}`;
+      return `${isToolBlocked(item.tool_name) ? '✗' : '·'} ${name.padEnd(28)}${formatAgent(item).padEnd(14)}${alignRight(fmt(item.in_requests), 4)} ${alignRight(fmt(item.in_responses), 5)} ${alignRight(fmt(item.in_request_chars), 10)}`;
     };
 
     const items: ToolItem[] = (snap.agentToolStats || []).map((e) => ({
