@@ -123,6 +123,18 @@ upstream_mode = "openai-completions"
 base_url = "https://api.your-provider.com"   # section base_url overrides [default_upstream].default_base_url
 "*" = {}                                     # final catch-all for this section
 "deepseek/deepseek-v3.2" = {}
+
+# /v1/embeddings — OpenAI-compatible. The proxy appends `v1/embeddings` to
+# `base_url`, so set the **API root** (e.g. `https://integrate.api.nvidia.com`,
+# NOT `…/v1`). When `api_key` is set, it always overrides any caller-supplied
+# header on `/v1/embeddings` — see "Who wins — caller's key vs. configured
+# api_key" below. Model entries are exact-match only; bare model names without
+# the upstream's required prefix (e.g. `nvidia/`) will fail at the upstream.
+[models.embedding]
+upstream_mode = "openai-completions"   # value is informational — the proxy hardcodes this for /v1/embeddings
+base_url = "https://integrate.api.nvidia.com"
+api_key = "nvapi-..."
+"nvidia/nemotron-3-embed-1b" = {}
 ```
 
 Key ideas:
@@ -455,6 +467,17 @@ inheritance chain — anything left empty falls back to the level above:
 | `[models.default]`, `[models.claude]`, `[models.gemini]`, etc. | **Replaced** | Configured key **always wins** — per-entry → section → `[default_upstream] default_api_key`. |
 | Models hitting `[default_upstream]` (no section match) | **Replaced** | `[default_upstream] default_api_key` is used if set. |
 | `[models.embedding]` | **Overridden for embeddings** | Section `api_key` wins for `/v1/embeddings` requests when configured. |
+
+> **Why `[models.embedding].api_key` always wins** — the fixed-route branch in
+> `src/index.ts` (around line 1534) applies the embedding section's `api_key`
+> **after** `transformAuthHeadersForUpstream` has populated `modelAuthHeaders`
+> from the caller's headers, and the spread order is
+> `{ ...modelAuthHeaders, ...formatApiKeyForUpstream(embeddingApiKey, …) }`.
+> So when the section has an `api_key`, the config key replaces whatever the
+> caller sent. This is intentional: `[models.embedding]` is typically used to
+> pin a single provider-scoped key (e.g. NVIDIA integrate) so callers don't
+> need to manage upstream credentials. For other sections, the
+> `auth_passthrough_with` setting controls this same priority.
 
 Use `config_key` when the proxy is a shared gateway and callers should not supply their own upstream credentials.
 

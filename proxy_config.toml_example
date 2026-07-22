@@ -194,8 +194,9 @@ deepseek-v4-pro = {base_url = "https://api.deepseek.com", api_key = "sk-66c13986
 [models.embedding]
 # For `embedding` models ONLY.
 # If a configured `api_key` exists (section-level or per-entry), it takes
-# priority over the caller's auth key. If no `api_key` is configured, the
-# caller's auth key is passed through to the upstream unchanged.
+# priority over the caller's auth key because there are not so many embedding existing.
+# So this priority order should be easier for users.
+# If no `api_key` is configured, the caller's auth key is passed through to the upstream unchanged.
 upstream_mode = "openai-completions"
 base_url = "https://openrouter.ai/api"
 
