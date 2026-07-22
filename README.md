@@ -415,6 +415,14 @@ resolved against the configured sections in three priority levels (highest first
 | `models.default` | ✅ | ✅ (optional) | ✅ (recommended) |
 | `models.embedding` | ✅ | ❌ | ❌ |
 
+> **Section flavors — wildcards vs. exact-only:** user-defined provider sections
+> such as `[models.gpt]` and `[models.nvidia]` **inherit** the same exact /
+> `prefix-*` / `*` catch-all routing surface as `[models.default]`,
+> `[models.claude]`, and `[models.gemini]`, so wildcards work in them. The
+> concrete sections `[models.free]` and `[models.embedding]` are **exact-only**
+> and never pick up wildcards. Runtime caller-vs-config key priority is
+> governed separately by the **Who wins** tables below.
+
 ### `base_url` / `api_key` override rules
 
 Each model entry is an inline table `{target, base_url, api_key}`. Resolution walks an
