@@ -4,10 +4,10 @@
 State assumptions explicitly. Ask instead of guessing when uncertain. For non-obvious design decisions only, present tradeoffs and push back if a simpler method exists.
 
 ## 2. Simplicity First
-Write only the minimum code needed. No speculative features. No abstractions for single-use logic. If a senior engineer would call it over-engineered — simplify it.
+No speculative features. No abstractions for single-use logic. If a senior engineer would call it over-engineered — simplify it.
 
 ## 3. Surgical Changes, Follow Convention
-Only touch what must be changed. Don't "improve" unrelated code, comments, or formatting. Match existing naming and architectural conventions, even if you think yours is better. If a convention should change, propose it and wait for approval. Verify (check/build/test) after changing.
+Only touch what must be changed. Don't "improve" unrelated code, comments, or formatting. Match existing naming and architectural conventions, even if you think yours is better. If a convention should change, propose it and wait for approval. Verify (check/build/test) after changing. Document (update changlog or readme).
 
 ## 4. Read Before You Write
 Before adding code, read the current file and its import graph. If an identical function, utility, or constant already exists, use it — don't create a second version.
