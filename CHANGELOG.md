@@ -7,6 +7,32 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### `<think>` tag extraction for `openai-completions` upstream
+
+Upstreams with mode `openai-completions` that emit reasoning wrapped in `<think>...</think>` or
+`<thinking>...</thinking>` XML tags now have that content split into each endpoint's
+native reasoning field, mirroring the existing `<thinking>` behavior.
+
+- `/v1/messages`: extracted into a Claude `thinking` content block.
+- `/v1/responses`: extracted into a `reasoning` output item, with `reasoning_text`
+  embedded inside the assistant message for round-trip fidelity (matches Codex's
+  expected input shape for multi-turn DeepSeek responses).
+- `/v1/interactions`: extracted into a `thought` output item alongside the cleaned
+  text output.
+- `/v1beta/models/<model>:generateContent`: extracted into a Gemini `thought`
+  content part alongside the cleaned text part.
+- Tag is stripped from the user-visible text content in all paths.
+- Both streaming and non-streaming responses are covered; the streaming path
+  stitches tags that straddle SSE chunk boundaries via a per-stream `thinkStreamBuffer`
+  that is reset on `[DONE]` to avoid cross-request leakage.
+
+`README.md` documents the new behavior next to the existing thinking/reasoning notes.
+
+**Files changed:** `src/converters/openai-to-claude.ts`, `src/converters/streaming.ts`,
+`src/converters/completions-to-responses.ts`, `src/converters/openai-to-gemini.ts`,
+`src/handlers/responses.ts`, `src/handlers/openai.ts`, `tests/unit/think-tag-extraction.test.ts`,
+`README.md`.
+
 ### Model usage HTTP recording and auth context headers
 
 The proxy can now optionally POST per-request model usage records to an HTTP collector configured with `[model_usage] record_url`.

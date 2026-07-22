@@ -2,6 +2,24 @@
  * Convert OpenAI response to Gemini generateContent format
  */
 
+const THINK_REGEX = /<(?:thinking|think)>([\s\S]*?)<\/(?:thinking|think)>/g;
+
+/**
+ * Extract <think>/<thinking> content from text, returning the reasoning and
+ * the cleaned text separately. Both are empty strings if no tags are present.
+ */
+function extractThinkContent(text: string): { reasoning: string; cleanText: string } {
+    THINK_REGEX.lastIndex = 0;
+    let reasoning = '';
+    let m;
+    while ((m = THINK_REGEX.exec(text)) !== null) {
+        reasoning += m[1];
+    }
+    if (!reasoning) return { reasoning: '', cleanText: text };
+    const cleanText = text.replace(/<(?:thinking|think)>[\s\S]*?<\/(?:thinking|think)>/g, '').trim();
+    return { reasoning, cleanText };
+}
+
 function parseToolArguments(value: unknown): Record<string, unknown> {
     if (value && typeof value === 'object') return value as Record<string, unknown>;
     if (typeof value !== 'string' || value === '') return {};
@@ -38,7 +56,13 @@ export function convertOpenAIToGeminiGenerateContent(
         const parts: any[] = [];
 
         if (content !== '') {
-            parts.push({ text: content });
+            const { reasoning, cleanText } = extractThinkContent(content);
+            if (reasoning) {
+                parts.push({ thought: true, text: reasoning });
+            }
+            if (cleanText) {
+                parts.push({ text: cleanText });
+            }
         }
         for (const toolCall of toolCalls) {
             const fn = toolCall.function || {};
@@ -110,10 +134,13 @@ export function convertOpenAIToGeminiInteractions(
         const outputs: any[] = [];
 
         if (content !== '') {
-            outputs.push({
-                type: 'text',
-                text: content
-            });
+            const { reasoning, cleanText } = extractThinkContent(content);
+            if (reasoning) {
+                outputs.push({ type: 'thought', text: reasoning });
+            }
+            if (cleanText) {
+                outputs.push({ type: 'text', text: cleanText });
+            }
         }
         for (const toolCall of toolCalls) {
             const fn = toolCall.function || {};

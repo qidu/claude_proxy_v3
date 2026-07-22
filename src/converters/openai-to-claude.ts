@@ -138,8 +138,8 @@ export async function convertOpenAIToClaudeResponse(
         if (typeof content === 'string') {
             textContent = content;
 
-            // Extract <thinking>...</thinking> markers from text content
-            const thinkingRegex = /<thinking>([\s\S]*?)<\/thinking>/g;
+            // Extract <thinking>...</thinking> and <think>...</think> markers from text content
+            const thinkingRegex = /<(?:thinking|think)>([\s\S]*?)<\/(?:thinking|think)>/g;
             let match;
             let hasThinkingContent = false;
 
@@ -150,7 +150,7 @@ export async function convertOpenAIToClaudeResponse(
 
             // If thinking content found, strip markers from text
             if (hasThinkingContent) {
-                const cleanedText = textContent.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
+                const cleanedText = textContent.replace(/<(?:thinking|think)>[\s\S]*?<\/(?:thinking|think)>/g, '').trim();
                 if (cleanedText) {
                     contentBlocks.push({
                         type: 'text',

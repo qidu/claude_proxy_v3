@@ -989,6 +989,12 @@ async function handleOpenAINonStreamingResponse(
 /**
  * Convert OpenAI streaming chunk to Claude format
  */
+// Cross-chunk buffer for <think>/<thinking> tags that may straddle SSE events.
+// Single-flight per process because Node.js JS is single-threaded; safe for one
+// concurrent stream at a time. Resetting at [DONE] is the responsibility of the
+// chunk processor below when it observes that sentinel.
+let thinkStreamBuffer = '';
+
 /**
  * Process SSE buffer and extract complete events
  */
@@ -1010,6 +1016,7 @@ function processSSEBuffer(buffer: string, modelId: string, requestId: string, is
             if (line.startsWith('data: ')) {
                 const data = line.slice(6).trim();
                 if (data === '[DONE]') {
+                    thinkStreamBuffer = '';
                     if (isGenerateContentRequest) {
                         // Gemini generateContent doesn't need explicit end marker
                         continue;
@@ -1019,9 +1026,15 @@ function processSSEBuffer(buffer: string, modelId: string, requestId: string, is
                 } else {
                     try {
                         const parsed = JSON.parse(data);
-                        
+
+                        // Stitch cross-chunk think tags: prepend any partial thinkStreamBuffer to current content
+                        if (thinkStreamBuffer && parsed?.choices?.[0]?.delta?.content) {
+                            parsed.choices[0].delta.content = thinkStreamBuffer + parsed.choices[0].delta.content;
+                            thinkStreamBuffer = '';
+                        }
+
                         let convertedChunk: Record<string, any> | null = null;
-                        
+
                         if (isGenerateContentRequest) {
                             // Convert to Gemini generateContent format
                             convertedChunk = convertOpenAIToGeminiGenerateContent(parsed, modelId, requestId);
@@ -1031,6 +1044,15 @@ function processSSEBuffer(buffer: string, modelId: string, requestId: string, is
                         } else {
                             // Convert to Claude format
                             convertedChunk = convertOpenAIToClaudeResponse(parsed, modelId, requestId);
+                        }
+
+                        // If converter didn't consume the buffer-tail (tag never closed), carry it forward
+                        const emittedContent: string | undefined = parsed?.choices?.[0]?.delta?.content;
+                        if (emittedContent) {
+                            const partialOpen = emittedContent.lastIndexOf('<');
+                            if (partialOpen !== -1 && !emittedContent.slice(partialOpen).includes('>')) {
+                                thinkStreamBuffer = emittedContent.slice(partialOpen);
+                            }
                         }
                         
                         // Skip chunks with no endpoint-specific payload.

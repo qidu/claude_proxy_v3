@@ -165,6 +165,15 @@ Key ideas:
 > `budget_to_effort_medium = 65536`
 > `budget_to_effort_high = 128000`
 > map `reasoning_effort: "low"` would avoid the limit of `kimi-k2.7-code`.
+- **Tag-based reasoning extraction (`openai-completions` only):** when an upstream replies
+  with reasoning wrapped in `<think>...</think>` or `<thinking>...</thinking>` tags, the proxy splits
+  the content into the endpoint's native reasoning field. `/v1/messages` returns it as a
+  Claude `thinking` block; `/v1/responses` returns it as a `reasoning` output item plus an
+  embedded `reasoning_text` part for round-trip; `/v1/interactions` returns it as a
+  `thought` output item; `/v1beta/models/<model>:generateContent` returns it as a Gemini
+  `thought` part. The tag itself is stripped from the user-visible text. This applies to
+  both streaming and non-streaming responses; the streaming path stitches tags that cross
+  SSE chunk boundaries before extraction.
 - **Wildcards** (`claude-*`) apply only in the provider/default sections listed in
   [Model Routing](#model-routing); the **catch-all** (`*`) is only the final
   `[models.default]` fallback for anything not claimed earlier.

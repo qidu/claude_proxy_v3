@@ -710,6 +710,7 @@ function streamCompletionsAsResponses(
 
       let accumulatedText = '';
       let accumulatedReasoning = ''; // reasoning_content / thinking tokens from upstream
+      let thinkBuffer = ''; // partial <think>/<thinking> tag buffer for streaming extraction
       let textPartOpened = false;
       let textOutputIndex = -1; // set when text item is opened
       let usageData: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; prompt_tokens_details?: { cached_tokens?: number }; prompt_cache_hit_tokens?: number } | undefined;
@@ -780,35 +781,62 @@ function streamCompletionsAsResponses(
 
           // --- text content ---
           if (delta.content) {
-            if (!textPartOpened) {
-              // Text message item claims the next available index (always 0 if no tool calls came first)
-              textOutputIndex = nextOutputIndex++;
-              // Open the message output item and text part on first text delta
-              await writer.write(encoder.encode(sseEvent('response.output_item.added', {
-                type: 'response.output_item.added',
-                sequence_number: nextSeq(),
-                output_index: textOutputIndex,
-                item: { id: itemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] },
-              })));
-              await writer.write(encoder.encode(sseEvent('response.content_part.added', {
-                type: 'response.content_part.added',
+            // Buffer chunks that may contain <think>/<thinking> tags; extract reasoning
+            // inline and only forward clean text as output_text.delta events.
+            let pendingText = thinkBuffer + delta.content;
+            thinkBuffer = '';
+
+            const thinkRegex = /<(?:thinking|think)>([\s\S]*?)<\/(?:thinking|think)>/g;
+            let lastIdx = 0;
+            let m;
+            let cleanChunk = '';
+            while ((m = thinkRegex.exec(pendingText)) !== null) {
+              cleanChunk += pendingText.slice(lastIdx, m.index);
+              accumulatedReasoning += m[1];
+              lastIdx = thinkRegex.lastIndex;
+            }
+            // Remainder after last complete tag: may be a partial opening tag — buffer it
+            const remainder = pendingText.slice(lastIdx);
+            const partialOpen = remainder.lastIndexOf('<');
+            if (partialOpen !== -1 && !remainder.slice(partialOpen).includes('>')) {
+              // Potential partial tag — hold back from output until next chunk
+              cleanChunk += remainder.slice(0, partialOpen);
+              thinkBuffer = remainder.slice(partialOpen);
+            } else {
+              cleanChunk += remainder;
+            }
+
+            if (cleanChunk) {
+              if (!textPartOpened) {
+                // Text message item claims the next available index (always 0 if no tool calls came first)
+                textOutputIndex = nextOutputIndex++;
+                // Open the message output item and text part on first text delta
+                await writer.write(encoder.encode(sseEvent('response.output_item.added', {
+                  type: 'response.output_item.added',
+                  sequence_number: nextSeq(),
+                  output_index: textOutputIndex,
+                  item: { id: itemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] },
+                })));
+                await writer.write(encoder.encode(sseEvent('response.content_part.added', {
+                  type: 'response.content_part.added',
+                  sequence_number: nextSeq(),
+                  item_id: itemId,
+                  output_index: textOutputIndex,
+                  content_index: 0,
+                  part: { type: 'output_text', text: '' },
+                })));
+                textPartOpened = true;
+              }
+              accumulatedText += cleanChunk;
+              await writer.write(encoder.encode(sseEvent('response.output_text.delta', {
+                type: 'response.output_text.delta',
                 sequence_number: nextSeq(),
                 item_id: itemId,
                 output_index: textOutputIndex,
                 content_index: 0,
-                part: { type: 'output_text', text: '' },
+                delta: cleanChunk,
               })));
-              textPartOpened = true;
             }
-            accumulatedText += delta.content;
-            await writer.write(encoder.encode(sseEvent('response.output_text.delta', {
-              type: 'response.output_text.delta',
-              sequence_number: nextSeq(),
-              item_id: itemId,
-              output_index: textOutputIndex,
-              content_index: 0,
-              delta: delta.content,
-            })));
           }
 
           // --- tool call chunks ---
@@ -868,6 +896,12 @@ function streamCompletionsAsResponses(
       }
 
       logger?.debug(requestId, `[stream] upstream raw body (${rawUpstreamBody.length} bytes):\n${rawUpstreamBody}`);
+
+      // Flush any buffered partial tag as plain text (tag never closed by upstream)
+      if (thinkBuffer) {
+        accumulatedText += thinkBuffer;
+        thinkBuffer = '';
+      }
 
       // --- close text part if it was opened ---
       if (textPartOpened) {

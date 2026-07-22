@@ -149,7 +149,7 @@ export function createStreamTransformer(
         accumulatedThinkingContent += textContent;
 
         // Try to extract complete thinking blocks
-        const thinkingRegex = /<thinking>([\s\S]*?)<\/thinking>/g;
+        const thinkingRegex = /<(?:thinking|think)>([\s\S]*?)<\/(?:thinking|think)>/g;
         let match;
         let lastIndex = 0;
         let hasCompleteThinkingBlock = false;
@@ -202,7 +202,7 @@ export function createStreamTransformer(
         }
 
         // If we have remaining text after thinking blocks, send it
-        if (accumulatedThinkingContent && !accumulatedThinkingContent.includes('<thinking>')) {
+        if (accumulatedThinkingContent && !accumulatedThinkingContent.includes('<thinking>') && !accumulatedThinkingContent.includes('<think>')) {
             countOutputTokens(accumulatedThinkingContent);
             sendEvent(controller, 'content_block_delta', {
                 type: 'content_block_delta',
@@ -361,7 +361,7 @@ export function createStreamTransformer(
                         const textContent = delta.content;
 
                         // Check if this chunk contains thinking markers
-                        if (textContent.includes('<thinking>') || textContent.includes('</thinking>') || accumulatedThinkingContent) {
+                        if (textContent.includes('<thinking>') || textContent.includes('</thinking>') || textContent.includes('<think>') || textContent.includes('</think>') || accumulatedThinkingContent) {
                             // Process thinking extraction with state management
                             processThinkingExtraction(textContent, controller);
                         } else {

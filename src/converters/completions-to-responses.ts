@@ -103,10 +103,15 @@ export function convertCompletionsToResponses(
     // Handle text content
     if (message.content) {
       if (typeof message.content === 'string') {
-        outputItem.content = [{
-          type: 'output_text',
-          text: message.content,
-        }];
+        const thinkRegex = /<(?:thinking|think)>([\s\S]*?)<\/(?:thinking|think)>/g;
+        let m;
+        while ((m = thinkRegex.exec(message.content)) !== null) {
+          reasoningText += m[1];
+        }
+        const cleanedText = message.content.replace(/<(?:thinking|think)>[\s\S]*?<\/(?:thinking|think)>/g, '').trim();
+        if (cleanedText) {
+          outputItem.content = [{ type: 'output_text', text: cleanedText }];
+        }
       } else if (Array.isArray(message.content)) {
         const contentParts: NonNullable<typeof outputItem.content> = [];
         for (const part of message.content) {
