@@ -608,10 +608,15 @@ async function runOpenCodeAgent(prompt: string, model: string) {
   console.log(`\n--- OpenCode Agent | model=${model} ---`);
   // `opencode` binary presence is checked at runtime by cross-spawn. Pre-check
   // here so the skip reason is visible BEFORE the 5s server-start timeout.
+  // Use the ESM-imported `fs` here, NOT `require("fs")`: tsx's ESM-mode
+  // `require("fs")` returns a namespace whose `existsSync` returns false for
+  // `/usr/local/bin/opencode` (a symlink → `opencode.exe`) on this host even
+  // though the binary is installed, which previously caused a false-negative
+  // skip. The imported `fs` resolves the symlink correctly.
   const pathEnv = process.env.PATH ?? "";
   const hasBinary = pathEnv.split(":").some((dir) => {
     try {
-      return require("fs").existsSync(`${dir}/opencode`);
+      return fs.existsSync(`${dir}/opencode`);
     } catch {
       return false;
     }
@@ -628,67 +633,112 @@ async function runOpenCodeAgent(prompt: string, model: string) {
   try {
     const { createOpencode } = await import("@opencode-ai/sdk");
 
-    // Configure OpenCode's server to point its provider at our proxy. Model
-    // id is prefixed with the provider name (opencode convention) when the
-    // session is created below.
+    // Configure OpenCode's server to point its provider at our proxy.
+    //
+    // Active provider (Anthropic mode, /v1/messages — any key accepted):
+    //   npm: "@ai-sdk/anthropic"
+    //   API_KEY env:  any non-empty key (e.g. export API_KEY=sk-hi)
+    //
+    // Alternative openai-compatible provider (/v1/chat/completions — requires
+    // the dedicated sk-cp key on this proxy):
+    //   npm: "@ai-sdk/openai-compatible"
+    //   apiKey:        "sk-cp-p_i6lDK-***_xzjlhvQ0jblFw"
+    //   baseURL:       `${PROXY_BASE}/v1`
+    //   headers:       { Authorization: `Bearer <apiKey>` }
+    //   options:       { setCacheKey: false, timeout: 600_000 }
+    //   models:        "minimax-m3"
+    //
+    // Model catalog mirrors `~/.config/opencode/opencode.jsonc`: each model
+    // id in MODELS is registered under proxyv3 so the caller-supplied `model`
+    // is used verbatim. The proxy accepts any of these ids on /v1/messages.
+    const API_KEY = process.env.OPENCODE_API_KEY || process.env.API_KEY || "sk-agent-test-key";
+    const ocModelID = model;
     const ocConfig: any = {
       provider: {
-        openai: {
-          name: "Local Proxy",
-          npm: "@ai-sdk/openai-compatible",
+        proxyv3: {
+          npm: "@ai-sdk/anthropic",
+          name: "proxyv3",
           options: {
-            baseURL: `${PROXY_BASE}/v1`,
-            apiKey: process.env.OPENCODE_API_KEY || process.env.API_KEY || "sk-agent-test-key",
+            baseURL: PROXY_BASE,
+            apiKey: API_KEY,
           },
-          models: Object.fromEntries(
-            MODELS.map((id) => [
-              id,
-              {
-                name: id,
-                attachment: false,
-                reasoning: true,
-                temperature: false,
-                tool_call: true,
-                cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-                limit: { context: 200_000, output: 64_000 },
-                modalities: { input: ["text"], output: ["text"] },
-              },
-            ]),
-          ),
+          models: {
+            [ocModelID]: { name: ocModelID },
+          },
         },
       },
     };
 
-    const oc = await createOpencode({ config: ocConfig });
+    const oc = await createOpencode({ config: ocConfig, timeout: 600_000 });
     server = oc.server;
 
-    const session = await oc.client.session.create({
-      body: {},
-    });
+    const sessionResp: any = await oc.client.session.create({ body: {} });
+    const sid = sessionResp?.data?.id ?? sessionResp?.id;
+    if (!sid) throw new Error("OpenCode: session.create returned no id");
 
-    // OpenCode's session.prompt() is synchronous — it blocks until the server
-    // emits EventSessionIdle (i.e. the run has finished including any tool
-    // calls). All parts (text + tool calls) come back in the response.
-    const result = await oc.client.session.prompt({
-      path: { id: (session as any).data?.id ?? (session as any).id },
+    // The SDK's `session.prompt()` hits POST `/session/{id}/message` which only
+    // returns the new user-message info — the actual assistant reply and tool
+    // calls stream back via `/global/event`. We subscribe first, then submit.
+    const events: any[] = [];
+    const eventStream: any = await oc.client.event.subscribe();
+    const eventPromise = (async () => {
+      try {
+        for await (const ev of eventStream.stream ?? eventStream) {
+          events.push(ev);
+        }
+      } catch (e: any) {
+        // stream ended or aborted; ignore
+      }
+    })();
+
+    await oc.client.session.promptAsync({
+      path: { id: sid },
       body: {
-        model: { providerID: "openai", modelID: model },
+        model: { providerID: "proxyv3", modelID: ocModelID },
         // Read-only parity with Codex/Claude/Gemini/Pi workers
         tools: { read: true, bash: false, edit: false, write: false, grep: true, glob: true },
         parts: [{ type: "text", text: prompt }],
       },
     });
 
-    const parts: any[] = (result as any).data?.parts ?? (result as any).parts ?? [];
-    const toolCalls = parts.filter((p) => p.type === "tool").length;
+    // Poll the session messages endpoint until the session becomes idle (no
+    // more in-flight assistant message) or we hit the timeout. Each iteration
+    // fetches the latest messages and checks for terminal state.
+    const deadline = Date.now() + 600_000;
+    let idleSeen = false;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const msgsResp: any = await oc.client.session.messages({ path: { id: sid } });
+      const msgs: any[] = msgsResp?.data ?? [];
+      const last = msgs[msgs.length - 1];
+      const lastRole = last?.info?.role;
+      const lastFinish = last?.info?.finish;
+      // OpenCode emits an "idle" event when the session has no pending
+      // assistant run; also treat the last assistant message finishing as done.
+      if (events.some((e) => e?.type === "session.idle")) { idleSeen = true; break; }
+      if (lastRole === "assistant" && (lastFinish === "stop" || lastFinish === "end_turn")) break;
+    }
+
+    // Final message dump.
+    const finalResp: any = await oc.client.session.messages({ path: { id: sid } });
+    const finalMsgs: any[] = finalResp?.data ?? [];
+    const lastAssistant: any = [...finalMsgs].reverse().find((m: any) => m?.info?.role === "assistant");
+    const parts: any[] = lastAssistant?.parts ?? [];
+    const toolCalls = parts.filter((p: any) => p.type === "tool").length;
     const text = parts
-      .filter((p) => p.type === "text")
-      .map((p) => p.text)
+      .filter((p: any) => p.type === "text")
+      .map((p: any) => p.text)
       .join("\n");
 
-    console.log(`OpenCode done. tool_calls=${toolCalls}, chars=${text.length}`);
+    console.log(`OpenCode done. tool_calls=${toolCalls}, chars=${text.length}, idleSeen=${idleSeen}`);
+    if (lastAssistant?.info?.error) {
+      console.log(`OpenCode error: ${JSON.stringify(lastAssistant.info.error).slice(0, 400)}`);
+    }
     if (text) console.log(text);
     else console.log("(no text output)");
+
+    // Stop the event subscription
+    try { (eventStream as any)?.close?.(); } catch { /* ignore */ }
   } catch (error) {
     console.error("OpenCode agent failed:", error);
   } finally {

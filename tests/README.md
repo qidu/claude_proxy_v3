@@ -83,6 +83,40 @@ By default all 5 agents are enabled. To run a subset, comment the `runXxxAgent(t
 2. The `opencode` binary must be on `PATH` (not always installed alongside the SDK). The runner pre-checks `PATH` and logs `[OpenCode] 'opencode' binary not found on PATH — skipping. Install with: npm i -g opencode-ai` rather than timing out on the 5-second server-start wait. Install with `npm i -g opencode-ai` if you want this agent enabled.
 3. Write-capable tools (`bash`, `edit`, `write`) are disabled in the session body so behavior stays read-only and comparable to the other workers; `read`, `grep`, `glob` are kept on.
 
+#### OpenCode — example config & key requirements
+
+A reference `~/.config/opencode/opencode.jsonc` for this proxy looks like:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "proxyv3": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "proxyv3",
+      "options": {
+        "baseURL": "http://localhost:8788/v1",
+        "apiKey": "{env:API_KEY}",
+        "headers": {
+          "Authorization": "Bearer {env:API_KEY}"
+        }
+      },
+      "models": {
+        "minimax-m3": { "name": "minimax-m3" },
+      }
+    }
+  },
+  "model": "proxyv3/minimax-m3"
+}
+```
+
+The two provider packages OpenCode can load — `@ai-sdk/anthropic` and `@ai-sdk/openai-compatible` — end up at different proxy endpoints with very different key requirements:
+
+- **`@ai-sdk/anthropic`** → `/v1/messages`. The proxy's Anthropic Messages handler is open for the local test runner; any non-empty key is accepted (e.g. `API_KEY=sk-hi`). Use this when you just want to point OpenCode at the proxy and exercise the model catalog.
+- **`@ai-sdk/openai-compatible`** → `/v1/chat/completions`. This path is only exposed in **pass-through mode** (`DEV_PASS_THROUGH=true` on the proxy). The proxy forwards the raw `Authorization: Bearer <key>` header to the upstream provider, so the key must be valid for the upstream you target (e.g. the dedicated `sk-cp-…` key for `minimax-m3`). A key that works for `/v1/messages` will be rejected with `401` here.
+- In both cases the `options.apiKey` is what AI SDK uses to authenticate; the `options.headers.Authorization` entry is OpenCode's documented way to also stamp an explicit `Authorization: Bearer …` on the outgoing request and is required when the upstream does not infer auth from the URL.
+- `promptCacheKey` is added by default by `@ai-sdk/openai-compatible`; some proxies/upstreams reject it. For `openai-compatible` on this proxy you can either add `options.setCacheKey = false` or set the header explicitly via the `headers` block above.
+
 #### Result reference
 
 For a sample run (1 model × all agents × all tasks), see `./logs/results/test_result_of_deepseek_v4_flash_all_agents_all_tasks.md`.
