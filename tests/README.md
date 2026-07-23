@@ -8,34 +8,84 @@ Coverage test cases live in `../testcases` and must be run from the project root
 
 ### `multi-agents-test.ts`
 
-Runs three agent SDKs (OpenAI Codex, Anthropic Claude, Google Gemini) against eight models with diverse prefixes through the local proxy (`127.0.0.1:7777`).
+Runs five agent SDKs against the local proxy (`127.0.0.1:8788` by default, override with `PROXY_BASE`).
+
+Agent order (used by the CLI `agent` selector):
+
+| # | Agent   | SDK package                          | Transport                       |
+|---|---------|--------------------------------------|---------------------------------|
+| 1 | Codex   | `@openai/codex-sdk`                  | OpenAI Responses (`/v1/responses`) via `~/.codex/config.toml` |
+| 2 | Claude  | `@anthropic-ai/claude-agent-sdk`     | Anthropic Messages (`/v1/messages`) via `ANTHROPIC_BASE_URL` |
+| 3 | Gemini  | `@google/genai`                      | Gemini (`/v1beta/...`) via `httpOptions.baseUrl` |
+| 4 | Pi      | `@earendil-works/pi-agent-core`      | Anthropic Messages (`/v1/messages`) via `createProvider` |
+| 5 | OpenCode| `@opencode-ai/sdk`                   | OpenAI-compatible (`/v1`) via `OPENCODE_CONFIG_CONTENT` → spawns `opencode serve` |
+
+The full run is `len(USER_TASKS) * len(MODELS) * 5` = 8 × 9 × 5 = 360 invocations (modulated by the CLI selection below).
 
 #### Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | For Claude | API key for the proxy. Used by Claude Agent. |
-| `CODEX_API_KEY` | For Codex | API key for Codex Agent (uncomment `runCodexAgent` to enable). |
-| `GEMINI_API_KEY` | For Gemini | API key for Gemini Agent (uncomment `runGeminiAgent` to enable). |
+`API_KEY` (or any one of the agent-specific keys below) is required for the agent to authenticate against the proxy. The key is the value the proxy itself accepts and forwards to its upstream — supply a key that is valid for the upstream provider you are targeting.
 
-`multi-agents-test.ts` also supports 3 parameters to choose how many models x agents x tasks to run,
-refer to ./logs/results/test_result_of_deepseek_v4_flash_all_agents_all_tasks.md for 1 model x all agents x all tasks.
+| Variable             | Used by agent | Notes |
+|----------------------|---------------|-------|
+| `API_KEY`            | all           | Fallback if a per-agent key is not set. |
+| `CODEX_API_KEY`      | Codex         | Codex reads this via `~/.codex/config.toml` (`env_key = "CODEX_API_KEY"`). |
+| `ANTHROPIC_API_KEY`  | Claude, Pi    | Claude passes it via `env.ANTHROPIC_API_KEY`; Pi's `envApiKeyAuth` falls back to it after `PI_API_KEY`. |
+| `GEMINI_API_KEY`     | Gemini        | Passed to `GoogleGenAI({ apiKey })`. |
+| `PI_API_KEY`         | Pi            | First preference for `envApiKeyAuth`; if unset, `ANTHROPIC_API_KEY` / `API_KEY` are tried in order. |
+| `OPENCODE_API_KEY`   | OpenCode      | Injected into `OPENCODE_CONFIG_CONTENT` and read by the spawned `opencode serve`. |
+| `PROXY_BASE`         | all           | Override the proxy origin (default `http://127.0.0.1:8788`). |
+
+If you only want to exercise one agent, set just its key. Other agents will be skipped because their SDK constructors will fail.
 
 #### Usage
 
 ```bash
-# Required for at least one agent to run, the key should be valid key from proxy's upstream server.
-export ANTHROPIC_API_KEY="sk-a-valid-key"
+# Start the proxy first (it must listen on PROXY_BASE; default 127.0.0.1:8788)
+npm run dev
 
-# Optional — only needed if you enable Codex or Gemini below
-# export CODEX_API_KEY="your-codex-key"
-# export GEMINI_API_KEY="your-gemini-key"
+# Set at least one key (or API_KEY for all agents)
+export API_KEY="sk-a-valid-key"
+# export CODEX_API_KEY="$API_KEY"
+# export ANTHROPIC_API_KEY="$API_KEY"
+# export GEMINI_API_KEY="$API_KEY"
+# export PI_API_KEY="$API_KEY"
+# export OPENCODE_API_KEY="$API_KEY"
 
-# Start the proxy first, then run the test
+# Run the full sweep
 npx tsx tests/multi-agents-test.ts
+
+# Or pick (M A T): Mth model, Ath agent, Tth task (1-based, wraps with %)
+npx tsx tests/multi-agents-test.ts 1 1 1     # first model, first agent, first task
+npx tsx tests/multi-agents-test.ts 9 4 0     # last model, Pi agent, all tasks
+npx tsx tests/multi-agents-test.ts 0 4 0     # all models, Pi agent, all tasks
 ```
 
-By default all 3 agents is active. Comment some of them in `main()` to just enable left one.
+By default all 5 agents are enabled. To run a subset, comment the `runXxxAgent(task, model);` lines in `main()` for the agents you want to skip.
+
+#### Per-agent notes
+
+**Codex** — Writes `~/.codex/config.toml` with `base_url = ${PROXY_BASE}/v1` and `wire_api = "responses"`, then runs the prompt through `Codex().startThread(...).run(prompt)`. Requires `DEV_PASS_THROUGH=true` on the proxy so `/v1/chat/completions` (Codex's fallback) is also accepted.
+
+**Claude** — Uses `claudeQuery()` with `allowedTools: ["Glob", "Read"]` and `maxTurns: 30`. `ANTHROPIC_BASE_URL` is set to the proxy origin (Claude SDK appends `/v1/messages`).
+
+**Gemini** — A custom 20-turn tool-calling loop using `GoogleGenAI` with two `functionDeclarations` (`Glob`, `Read`) that call back into the shared `toolGlobSync` / `toolRead` helpers. Tools execute synchronously in the test process; results are appended as `functionResponse` parts.
+
+**Pi (`@earendil-works/pi-agent-core`)** — Three subtleties:
+
+1. The proxy only accepts `/v1/messages` for arbitrary models, so Pi is wired through `anthropicMessagesApi()` regardless of the underlying provider. A static model catalog is built from `MODELS` at startup (one entry per id, all routed through `provider: "anthropic"`).
+2. Pi's anthropic client appends `/v1/messages` to `baseUrl` internally, so the provider's `baseUrl` must be the proxy origin **without** the `/v1` suffix — otherwise the request hits `/v1/v1/messages` and 404s.
+3. `provider.auth` must be wrapped in an envelope (`{ apiKey: envApiKeyAuth(...) }`), not passed as the bare auth object — Pi looks for `auth.apiKey` and silently produces `"Provider is not configured"` if the envelope is missing. The `getApiKey` hook on the `Agent` also bypasses Pi's on-disk credential store (`~/.pi/agent/auth.json`) so a stale OAuth credential for another provider cannot shadow the env-supplied key.
+
+**OpenCode (`@opencode-ai/sdk`)** — Three subtleties:
+
+1. OpenCode's SDK does not speak to a provider directly — `createOpencode()` spawns `opencode serve`, which then forwards requests. Provider config is injected via `OPENCODE_CONFIG_CONTENT`; `baseURL` is `${PROXY_BASE}/v1`.
+2. The `opencode` binary must be on `PATH` (not always installed alongside the SDK). The runner pre-checks `PATH` and logs `[OpenCode] 'opencode' binary not found on PATH — skipping. Install with: npm i -g opencode-ai` rather than timing out on the 5-second server-start wait. Install with `npm i -g opencode-ai` if you want this agent enabled.
+3. Write-capable tools (`bash`, `edit`, `write`) are disabled in the session body so behavior stays read-only and comparable to the other workers; `read`, `grep`, `glob` are kept on.
+
+#### Result reference
+
+For a sample run (1 model × all agents × all tasks), see `./logs/results/test_result_of_deepseek_v4_flash_all_agents_all_tasks.md`.
 
 ---
 

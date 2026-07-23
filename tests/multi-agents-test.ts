@@ -1,11 +1,12 @@
 /**
  * Multi-agent, multi-model test.
  *
- * Runs three agent SDKs (OpenAI Codex, Anthropic Claude, Google Gemini) against
- * eight models with diverse prefixes through the local proxy (127.0.0.1:7777).
+ * Runs five agent SDKs (OpenAI Codex, Anthropic Claude, Google Gemini,
+ * Earendil Works Pi, OpenCode) against eight models with diverse prefixes
+ * through the local proxy (127.0.0.1:7777).
  *
  * Each agent receives every task in `USER_TASKS`, and every model is exercised
- * against every task, producing `len(USER_TASKS) * len(MODELS) * 3` total runs
+ * against every task, producing `len(USER_TASKS) * len(MODELS) * 5` total runs
  * (modulated by the CLI selection below).
  *
  * Usage:
@@ -15,20 +16,23 @@
  *   export CODEX_API_KEY=$API_KEY
  *   export ANTHROPIC_API_KEY=$API_KEY
  *   export GEMINI_API_KEY=$API_KEY
+ *   export PI_API_KEY=$API_KEY
  *
  *   export ANTHROPIC_API_KEY="sk-hi"
  *   npx tsx tests/multi-agents-test.ts              # all models x agents x all tasks
  *   npx tsx tests/multi-agents-test.ts 1 1 1        # first model, first agent, first task
  *   npx tsx tests/multi-agents-test.ts 2 3 1        # 2nd model, 3rd agent, 1st task
  *   npx tsx tests/multi-agents-test.ts 0 0 2        # all models, all agents, 2nd task
- *   npx tsx tests/multi-agents-test.ts 9 4 0        # MODELS[(9-1) % len], AGENTS[(4-1) % 3], all tasks
+ *   npx tsx tests/multi-agents-test.ts 9 4 0        # MODELS[(9-1) % len], AGENTS[(4-1) % 5], all tasks
  *
  *   Set keys for each agent sdk:
- *   // await runCodexAgent(task, model);  // export CODEX_API_KEY=a-valid-key
- *   // await runClaudeAgent(task, model); // export ANTHROPIC_API_KEY=a-valid-key
- *   // await runGeminiAgent(task, model); // export GEMINI_API_KEY=a-valid-key
+ *   // await runCodexAgent(task, model);    // export CODEX_API_KEY=a-valid-key
+ *   // await runClaudeAgent(task, model);   // export ANTHROPIC_API_KEY=a-valid-key
+ *   // await runGeminiAgent(task, model);   // export GEMINI_API_KEY=a-valid-key
+ *   // await runPiAgent(task, model);       // export PI_API_KEY=a-valid-key
+ *   // await runOpenCodeAgent(task, model); // OpenCode reads OPENCODE_API_KEY or uses OPENCODE_CONFIG_CONTENT
  *
- *   // or export API_KEY=a-valid-key for all them three.
+ *   // or export API_KEY=a-valid-key for all of them.
  *
  *   CLI selection semantics (three args: model agent task):
  *     - no args                                -> all models x all agents x all tasks
@@ -40,7 +44,7 @@
  *     - 0 in any position                      -> that dimension runs all entries
  *                                                (e.g. "0 1 0" = all models, first agent, all tasks)
  *
- *   Agent order:  1=Codex, 2=Claude, 3=Gemini
+ *   Agent order:  1=Codex, 2=Claude, 3=Gemini, 4=Pi, 5=OpenCode
  *
  *   To restrict the static task list, comment entries in USER_TASKS below.
  */
@@ -58,6 +62,7 @@ const PROXY_BASE = process.env.PROXY_BASE || "http://127.0.0.1:8788";
 const WORK_DIR = "./tests/";
 
 const MODELS = [
+  "MiniMaxAI/MiniMax-M3",           // local test
   "gpt-5.5",                        // gpt
   "deepseek/deepseek-v4-flash",     // deepseek
   "minimax/minimax-m3",             // minimax
@@ -413,13 +418,296 @@ async function runGeminiAgent(prompt: string, model: string) {
 }
 
 // ---------------------------------------------------------------------------
+// 4. Earendil Works Pi Agent  (uses @earendil-works/pi-agent-core)
+// ---------------------------------------------------------------------------
+//
+// Pi's agent SDK does not ship user-supplied tools in the same shape as
+// Gemini's functionDeclarations — you write each tool as an AgentTool with
+// a typebox schema + execute(). We reuse the file's existing toolGlobSync /
+// toolRead helpers (declared at the top of this file) so the toolset is
+// identical across Pi and the other read-only workers.
+//
+// Model wiring: pi's anthropic-messages API POSTs to `{baseUrl}/v1/messages`.
+// The proxy accepts /v1/messages for any registered model and returns
+// "Direct access to /v1/chat/completions is not allowed" for the completions
+// path, so the Anthropic Messages API is the only client-side choice.
+// pi's SDK appends "/v1/messages" to baseUrl internally, so the provider's
+// baseUrl is the proxy origin (no /v1 suffix). One static model entry per
+// id in MODELS is registered.
+
+async function runPiAgent(prompt: string, model: string) {
+  console.log(`\n--- Pi Agent | model=${model} ---`);
+  try {
+    const { Agent } = await import("@earendil-works/pi-agent-core");
+    const {
+      createModels,
+      createProvider,
+      envApiKeyAuth,
+      Type,
+    } = await import("@earendil-works/pi-ai");
+    const { anthropicMessagesApi } = await import(
+      "@earendil-works/pi-ai/api/anthropic-messages.lazy"
+    );
+
+    // The proxy accepts /v1/messages for any registered model (the only
+    // /v1/chat/completions path is explicitly disabled with a 403 telling
+    // callers to use /v1/messages). So we wire pi through the Anthropic
+    // Messages API regardless of the underlying model's actual provider —
+    // the proxy handles the cross-API translation.
+    //
+    // Build a static model catalog for this proxy from the shared MODELS list.
+    const piModels: any[] = MODELS.map((id) => ({
+      id,
+      name: id,
+      api: "anthropic-messages",
+      provider: "anthropic",
+      // Pi's anthropic client appends "/v1/messages" to baseUrl, so the
+      // baseUrl is the proxy origin WITHOUT the /v1 suffix (avoids the
+      // "/v1/v1/messages" doubled-path error).
+      baseUrl: PROXY_BASE,
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+    }));
+
+    const provider = createProvider({
+      id: "anthropic",
+      name: "Local Proxy (/v1/messages)",
+      baseUrl: PROXY_BASE,
+      // Provider.auth must be { apiKey?: ApiKeyAuth, oauth?: OAuthAuth }.
+      // Passing the envApiKeyAuth object directly (no envelope) makes pi look
+      // for `auth.apiKey` and silently return undefined → "Provider is not
+      // configured". See Pi auth.resolve docs.
+      auth: { apiKey: envApiKeyAuth("PI key", ["PI_API_KEY", "ANTHROPIC_API_KEY", "API_KEY"]) },
+      models: piModels,
+      api: anthropicMessagesApi(),
+    });
+
+    const models = createModels();
+    models.setProvider(provider);
+
+    const piModel = models.getModel("anthropic", model);
+    if (!piModel) {
+      throw new Error(`Pi: model "${model}" not registered in the static catalog`);
+    }
+
+    // Reuse the file's existing tool implementations (no duplicates — see
+    // CLAUDE.md rule 4). Schema is declared with typebox Type, which is what
+    // pi's AgentTool expects.
+    const piTools: any[] = [
+      {
+        name: "Glob",
+        label: "List files matching a glob pattern",
+        description: "List files matching a glob pattern under ./tests/",
+        parameters: Type.Object({
+          pattern: Type.String({ description: 'e.g. "tests/**/*.ts"' }),
+        }),
+        execute: async (_id: string, args: { pattern: string }) =>
+          JSON.stringify(toolGlobSync(args.pattern), null, 2),
+      },
+      {
+        name: "Read",
+        label: "Read a file",
+        description: "Read the full contents of a file",
+        parameters: Type.Object({
+          path: Type.String({ description: "Absolute file path" }),
+        }),
+        execute: async (_id: string, args: { path: string }) => {
+          try {
+            return await fs.promises.readFile(args.path, "utf-8");
+          } catch (e: any) {
+            return `Error: ${e.message}`;
+          }
+        },
+      },
+    ];
+
+    const agent = new Agent({
+      initialState: {
+        systemPrompt:
+          "You are a code-analysis assistant. Use the provided Glob and Read " +
+          "tools to inspect ./tests/ before answering. Cite file paths and line " +
+          "ranges. Admit uncertainty rather than fabricating.",
+        model: piModel,
+        thinkingLevel: "off",
+      },
+      streamFn: models.streamSimple.bind(models),
+      // Bypass pi's on-disk credential store (~/.pi/agent/auth.json) and
+      // resolve the API key directly from the environment. Without this hook,
+      // a stored OAuth credential for another provider masks our env key and
+      // pi returns "Provider is not configured".
+      getApiKey: async () =>
+        process.env.PI_API_KEY || process.env.API_KEY || "sk-agent-test-key",
+    });
+    agent.state.tools = piTools;
+
+    let finalText = "";
+    let toolCalls = 0;
+    agent.subscribe((event) => {
+      if (
+        event.type === "message_update" &&
+        event.assistantMessageEvent.type === "text_delta"
+      ) {
+        process.stdout.write(event.assistantMessageEvent.delta);
+      } else if (event.type === "tool_execution_end") {
+        toolCalls++;
+      }
+    });
+
+    await agent.prompt(prompt);
+
+    // Drain the final text from the agent's last assistant message so the
+    // log shows the complete answer on a single block (text_delta streaming
+    // may have written partial chunks to stdout already).
+    const lastAssistant = [...agent.state.messages]
+      .reverse()
+      .find((m: any) => m.role === "assistant");
+    if (lastAssistant) {
+      const text = (lastAssistant.content ?? [])
+        .filter((b: any) => b.type === "text")
+        .map((b: any) => b.text)
+        .join("\n");
+      if (text && text !== finalText) {
+        finalText = text;
+        if (process.stdout.writableLength === 0) console.log("");
+        console.log(`Pi done. tool_calls=${toolCalls}, chars=${finalText.length}`);
+      }
+      // Surface upstream errors as warnings (not failures) — pi-agent-core
+      // catches LLM stream errors and emits stopReason="error" on the final
+      // assistant message rather than throwing. Without this log line,
+      // a silent model-side failure looks identical to a successful empty
+      // run.
+      if (lastAssistant.stopReason === "error") {
+        console.log(`Pi upstream error: ${lastAssistant.errorMessage ?? "(no message)"}`);
+      }
+    }
+  } catch (error) {
+    console.error("Pi agent failed:", error);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 5. OpenCode Agent  (uses @opencode-ai/sdk)
+//
+// OpenCode's SDK does not speak OpenAI-compatible APIs directly — it spawns
+// its own server (`opencode serve`) which then forwards requests to a model
+// provider. We inject our provider config via OPENCODE_CONFIG_CONTENT so the
+// server talks to the local proxy at /v1.
+//
+// OpenCode ships its own sandboxed tool registry (read/bash/edit/write).
+// We disable the write-capable tools so behavior stays read-only and
+// comparable to the other workers. If the `opencode` binary is not on PATH
+// (it is not always installed alongside @opencode-ai/sdk), we log a clear
+// skip message and return — per CLAUDE.md rule 8 (fail loud, no silent
+// default success).
+// ---------------------------------------------------------------------------
+
+async function runOpenCodeAgent(prompt: string, model: string) {
+  console.log(`\n--- OpenCode Agent | model=${model} ---`);
+  // `opencode` binary presence is checked at runtime by cross-spawn. Pre-check
+  // here so the skip reason is visible BEFORE the 5s server-start timeout.
+  const pathEnv = process.env.PATH ?? "";
+  const hasBinary = pathEnv.split(":").some((dir) => {
+    try {
+      return require("fs").existsSync(`${dir}/opencode`);
+    } catch {
+      return false;
+    }
+  });
+  if (!hasBinary) {
+    console.error(
+      "[OpenCode] `opencode` binary not found on PATH — skipping. " +
+        "Install with: npm i -g opencode-ai",
+    );
+    return;
+  }
+
+  let server: { url: string; close: () => void } | null = null;
+  try {
+    const { createOpencode } = await import("@opencode-ai/sdk");
+
+    // Configure OpenCode's server to point its provider at our proxy. Model
+    // id is prefixed with the provider name (opencode convention) when the
+    // session is created below.
+    const ocConfig: any = {
+      provider: {
+        openai: {
+          name: "Local Proxy",
+          npm: "@ai-sdk/openai-compatible",
+          options: {
+            baseURL: `${PROXY_BASE}/v1`,
+            apiKey: process.env.OPENCODE_API_KEY || process.env.API_KEY || "sk-agent-test-key",
+          },
+          models: Object.fromEntries(
+            MODELS.map((id) => [
+              id,
+              {
+                name: id,
+                attachment: false,
+                reasoning: true,
+                temperature: false,
+                tool_call: true,
+                cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+                limit: { context: 200_000, output: 64_000 },
+                modalities: { input: ["text"], output: ["text"] },
+              },
+            ]),
+          ),
+        },
+      },
+    };
+
+    const oc = await createOpencode({ config: ocConfig });
+    server = oc.server;
+
+    const session = await oc.client.session.create({
+      body: {},
+    });
+
+    // OpenCode's session.prompt() is synchronous — it blocks until the server
+    // emits EventSessionIdle (i.e. the run has finished including any tool
+    // calls). All parts (text + tool calls) come back in the response.
+    const result = await oc.client.session.prompt({
+      path: { id: (session as any).data?.id ?? (session as any).id },
+      body: {
+        model: { providerID: "openai", modelID: model },
+        // Read-only parity with Codex/Claude/Gemini/Pi workers
+        tools: { read: true, bash: false, edit: false, write: false, grep: true, glob: true },
+        parts: [{ type: "text", text: prompt }],
+      },
+    });
+
+    const parts: any[] = (result as any).data?.parts ?? (result as any).parts ?? [];
+    const toolCalls = parts.filter((p) => p.type === "tool").length;
+    const text = parts
+      .filter((p) => p.type === "text")
+      .map((p) => p.text)
+      .join("\n");
+
+    console.log(`OpenCode done. tool_calls=${toolCalls}, chars=${text.length}`);
+    if (text) console.log(text);
+    else console.log("(no text output)");
+  } catch (error) {
+    console.error("OpenCode agent failed:", error);
+  } finally {
+    if (server) {
+      try { server.close(); } catch { /* ignore */ }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Agent registry (drives the CLI `agent` selector)
 // ---------------------------------------------------------------------------
 
 const AGENTS: { name: string; run: (prompt: string, model: string) => Promise<void> }[] = [
-  { name: "Codex",  run: runCodexAgent  },
-  { name: "Claude", run: runClaudeAgent },
-  { name: "Gemini", run: runGeminiAgent },
+  { name: "Codex",    run: runCodexAgent    },
+  { name: "Claude",   run: runClaudeAgent   },
+  { name: "Gemini",   run: runGeminiAgent   },
+  { name: "Pi",       run: runPiAgent       },
+  { name: "OpenCode", run: runOpenCodeAgent },
 ];
 
 // ---------------------------------------------------------------------------
