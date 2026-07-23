@@ -1174,7 +1174,18 @@ export default {
               modelId = modelName; // Use extracted model name for dashboard stats
               forceStreaming = fixedRoute.forceStreaming || false;
 
-              // Recreate request with original body (forwarded as-is, no conversion)
+              // Resolve composite/alias model id: if the configured route resolves to a
+              // different target model (e.g. "for-claw" → "minimax-m3" → target "MiniMax-M3"),
+              // rewrite the model field in the forwarded body so the upstream sees the real
+              // model id. Fall back to the original model name if no alias is resolved.
+              const resolvedModelAlias = modelRoute?.modelAlias;
+              if (resolvedModelAlias && resolvedModelAlias !== modelName) {
+                body.model = resolvedModelAlias;
+                bodyText = JSON.stringify(body);
+                logger.info(requestId, `/v1/chat/completions composite alias resolved: ${modelName} → ${resolvedModelAlias}`);
+              }
+
+              // Recreate request with (possibly rewritten) body
               request = new Request(request.url, {
                 method: request.method,
                 headers: request.headers,

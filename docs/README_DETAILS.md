@@ -586,11 +586,15 @@ For detailed routing behavior, see `docs/routing_refactor.md`.
 affects — all other endpoints and modes are untouched by the flag.
 
 Set `DEV_PASS_THROUGH=true` (or `1`) to unlock it as a passthrough: the request body is forwarded
-**as-is** to `${default_base_url}/v1/chat/completions` with no format conversion.
+to the resolved upstream with no format conversion.
 
 What is **bypassed**:
-- **Model-based routing** — uses fixed `[upstream] default_base_url` routing (`parseFixedRoute`), not the `[models.*]` category lookup. Per-model `base_url`/`api_key`/`upstream_mode` overrides, wildcards, catch-alls, and composite/fusion aliases do **not** apply. The `model` field is read only for dashboard stats.
 - **Schema conversion** — the client speaks raw OpenAI chat-completions; no Claude→OpenAI conversion runs.
+
+What **applies** for routing:
+- **Per-model routing** — `[models.*]` category lookup runs. Per-model `base_url`, `api_key`, and `upstream_mode` overrides apply; the correct upstream is selected based on the model in the request body.
+- **Composite/alias resolution** — composite aliases (e.g. `for-claw`) and `target`-mapped entries (e.g. `minimax-m3` → `MiniMax-M3`) are resolved. The `model` field in the forwarded body is rewritten to the resolved target model id. If no alias resolves, the original model name is forwarded unchanged.
+- **Falls back** to `parseFixedRoute` / `[upstream] default_base_url` only when no per-model route is found.
 
 What still **applies**: request validation (openai-completions schema), privacy-filter / Kompress
 / blocked-tool erasure, upstream auth-header transformation, and dashboard stats. A startup

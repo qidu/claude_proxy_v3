@@ -7,6 +7,22 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Composite alias resolution for `DEV_PASS_THROUGH` `/v1/chat/completions`
+
+When `DEV_PASS_THROUGH=true`, the `/v1/chat/completions` passthrough handler now resolves
+composite aliases and `target`-mapped model ids before forwarding the request upstream.
+
+- Composite aliases (e.g. `for-claw`) are resolved to their primary/weighted target model
+  via the same `getModelRouteConfig` path used by `/v1/messages`.
+- `target`-mapped entries (e.g. `minimax-m3` → `MiniMax-M3`, `MiniMaxAI/MiniMax-M3` → `MiniMax-M3`)
+  are also resolved.
+- The `model` field in the forwarded request body is rewritten to the resolved target model id.
+  If no alias resolves, the original model name is forwarded unchanged.
+- Previously, composite alias names were forwarded verbatim, causing upstreams to return
+  `unknown model` errors (e.g. MiniMax error 2013).
+
+**Files changed:** `src/index.ts`, `README.md`, `docs/README_DETAILS.md`.
+
 ### `<think>` tag extraction for `openai-completions` upstream
 
 Upstreams with mode `openai-completions` that emit reasoning wrapped in `<think>...</think>` or
