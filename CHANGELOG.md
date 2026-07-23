@@ -7,6 +7,15 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Node server decoded response header normalization
+
+The Node server adapter now removes `content-encoding` and `content-length` from
+responses before writing them to clients. This prevents clients from trying to
+decompress plain text when Node `fetch()` has already decoded an upstream
+compressed response while preserving the upstream compression headers.
+
+**Files changed:** `src/server.ts`.
+
 ### Composite alias resolution for `DEV_PASS_THROUGH` `/v1/chat/completions`
 
 When `DEV_PASS_THROUGH=true`, the `/v1/chat/completions` passthrough handler now resolves

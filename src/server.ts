@@ -19,6 +19,13 @@ interface NodeEnv extends Env {
   NODE_ENV: string;
 }
 
+function nodeResponseHeaders(response: Response): Record<string, string> {
+  const headers = new Headers(response.headers);
+  headers.delete('content-encoding');
+  headers.delete('content-length');
+  return Object.fromEntries(headers.entries());
+}
+
 const env: NodeEnv = {
   NODE_ENV: process.env.NODE_ENV || 'production',
   VERSION: process.env.VERSION || 'dev',
@@ -99,7 +106,7 @@ const server = createServer(async (req, res) => {
       // For streaming responses (text/event-stream), pipe directly to the Node.js
       // response without consuming the body via .text(), which avoids the
       // "headers already sent" error when the stream body was already locked.
-      res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
+      res.writeHead(response.status, nodeResponseHeaders(response));
       const { PassThrough } = await import('stream');
       const passthrough = new PassThrough();
       passthrough.pipe(res);

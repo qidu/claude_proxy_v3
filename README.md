@@ -709,6 +709,21 @@ npm run dev       # local
 npm run deploy    # publish
 ```
 
+### Node response compression headers
+
+The Node server adapter normalizes response headers before writing them to the
+client. It removes `content-encoding` and `content-length` because Node `fetch()`
+can decode upstream-compressed bodies while leaving the original upstream headers
+visible on the `Response`. The previous direct header copy:
+
+```ts
+Object.fromEntries(response.headers.entries())
+```
+
+could therefore send plain text with a stale `content-encoding: br` / `gzip`
+header. Clients such as opencode may then try to decode Brotli by default and
+fail to read the response body.
+
 ## Configuration Reference
 
 Most users only need `proxy_config.toml`. Optional environment variables tune behavior.
