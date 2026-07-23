@@ -789,7 +789,7 @@ entry can set `base_url = "sdk://chatjimmy.ai/api"` and keep the appropriate
 | `UPSTREAM_BODY_TIMEOUT_MS` | `600000` | Upstream body timeout (also judge/synth timeout in fusion) |
 | `MODELS_CACHE_TTL` | unset | Seconds to cache the upstream `/v1/models` list |
 | `JSON_STRINGIFY_METHOD` | `json` | Serialization method for outgoing bodies |
-| `DEV_PASS_THROUGH` | `false` | `true` enables `/v1/chat/completions`. The proxy resolves the request model first; `openai-completions` routes forward the Chat Completions body as-is, while `openai-responses` routes convert it to Responses format and forward to `/v1/responses`. |
+| `DEV_PASS_THROUGH` | `false` | `true` enables `/v1/chat/completions`. The proxy resolves the request model first; `openai-completions` routes forward the Chat Completions body as-is, while `openai-responses` routes convert it to Responses format and forward to `/v1/responses`. **Notice:** the caller's `Authorization` / `x-api-key` / `x-goog-api-key` is forwarded to the upstream as-is — the proxy does **not** perform a local credential check, so the upstream directly authenticates the request. A valid upstream key returns 200; an invalid one returns the upstream's 401. Do not use in production. |
 | `CONVERSATION` | unset | `true` enables experimental in-process stateful conversation cache |
 | `IMAGE_BLOCK_DATA_MAX_SIZE` | `10485760` | Max inline image bytes accepted |
 | `ALLOWED_HOSTS` | `127.0.0.1,localhost` | SSRF allowlist for dynamic per-request upstream hosts |

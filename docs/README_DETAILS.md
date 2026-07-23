@@ -590,6 +590,7 @@ to the resolved upstream with no format conversion.
 
 What is **bypassed**:
 - **Schema conversion** — the client speaks raw OpenAI chat-completions; no Claude→OpenAI conversion runs.
+- **Local credential check** — the proxy forwards the caller's `Authorization` / `x-api-key` / `x-goog-api-key` to the upstream without validating it. The upstream performs authentication, so a key valid on the upstream returns 200 and an invalid one returns the upstream's 401. The configured `[models.*].api_key` is only sent on top when `auth_passthrough_with = "config_key"` is set globally. Do not expose this endpoint on a public network.
 
 What **applies** for routing:
 - **Per-model routing** — `[models.*]` category lookup runs. Per-model `base_url`, `api_key`, and `upstream_mode` overrides apply; the correct upstream is selected based on the model in the request body.

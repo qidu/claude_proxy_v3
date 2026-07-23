@@ -7,6 +7,17 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### `DEV_PASS_THROUGH` upstream-auth notice
+
+The README and `docs/README_DETAILS.md` now explicitly flag that `DEV_PASS_THROUGH=true`
+on `/v1/chat/completions` forwards the caller's `Authorization` / `x-api-key` /
+`x-goog-api-key` to the upstream unchanged — the proxy does **not** perform a local
+credential check, the upstream directly authenticates the request (valid key → 200,
+invalid key → upstream 401). Previously this was implied by the "validation only (no
+model routing)" startup warning but not stated in the docs. No code change; this is
+a documentation-only notice. See the env-var table row in `README.md` and the
+`DEV_PASS_THROUGH` section in `docs/README_DETAILS.md`.
+
 ### Node server decoded response header normalization
 
 The Node server adapter now removes `content-encoding` and `content-length` from
