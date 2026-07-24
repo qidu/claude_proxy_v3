@@ -129,7 +129,7 @@ Agent order (used by the CLI `agent` selector):
 
 | # | Agent        | SDK package                                                                 | Transport                                                                                  |
 |---|--------------|-----------------------------------------------------------------------------|--------------------------------------------------------------------------------------------|
-| 1 | Antigravity  | `google-antigravity` (imports `Agent`, `LocalAgentConfig` from `google.antigravity`) | Gemini-style. Wired with `LocalAgentConfig(api_key=…, model=…, base_url=PROXY_BASE, …)`.   |
+| 1 | Antigravity  | `google-antigravity` (imports `Agent`, `LocalOpenAIAgentConfig` from `google.antigravity`) | OpenAI-compatible (`/v1/chat/completions`). `LocalOpenAIAgentConfig(base_url=PROXY_BASE, …)`; the SDK appends the route. |
 | 2 | LangGraph    | `langgraph` (`create_react_agent`) + `langchain-openai` (`ChatOpenAI`)      | OpenAI-compatible (`/v1/chat/completions`). `ChatOpenAI(base_url={PROXY_BASE}/v1, …)`.     |
 | 3 | CrewAI       | `crewai` (`Agent`, `Crew`, `Task`, `LLM`) + `pydantic` (`BaseTool` schemas) | OpenAI-compatible (`/v1/chat/completions`). `LLM(model="openai/<id>", base_url={PROXY_BASE}/v1, …)`. |
 
@@ -151,11 +151,23 @@ pip install google-antigravity langgraph langchain langchain-openai langchain-co
 | Variable          | Used by agent           | Notes                                                                          |
 |-------------------|-------------------------|--------------------------------------------------------------------------------|
 | `API_KEY`         | all                     | Fallback if a per-agent key is not set.                                         |
-| `GEMINI_API_KEY`  | Antigravity             | Per docs, `LocalAgentConfig` reads `GEMINI_API_KEY` when `api_key` is omitted. |
-| `OPENAI_API_KEY`  | LangGraph, CrewAI       | `langchain_openai.ChatOpenAI` and `crewai.LLM` read this when `api_key` is unset. |
+| `OPENAI_API_KEY`  | LangGraph, CrewAI       | Explicit API key for clients that can send authorization headers.               |
 | `PROXY_BASE`      | all                     | Override the proxy origin (default `http://127.0.0.1:8788`).                   |
 
-Set `DEV_PASS_THROUGH=true` on the proxy before running so the `/v1/chat/completions` endpoint required by LangGraph and CrewAI is exposed (matches the `multi-agents-test.ts` setup note).
+For Antigravity, start the proxy with both development-only switches:
+
+```bash
+DEV_PASS_THROUGH=true DEV_NO_KEY=true npm run server
+```
+
+The active proxy TOML must provide the upstream credential because the installed `LocalOpenAIAgentConfig` cannot send an API key or custom authorization header:
+
+```toml
+[general]
+auth_passthrough_with = "config_key"
+```
+
+The selected model route must define `api_key`, or an applicable unmatched model must have `default_api_key` under `[default_upstream]`. In `config_key` mode, the proxy injects that configured key instead of forwarding Antigravity's absent client key. `DEV_NO_KEY` and `DEV_PASS_THROUGH` must not be enabled in production.
 
 #### Usage
 
@@ -165,7 +177,6 @@ npm run dev
 
 # Set at least one key (or API_KEY for all agents)
 export API_KEY="sk-a-valid-key"
-# export GEMINI_API_KEY="$API_KEY"
 # export OPENAI_API_KEY="$API_KEY"
 
 # Run the full sweep (all 10 models × 3 agents × 8 tasks)
@@ -183,7 +194,7 @@ By default all 3 agents are enabled. To run a subset, comment the entries in the
 
 **Antigravity (`google-antigravity`)** — Three subtleties:
 
-1. `LocalAgentConfig.__init__` accepts `model=` and `api_key=` as shorthand but has **no `base_url=` kwarg**. An earlier version of the runner passed `base_url={PROXY_BASE}` anyway, but pydantic silently dropped it via `**kwargs`, leaving the SDK pointing at Google's Gemini API — which 404s on non-Gemini model ids (the user's failure: `MiniMaxAI/MiniMax-M3` returned `404: request failed with empty body`). The correct way to route the agent at an OpenAI-compatible endpoint is `LocalAgentConfig(models=[ModelTarget(name=..., endpoint=GeminiAPIEndpoint(base_url=f"{PROXY_BASE}/v1", api_key=...))])`. `GeminiAPIEndpoint.validate_endpoint` explicitly permits an external `base_url` (it skips the `GEMINI_API_KEY` check when one is set).
+1. Use `LocalOpenAIAgentConfig(model=..., base_url=PROXY_BASE)` for OpenAI-compatible `/v1/chat/completions` endpoints; the SDK appends `/v1/chat/completions` to the supplied origin. The installed SDK sends no API key or custom headers, so this proxy test requires `DEV_NO_KEY=true` plus `[general] auth_passthrough_with = "config_key"`. The proxy then injects the selected model route's configured `api_key`. Use `LocalAgentConfig` plus a `GeminiAPIEndpoint` for Gemini-compatible endpoints; the two transports are not interchangeable.
 2. Tools are registered as plain Python callables with docstrings (`glob_tool`, `read_tool`); the SDK introspects them per the docs.
 3. `Agent` is an async context manager; the runner `await`s `agent.chat(prompt)` and tries `await response.text()` first, falling back to `async for token in response` if `text()` is not available on the response object.
 

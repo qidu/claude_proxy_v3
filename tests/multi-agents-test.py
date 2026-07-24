@@ -14,12 +14,18 @@ Usage:
         # create a new venv: python3 -m venv .venv && .venv/bin/pip install -q --upgrade pip && .venv/bin/pip install -q langgraph langchain-openai langchain-core crewai pydantic google-antigravity
         pip install google-antigravity langgraph crewai langchain-openai langchain-core
 
-    Start the proxy with `DEV_PASS_THROUGH=true` to enable the
-    `/v1/chat/completions` endpoint required by langgraph/crewai.
+    Start the proxy with `DEV_PASS_THROUGH=true DEV_NO_KEY=true` to enable
+    `/v1/chat/completions` and permit Antigravity's headerless requests.
+    The active proxy TOML must inject the configured upstream key:
+
+        [general]
+        auth_passthrough_with = "config_key"
+
+    The selected model route (or applicable default upstream) must define its
+    upstream `api_key`.
 
     export API_KEY=a-valid-key
-    # Antigravity reads GEMINI_API_KEY per docs; LangGraph/CrewAI read OPENAI_API_KEY
-    export GEMINI_API_KEY=$API_KEY
+    # LangGraph/CrewAI read OPENAI_API_KEY; Antigravity uses the proxy config key.
     export OPENAI_API_KEY=$API_KEY
 
     python tests/multi-agents-test.py                 # all models x agents x tasks
@@ -42,12 +48,10 @@ Usage:
 
     To restrict the static task list, comment entries in USER_TASKS below.
 
-Assumptions (since docs do not spell every kwarg out):
-  - google-antigravity `LocalAgentConfig` accepts `model=` and `base_url=`. The
-    bundled snippet only shows `api_key`/`system_instructions`/`vertex`/`tools`;
-    `model` and `base_url` are the standard pattern for similar Google SDKs
-    and for the proxy to route arbitrary model ids. If these kwargs are not
-    accepted the import-time or first-call error is surfaced immediately.
+Assumptions:
+  - google-antigravity uses `LocalOpenAIAgentConfig` pointed at `PROXY_BASE`.
+    The SDK appends `/v1/chat/completions` but cannot attach an API key or custom
+    headers, so the proxy must use `DEV_NO_KEY=true` and config-key injection.
   - langgraph uses `langchain_openai.ChatOpenAI` pointed at `{PROXY_BASE}/v1`
     and `create_react_agent` for the tool-calling loop. `langgraph` alone is
     a low-level orchestrator (per its own docs), so the LLM wiring is done
@@ -75,7 +79,7 @@ PROXY_BASE = os.environ.get("PROXY_BASE", "http://127.0.0.1:8788")
 WORK_DIR = "./tests/"
 
 MODELS = [
-    "minimax-m3",                     # local test
+    "max-m3",                     # local test
     "gpt-5.5",                        # gpt
     "deepseek/deepseek-v4-flash",     # deepseek
     "minimax/minimax-m3",             # minimax
@@ -238,22 +242,19 @@ def tool_read(file_path: str) -> str:
 # Agent 1: Google Antigravity  (docs/agents/google-antigravity.md)
 # ---------------------------------------------------------------------------
 #
-# The SDK exposes `LocalAgentConfig` + `Agent` (Layer-1 high-level entry
-# point). Plain Python callables are registered as tools via `tools=[...]`.
-# `LocalAgentConfig.__init__` accepts `model=` and `api_key=` as shorthand
-# but has **no `base_url=` kwarg** (a previous version of this runner tried
-# to pass one, and pydantic silently dropped it via `**kwargs`, leaving the
-# SDK pointing at Google's Gemini API — which 404s on non-Gemini model
-# ids). The correct way to route to an OpenAI-compatible endpoint (our
-# proxy at `{PROXY_BASE}`) is the `models=` list with an explicit
-# `ModelTarget` whose `endpoint` is `GeminiAPIEndpoint(base_url=...)`
-# (the SDK treats that as "external API, validate against the endpoint" —
-# see `models.GeminiAPIEndpoint.validate_endpoint`).
+# The proxy exposes an OpenAI-compatible `/v1/chat/completions` endpoint, so
+# this runner uses `LocalOpenAIAgentConfig` with `{PROXY_BASE}`. The SDK
+# appends `/v1/chat/completions` to that origin but sends no auth header.
+# Start the proxy with `DEV_NO_KEY=true`; configure
+# `[general] auth_passthrough_with = "config_key"` so it injects the selected
+# model route's configured upstream key. `LocalAgentConfig` plus a
+# `GeminiAPIEndpoint` is the separate configuration for Gemini-compatible
+# endpoints.
 
 async def run_antigravity_agent(prompt: str, model: str) -> None:
     print(f"\n--- Antigravity Agent | model={model} ---")
     try:
-        from google.antigravity import Agent, LocalAgentConfig
+        from google.antigravity import Agent, LocalOpenAIAgentConfig
     except ImportError as e:
         print(f"Antigravity skipped: `google-antigravity` not installed ({e})")
         return
@@ -273,57 +274,16 @@ async def run_antigravity_agent(prompt: str, model: str) -> None:
         """
         return tool_read(path)
 
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY") or "sk-agent-test-key"
-
     try:
-        from google.antigravity import types as ag_types
-    except ImportError:
-        # Older SDK without the public `types` re-export — fall back to
-        # the legacy `LocalAgentConfig(api_key=, model=)` shorthand, which
-        # will hit Google's Gemini API and likely 404 on non-Gemini model
-        # ids. Surface this loudly per CLAUDE.md rule 8.
-        ag_types = None
-
-    if ag_types is not None:
-        # Route through the proxy's OpenAI-compatible `/v1/chat/completions`
-        # endpoint (`DEV_PASS_THROUGH=true` exposes it). Without this, the
-        # SDK would default to Google's Gemini API, which 404s on arbitrary
-        # model ids like `MiniMaxAI/MiniMax-M3`.
-        endpoint = ag_types.GeminiAPIEndpoint(
-            base_url=f"{PROXY_BASE}",
-            api_key=api_key,
+        config = LocalOpenAIAgentConfig(
+            model=model,
+            base_url=PROXY_BASE,
+            system_instructions=SYSTEM_PROMPT,
+            tools=[glob_tool, read_tool],
         )
-        model_target = ag_types.ModelTarget(
-            name=model,
-            types=[ag_types.ModelType.TEXT],
-            endpoint=endpoint,
-        )
-        try:
-            config = LocalAgentConfig(
-                models=[model_target],
-                api_key=api_key,
-                system_instructions=SYSTEM_PROMPT,
-                tools=[glob_tool, read_tool],
-            )
-        except (TypeError, pydantic.ValidationError) as e:
-            print(f"Antigravity config rejected by LocalAgentConfig: {e}")
-            print("Check SDK ModelTarget/ModelEndpoint signature.")
-            return
-    else:
-        # Fallback path: legacy shorthand. Will hit Google's Gemini API and
-        # almost certainly 404 on non-Gemini ids; this branch exists only so
-        # older SDK versions surface the limitation loudly instead of crashing.
-        try:
-            config = LocalAgentConfig(
-                api_key=api_key,
-                model=model,
-                system_instructions=SYSTEM_PROMPT,
-                tools=[glob_tool, read_tool],
-            )
-        except TypeError as e:
-            print(f"Antigravity config rejected by LocalAgentConfig: {e}")
-            print("Docs do not show model/base_url kwargs; check SDK signature.")
-            return
+    except (TypeError, pydantic.ValidationError) as e:
+        print(f"Antigravity config rejected by LocalOpenAIAgentConfig: {e}")
+        return
 
     try:
         async with Agent(config) as agent:
@@ -344,6 +304,12 @@ async def run_antigravity_agent(prompt: str, model: str) -> None:
                 print("(no text output)")
     except Exception as e:
         print(f"Antigravity failed: {e}")
+        if "401" in str(e):
+            print(
+                "Antigravity auth hint: start the proxy with DEV_NO_KEY=true "
+                "and set [general] auth_passthrough_with = \"config_key\" in "
+                "the active proxy TOML with an api_key for the selected model route."
+            )
 
 
 # ---------------------------------------------------------------------------

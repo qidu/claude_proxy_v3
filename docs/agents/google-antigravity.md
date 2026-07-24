@@ -62,6 +62,26 @@ export GOOGLE_CLOUD_LOCATION="us-central1"
 
 Explicit kwargs always take precedence over env vars.
 
+## Custom Endpoints
+
+Choose the config class that matches the endpoint protocol:
+
+- Use `LocalOpenAIAgentConfig` for OpenAI-compatible `/v1/chat/completions` endpoints. The installed SDK version does not expose an API-key or custom-header option for this config.
+- Use `LocalAgentConfig` plus `GeminiAPIEndpoint` for Gemini-compatible endpoints.
+
+```python
+from google.antigravity import Agent, LocalOpenAIAgentConfig
+
+config = LocalOpenAIAgentConfig(
+    model="your-custom-model-name",
+    base_url="https://your-provider.com",  # SDK appends /v1/chat/completions
+)
+
+async with Agent(config) as agent:
+    response = await agent.chat("Hello!")
+    print(await response.text())
+```
+
 Ensure you have authenticated locally before running the agent:
 
 ```sh
