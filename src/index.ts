@@ -887,13 +887,15 @@ export default {
 
       // Require at least one of: Authorization, x-api-key, x-goog-api-key
       // for model API requests. Health/dashboard/admin paths above are exempt.
+      // DEV_NO_KEY disables only this presence check; auth_url still applies.
       const authHeader = request.headers.get('authorization');
       const xApiKey = request.headers.get('x-api-key');
       const xGoogApiKey = request.headers.get('x-goog-api-key');
       const hasAuth = (authHeader && authHeader.trim() !== '') ||
                       (xApiKey && xApiKey.trim() !== '') ||
                       (xGoogApiKey && xGoogApiKey.trim() !== '');
-      if (!hasAuth) {
+      const devNoKey = env.DEV_NO_KEY === 'true' || env.DEV_NO_KEY === '1';
+      if (!hasAuth && !devNoKey) {
         logger.warn(requestId, `Missing auth headers (need Authorization, x-api-key, or x-goog-api-key) for ${path}`);
         return createErrorResponse(
           new Error('Missing authentication: provide Authorization, x-api-key, or x-goog-api-key header.'),

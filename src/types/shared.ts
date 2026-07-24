@@ -140,6 +140,13 @@ export interface Env {
     DEV_PASS_THROUGH?: string;
 
     /**
+     * Development-only: skip the requirement that model requests include an
+     * Authorization, x-api-key, or x-goog-api-key header. Set to "true" or "1".
+     * Configured auth_url validation still applies.
+     */
+    DEV_NO_KEY?: string;
+
+    /**
      * Base URL of the OPF privacy-filter sidecar, e.g. "http://127.0.0.1:8799".
      * When unset, the privacy filter plugin is disabled (no behavior change).
      */

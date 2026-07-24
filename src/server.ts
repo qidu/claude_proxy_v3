@@ -42,6 +42,7 @@ const env: NodeEnv = {
   PROXY_CONFIG_URL: process.env.PROXY_CONFIG_URL,
   PORT: process.env.PORT || '8788',
   DEV_PASS_THROUGH: process.env.DEV_PASS_THROUGH || 'false',
+  DEV_NO_KEY: process.env.DEV_NO_KEY || 'false',
   PRIVACY_FILTER_URL: process.env.PRIVACY_FILTER_URL,
   PRIVACY_FILTER_TIMEOUT_MS: process.env.PRIVACY_FILTER_TIMEOUT_MS,
   PRIVACY_FILTER_MAX_CHARS: process.env.PRIVACY_FILTER_MAX_CHARS,
@@ -153,6 +154,9 @@ server.listen(port, '0.0.0.0', async () => {
 
   if (env.DEV_PASS_THROUGH === 'true' || env.DEV_PASS_THROUGH === '1') {
     console.warn('[WARN] DEV_PASS_THROUGH is enabled: /v1/chat/completions requests are passed through directly with validation only (no model routing). Do not use in production.');
+  }
+  if (env.DEV_NO_KEY === 'true' || env.DEV_NO_KEY === '1') {
+    console.warn('[WARN] DEV_NO_KEY is enabled: model requests may omit authentication headers. Do not use in production.');
   }
 
   // Token stats persistence (JSONL dump + restore) is opt-in: it only runs
