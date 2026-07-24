@@ -8,7 +8,7 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 Newest merged work, reverse-chronological.
 
 ### Fix: `DEV_PASS_THROUGH` `/v1/chat/completions` returns raw Claude response to OpenAI clients
-
+Notice:
 `handleChatCompletionsPassthrough` was forwarding the Claude Messages upstream response directly
 to the client without conversion. Clients expecting OpenAI completions format (e.g. Antigravity
 `LocalOpenAIAgentConfig`) received a Claude response object with no `choices` field, triggering:
