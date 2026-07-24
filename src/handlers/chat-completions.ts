@@ -51,6 +51,27 @@ export async function handleChatCompletionsPassthrough(
   const isStreaming = parsedBody.stream === true;
   logger.debug(requestId, `${path} req: model=${parsedBody.model} messages=${Array.isArray(parsedBody.messages) ? (parsedBody.messages as unknown[]).length : 0} stream=${isStreaming}`);
 
+  // Some SDK clients (e.g. Antigravity LocalOpenAIAgentConfig) omit the `name`
+  // field on tool messages. DeepSeek and some other upstreams require it.
+  // Recover the name from the preceding assistant turn's tool_calls by tool_call_id.
+  if (Array.isArray(parsedBody.messages)) {
+    const toolCallIndex = new Map<string, string>();
+    let bodyPatched = false;
+    for (const msg of parsedBody.messages as Record<string, unknown>[]) {
+      if (msg.role === 'assistant' && Array.isArray(msg.tool_calls)) {
+        for (const tc of msg.tool_calls as Record<string, unknown>[]) {
+          const id = tc.id as string | undefined;
+          const name = (tc.function as Record<string, unknown> | undefined)?.name as string | undefined;
+          if (id && name) toolCallIndex.set(id, name);
+        }
+      } else if (msg.role === 'tool' && !msg.name) {
+        const name = toolCallIndex.get(msg.tool_call_id as string);
+        if (name) { msg.name = name; bodyPatched = true; }
+      }
+    }
+    if (bodyPatched) logger.debug(requestId, `${path} patched missing tool message name(s)`);
+  }
+
   // When the upstream is anthropic-messages, convert completions body → Claude Messages,
   // forward to upstream, then convert the Claude response back to OpenAI completions format.
   if (upstreamMode === 'anthropic-messages') {
@@ -193,7 +214,7 @@ export async function handleChatCompletionsPassthrough(
       'Content-Type': 'application/json',
       ...addForwardedHeaders(authHeaders, request),
     },
-    body: bodyText,
+    body: JSON.stringify(parsedBody),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env as Record<string, unknown>)),
   });
 

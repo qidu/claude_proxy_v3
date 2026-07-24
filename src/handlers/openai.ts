@@ -115,40 +115,58 @@ function convertGeminiGenerateContentToOpenAI(geminiRequest: Record<string, unkn
       }
     }
 
+    // Track the last emitted tool_calls so tool results can recover the correct id+name.
+    let lastToolCalls: Array<{ id: string; name: string }> = [];
+
     for (const content of geminiRequest.contents as any[]) {
       const role = content.role === 'model' ? 'assistant' : content.role;
       const parts: any[] = content.parts ?? [];
 
       const funcCallParts = parts.filter((p: any) => p.functionCall);
       const funcRespParts = parts.filter((p: any) => p.functionResponse);
-      const textContent = parts.filter((p: any) => p.text).map((p: any) => p.text).join('');
+      // Separate thinking (thought:true) from regular text so they can be
+      // reconstructed as proper Claude thinking blocks by completionsToClaudeBody.
+      const thinkingContent = parts.filter((p: any) => p.thought && p.text).map((p: any) => p.text as string).join('');
+      const textContent = parts.filter((p: any) => p.text && !p.thought).map((p: any) => p.text as string).join('');
 
       if (funcCallParts.length > 0) {
         // Model turn: convert functionCall parts to OpenAI tool_calls
-        messages.push({
+        lastToolCalls = funcCallParts.map((p: any, i: number) => ({
+          id: `call_${p.functionCall.name}_${i}`,
+          name: p.functionCall.name,
+        }));
+        const msg: Record<string, unknown> = {
           role: 'assistant',
           content: textContent || null,
-          tool_calls: funcCallParts.map((p: any, i: number) => ({
-            id: `call_${p.functionCall.name}_${i}`,
+          tool_calls: lastToolCalls.map((tc, i) => ({
+            id: tc.id,
             type: 'function',
             function: {
-              name: p.functionCall.name,
-              arguments: JSON.stringify(p.functionCall.args ?? {}),
+              name: tc.name,
+              arguments: JSON.stringify(funcCallParts[i].functionCall.args ?? {}),
             },
           })),
-        });
+        };
+        if (thinkingContent) msg.reasoning_content = thinkingContent;
+        messages.push(msg);
       } else if (funcRespParts.length > 0) {
-        // User turn: convert functionResponse parts to OpenAI tool messages
+        // User turn: convert functionResponse parts to OpenAI tool messages.
+        // Match by position to the preceding lastToolCalls so id and name agree.
         for (let i = 0; i < funcRespParts.length; i++) {
           const p = funcRespParts[i];
+          const matched = lastToolCalls[i];
           messages.push({
             role: 'tool',
-            tool_call_id: `call_${p.functionResponse.name}_${i}`,
+            tool_call_id: matched?.id ?? `call_${p.functionResponse.name}_${i}`,
+            name: matched?.name ?? p.functionResponse.name,
             content: JSON.stringify(p.functionResponse.response ?? {}),
           });
         }
+        lastToolCalls = [];
       } else {
-        messages.push({ role, content: textContent });
+        const msg: Record<string, unknown> = { role, content: textContent };
+        if (thinkingContent) msg.reasoning_content = thinkingContent;
+        messages.push(msg);
       }
     }
 
@@ -193,6 +211,29 @@ function defaultMissingOpenAIMessageRoles(openaiRequest: Record<string, unknown>
   });
 }
 
+/**
+ * Some upstreams (e.g. DeepSeek) require `name` on tool-role messages, but not
+ * every converter/SDK populates it. Recover it from the preceding assistant
+ * turn's tool_calls, matched by tool_call_id.
+ */
+function fillMissingToolMessageNames(openaiRequest: Record<string, unknown>): void {
+  if (!Array.isArray(openaiRequest.messages)) return;
+  const idToName = new Map<string, string>();
+  for (const message of openaiRequest.messages as Record<string, unknown>[]) {
+    if (!message || typeof message !== 'object') continue;
+    if (message.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      for (const tc of message.tool_calls as Record<string, unknown>[]) {
+        const id = tc.id as string | undefined;
+        const name = (tc.function as Record<string, unknown> | undefined)?.name as string | undefined;
+        if (id && name) idToName.set(id, name);
+      }
+    } else if (message.role === 'tool' && !message.name) {
+      const name = idToName.get(message.tool_call_id as string);
+      if (name) message.name = name;
+    }
+  }
+}
+
 function openAIContentToText(content: OpenAIContent | null | undefined): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -223,10 +264,12 @@ function openAIChunk(text: string, model: string): Record<string, unknown> {
   };
 }
 
-// Module-level tool-call buffer for Anthropic SSE → Gemini conversion.
+// Module-level buffers for Anthropic SSE → Gemini conversion.
 // Single-flight (same pattern as thinkStreamBuffer): safe because JS is single-threaded.
 interface AnthropicToolBuffer { id: string; name: string; args: string; }
 let anthropicToolBuffers: Map<number, AnthropicToolBuffer> = new Map();
+// Keyed by block index; value is accumulated thinking text.
+let anthropicThinkingBuffers: Map<number, string> = new Map();
 
 function processAnthropicSSEBuffer(buffer: string, model: string, requestId: string, isInteractionsRequest: boolean, isGenerateContentRequest: boolean): { processed: string; remaining: string } {
   let result = '';
@@ -252,6 +295,8 @@ function processAnthropicSSEBuffer(buffer: string, model: string, requestId: str
             name: (block.name as string) || '',
             args: initialArgs,
           });
+        } else if (block?.type === 'thinking') {
+          anthropicThinkingBuffers.set(parsed.index as number, '');
         }
       } else if (parsed.type === 'content_block_delta') {
         const delta = parsed.delta as Record<string, unknown> | undefined;
@@ -259,6 +304,11 @@ function processAnthropicSSEBuffer(buffer: string, model: string, requestId: str
           const chunk = openAIChunk((delta.text as string) || '', model);
           const { processed } = processSSEBuffer(`data: ${JSON.stringify(chunk)}\n\n`, model, requestId, isInteractionsRequest, isGenerateContentRequest);
           result += processed;
+        } else if (delta?.type === 'thinking_delta') {
+          const existing = anthropicThinkingBuffers.get(parsed.index as number);
+          if (existing !== undefined) {
+            anthropicThinkingBuffers.set(parsed.index as number, existing + ((delta.thinking as string) || ''));
+          }
         } else if (delta?.type === 'input_json_delta') {
           const tool = anthropicToolBuffers.get(parsed.index as number);
           if (tool) tool.args += (delta.partial_json as string) || '';
@@ -283,6 +333,16 @@ function processAnthropicSSEBuffer(buffer: string, model: string, requestId: str
           };
           const { processed } = processSSEBuffer(`data: ${JSON.stringify(chunk)}\n\n`, model, requestId, isInteractionsRequest, isGenerateContentRequest);
           result += processed;
+        } else if (anthropicThinkingBuffers.has(parsed.index as number)) {
+          // Emit the completed thinking block as a <think>…</think>-wrapped text so
+          // processSSEBuffer's existing logic strips it into reasoning/cleanText.
+          const thinking = anthropicThinkingBuffers.get(parsed.index as number) || '';
+          anthropicThinkingBuffers.delete(parsed.index as number);
+          if (thinking) {
+            const chunk = openAIChunk(`<think>${thinking}</think>`, model);
+            const { processed } = processSSEBuffer(`data: ${JSON.stringify(chunk)}\n\n`, model, requestId, isInteractionsRequest, isGenerateContentRequest);
+            result += processed;
+          }
         }
       } else if (parsed.type === 'message_delta') {
         // processSSEBuffer filters out empty-parts candidates, so emit finishReason directly.
@@ -296,6 +356,7 @@ function processAnthropicSSEBuffer(buffer: string, model: string, requestId: str
         // Interactions format: stream just ends; no explicit finish event needed.
       } else if (parsed.type === 'message_stop') {
         anthropicToolBuffers.clear();
+        anthropicThinkingBuffers.clear();
         // Gemini generateContent/interactions streams end naturally; no sentinel needed.
       }
     } catch {
@@ -394,32 +455,51 @@ export function completionsToClaudeBody(completions: Record<string, unknown>, mo
   const systemMsg = messages.find(m => m.role === 'system');
   const otherMessages = messages.filter(m => m.role !== 'system');
 
+  // Group consecutive tool-role messages into a single user message with multiple
+  // tool_result blocks — Claude requires all results in one message immediately
+  // after the assistant turn that issued the tool_calls.
+  const claudeMessages: unknown[] = [];
+  let i = 0;
+  while (i < otherMessages.length) {
+    const m = otherMessages[i];
+    const thinking = (m as unknown as Record<string, unknown>).reasoning_content as string | undefined;
+    if (m.tool_calls) {
+      const content: unknown[] = [];
+      if (thinking) content.push({ type: 'thinking', thinking });
+      content.push(...m.tool_calls.map(tc => ({
+        type: 'tool_use',
+        id: tc.id,
+        name: tc.function.name,
+        input: parseJsonObject(tc.function.arguments),
+      })));
+      claudeMessages.push({ role: 'assistant', content });
+      i++;
+      // Collect all immediately following tool messages into one user message.
+      const toolResults: unknown[] = [];
+      while (i < otherMessages.length && otherMessages[i].role === 'tool') {
+        const t = otherMessages[i];
+        toolResults.push({ type: 'tool_result', tool_use_id: t.tool_call_id, content: t.content ?? '' });
+        i++;
+      }
+      if (toolResults.length > 0) {
+        claudeMessages.push({ role: 'user', content: toolResults });
+      }
+    } else if (m.role === 'tool') {
+      // Orphaned tool message (no preceding tool_calls — should not happen, but be safe).
+      claudeMessages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: m.tool_call_id, content: m.content ?? '' }] });
+      i++;
+    } else if (thinking) {
+      claudeMessages.push({ role: m.role, content: [{ type: 'thinking', thinking }, { type: 'text', text: m.content ?? '' }] });
+      i++;
+    } else {
+      claudeMessages.push({ role: m.role, content: m.content ?? '' });
+      i++;
+    }
+  }
+
   const claudeBody: Record<string, unknown> = {
     model,
-    messages: otherMessages.map(m => {
-      if (m.tool_calls) {
-        return {
-          role: 'assistant',
-          content: m.tool_calls.map(tc => ({
-            type: 'tool_use',
-            id: tc.id,
-            name: tc.function.name,
-            input: parseJsonObject(tc.function.arguments),
-          })),
-        };
-      }
-      if (m.role === 'tool') {
-        return {
-          role: 'user',
-          content: [{
-            type: 'tool_result',
-            tool_use_id: m.tool_call_id,
-            content: m.content ?? '',
-          }],
-        };
-      }
-      return { role: m.role, content: m.content ?? '' };
-    }),
+    messages: claudeMessages,
     max_tokens: (completions.max_tokens as number | undefined) ?? 4096,
     stream: completions.stream === true,
   };
@@ -846,6 +926,9 @@ export async function handleOpenAIRequest(
       defaultMissingOpenAIMessageRoles(openaiRequest);
     }
 
+    // Ensure tool messages carry a `name` (required by some upstreams like DeepSeek).
+    fillMissingToolMessageNames(openaiRequest);
+
     // Cross-mode routes: re-target the converted Completions body to a different
     // upstream family. Done after the Gemini/Claude → Completions conversion so
     // we reuse that conversion ("through openai-completions transforming").
@@ -1070,6 +1153,16 @@ async function handleOpenAINonStreamingResponse(
 // chunk processor below when it observes that sentinel.
 let thinkStreamBuffer = '';
 
+// Cross-chunk accumulation of streaming OpenAI tool_calls for the Gemini output
+// paths. Upstreams like DeepSeek fragment a single tool call across chunks: the
+// first chunk carries id+name+partial-args, continuation chunks carry only more
+// argument text at the same index. Emitting a Gemini functionCall per fragment
+// produces name-less "call_undefined" calls, so we buffer by index and flush one
+// complete functionCall when finish_reason arrives. Single-flight (same rationale
+// as thinkStreamBuffer). Keyed by the tool_call index.
+interface GeminiToolCallAccum { id: string; name: string; args: string; }
+let geminiToolCallBuffer: Map<number, GeminiToolCallAccum> = new Map();
+
 /**
  * Process SSE buffer and extract complete events
  */
@@ -1092,6 +1185,7 @@ function processSSEBuffer(buffer: string, modelId: string, requestId: string, is
                 const data = line.slice(6).trim();
                 if (data === '[DONE]') {
                     thinkStreamBuffer = '';
+                    geminiToolCallBuffer.clear();
                     if (isGenerateContentRequest) {
                         // Gemini generateContent doesn't need explicit end marker
                         continue;
@@ -1108,6 +1202,29 @@ function processSSEBuffer(buffer: string, modelId: string, requestId: string, is
                             thinkStreamBuffer = '';
                         }
 
+                        // For the Gemini output paths, accumulate fragmented streaming
+                        // tool_calls across chunks and strip them from the delta so the
+                        // stateless converter never emits a partial functionCall. Flush
+                        // complete calls when finish_reason arrives (handled below).
+                        if (isGenerateContentRequest || isInteractionsRequest) {
+                            const deltaToolCalls = parsed?.choices?.[0]?.delta?.tool_calls;
+                            if (Array.isArray(deltaToolCalls)) {
+                                for (const tc of deltaToolCalls) {
+                                    const idx = typeof tc.index === 'number' ? tc.index : 0;
+                                    let acc = geminiToolCallBuffer.get(idx);
+                                    if (!acc) {
+                                        acc = { id: '', name: '', args: '' };
+                                        geminiToolCallBuffer.set(idx, acc);
+                                    }
+                                    if (tc.id) acc.id = tc.id;
+                                    if (tc.function?.name) acc.name = tc.function.name;
+                                    if (typeof tc.function?.arguments === 'string') acc.args += tc.function.arguments;
+                                }
+                                // Remove tool_calls from this chunk; they are emitted on flush.
+                                delete parsed.choices[0].delta.tool_calls;
+                            }
+                        }
+
                         let convertedChunk: Record<string, any> | null = null;
 
                         if (isGenerateContentRequest) {
@@ -1119,6 +1236,32 @@ function processSSEBuffer(buffer: string, modelId: string, requestId: string, is
                         } else {
                             // Convert to Claude format
                             convertedChunk = convertOpenAIToClaudeResponse(parsed, modelId, requestId);
+                        }
+
+                        // Flush accumulated tool calls when the turn finishes, injecting
+                        // them as complete functionCall parts into the converted chunk.
+                        const finishReason = parsed?.choices?.[0]?.finish_reason;
+                        if ((isGenerateContentRequest || isInteractionsRequest) && finishReason && geminiToolCallBuffer.size > 0) {
+                            const accumulated = Array.from(geminiToolCallBuffer.values()).filter(a => a.name);
+                            geminiToolCallBuffer.clear();
+                            const synthetic = {
+                                choices: [{
+                                    index: 0,
+                                    delta: {},
+                                    message: {
+                                        role: 'assistant',
+                                        content: '',
+                                        tool_calls: accumulated.map(a => ({
+                                            id: a.id, type: 'function',
+                                            function: { name: a.name, arguments: a.args },
+                                        })),
+                                    },
+                                    finish_reason: finishReason,
+                                }],
+                            };
+                            convertedChunk = isGenerateContentRequest
+                                ? convertOpenAIToGeminiGenerateContent(synthetic, modelId, requestId)
+                                : convertOpenAIToGeminiInteractions(synthetic, modelId, requestId);
                         }
 
                         // If converter didn't consume the buffer-tail (tag never closed), carry it forward

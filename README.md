@@ -186,6 +186,16 @@ Key ideas:
   `thought` part. The tag itself is stripped from the user-visible text. This applies to
   both streaming and non-streaming responses; the streaming path stitches tags that cross
   SSE chunk boundaries before extraction.
+- **`reasoning_content` field round-trip (`openai-completions`, Gemini endpoints):** reasoning
+  models such as DeepSeek emit thinking as a dedicated `reasoning_content` field on the delta
+  rather than inline tags. The proxy extracts it the same way as tag-based reasoning (emitted as
+  a Gemini `thought` part, Claude `thinking` block, etc.) and ensures it is replayed on the
+  assistant turn in subsequent requests — required by DeepSeek-compatible upstreams that reject
+  conversations where a prior thinking turn omits `reasoning_content`. Tool-call streaming is
+  also handled: DeepSeek fragments a single tool call across multiple SSE chunks (first chunk
+  carries `id`+`name`+partial args, continuation chunks carry only more arg text). The proxy
+  accumulates these fragments and flushes one complete `functionCall` part per tool call when
+  `finish_reason` arrives, avoiding name-less `call_undefined` entries in the client's history.
 - **Wildcards** (`claude-*`) apply only in the provider/default sections listed in
   [Model Routing](#model-routing); the **catch-all** (`*`) is only the final
   `[models.default]` fallback for anything not claimed earlier.

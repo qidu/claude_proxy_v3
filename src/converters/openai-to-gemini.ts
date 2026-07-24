@@ -52,9 +52,15 @@ export function convertOpenAIToGeminiGenerateContent(
     if (choices.length > 0) {
         const choice = choices[0];
         const content = choice.delta?.content || choice.message?.content || '';
+        // Reasoning-model upstreams (e.g. DeepSeek) emit thinking as a dedicated
+        // reasoning_content field rather than inline <think> tags.
+        const reasoningContent = choice.delta?.reasoning_content || choice.message?.reasoning_content || '';
         const toolCalls = choice.message?.tool_calls || choice.delta?.tool_calls || [];
         const parts: any[] = [];
 
+        if (reasoningContent !== '') {
+            parts.push({ thought: true, text: reasoningContent });
+        }
         if (content !== '') {
             const { reasoning, cleanText } = extractThinkContent(content);
             if (reasoning) {

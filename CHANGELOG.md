@@ -7,6 +7,65 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: Gemini-endpoint → `openai-completions` streaming with DeepSeek reasoning models
+
+Resolved a cascade of five interrelated bugs that prevented Gemini-endpoint clients
+(e.g. Antigravity `GeminiAPIEndpoint`) from completing multi-turn agentic tasks through
+an `openai-completions` upstream such as `deepseek-v4-flash` on DeepSeek.
+
+**Root causes and fixes:**
+
+1. **Fragmented streaming tool calls emitted as broken `functionCall` parts**
+   DeepSeek fragments a single tool call across multiple SSE chunks: the first chunk
+   carries `index`, `id`, `name`, and a partial-args string; continuation chunks carry
+   only more argument text at the same index. The stateless `convertOpenAIToGeminiGenerateContent`
+   converter was called for every chunk, producing name-less `call_undefined_N` parts.
+   **Fix:** `processSSEBuffer` now accumulates tool-call deltas in a `geminiToolCallBuffer`
+   (keyed by `index`) and flushes one complete `functionCall` per tool call when
+   `finish_reason` arrives (`src/handlers/openai.ts`).
+
+2. **`reasoning_content` not passed back on next turn**
+   DeepSeek reasoning models emit thinking in a dedicated `delta.reasoning_content` field
+   (not inline `<think>` tags). The converter ignored it, so the subsequent request omitted
+   `reasoning_content` from the assistant turn and DeepSeek rejected it with:
+   `The reasoning_content in the thinking mode must be passed back to the API.`
+   **Fix:** `convertOpenAIToGeminiGenerateContent` now extracts `reasoning_content` and
+   emits it as a `{thought: true, text}` Gemini part (`src/converters/openai-to-gemini.ts`).
+   On the inbound side, `convertGeminiGenerateContentToOpenAI` maps `thought:true` Gemini
+   parts to the standard `reasoning_content` field on the assistant message (not a private
+   `_thinking` field), so it round-trips correctly through subsequent requests.
+   `completionsToClaudeBody` reads the same `reasoning_content` field and converts it to
+   a `{type: "thinking"}` Claude content block for `anthropic-messages` upstreams.
+
+3. **Tool messages missing `name` field**
+   Several converters (`convertClaudeToOpenAIRequest`, `convertGeminiGenerateContentToOpenAI`,
+   Antigravity `LocalOpenAIAgentConfig` passthrough) emitted `role:"tool"` messages without
+   the `name` field. DeepSeek's OpenAI endpoint requires it.
+   **Fix (A):** `convertGeminiGenerateContentToOpenAI` now tracks each assistant turn's
+   `tool_calls` in `lastToolCalls` and uses that to set `name` and match `tool_call_id`
+   by position when converting the following `functionResponse` turn.
+   **Fix (B):** `fillMissingToolMessageNames` post-processes the converted OpenAI request
+   in `handleOpenAIRequest`, recovering `name` from `tool_calls` by `tool_call_id` for
+   any converter that missed it (`src/handlers/openai.ts`).
+   **Fix (C):** `handleChatCompletionsPassthrough` applies the same recovery for clients
+   that hit `/v1/chat/completions` directly (`src/handlers/chat-completions.ts`).
+
+4. **Tool-call IDs mismatched between assistant and tool turns**
+   The previous ID scheme `call_${name}_${i}` generated IDs independently in each turn,
+   which diverged when multiple calls shared the same function name.
+   **Fix:** IDs are now generated once in the assistant turn and recovered by position for
+   the corresponding tool-result turn via `lastToolCalls`.
+
+5. **Multiple tool results sent as separate `user` messages (anthropic-messages path)**
+   When an assistant turn issued N tool calls, the converter produced N separate
+   `{role:"user", content:[{type:"tool_result"}]}` messages. Claude requires all results
+   bundled in a single `user` message immediately after the assistant turn.
+   **Fix:** `completionsToClaudeBody` now uses a loop that collects consecutive `tool`-role
+   messages into one `{role:"user", content:[...tool_results]}` message.
+
+**Files changed:** `src/converters/openai-to-gemini.ts`, `src/handlers/openai.ts`,
+`src/handlers/chat-completions.ts`.
+
 ### Fix: `DEV_PASS_THROUGH` `/v1/chat/completions` returns raw Claude response to OpenAI clients
 Notice:
 `handleChatCompletionsPassthrough` was forwarding the Claude Messages upstream response directly
