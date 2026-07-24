@@ -7,6 +7,23 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: `systemInstruction` dropped when routing Gemini `generateContent` to OpenAI upstream
+
+When Antigravity SDK (or any client) sends a Gemini `generateContent` request with
+`systemInstruction` to an `openai-completions` upstream route (e.g. `max-m3`), the system
+prompt was silently dropped during conversion. The model received no system context and
+hallucinated tool names not in the provided schema, causing errors like:
+
+```
+invalid tool call error (invalid_signature) SearchDirectory is required
+```
+
+`convertGeminiGenerateContentToOpenAI` in `src/handlers/openai.ts` now extracts
+`systemInstruction.parts[*].text` (standard Gemini format) and prepends it as an OpenAI
+`{ role: "system", content: "..." }` message before the conversation turns.
+
+**Files changed:** `src/handlers/openai.ts`.
+
 ### `DEV_PASS_THROUGH` upstream-auth notice
 
 The README and `docs/README_DETAILS.md` now explicitly flag that `DEV_PASS_THROUGH=true`

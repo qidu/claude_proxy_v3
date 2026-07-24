@@ -103,6 +103,18 @@ function convertGeminiGenerateContentToOpenAI(geminiRequest: Record<string, unkn
   if (Array.isArray(geminiRequest.contents)) {
     const messages: Record<string, unknown>[] = [];
 
+    // Extract systemInstruction and prepend as OpenAI system message
+    const sysInstr = geminiRequest.systemInstruction as Record<string, unknown> | undefined;
+    if (sysInstr) {
+      const parts = sysInstr.parts as Array<Record<string, unknown>> | undefined;
+      const systemText = Array.isArray(parts)
+        ? parts.map(p => (typeof p.text === 'string' ? p.text : '')).join('')
+        : typeof sysInstr.text === 'string' ? sysInstr.text : '';
+      if (systemText) {
+        messages.push({ role: 'system', content: systemText });
+      }
+    }
+
     for (const content of geminiRequest.contents as any[]) {
       const role = content.role === 'model' ? 'assistant' : content.role;
       const parts: any[] = content.parts ?? [];
