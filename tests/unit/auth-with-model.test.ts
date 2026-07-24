@@ -35,6 +35,14 @@ function makeRequest(model: string, headers: Record<string, string> = {}): Reque
   });
 }
 
+function makeRequestWithoutAuth(model: string): Request {
+  return new Request('http://localhost/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 10 }),
+  });
+}
+
 // Captured calls by the mock
 type AuthCall = { url: string; headers: Record<string, string> };
 let authCalls: AuthCall[] = [];
@@ -115,6 +123,53 @@ base_url = "https://api.example.com"
 api_key = "sk-test"
 "claude-*" = {}
 `;
+
+describe('DEV_NO_KEY', () => {
+  let configPath: string;
+
+  before(() => {
+    configPath = makeConfigPath(BASE_TOML);
+    installMockFetch(AUTH_URL);
+  });
+
+  after(() => {
+    restoreFetch();
+    unlinkSync(configPath);
+  });
+
+  beforeEach(() => {
+    clearProxyConfigCache();
+    authCalls = [];
+    authStatus = 200;
+  });
+
+  it('rejects missing auth headers by default', async () => {
+    const resp = await handler.fetch(makeRequestWithoutAuth('claude-sonnet-4-6'), makeEnv(configPath) as any);
+    assert.equal(resp.status, 401);
+    assert.equal(authCalls.length, 0);
+  });
+
+  for (const value of ['true', '1']) {
+    it(`accepts missing auth headers when DEV_NO_KEY=${value}`, async () => {
+      const resp = await handler.fetch(
+        makeRequestWithoutAuth('claude-sonnet-4-6'),
+        { ...makeEnv(configPath), DEV_NO_KEY: value } as any,
+      );
+      assert.equal(resp.status, 200);
+      assert.equal(authCalls.length, 1, 'configured auth_url must still be called');
+    });
+  }
+
+  it('still rejects when auth_url rejects', async () => {
+    authStatus = 403;
+    const resp = await handler.fetch(
+      makeRequestWithoutAuth('claude-sonnet-4-6'),
+      { ...makeEnv(configPath), DEV_NO_KEY: 'true' } as any,
+    );
+    assert.equal(authCalls.length, 1);
+    assert.equal(resp.status, 401);
+  });
+});
 
 describe('auth_with_model = false (default)', () => {
   let configPath: string;
