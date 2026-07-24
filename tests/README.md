@@ -121,6 +121,88 @@ The two provider packages OpenCode can load — `@ai-sdk/anthropic` and `@ai-sdk
 
 For a sample run (1 model × all agents × all tasks), see `./logs/results/test_result_of_deepseek_v4_flash_all_agents_all_tasks.md`.
 
+### `multi-agents-test.py`
+
+Python counterpart of `multi-agents-test.ts`. Runs three Python-native agent SDKs against the same local proxy, exercising the same `MODELS` list and `USER_TASKS` set with the same CLI selection semantics (`M A T`, 1-based with `%` wrap; `0` means "all").
+
+Agent order (used by the CLI `agent` selector):
+
+| # | Agent        | SDK package                                                                 | Transport                                                                                  |
+|---|--------------|-----------------------------------------------------------------------------|--------------------------------------------------------------------------------------------|
+| 1 | Antigravity  | `google-antigravity` (imports `Agent`, `LocalAgentConfig` from `google.antigravity`) | Gemini-style. Wired with `LocalAgentConfig(api_key=…, model=…, base_url=PROXY_BASE, …)`.   |
+| 2 | LangGraph    | `langgraph` (`create_react_agent`) + `langchain-openai` (`ChatOpenAI`)      | OpenAI-compatible (`/v1/chat/completions`). `ChatOpenAI(base_url={PROXY_BASE}/v1, …)`.     |
+| 3 | CrewAI       | `crewai` (`Agent`, `Crew`, `Task`, `LLM`) + `pydantic` (`BaseTool` schemas) | OpenAI-compatible (`/v1/chat/completions`). `LLM(model="openai/<id>", base_url={PROXY_BASE}/v1, …)`. |
+
+The full run is `len(USER_TASKS) * len(MODELS) * 3` = 8 × 10 × 3 = 240 invocations (modulated by the CLI selection below).
+
+#### Prerequisites
+
+```bash
+# Python 3.10–3.13 required (3.14 has no compatible wheels for crewai).
+python3 -m venv .venv
+source .venv/bin/activate
+pip install google-antigravity langgraph langchain langchain-openai langchain-core crewai pydantic
+```
+
+> **Note:** `google-antigravity` currently only ships macOS **arm64** wheels. On x86_64 Macs (or Linux/Windows) the Antigravity agent will be skipped with a clear "no matching distribution" message — the other two agents still run.
+
+#### Environment Variables
+
+| Variable          | Used by agent           | Notes                                                                          |
+|-------------------|-------------------------|--------------------------------------------------------------------------------|
+| `API_KEY`         | all                     | Fallback if a per-agent key is not set.                                         |
+| `GEMINI_API_KEY`  | Antigravity             | Per docs, `LocalAgentConfig` reads `GEMINI_API_KEY` when `api_key` is omitted. |
+| `OPENAI_API_KEY`  | LangGraph, CrewAI       | `langchain_openai.ChatOpenAI` and `crewai.LLM` read this when `api_key` is unset. |
+| `PROXY_BASE`      | all                     | Override the proxy origin (default `http://127.0.0.1:8788`).                   |
+
+Set `DEV_PASS_THROUGH=true` on the proxy before running so the `/v1/chat/completions` endpoint required by LangGraph and CrewAI is exposed (matches the `multi-agents-test.ts` setup note).
+
+#### Usage
+
+```bash
+# Start the proxy first
+npm run dev
+
+# Set at least one key (or API_KEY for all agents)
+export API_KEY="sk-a-valid-key"
+# export GEMINI_API_KEY="$API_KEY"
+# export OPENAI_API_KEY="$API_KEY"
+
+# Run the full sweep (all 10 models × 3 agents × 8 tasks)
+python tests/multi-agents-test.py
+
+# Or pick (M A T): Mth model, Ath agent, Tth task (1-based, wraps with %)
+python tests/multi-agents-test.py 1 1 1     # first model, first agent (Antigravity), first task
+python tests/multi-agents-test.py 9 3 0     # last model, CrewAI, all tasks
+python tests/multi-agents-test.py 0 2 0     # all models, LangGraph, all tasks
+```
+
+By default all 3 agents are enabled. To run a subset, comment the entries in the `AGENTS` list at the bottom of the script.
+
+#### Per-agent notes
+
+**Antigravity (`google-antigravity`)** — Three subtleties:
+
+1. `LocalAgentConfig.__init__` accepts `model=` and `api_key=` as shorthand but has **no `base_url=` kwarg**. An earlier version of the runner passed `base_url={PROXY_BASE}` anyway, but pydantic silently dropped it via `**kwargs`, leaving the SDK pointing at Google's Gemini API — which 404s on non-Gemini model ids (the user's failure: `MiniMaxAI/MiniMax-M3` returned `404: request failed with empty body`). The correct way to route the agent at an OpenAI-compatible endpoint is `LocalAgentConfig(models=[ModelTarget(name=..., endpoint=GeminiAPIEndpoint(base_url=f"{PROXY_BASE}/v1", api_key=...))])`. `GeminiAPIEndpoint.validate_endpoint` explicitly permits an external `base_url` (it skips the `GEMINI_API_KEY` check when one is set).
+2. Tools are registered as plain Python callables with docstrings (`glob_tool`, `read_tool`); the SDK introspects them per the docs.
+3. `Agent` is an async context manager; the runner `await`s `agent.chat(prompt)` and tries `await response.text()` first, falling back to `async for token in response` if `text()` is not available on the response object.
+
+**LangGraph (`langgraph` + `langchain-openai`)** — Three subtleties:
+
+1. `langgraph` is a low-level orchestrator (per its own docs) and does not ship its own chat client. The runner uses `langchain.agents.create_agent` (the ReAct tool-calling loop, the new home of `langgraph.prebuilt.create_react_agent` from pre-1.x) with `langchain_openai.ChatOpenAI`, which is the standard pairing for tool-calling agents.
+2. `ChatOpenAI(base_url={PROXY_BASE}/v1)` routes through the proxy's `/v1/chat/completions` handler. The proxy must be started with `DEV_PASS_THROUGH=true` so that path is exposed.
+3. The runner imports `create_agent` aliased as `create_react_agent` so the call site stays readable; this sidesteps the `LangGraphDeprecatedSinceV10` warning emitted by the legacy `langgraph.prebuilt.create_react_agent` in langgraph 1.x.
+
+**CrewAI (`crewai`)** — Three subtleties:
+
+1. The LLM is configured via `LLM(model="openai/<id>", base_url={PROXY_BASE}/v1, api_key=…)`. The `openai/` prefix tells CrewAI to use the OpenAI-compatible chat-completions client; the proxy serves that path when started with `DEV_PASS_THROUGH=true`.
+2. CrewAI tools must subclass `BaseTool` and declare an `args_schema` (a `pydantic.BaseModel` with `Field(...)` descriptions). The runner wires `GlobTool`/`ReadTool` with explicit schemas so the model sees typed parameters, not raw JSON.
+3. CrewAI's `kickoff()` is synchronous and blocks until the crew finishes; the runner surfaces the result's `raw` attribute (falling back to `str(result)`) and prints `chars=<len>` so silent empty responses are still detectable.
+
+#### Result reference
+
+For a sample run (1 model × all agents × all tasks), see `./logs/results/test_result_of_deepseek_v4_flash_all_agents_all_tasks.md` (TS runner). The Python runner writes its output to stdout in the same shape (`--- <Agent> Agent | model=<id> ---` header + `<Agent> done. tool_calls=N, chars=M` summary); redirect with `python tests/multi-agents-test.py 1 2 1 > out.log` to capture.
+
 ---
 
 ## Gemini API Tests
