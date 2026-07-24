@@ -2,6 +2,7 @@
 .wrangler/
 node_modules/
 dist/
+tests/__pycache__/
 docs/test_keys.md
 ./package-lock.json
 .git_audit_before_commiting

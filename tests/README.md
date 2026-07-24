@@ -152,6 +152,7 @@ pip install google-antigravity langgraph langchain langchain-openai langchain-co
 |-------------------|-------------------------|--------------------------------------------------------------------------------|
 | `API_KEY`         | all                     | Fallback if a per-agent key is not set.                                         |
 | `OPENAI_API_KEY`  | LangGraph, CrewAI       | Explicit API key for clients that can send authorization headers.               |
+| `ANTIGRAVITY_USE_GEMINI_API` | Antigravity           | Set to `true` or `1` to use `LocalAgentConfig` plus `GeminiAPIEndpoint`; otherwise the runner uses `LocalOpenAIAgentConfig`. |
 | `PROXY_BASE`      | all                     | Override the proxy origin (default `http://127.0.0.1:8788`).                   |
 
 For Antigravity, start the proxy with both development-only switches:
@@ -169,17 +170,18 @@ auth_passthrough_with = "config_key"
 
 The selected model route must define `api_key`, or an applicable unmatched model must have `default_api_key` under `[default_upstream]`. In `config_key` mode, the proxy injects that configured key instead of forwarding Antigravity's absent client key. `DEV_NO_KEY` and `DEV_PASS_THROUGH` must not be enabled in production.
 
-#### Usage
+For the Gemini transport, run the focused `max-m3` test with:
 
 ```bash
-# Start the proxy first
-npm run dev
+ANTIGRAVITY_USE_GEMINI_API=true \
+PROXY_BASE=http://127.0.0.1:8788 \
+API_KEY=xxx \
+python tests/multi-agents-test.py 1 1 1
+```
 
-# Set at least one key (or API_KEY for all agents)
-export API_KEY="sk-a-valid-key"
-# export OPENAI_API_KEY="$API_KEY"
+The SDK is expected to call `/v1beta/models/max-m3:generateContent` through the proxy. `GEMINI_API_KEY` is preferred over `API_KEY` for this mode.
 
-# Run the full sweep (all 10 models × 3 agents × 8 tasks)
+
 python tests/multi-agents-test.py
 
 # Or pick (M A T): Mth model, Ath agent, Tth task (1-based, wraps with %)

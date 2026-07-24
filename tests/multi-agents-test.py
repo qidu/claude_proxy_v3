@@ -16,6 +16,8 @@ Usage:
 
     Start the proxy with `DEV_PASS_THROUGH=true DEV_NO_KEY=true` to enable
     `/v1/chat/completions` and permit Antigravity's headerless requests.
+    Set `ANTIGRAVITY_USE_GEMINI_API=true` to use the Gemini-compatible
+    `LocalAgentConfig` + `GeminiAPIEndpoint` path instead.
     The active proxy TOML must inject the configured upstream key:
 
         [general]
@@ -25,8 +27,10 @@ Usage:
     upstream `api_key`.
 
     export API_KEY=a-valid-key
-    # LangGraph/CrewAI read OPENAI_API_KEY; Antigravity uses the proxy config key.
+    # LangGraph/CrewAI read OPENAI_API_KEY; Antigravity Gemini mode reads
+    # GEMINI_API_KEY, falling back to API_KEY.
     export OPENAI_API_KEY=$API_KEY
+    export GEMINI_API_KEY=$API_KEY
 
     python tests/multi-agents-test.py                 # all models x agents x tasks
     python tests/multi-agents-test.py 1 1 1           # first model, first agent, first task
@@ -79,7 +83,8 @@ PROXY_BASE = os.environ.get("PROXY_BASE", "http://127.0.0.1:8788")
 WORK_DIR = "./tests/"
 
 MODELS = [
-    "max-m3",                     # local test
+    "MiniMaxAI/MiniMax-M3",                     # local test
+    "minimax-m3",                     # local test
     "gpt-5.5",                        # gpt
     "deepseek/deepseek-v4-flash",     # deepseek
     "minimax/minimax-m3",             # minimax
@@ -251,10 +256,23 @@ def tool_read(file_path: str) -> str:
 # `GeminiAPIEndpoint` is the separate configuration for Gemini-compatible
 # endpoints.
 
+# Transport selection:
+# - default: `LocalOpenAIAgentConfig` -> `/v1/chat/completions`
+# - `ANTIGRAVITY_USE_GEMINI_API=true`: `LocalAgentConfig` plus
+#   `GeminiAPIEndpoint` -> `/v1beta/models/<model>:generateContent`.
+# The Gemini branch passes its API key to the SDK; DEV_NO_KEY remains useful
+# when the proxy is configured to accept headerless development requests.
+
 async def run_antigravity_agent(prompt: str, model: str) -> None:
-    print(f"\n--- Antigravity Agent | model={model} ---")
+    use_gemini_api = os.environ.get("ANTIGRAVITY_USE_GEMINI_API", "").lower() in {"true", "1"}
+    transport = "GeminiAPIEndpoint" if use_gemini_api else "LocalOpenAIAgentConfig"
+    print(f"\n--- Antigravity Agent | model={model} | transport={transport} ---")
     try:
-        from google.antigravity import Agent, LocalOpenAIAgentConfig
+        from google.antigravity import Agent
+        if use_gemini_api:
+            from google.antigravity import GeminiAPIEndpoint, LocalAgentConfig, ModelTarget, ModelType
+        else:
+            from google.antigravity import LocalOpenAIAgentConfig
     except ImportError as e:
         print(f"Antigravity skipped: `google-antigravity` not installed ({e})")
         return
@@ -275,14 +293,32 @@ async def run_antigravity_agent(prompt: str, model: str) -> None:
         return tool_read(path)
 
     try:
-        config = LocalOpenAIAgentConfig(
-            model=model,
-            base_url=PROXY_BASE,
-            system_instructions=SYSTEM_PROMPT,
-            tools=[glob_tool, read_tool],
-        )
+        if use_gemini_api:
+            api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY") or "sk-agent-test-key"
+            endpoint = GeminiAPIEndpoint(
+                base_url=PROXY_BASE,
+                api_key=api_key,
+            )
+            model_target = ModelTarget(
+                name=model,
+                types=[ModelType.TEXT],
+                endpoint=endpoint,
+            )
+            config = LocalAgentConfig(
+                models=[model_target],
+                api_key=api_key,
+                system_instructions=SYSTEM_PROMPT,
+                tools=[glob_tool, read_tool],
+            )
+        else:
+            config = LocalOpenAIAgentConfig(
+                model=model,
+                base_url=PROXY_BASE,
+                system_instructions=SYSTEM_PROMPT,
+                tools=[glob_tool, read_tool],
+            )
     except (TypeError, pydantic.ValidationError) as e:
-        print(f"Antigravity config rejected by LocalOpenAIAgentConfig: {e}")
+        print(f"Antigravity config rejected by {transport}: {e}")
         return
 
     try:
@@ -305,11 +341,17 @@ async def run_antigravity_agent(prompt: str, model: str) -> None:
     except Exception as e:
         print(f"Antigravity failed: {e}")
         if "401" in str(e):
-            print(
-                "Antigravity auth hint: start the proxy with DEV_NO_KEY=true "
-                "and set [general] auth_passthrough_with = \"config_key\" in "
-                "the active proxy TOML with an api_key for the selected model route."
-            )
+            if use_gemini_api:
+                print(
+                    "Antigravity Gemini auth hint: set GEMINI_API_KEY (or API_KEY), "
+                    "and ensure the proxy has a configured model api_key."
+                )
+            else:
+                print(
+                    "Antigravity auth hint: start the proxy with DEV_NO_KEY=true "
+                    "and set [general] auth_passthrough_with = \"config_key\" in "
+                    "the active proxy TOML with an api_key for the selected model route."
+                )
 
 
 # ---------------------------------------------------------------------------
