@@ -148,7 +148,7 @@ const server = createServer(async (req, res) => {
 let stopTui: (() => void) | undefined;
 
 server.listen(port, '0.0.0.0', async () => {
-  console.log(`Server running on http://0.0.0.0:${port}`);
+  console.log(`Server running on http://0.0.0.0:${port} (version: ${env.VERSION})`);
   console.log(` and dashboard at http://0.0.0.0:${port}/dashboard`);
 
   if (env.DEV_PASS_THROUGH === 'true' || env.DEV_PASS_THROUGH === '1') {

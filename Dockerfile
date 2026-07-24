@@ -1,6 +1,9 @@
 # Build image
 FROM node:22-alpine AS builder
 
+# COMMIT=$(git rev-parse --short HEAD) 
+# docker build --network=host --build-arg VERSION=$COMMIT -t model-proxy-v3:$COMMIT -t model-proxy-v3:latest .
+
 WORKDIR /app
 
 # Install build tools (no python needed - sharp/esbuild have prebuilt binaries)
@@ -15,18 +18,14 @@ RUN sed -i 's/"dev": "wrangler dev",\r$//' package.json && \
     sed -i 's/"wrangler": "^4.60.0"\r$//' package.json
 
 # Install dependencies
+# RUN npm ci --no-audit --no-fund
 RUN npm install
-RUN npm ci --no-audit --no-fund
 
 # Copy source and build
 COPY tsconfig.json ./
 COPY tsconfig.server.json ./
 COPY src/ ./src/
 COPY submodules/ ./submodules/
-
-ARG VERSION
-ENV VERSION=$VERSION
-RUN echo "Building with version: ${VERSION}"
 
 RUN npm run build
 
@@ -43,6 +42,8 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/submodules ./submodules
 COPY --from=builder /app/dist ./dist
 
+ARG VERSION
+ENV VERSION=$VERSION
 ENV LOCAL_TIKTOKEN=true
 ENV TIKTOKEN_MODEL="o200k_base"
 

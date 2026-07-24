@@ -332,7 +332,7 @@ export function handleDashboardRemoveScheduleTarget(
   }
 }
 
-export function handleDashboardPage(): Response {
+export function handleDashboardPage(env: Env): Response {
   const html = `<!doctype html>
 <html>
   <head>
@@ -463,7 +463,7 @@ export function handleDashboardPage(): Response {
     </style>
   </head>
   <body>
-    <h1>Proxy Dashboard</h1>
+    <h1>Proxy Dashboard <span style="color:#9e9e9e;font-size:14px;font-weight:normal;">${env.VERSION || 'dev'}</span></h1>
 
     <div class="side-nav" id="sideNav">
       <a href="#section-config">Config</a>
@@ -702,7 +702,12 @@ export function handleDashboardPage(): Response {
 
       function renderWildcardRouteHint(config) {
         const routes = wildcardRoutes(config);
-        wildcardRouteHint.textContent = routes.length ? 'configured: ' + routes.join(', ') : 'no wildcard routes configured';
+        if (routes.length) {
+          const highlighted = routes.map((r) => '<span style="color:#e67e22;font-weight:bold;">' + escapeHtml(r) + '</span>');
+          wildcardRouteHint.innerHTML = 'configured: ' + highlighted.join(', ');
+        } else {
+          wildcardRouteHint.textContent = 'no wildcard routes configured';
+        }
       }
 
       function upstreamModeSelect(categoryName, currentMode) {
@@ -730,8 +735,9 @@ export function handleDashboardPage(): Response {
         const testBtnHtml = isWildcard
           ? ''
           : '<button type="button" class="test-btn mini-btn" data-action="test-model" data-model="' + escapeHtml(modelKey) + '">t</button>';
-        return '<div class="config-row">'
-          + '<label>' + escapeHtml(modelKey) + '</label>'
+        const wildcardStyle = isWildcard ? ' style="border-left:3px solid #e67e22;padding-left:6px;background:#fff8f3;"' : '';
+        return '<div class="config-row"' + wildcardStyle + '>'
+          + '<label>' + (isWildcard ? '<span style="color:#e67e22;font-weight:bold;">' + escapeHtml(modelKey) + '</span>' : escapeHtml(modelKey)) + '</label>'
           + '<input type="text" data-kind="model-alias" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '" value="' + escapeHtml(alias) + '" placeholder="model alias"' + disabledAttr + ' />'
           + '<div class="row-actions">'
             + testBtnHtml

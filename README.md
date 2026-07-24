@@ -691,6 +691,8 @@ Three concrete examples of the same caller request resolving differently per lay
 
 ```bash
 cp proxy_config.toml_example proxy_config.toml
+#COMMIT=$(git rev-parse --short HEAD)
+#docker build --network=host --build-arg VERSION=$COMMIT -t model-proxy-v3:$COMMIT -t model-proxy-v3:latest .
 docker build -t model-proxy-v3 .
 docker run --network host -p 8788:8788 -v $(pwd)/proxy_config.toml:/app/proxy_config.toml -e DEV_PASS_THROUGH=true -e LOG_LEVEL=info model-proxy-v3
 ```

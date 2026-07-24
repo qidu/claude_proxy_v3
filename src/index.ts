@@ -756,7 +756,7 @@ export default {
       }
 
       if (path === '/dashboard' && request.method === 'GET') {
-        return applyCorsHeaders(handleDashboardPage(), request, env);
+        return applyCorsHeaders(handleDashboardPage(env), request, env);
       }
 
       if (path.startsWith('/dashboard/api/')) {

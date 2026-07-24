@@ -1043,7 +1043,7 @@ class DashboardView implements Component {
     const secondsTime = secColor(this.lastTime.slice(-2));
     const inflightIndicator = getActiveRequestCount() > 0 && Math.floor(sec % 2) == 0 ? ` ${green('●')}` : '';
     const lines: string[] = [];
-    lines.push(bold('Proxy TUI') + dim(`  ${hourminTime}`) + `${secondsTime}${inflightIndicator}`);
+    lines.push(bold('Proxy TUI') + dim(`  ${hourminTime}`) + `${secondsTime}${inflightIndicator}` + dim(`  ${this.app.getVersion()}`));
     lines.push(dim('─'.repeat(Math.max(0, width))));
 
     if (!snap) {
@@ -1238,6 +1238,8 @@ class DashboardApp {
   private proxyConfig: ProxyConfig | null = null;
 
   constructor(private readonly source: DashboardSource) {}
+
+  getVersion(): string { return this.source.env.VERSION || 'dev'; }
 
   async start(): Promise<() => void> {
     this.tui.addChild(this.view);
