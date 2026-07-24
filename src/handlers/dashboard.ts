@@ -837,7 +837,7 @@ export function handleDashboardPage(env: Env): Response {
               + '</div>';
           }
           const share = cfg.share ?? '';
-          const fallback = cfg.fallback === 0 ? 'no FB' : cfg.fallback ?? '';
+          const fallback = cfg.fallback === 0 ? '' : cfg.fallback ?? '';
           const primary = cfg.primary === true ? 'checked' : '';
           return '<div class="config-row">'
             + '<label>' + escapeHtml(targetName) + '</label>'
@@ -845,7 +845,7 @@ export function handleDashboardPage(env: Env): Response {
             + '<div class="row-actions">'
             + '<button type="button" class="test-btn mini-btn" data-action="test-model" data-model="' + escapeHtml(targetName) + '">t</button>'
               + '<label class="primary-label"><input type="checkbox" data-kind="comp-primary" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" ' + primary + disabledAttr + ' /> primary</label>'
-              + '<input type="number" data-kind="comp-fallback" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(fallback) + '" placeholder="fallback" style="width: 120px;"' + disabledAttr + ' />'
+              + '<input type="number" data-kind="comp-fallback" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(fallback) + '" placeholder="' + (cfg.fallback === 0 ? 'no FB' : 'fallback') + '" style="width: 120px;"' + disabledAttr + ' />'
               + '<button type="button" class="mini-btn danger" data-action="remove-composite-target" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
             + '</div>'
             + '</div>';
