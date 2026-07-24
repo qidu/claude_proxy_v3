@@ -1165,8 +1165,10 @@ export default {
               const fixedRoute = parseFixedRoute(path, proxyConfig, env);
 
               if (modelRoute && modelRoute.targetUrl) {
-                targetUrl = buildUpstreamUrl(modelRoute.targetUrl,
-                  modelRoute.upstreamMode === 'openai-responses' ? 'v1/responses' : 'v1/chat/completions');
+                const upstreamPath = modelRoute.upstreamMode === 'openai-responses' ? 'v1/responses'
+                  : modelRoute.upstreamMode === 'anthropic-messages' ? 'v1/messages'
+                  : 'v1/chat/completions';
+                targetUrl = buildUpstreamUrl(modelRoute.targetUrl, upstreamPath);
                 upstreamMode = modelRoute.upstreamMode || fixedRoute.upstreamMode;
               } else {
                 targetUrl = fixedRoute.targetUrl;

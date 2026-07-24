@@ -223,6 +223,11 @@ function openAIChunk(text: string, model: string): Record<string, unknown> {
   };
 }
 
+// Module-level tool-call buffer for Anthropic SSE → Gemini conversion.
+// Single-flight (same pattern as thinkStreamBuffer): safe because JS is single-threaded.
+interface AnthropicToolBuffer { id: string; name: string; args: string; }
+let anthropicToolBuffers: Map<number, AnthropicToolBuffer> = new Map();
+
 function processAnthropicSSEBuffer(buffer: string, model: string, requestId: string, isInteractionsRequest: boolean, isGenerateContentRequest: boolean): { processed: string; remaining: string } {
   let result = '';
   const events = buffer.split('\n\n');
@@ -234,10 +239,64 @@ function processAnthropicSSEBuffer(buffer: string, model: string, requestId: str
     if (!dataLine) continue;
     try {
       const parsed = JSON.parse(dataLine.slice(6));
-      if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
-        const chunk = openAIChunk(parsed.delta.text || '', model);
-        const { processed } = processSSEBuffer(`data: ${JSON.stringify(chunk)}\n\n`, model, requestId, isInteractionsRequest, isGenerateContentRequest);
-        result += processed;
+
+      if (parsed.type === 'content_block_start') {
+        const block = parsed.content_block as Record<string, unknown> | undefined;
+        if (block?.type === 'tool_use') {
+          // Standard Anthropic sends input:{} here and streams args via input_json_delta.
+          // Some compatible APIs (e.g. MiniMax) send args fully populated in input already.
+          const input = block.input as Record<string, unknown> | undefined;
+          const initialArgs = (input && Object.keys(input).length > 0) ? JSON.stringify(input) : '';
+          anthropicToolBuffers.set(parsed.index as number, {
+            id: (block.id as string) || '',
+            name: (block.name as string) || '',
+            args: initialArgs,
+          });
+        }
+      } else if (parsed.type === 'content_block_delta') {
+        const delta = parsed.delta as Record<string, unknown> | undefined;
+        if (delta?.type === 'text_delta') {
+          const chunk = openAIChunk((delta.text as string) || '', model);
+          const { processed } = processSSEBuffer(`data: ${JSON.stringify(chunk)}\n\n`, model, requestId, isInteractionsRequest, isGenerateContentRequest);
+          result += processed;
+        } else if (delta?.type === 'input_json_delta') {
+          const tool = anthropicToolBuffers.get(parsed.index as number);
+          if (tool) tool.args += (delta.partial_json as string) || '';
+        }
+      } else if (parsed.type === 'content_block_stop') {
+        const tool = anthropicToolBuffers.get(parsed.index as number);
+        if (tool) {
+          anthropicToolBuffers.delete(parsed.index as number);
+          // Emit a complete OpenAI-format tool_calls chunk, then convert to the target format.
+          const chunk = {
+            id: `chatcmpl_${Date.now()}`,
+            object: 'chat.completion.chunk',
+            created: Math.floor(Date.now() / 1000),
+            model,
+            choices: [{
+              index: 0,
+              delta: {
+                tool_calls: [{ index: 0, id: tool.id, type: 'function', function: { name: tool.name, arguments: tool.args } }],
+              },
+              finish_reason: null,
+            }],
+          };
+          const { processed } = processSSEBuffer(`data: ${JSON.stringify(chunk)}\n\n`, model, requestId, isInteractionsRequest, isGenerateContentRequest);
+          result += processed;
+        }
+      } else if (parsed.type === 'message_delta') {
+        // processSSEBuffer filters out empty-parts candidates, so emit finishReason directly.
+        const delta = parsed.delta as Record<string, unknown> | undefined;
+        const stopReason = delta?.stop_reason as string | undefined;
+        const finishReason = stopReason === 'tool_use' ? 'tool_calls'
+          : stopReason === 'max_tokens' ? 'length' : 'stop';
+        if (isGenerateContentRequest) {
+          result += `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [] }, finishReason, index: 0 }], model })}\n\n`;
+        }
+        // Interactions format: stream just ends; no explicit finish event needed.
+      } else if (parsed.type === 'message_stop') {
+        anthropicToolBuffers.clear();
+        // Gemini generateContent/interactions streams end naturally; no sentinel needed.
       }
     } catch {
       // Skip invalid SSE data.
@@ -330,7 +389,7 @@ async function handleCrossModeStreamingResponse(
  * Claude Messages body. Used to route Gemini endpoints (interactions/generateContent)
  * through an anthropic-messages upstream.
  */
-function completionsToClaudeBody(completions: Record<string, unknown>, model: string): Record<string, unknown> {
+export function completionsToClaudeBody(completions: Record<string, unknown>, model: string): Record<string, unknown> {
   const messages = (completions.messages as OpenAIMessage[]) || [];
   const systemMsg = messages.find(m => m.role === 'system');
   const otherMessages = messages.filter(m => m.role !== 'system');
@@ -520,11 +579,36 @@ async function forwardCompletionsAsAnthropicMessages(
   }
 
   const claudeJson = await response.json() as Record<string, unknown>;
-  const contentBlocks = (claudeJson.content as Array<Record<string, unknown>>) ?? [];
-  const toolUseBlocks = contentBlocks.filter(c => c.type === 'tool_use');
   // Convert Claude Messages response → OpenAI Completions response shape, then
   // let the existing Gemini response converters produce the right endpoint shape.
-  const syntheticCompletions: Record<string, unknown> = {
+  const syntheticCompletions = claudeJsonToSyntheticCompletions(claudeJson, model);
+
+  if (isGenerateContentRequest) {
+    const geminiResponse = convertOpenAIToGeminiGenerateContent(syntheticCompletions, model, requestId);
+    return new Response(JSON.stringify(geminiResponse), {
+      headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+    });
+  }
+  if (isInteractionsRequest) {
+    const interactionResponse = convertOpenAIToGeminiInteractions(syntheticCompletions, model, requestId);
+    return new Response(JSON.stringify(interactionResponse), {
+      headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+    });
+  }
+
+  // Fallback: return Claude Messages response as-is
+  return new Response(JSON.stringify(claudeJson), {
+    headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+  });
+}
+
+/**
+ * Convert a Claude Messages JSON response to an OpenAI Chat Completions response shape.
+ */
+export function claudeJsonToSyntheticCompletions(claudeJson: Record<string, unknown>, model: string): Record<string, unknown> {
+  const contentBlocks = (claudeJson.content as Array<Record<string, unknown>>) ?? [];
+  const toolUseBlocks = contentBlocks.filter(c => c.type === 'tool_use');
+  return {
     id: claudeJson.id ?? `chatcmpl_${Date.now()}`,
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
@@ -533,10 +617,7 @@ async function forwardCompletionsAsAnthropicMessages(
       index: 0,
       message: {
         role: 'assistant',
-        content: contentBlocks
-          .filter(c => c.type === 'text')
-          .map(c => c.text)
-          .join(''),
+        content: contentBlocks.filter(c => c.type === 'text').map(c => c.text).join(''),
         ...(toolUseBlocks.length > 0 ? {
           tool_calls: toolUseBlocks.map(tc => ({
             id: (tc.id as string) ?? `call_${Date.now()}`,
@@ -557,24 +638,6 @@ async function forwardCompletionsAsAnthropicMessages(
       };
     })(),
   };
-
-  if (isGenerateContentRequest) {
-    const geminiResponse = convertOpenAIToGeminiGenerateContent(syntheticCompletions, model, requestId);
-    return new Response(JSON.stringify(geminiResponse), {
-      headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
-    });
-  }
-  if (isInteractionsRequest) {
-    const interactionResponse = convertOpenAIToGeminiInteractions(syntheticCompletions, model, requestId);
-    return new Response(JSON.stringify(interactionResponse), {
-      headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
-    });
-  }
-
-  // Fallback: return Claude Messages response as-is
-  return new Response(JSON.stringify(claudeJson), {
-    headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
-  });
 }
 
 /**

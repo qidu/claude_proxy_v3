@@ -7,6 +7,47 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: `DEV_PASS_THROUGH` `/v1/chat/completions` returns raw Claude response to OpenAI clients
+
+`handleChatCompletionsPassthrough` was forwarding the Claude Messages upstream response directly
+to the client without conversion. Clients expecting OpenAI completions format (e.g. Antigravity
+`LocalOpenAIAgentConfig`) received a Claude response object with no `choices` field, triggering:
+
+```
+model output error: model output must contain either output text or tool calls
+```
+
+The `anthropic-messages` branch in `chat-completions.ts` now converts:
+- **Non-streaming**: Claude JSON → `claudeJsonToSyntheticCompletions` → OpenAI `chat.completion`
+- **Streaming**: Claude SSE events (`content_block_delta`, `content_block_start`,
+  `message_delta`, `message_stop`) → OpenAI `chat.completion.chunk` SSE, including tool call
+  streaming (`input_json_delta` → `function.arguments` delta).
+
+`claudeJsonToSyntheticCompletions` is extracted as an exported helper in `src/handlers/openai.ts`
+(replacing the previously inlined duplicate in `forwardCompletionsAsAnthropicMessages`).
+
+**Files changed:** `src/handlers/chat-completions.ts`, `src/handlers/openai.ts`.
+
+### Fix: `DEV_PASS_THROUGH` `/v1/chat/completions` fails for `anthropic-messages` routes
+
+When `DEV_PASS_THROUGH=true` and `LocalOpenAIAgentConfig` (e.g. Antigravity) hits
+`/v1/chat/completions` with a model whose route uses `anthropic-messages` (e.g. `minimax-m3`),
+the proxy had two bugs:
+
+1. **Wrong upstream URL** — `src/index.ts` was appending `v1/chat/completions` to the route's
+   `base_url` regardless of `upstream_mode`. For `anthropic-messages` routes this produced a URL
+   like `https://api.minimaxi.com/anthropic/v1/chat/completions` which returns 404. Fixed: the
+   upstream path is now selected as `v1/messages` for `anthropic-messages`, `v1/responses` for
+   `openai-responses`, and `v1/chat/completions` otherwise.
+
+2. **Wrong request body format** — `handleChatCompletionsPassthrough` only handled
+   `openai-responses` body conversion; for `anthropic-messages` it forwarded the raw OpenAI
+   completions body. Fixed: the handler now converts completions → Claude Messages format
+   (via the existing `completionsToClaudeBody`) and sets `anthropic-version` before forwarding.
+   `completionsToClaudeBody` is now exported from `src/handlers/openai.ts`.
+
+**Files changed:** `src/index.ts`, `src/handlers/chat-completions.ts`, `src/handlers/openai.ts`.
+
 ### Fix: `systemInstruction` dropped when routing Gemini `generateContent` to OpenAI upstream
 
 When Antigravity SDK (or any client) sends a Gemini `generateContent` request with
