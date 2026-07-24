@@ -217,6 +217,13 @@ describe('buildUpstreamUrl', () => {
     );
   });
 
+  it('collapses the suffix version to the base version when they differ', () => {
+    assert.equal(
+      buildUpstreamUrl('https://generativelanguage.googleapis.com/v1', 'v1beta/models/gemini-pro:generateContent'),
+      'https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent'
+    );
+  });
+
   it('performs case-insensitive matching', () => {
     assert.equal(
       buildUpstreamUrl('https://api.example.com/V1/Messages', 'v1/messages'),

@@ -275,7 +275,7 @@ export function buildUpstreamUrl(baseUrl: string, suffix: string): string {
   }
 
   const suffixMatch = suffix.match(/^(v1beta|v1)\/(.*)$/i);
-  if (suffixMatch && lowerBase.match(new RegExp(`/${suffixMatch[1].toLowerCase()}/?$`))) {
+  if (suffixMatch && lowerBase.match(/\/(v1beta|v1)\/?$/)) {
     return `${baseUrl.replace(/\/$/, '')}/${suffixMatch[2]}`;
   }
 
