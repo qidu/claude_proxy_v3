@@ -1941,11 +1941,14 @@ export function parseSimpleToml(content: string): ProxyConfig {
   const lines = content.split('\n');
   let currentSection: string | null = null;
   let currentCategory: string | null = null;
+  const seenSections = new Set<string>();
+  // Track seen keys per section+category, e.g. "models.gemini/api_key"
+  const seenKeys = new Set<string>();
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = line.trim();
-    
+
     // Skip comments and empty lines
     if (!trimmed || trimmed.startsWith('#')) continue;
 
@@ -1953,7 +1956,12 @@ export function parseSimpleToml(content: string): ProxyConfig {
     if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
       const section = trimmed.slice(1, -1);
       const parts = section.split('.');
-      
+
+      if (seenSections.has(section)) {
+        console.warn(`[config] duplicate section header [${section}] at line ${i + 1} — earlier entries in this section are overwritten`);
+      }
+      seenSections.add(section);
+
       if (parts[0] === 'general') {
         currentSection = 'general';
         currentCategory = null;
@@ -2008,6 +2016,11 @@ export function parseSimpleToml(content: string): ProxyConfig {
     if (stringMatch) {
       const [, key, , value] = stringMatch;
       const cleanKey = key.trim().replace(/^"|"$/g, '');
+      const seenKeyId = `${currentSection}/${currentCategory}/${cleanKey}`;
+      if (seenKeys.has(seenKeyId)) {
+        console.warn(`[config] duplicate key "${cleanKey}" in [${currentSection}${currentCategory ? '.' + currentCategory : ''}] at line ${i + 1} — earlier value is overwritten`);
+      }
+      seenKeys.add(seenKeyId);
 
       if (currentSection === 'general' && config.general) {
         if (cleanKey === 'auth_url' || cleanKey === 'global_token_limit' || cleanKey === 'auth_passthrough_with') {
@@ -2047,6 +2060,11 @@ export function parseSimpleToml(content: string): ProxyConfig {
       const modelTableMatch = trimmedNoComment.match(/^"?([^"=]+)"?\s*=\s*(\{[^{}]*\})$/);
       if (modelTableMatch) {
         const cleanKey = modelTableMatch[1].trim().replace(/^"|"$/g, '');
+        const seenKeyIdTable = `${currentSection}/${currentCategory}/${cleanKey}`;
+        if (seenKeys.has(seenKeyIdTable)) {
+          console.warn(`[config] duplicate key "${cleanKey}" in [${currentSection}.${currentCategory}] at line ${i + 1} — earlier value is overwritten`);
+        }
+        seenKeys.add(seenKeyIdTable);
         const tableBody = modelTableMatch[2].slice(1, -1); // strip outer braces
         const fields: Record<string, string> = {};
         for (const field of tableBody.split(',')) {
@@ -2089,6 +2107,11 @@ export function parseSimpleToml(content: string): ProxyConfig {
     if (arrayMatch) {
       const [, key, arrayContent] = arrayMatch;
       const cleanKey = key.trim().replace(/^"|"$/g, '');
+      const seenKeyIdArr = `${currentSection}/${currentCategory}/${cleanKey}`;
+      if (seenKeys.has(seenKeyIdArr)) {
+        console.warn(`[config] duplicate key "${cleanKey}" in [${currentSection}${currentCategory ? '.' + currentCategory : ''}] at line ${i + 1} — earlier value is overwritten`);
+      }
+      seenKeys.add(seenKeyIdArr);
 
       // Parse array elements
       const elements: string[] = [];
@@ -2126,6 +2149,11 @@ export function parseSimpleToml(content: string): ProxyConfig {
     if (unquotedMatch) {
       const [, key, value] = unquotedMatch;
       const cleanKey = key.trim();
+      const seenKeyIdUnquoted = `${currentSection}/${currentCategory}/${cleanKey}`;
+      if (seenKeys.has(seenKeyIdUnquoted)) {
+        console.warn(`[config] duplicate key "${cleanKey}" in [${currentSection}${currentCategory ? '.' + currentCategory : ''}] at line ${i + 1} — earlier value is overwritten`);
+      }
+      seenKeys.add(seenKeyIdUnquoted);
       let cleanValue: string | number = value.trim();
 
       // Try to parse as boolean or number

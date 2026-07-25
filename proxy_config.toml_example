@@ -1,3 +1,8 @@
+# WARNING: Duplicate section headers (e.g. two [models.gemini] blocks) or duplicate
+# keys within a section cause silent data loss — the second occurrence overwrites the
+# first. The proxy will now log a warning to stderr when this happens, but the safest
+# fix is to avoid duplicates entirely: merge all entries for a section into one block.
+
 [dashboard]
 # Optional: require Authorization: Bearer <api_key> for /dashboard/api/*.
 # If omitted or empty, dashboard APIs remain loopback-only.
