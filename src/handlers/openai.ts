@@ -697,7 +697,12 @@ export function claudeJsonToSyntheticCompletions(claudeJson: Record<string, unkn
       index: 0,
       message: {
         role: 'assistant',
-        content: contentBlocks.filter(c => c.type === 'text').map(c => c.text).join(''),
+        // When only tool_calls are present (no text), content must be null not "".
+        // Upstreams like DeepSeek reject messages[N].content = "" with tool_calls present.
+        content: (() => {
+          const text = contentBlocks.filter(c => c.type === 'text').map(c => c.text).join('');
+          return (toolUseBlocks.length > 0 && text === '') ? null : text;
+        })(),
         ...(toolUseBlocks.length > 0 ? {
           tool_calls: toolUseBlocks.map(tc => ({
             id: (tc.id as string) ?? `call_${Date.now()}`,

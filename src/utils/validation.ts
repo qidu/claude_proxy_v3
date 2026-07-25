@@ -461,11 +461,12 @@ export function validateOpenAICompletionsRequest(request: Record<string, unknown
     if (!validRoles.includes(msg.role as string)) {
       throw new ValidationError(`messages[${i}].role must be one of: ${validRoles.join(', ')}`);
     }
-    if (msg.content === undefined || msg.content === null) {
+    // content may be null on assistant messages that have tool_calls (OpenAI spec allows this).
+    if (msg.content === undefined) {
       throw new ValidationError(`messages[${i}].content is required`);
     }
-    if (typeof msg.content !== 'string' && !Array.isArray(msg.content)) {
-      throw new ValidationError(`messages[${i}].content must be a string or array`);
+    if (msg.content !== null && typeof msg.content !== 'string' && !Array.isArray(msg.content)) {
+      throw new ValidationError(`messages[${i}].content must be a string, array, or null`);
     }
   }
 

@@ -12,6 +12,29 @@ import { validateOpenAICompletionsRequest } from '../utils/validation.js';
 import { ValidationError } from '../utils/errors.js';
 import { completionsToResponsesBody, completionsToClaudeBody, claudeJsonToSyntheticCompletions } from './openai.js';
 
+/**
+ * Recursively lowercase JSON Schema `type` values.
+ * Some SDKs (e.g. google-antigravity) emit uppercase types like "STRING" or "INTEGER"
+ * which are rejected by strict upstreams. Mutates the schema object in place.
+ */
+function normalizeJsonSchemaTypes(schema: Record<string, unknown>): void {
+  if (typeof schema.type === 'string') {
+    schema.type = schema.type.toLowerCase();
+  }
+  if (schema.properties && typeof schema.properties === 'object') {
+    for (const prop of Object.values(schema.properties as Record<string, unknown>)) {
+      if (prop && typeof prop === 'object') normalizeJsonSchemaTypes(prop as Record<string, unknown>);
+    }
+  }
+  if (Array.isArray(schema.items)) {
+    for (const item of schema.items) {
+      if (item && typeof item === 'object') normalizeJsonSchemaTypes(item as Record<string, unknown>);
+    }
+  } else if (schema.items && typeof schema.items === 'object') {
+    normalizeJsonSchemaTypes(schema.items as Record<string, unknown>);
+  }
+}
+
 export async function handleChatCompletionsPassthrough(
   request: Request,
   targetUrl: string,
@@ -51,9 +74,23 @@ export async function handleChatCompletionsPassthrough(
   const isStreaming = parsedBody.stream === true;
   logger.debug(requestId, `${path} req: model=${parsedBody.model} messages=${Array.isArray(parsedBody.messages) ? (parsedBody.messages as unknown[]).length : 0} stream=${isStreaming}`);
 
+  // Some SDK clients (e.g. google-antigravity) emit uppercase JSON Schema type strings
+  // ("STRING", "INTEGER", "BOOLEAN", "OBJECT", "ARRAY", "NUMBER") that are invalid per
+  // the OpenAI spec and rejected by upstreams like DeepSeek. Lowercase them in place.
+  if (Array.isArray(parsedBody.tools)) {
+    for (const tool of parsedBody.tools as Record<string, unknown>[]) {
+      const fn = tool.function as Record<string, unknown> | undefined;
+      if (fn?.parameters && typeof fn.parameters === 'object') {
+        normalizeJsonSchemaTypes(fn.parameters as Record<string, unknown>);
+      }
+    }
+  }
+
   // Some SDK clients (e.g. Antigravity LocalOpenAIAgentConfig) omit the `name`
   // field on tool messages. DeepSeek and some other upstreams require it.
   // Recover the name from the preceding assistant turn's tool_calls by tool_call_id.
+  // Also fix assistant messages that have tool_calls but content="" — DeepSeek and
+  // MiniMax require content to be null (not empty string) in that case.
   if (Array.isArray(parsedBody.messages)) {
     const toolCallIndex = new Map<string, string>();
     let bodyPatched = false;
@@ -64,6 +101,7 @@ export async function handleChatCompletionsPassthrough(
           const name = (tc.function as Record<string, unknown> | undefined)?.name as string | undefined;
           if (id && name) toolCallIndex.set(id, name);
         }
+        if (msg.content === '') { msg.content = null; bodyPatched = true; }
       } else if (msg.role === 'tool' && !msg.name) {
         const name = toolCallIndex.get(msg.tool_call_id as string);
         if (name) { msg.name = name; bodyPatched = true; }
@@ -75,7 +113,9 @@ export async function handleChatCompletionsPassthrough(
   // When the upstream is anthropic-messages, convert completions body → Claude Messages,
   // forward to upstream, then convert the Claude response back to OpenAI completions format.
   if (upstreamMode === 'anthropic-messages') {
-    const model = (modelId || parsedBody.model as string || 'unknown');
+    // Use the model name from the (already alias-rewritten) request body, falling back to modelId.
+    // modelId carries the original alias name; parsedBody.model carries the rewritten target name.
+    const model = (parsedBody.model as string || modelId || 'unknown');
     const claudeBody = completionsToClaudeBody(parsedBody, model);
     logger.debug(requestId, `${path} converted to anthropic-messages body`);
 

@@ -7,6 +7,65 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: `/v1/chat/completions` DEV_PASS_THROUGH — tool schema types, `content: null`, and multi-turn tool calls
+
+Four interrelated fixes to the `handleChatCompletionsPassthrough` path used by
+`DEV_PASS_THROUGH=true` clients (e.g. Antigravity `LocalOpenAIAgentConfig`, LangGraph).
+All changes affect `anthropic-messages` and `openai-completions` upstream routes.
+
+**Root causes and fixes:**
+
+1. **Uppercase JSON Schema type strings rejected by DeepSeek (`"STRING"` instead of `"string"`)**
+   The Antigravity SDK (`google-antigravity`) introspects Python type annotations and emits
+   JSON Schema `type` fields in all-caps (`"STRING"`, `"INTEGER"`, `"BOOLEAN"`, etc.).
+   DeepSeek and other strict upstreams reject these as invalid per the OpenAI spec.
+   **Fix:** `handleChatCompletionsPassthrough` in `src/handlers/chat-completions.ts` now
+   recursively lowercases all `type` strings in every tool's `function.parameters` schema
+   before forwarding, via a new `normalizeSchemaCasing()` helper.
+
+2. **`messages[N].content is required` (400 from proxy validator) on multi-turn tool calls**
+   The OpenAI spec permits `content: null` on assistant messages that contain `tool_calls`
+   (the model produced only function calls, no text). Two issues stacked:
+   - The proxy's own `validateChatCompletionsRequest` in `src/utils/validation.ts` was
+     throwing `content is required` when `content === null`, treating `null` and `undefined`
+     the same. Fixed: only `undefined` is now rejected; `null` is accepted for assistant
+     messages. `content` must be a string, array, or `null`.
+   - LangGraph sends multi-turn history where assistant messages with `tool_calls` have
+     `content: ""` (empty string). DeepSeek's Anthropic-compatible endpoint rejects
+     `content: ""` when `tool_calls` is present. **Fix:** `handleChatCompletionsPassthrough`
+     now normalizes inbound assistant messages: if `tool_calls` is present and
+     `content === ""`, it is rewritten to `null` before forwarding.
+
+3. **`anthropic-messages` path sent model alias instead of resolved target name**
+   In the `anthropic-messages` conversion branch, `modelId` (the original alias, e.g.
+   `deepseek-v4-auth`) was taking priority over `parsedBody.model` (the already-rewritten
+   target, e.g. `deepseek-v4-flash`). Claude rejected the alias name.
+   **Fix:** priority is now `parsedBody.model || modelId || 'unknown'` — the rewritten
+   body model always wins when present.
+
+4. **Multiple consecutive tool messages rejected by Claude (`anthropic-messages` path)**
+   When an assistant turn issued N tool calls, the OpenAI → Claude converter
+   (`completionsToClaudeBody` in `src/handlers/openai.ts`) produced N separate
+   `{role: "user", content: [{type: "tool_result"}]}` messages. Claude requires all
+   tool results for a single turn to be bundled in one `user` message.
+   **Fix:** `completionsToClaudeBody` now uses a loop that collects all consecutive
+   `role: "tool"` messages into a single `{role: "user", content: [...tool_results]}`
+   message before continuing. This was already partially noted in the prior "Gemini-endpoint"
+   changelog entry but the `completionsToClaudeBody` path was re-fixed here for the
+   completions passthrough specifically.
+
+**Additional change — `claudeJsonToSyntheticCompletions` returns `null` content for tool-only responses**
+
+`claudeJsonToSyntheticCompletions` in `src/handlers/openai.ts` (the non-streaming
+Claude → OpenAI completions converter) was returning `content: ""` on assistant messages
+where the upstream responded with only `tool_use` blocks and no text. This caused the
+next LangGraph turn to send `content: ""` back, triggering fix #2 above.
+**Fix:** when `tool_use` blocks are present and the text content is empty, `content` is
+returned as `null` to match the OpenAI spec.
+
+**Files changed:** `src/handlers/chat-completions.ts`, `src/handlers/openai.ts`,
+`src/utils/validation.ts`.
+
 ### Fix: Gemini-endpoint → `openai-completions` streaming with DeepSeek reasoning models
 
 Resolved a cascade of five interrelated bugs that prevented Gemini-endpoint clients

@@ -11,8 +11,8 @@ against every task, producing `len(USER_TASKS) * len(MODELS) * 3` total runs
 Usage:
     Install:
         # use existing venv: source ~/dev/ainew/bin/activate
-        # create a new venv: python3 -m venv .venv && .venv/bin/pip install -q --upgrade pip && .venv/bin/pip install -q langgraph langchain-openai langchain-core crewai pydantic google-antigravity
-        pip install google-antigravity langgraph crewai langchain-openai langchain-core
+        # create a new venv: python3 -m venv .venv && .venv/bin/pip install -q --upgrade pip && .venv/bin/pip install -q pydantic google-antigravity
+        pip install pydantic google-antigravity
 
     Start the proxy with `DEV_PASS_THROUGH=true DEV_NO_KEY=true` to enable
     `/v1/chat/completions` and permit Antigravity's headerless requests.
@@ -83,17 +83,19 @@ PROXY_BASE = os.environ.get("PROXY_BASE", "http://127.0.0.1:8788")
 WORK_DIR = "./tests/"
 
 MODELS = [
-    "MiniMaxAI/MiniMax-M3",                     # local test
-    "minimax-m3",                     # local test
-    "gpt-5.5",                        # gpt
-    "deepseek/deepseek-v4-flash",     # deepseek
-    "minimax/minimax-m3",             # minimax
-    "google/gemini-3.1-flash-lite",   # gemini
-    "claude-4.5-haiku",               # claude
-    "openai/gpt-5.4-mini",            # gpt
-    "qwen3-max-preview",              # qwen3
-    "moonshotai/kimi-k2.7-code",      # moonshot-kimi
-    "z-ai/glm-5.2",                   # z-ai-glm
+    "deepseek-v4-comp",               # local test for endpoint '/v1/chat/completions'
+    "deepseek-v4-auth",               # local test for endpoint '/v1/messages'
+    "max-m3-comp",                    # local test for endpoint '/v1/chat/completions'
+    "max-m3-anth",                    # local test for endpoint '/v1/messages'
+#    "gpt-5.5",                        # gpt
+#    "deepseek/deepseek-v4-flash",     # deepseek
+#    "minimax/minimax-m3",             # minimax
+#    "google/gemini-3.1-flash-lite",   # gemini
+#    "claude-4.5-haiku",               # claude
+#    "openai/gpt-5.4-mini",            # gpt
+#    "qwen3-max-preview",              # qwen3
+#    "moonshotai/kimi-k2.7-code",      # moonshot-kimi
+#    "z-ai/glm-5.2",                   # z-ai-glm
 ]
 
 # Each task targets a different AI-coding / agent capability so model
@@ -546,7 +548,7 @@ AsyncAgentRunner = Callable[[str, str], Awaitable[None]]
 AGENTS: list[dict[str, AgentRunner | AsyncAgentRunner | str]] = [
     {"name": "Antigravity", "run": run_antigravity_agent, "async": True},
     {"name": "LangGraph",  "run": run_langgraph_agent,  "async": False},
-    {"name": "CrewAI",     "run": run_crewai_agent,     "async": False},
+#    {"name": "CrewAI",     "run": run_crewai_agent,     "async": False},
 ]
 
 
