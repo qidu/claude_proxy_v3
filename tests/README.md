@@ -137,12 +137,34 @@ The full run is `len(USER_TASKS) * len(MODELS) * 3` = 8 × 10 × 3 = 240 invocat
 
 #### Prerequisites
 
+The test suite mixes Python 3.13 and 3.14 packages that cannot share one venv. CrewAI 1.x declares `requires-python = ">=3.10, <3.14"` and transitively pulls in `tiktoken` whose `pyo3 0.20.3` build pin fails on Python 3.14. LangGraph / LangChain 1.x, on the other hand, work fine on 3.14. Use two venvs:
+
 ```bash
-# Python 3.10–3.13 required (3.14 has no compatible wheels for crewai).
+# Main stack — Python 3.14 (system or brew). Holds Antigravity + LangGraph.
 python3 -m venv .venv
 source .venv/bin/activate
-pip install google-antigravity langgraph langchain langchain-openai langchain-core crewai pydantic
+pip install google-antigravity langgraph langchain langchain-openai langchain-core
+
+# CrewAI only — must be Python 3.13 (no 3.14-compatible wheels).
+python3.13 -m venv .venv-crewai
+source .venv-crewai/bin/activate
+pip install crewai pydantic
 ```
+
+To run CrewAI:
+
+```bash
+.venv-crewai/bin/python tests/multi-agents-test.py 1 3 1   # model 1, agent 3 (CrewAI), task 1
+```
+
+To run Antigravity or LangGraph, use the main venv:
+
+```bash
+.venv/bin/python tests/multi-agents-test.py 1 1 1         # model 1, agent 1 (Antigravity), task 1
+.venv/bin/python tests/multi-agents-test.py 1 2 1         # model 1, agent 2 (LangGraph),  task 1
+```
+
+If you don't need CrewAI, a single `.venv` (3.13 or 3.14) with `pip install google-antigravity langgraph langchain langchain-openai langchain-core pydantic` is enough.
 
 > **Note:** `google-antigravity` currently only ships macOS **arm64** wheels. On x86_64 Macs (or Linux/Windows) the Antigravity agent will be skipped with a clear "no matching distribution" message — the other two agents still run.
 
@@ -206,15 +228,31 @@ By default all 3 agents are enabled. To run a subset, comment the entries in the
 2. `ChatOpenAI(base_url={PROXY_BASE}/v1)` routes through the proxy's `/v1/chat/completions` handler. The proxy must be started with `DEV_PASS_THROUGH=true` so that path is exposed.
 3. The runner imports `create_agent` aliased as `create_react_agent` so the call site stays readable; this sidesteps the `LangGraphDeprecatedSinceV10` warning emitted by the legacy `langgraph.prebuilt.create_react_agent` in langgraph 1.x.
 
-**CrewAI (`crewai`)** — Three subtleties:
+**CrewAI (`crewai`)** — Four subtleties:
 
 1. The LLM is configured via `LLM(model="openai/<id>", base_url={PROXY_BASE}/v1, api_key=…)`. The `openai/` prefix tells CrewAI to use the OpenAI-compatible chat-completions client; the proxy serves that path when started with `DEV_PASS_THROUGH=true`.
 2. CrewAI tools must subclass `BaseTool` and declare an `args_schema` (a `pydantic.BaseModel` with `Field(...)` descriptions). The runner wires `GlobTool`/`ReadTool` with explicit schemas so the model sees typed parameters, not raw JSON.
 3. CrewAI's `kickoff()` is synchronous and blocks until the crew finishes; the runner surfaces the result's `raw` attribute (falling back to `str(result)`) and prints `chars=<len>` so silent empty responses are still detectable.
+4. The CLI runner wraps all agents in `asyncio.run(...)`. Calling the sync `crew.kickoff()` from inside an active event loop raises `Agent execution was invoked synchronously from within a running event loop`. The dispatcher handles this by running the CrewAI agent via `asyncio.to_thread(runner, prompt, model)`; the async Antigravity agent and the sync LangGraph agent are invoked inline. Switching the dispatcher away from `asyncio.run` would lift this requirement.
 
 #### Result reference
 
 For a sample run (1 model × all agents × all tasks), see `./logs/results/test_result_of_deepseek_v4_flash_all_agents_all_tasks.md` (TS runner). The Python runner writes its output to stdout in the same shape (`--- <Agent> Agent | model=<id> ---` header + `<Agent> done. tool_calls=N, chars=M` summary); redirect with `python tests/multi-agents-test.py 1 2 1 > out.log` to capture.
+
+**CrewAI × 4-model smoke test (2026-07-25, task=`codebase_layout`).** All four `MODELS` entries (with `auth_passthrough_with = "config_key"`) routed cleanly through CrewAI's `openai/{model}` path against the proxy at `127.0.0.1:8788`:
+
+| CLI    | Model              | Upstream mode                                  | Chars  | Status |
+|--------|--------------------|------------------------------------------------|--------|--------|
+| `1 3 1`| `deepseek-v4-comp` | openai-completions → `api.deepseek.com`        | 16,569 | ✅     |
+| `2 3 1`| `deepseek-v4-auth` | anthropic-messages → `api.deepseek.com/anthropic` |  8,022 | ✅     |
+| `3 3 1`| `max-m3-comp`      | openai-completions → `api.minimaxi.com`        | 22,985 | ✅     |
+| `4 3 1`| `max-m3-anth`      | anthropic-messages → `api.minimaxi.com/anthropic` | 14,782 | ✅     |
+
+The two `-comp` variants exercise the proxy's OpenAI-compatible passthrough; the two `-auth` variants route the request as Anthropic-messages upstream and re-emit as OpenAI-compatible to CrewAI. Run with:
+
+```bash
+OPENAI_API_KEY=sk-agent-test-key .venv-crewai/bin/python tests/multi-agents-test.py <M> 3 1
+```
 
 ---
 

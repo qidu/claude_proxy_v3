@@ -548,7 +548,7 @@ AsyncAgentRunner = Callable[[str, str], Awaitable[None]]
 AGENTS: list[dict[str, AgentRunner | AsyncAgentRunner | str]] = [
     {"name": "Antigravity", "run": run_antigravity_agent, "async": True},
     {"name": "LangGraph",  "run": run_langgraph_agent,  "async": False},
-#    {"name": "CrewAI",     "run": run_crewai_agent,     "async": False},
+    {"name": "CrewAI",     "run": run_crewai_agent,     "async": False},
 ]
 
 
@@ -579,6 +579,11 @@ async def _run_async(agent: dict[str, Any], prompt: str, model: str) -> None:
     runner = agent["run"]
     if agent.get("async"):
         await runner(prompt, model)  # type: ignore[arg-type]
+    elif agent["name"] == "CrewAI":
+        # CrewAI 1.x rejects sync kickoff() from inside a running event loop.
+        # Run the blocking kickoff in a worker thread so the outer asyncio
+        # scheduler stays responsive for the async agents.
+        await asyncio.to_thread(runner, prompt, model)  # type: ignore[arg-type]
     else:
         runner(prompt, model)  # type: ignore[arg-type]
 
