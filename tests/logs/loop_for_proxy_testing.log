@@ -1,0 +1,358 @@
+=== Round 1: ANTIGRAVITY_USE_GEMINI_API=false ===
+
+> model-proxy-v3@3.2.0 start
+> node dist/server.js
+
+Server running on http://0.0.0.0:7777 (version: dev)
+ and dashboard at http://0.0.0.0:7777/dashboard
+[WARN] DEV_PASS_THROUGH is enabled: /v1/chat/completions requests are passed through directly with validation only (no model routing). Do not use in production.
+[WARN] DEV_NO_KEY is enabled: model requests may omit authentication headers. Do not use in production.
+[INFO] Config path: ./proxy_config.toml, Config URL: undefined
+[INFO] Privacy filter active: mode=local entropyThreshold=1
+=== Proxy log ===
+
+> model-proxy-v3@3.2.0 start
+> node dist/server.js
+
+Server running on http://0.0.0.0:7777 (version: dev)
+ and dashboard at http://0.0.0.0:7777/dashboard
+[WARN] DEV_PASS_THROUGH is enabled: /v1/chat/completions requests are passed through directly with validation only (no model routing). Do not use in production.
+[WARN] DEV_NO_KEY is enabled: model requests may omit authentication headers. Do not use in production.
+[INFO] Config path: ./proxy_config.toml, Config URL: undefined
+[INFO] Privacy filter active: mode=local entropyThreshold=1
+=== Proxy log after rounds 1 & 2 ===
+
+> model-proxy-v3@3.2.0 start
+> node dist/server.js
+
+Server running on http://0.0.0.0:7777 (version: dev)
+ and dashboard at http://0.0.0.0:7777/dashboard
+[WARN] DEV_PASS_THROUGH is enabled: /v1/chat/completions requests are passed through directly with validation only (no model routing). Do not use in production.
+[WARN] DEV_NO_KEY is enabled: model requests may omit authentication headers. Do not use in production.
+[INFO] Config path: ./proxy_config.toml, Config URL: undefined
+[INFO] Privacy filter active: mode=local entropyThreshold=1
+[req_1784914813760_705ad26b55f9] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784914813760_705ad26b55f9] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784914813760_705ad26b55f9] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784914827929_c94dbc3cd042] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784914829697_55597b01e5fd] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784914834335_237764bfb9cb] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784914838514_b241eda9da08] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+
+=== Loop iteration: 2026-07-25 01:43:55 ===
+=== Proxy log after loop iteration ===
+
+> model-proxy-v3@3.2.0 start
+> node dist/server.js
+
+Server running on http://0.0.0.0:7777 (version: dev)
+ and dashboard at http://0.0.0.0:7777/dashboard
+[WARN] DEV_PASS_THROUGH is enabled: /v1/chat/completions requests are passed through directly with validation only (no model routing). Do not use in production.
+[WARN] DEV_NO_KEY is enabled: model requests may omit authentication headers. Do not use in production.
+[INFO] Config path: ./proxy_config.toml, Config URL: undefined
+[INFO] Privacy filter active: mode=local entropyThreshold=1
+[req_1784914813760_705ad26b55f9] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784914813760_705ad26b55f9] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784914813760_705ad26b55f9] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784914827929_c94dbc3cd042] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784914829697_55597b01e5fd] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784914834335_237764bfb9cb] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784914838514_b241eda9da08] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784915046555_d8d1c9d7830e] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784915046555_d8d1c9d7830e] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784915046555_d8d1c9d7830e] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784915053755_0a04f75c05ae] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784915055091_61f6f8e75d93] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784915062252_cb5a94b75eaa] [INFO] Privacy filter redacted 3 span(s) from /v1beta/models/deepseek-v4-comp:streamGenerateContent
+[req_1784915062252_cb5a94b75eaa] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784915067701_1384e7246a6a] [INFO] Privacy filter redacted 3 span(s) from /v1beta/models/deepseek-v4-comp:streamGenerateContent
+[req_1784915067701_1384e7246a6a] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784915101596_7349b7f711e8] [INFO] Privacy filter redacted 3 span(s) from /v1beta/models/gemini-3.1-flash-lite-preview:streamGenerateContent
+[req_1784915101596_7349b7f711e8] [INFO] /v1beta/models/gemini-3.1-flash-lite-preview:streamGenerateContent for gemini-3.1-flash-lite-preview to https://api.minimaxi.com/v1/chat/completions (openai-completions)
+[req_1784915101596_7349b7f711e8] [ERROR] Catch Error [model=gemini-3.1-flash-lite-preview status=400 type=invalid_request_error: invalid params, unknown model 'gemini-3.1-flash-lite-preview' (2013)
+=== 2026-07-25 10:41:41 proxy log ===
+
+> model-proxy-v3@3.2.0 start
+> node dist/server.js
+
+Server running on http://0.0.0.0:7777 (version: dev)
+ and dashboard at http://0.0.0.0:7777/dashboard
+[WARN] DEV_PASS_THROUGH is enabled: /v1/chat/completions requests are passed through directly with validation only (no model routing). Do not use in production.
+[WARN] DEV_NO_KEY is enabled: model requests may omit authentication headers. Do not use in production.
+[INFO] Config path: ./proxy_config.toml, Config URL: undefined
+[INFO] Privacy filter active: mode=local entropyThreshold=1
+[req_1784915458319_39b175f653f5] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784915458319_39b175f653f5] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784915458319_39b175f653f5] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784915472130_ede90ce14ea1] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784915473748_ec6a9b4c068a] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784915476612_bb6b0280fedd] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784915480959_53b93974c9f4] [INFO] /v1beta/models/gemini-3.1-flash-lite-preview:streamGenerateContent for gemini-3.1-flash-lite-preview to https://api.minimaxi.com/v1/chat/completions (openai-completions)
+[req_1784915480965_1bf99be26ce4] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784915480959_53b93974c9f4] [ERROR] Catch Error [model=gemini-3.1-flash-lite-preview status=400 type=invalid_request_error: invalid params, unknown model 'gemini-3.1-flash-lite-preview' (2013)
+[req_1784915484404_c9444727440b] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784915487911_11d4ac1cfebf] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784915524129_75cb5314fdda] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784915549659_35c493e7437b] [INFO] Privacy filter redacted 6 span(s) from /v1beta/models/deepseek-v4-comp:streamGenerateContent
+[req_1784915549659_35c493e7437b] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784915570522_98a6fabeab5d] [INFO] Privacy filter redacted 6 span(s) from /v1beta/models/deepseek-v4-comp:streamGenerateContent
+[req_1784915570522_98a6fabeab5d] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784947262813_232def6715e1] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784947262813_232def6715e1] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/v1/chat/completions model=deepseek-v4-auth upstream=openai-completions
+[req_1784947272790_3fc1f54f57db] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784947272790_3fc1f54f57db] [INFO] /v1/chat/completions composite alias resolved: max-m3-comp → MiniMax-M3
+[req_1784947272790_3fc1f54f57db] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/v1/chat/completions model=max-m3-comp upstream=openai-completions
+[req_1784947275629_cc4ae5a2fcef] [INFO] Privacy filter redacted 47 span(s) from /v1/chat/completions
+[req_1784947275629_cc4ae5a2fcef] [INFO] /v1/chat/completions composite alias resolved: max-m3-comp → MiniMax-M3
+[req_1784947275629_cc4ae5a2fcef] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/v1/chat/completions model=max-m3-comp upstream=openai-completions
+[req_1784947280449_65f4bec67e9d] [INFO] Privacy filter redacted 106 span(s) from /v1/chat/completions
+[req_1784947280449_65f4bec67e9d] [INFO] /v1/chat/completions composite alias resolved: max-m3-comp → MiniMax-M3
+[req_1784947280449_65f4bec67e9d] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/v1/chat/completions model=max-m3-comp upstream=openai-completions
+[req_1784947291465_a850982b344f] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784947291465_a850982b344f] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/v1/chat/completions model=max-m3-anth upstream=openai-completions
+=== 2026-07-25 12:05:09 proxy log ===
+
+> model-proxy-v3@3.2.0 start
+> node dist/server.js
+
+Server running on http://0.0.0.0:7777 (version: dev)
+ and dashboard at http://0.0.0.0:7777/dashboard
+[WARN] DEV_PASS_THROUGH is enabled: /v1/chat/completions requests are passed through directly with validation only (no model routing). Do not use in production.
+[WARN] DEV_NO_KEY is enabled: model requests may omit authentication headers. Do not use in production.
+[INFO] Config path: ./proxy_config.toml, Config URL: undefined
+[INFO] Privacy filter active: mode=local entropyThreshold=1
+[req_1784947702870_1717177af06d] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784947702870_1717177af06d] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784947702870_1717177af06d] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784947710336_8464fb11e66c] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784947712550_065dba767cce] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784947714286_45318b1f8b8e] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784947717120_2fb9b269b3ad] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784947720395_f8bfe6ed2946] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784947722844_bf5d7754fc49] [INFO] /v1beta/models/gemini-3.1-flash-lite-preview:streamGenerateContent for gemini-3.1-flash-lite-preview to https://api.minimaxi.com/v1/chat/completions (openai-completions)
+[req_1784947722848_fcd403d0b679] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784947722844_bf5d7754fc49] [ERROR] Catch Error [model=gemini-3.1-flash-lite-preview status=400 type=invalid_request_error: invalid params, unknown model 'gemini-3.1-flash-lite-preview' (2013)
+[req_1784947735161_21b5155c4be3] [INFO] Privacy filter redacted 21 span(s) from /v1beta/models/deepseek-v4-comp:streamGenerateContent
+[req_1784947735161_21b5155c4be3] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784947736463_0a54cfa68a41] [INFO] Privacy filter redacted 21 span(s) from /v1beta/models/deepseek-v4-comp:streamGenerateContent
+[req_1784947736463_0a54cfa68a41] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784947737966_cbb2bd56b112] [INFO] Privacy filter redacted 21 span(s) from /v1beta/models/deepseek-v4-comp:streamGenerateContent
+[req_1784947737966_cbb2bd56b112] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784947740181_7086f7f69726] [INFO] Privacy filter redacted 22 span(s) from /v1beta/models/deepseek-v4-comp:streamGenerateContent
+[req_1784947740181_7086f7f69726] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784947741328_486ac56618f4] [INFO] Privacy filter redacted 22 span(s) from /v1beta/models/deepseek-v4-comp:streamGenerateContent
+[req_1784947741328_486ac56618f4] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784947784318_517b0baa17d6] [INFO] Privacy filter redacted 22 span(s) from /v1beta/models/deepseek-v4-comp:streamGenerateContent
+[req_1784947784318_517b0baa17d6] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784947807926_f7fb91395b36] [INFO] Privacy filter redacted 22 span(s) from /v1beta/models/deepseek-v4-comp:streamGenerateContent
+[req_1784947807926_f7fb91395b36] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784947823701_7d4fe1b469db] [INFO] Privacy filter redacted 22 span(s) from /v1beta/models/deepseek-v4-comp:streamGenerateContent
+[req_1784947823701_7d4fe1b469db] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784952173943_de0cb391b8cf] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784952173943_de0cb391b8cf] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784952173943_de0cb391b8cf] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784952200798_596fad4908ea] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784952200798_596fad4908ea] [INFO] /v1/chat/completions composite alias resolved: max-m3-comp → MiniMax-M3
+[req_1784952200798_596fad4908ea] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/v1/chat/completions model=max-m3-comp upstream=openai-completions
+[req_1784952205097_4de012e650ce] [INFO] Privacy filter redacted 28 span(s) from /v1/chat/completions
+[req_1784952205097_4de012e650ce] [INFO] /v1/chat/completions composite alias resolved: max-m3-comp → MiniMax-M3
+[req_1784952205097_4de012e650ce] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/v1/chat/completions model=max-m3-comp upstream=openai-completions
+[req_1784952208916_b50548228c51] [INFO] Privacy filter redacted 52 span(s) from /v1/chat/completions
+[req_1784952208916_b50548228c51] [INFO] /v1/chat/completions composite alias resolved: max-m3-comp → MiniMax-M3
+[req_1784952208916_b50548228c51] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/v1/chat/completions model=max-m3-comp upstream=openai-completions
+[req_1784952211338_6598f4ed2315] [INFO] Privacy filter redacted 58 span(s) from /v1/chat/completions
+[req_1784952211338_6598f4ed2315] [INFO] /v1/chat/completions composite alias resolved: max-m3-comp → MiniMax-M3
+[req_1784952211338_6598f4ed2315] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/v1/chat/completions model=max-m3-comp upstream=openai-completions
+[req_1784952216489_84bffa447c6b] [INFO] Privacy filter redacted 61 span(s) from /v1/chat/completions
+[req_1784952216489_84bffa447c6b] [INFO] /v1/chat/completions composite alias resolved: max-m3-comp → MiniMax-M3
+[req_1784952216489_84bffa447c6b] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/v1/chat/completions model=max-m3-comp upstream=openai-completions
+[req_1784952287542_b0b3f19413ff] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784952287542_b0b3f19413ff] [INFO] /v1/chat/completions composite alias resolved: max-m3-anth → MiniMax-M3
+[req_1784952287542_b0b3f19413ff] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/anthropic/v1/messages model=max-m3-anth upstream=anthropic-messages
+[req_1784952289137_82f2ead05e7b] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784952289137_82f2ead05e7b] [INFO] /v1/chat/completions composite alias resolved: max-m3-anth → MiniMax-M3
+[req_1784952289137_82f2ead05e7b] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/anthropic/v1/messages model=max-m3-anth upstream=anthropic-messages
+[req_1784952290924_4fc835708fe3] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784952290924_4fc835708fe3] [INFO] /v1/chat/completions composite alias resolved: max-m3-anth → MiniMax-M3
+[req_1784952290924_4fc835708fe3] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/anthropic/v1/messages model=max-m3-anth upstream=anthropic-messages
+[req_1784952293224_99d101088ddf] [INFO] Privacy filter redacted 7 span(s) from /v1/chat/completions
+[req_1784952293224_99d101088ddf] [INFO] /v1/chat/completions composite alias resolved: max-m3-anth → MiniMax-M3
+[req_1784952293224_99d101088ddf] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/anthropic/v1/messages model=max-m3-anth upstream=anthropic-messages
+[req_1784952295310_87d573f5a8fc] [INFO] Privacy filter redacted 50 span(s) from /v1/chat/completions
+[req_1784952295310_87d573f5a8fc] [INFO] /v1/chat/completions composite alias resolved: max-m3-anth → MiniMax-M3
+[req_1784952295310_87d573f5a8fc] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/anthropic/v1/messages model=max-m3-anth upstream=anthropic-messages
+[req_1784952297162_0e56870e68d4] [INFO] Privacy filter redacted 62 span(s) from /v1/chat/completions
+[req_1784952297162_0e56870e68d4] [INFO] /v1/chat/completions composite alias resolved: max-m3-anth → MiniMax-M3
+[req_1784952297162_0e56870e68d4] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/anthropic/v1/messages model=max-m3-anth upstream=anthropic-messages
+=== 2026-07-25 12:32:51 proxy log ===
+
+> model-proxy-v3@3.2.0 start
+> node dist/server.js
+
+Server running on http://0.0.0.0:7777 (version: dev)
+ and dashboard at http://0.0.0.0:7777/dashboard
+[WARN] DEV_PASS_THROUGH is enabled: /v1/chat/completions requests are passed through directly with validation only (no model routing). Do not use in production.
+[WARN] DEV_NO_KEY is enabled: model requests may omit authentication headers. Do not use in production.
+[INFO] Config path: ./proxy_config.toml, Config URL: undefined
+[INFO] Privacy filter active: mode=local entropyThreshold=1
+[req_1784952446595_eb5890177123] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784952446595_eb5890177123] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952446595_eb5890177123] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952450437_336b50f2c250] [INFO] Privacy filter redacted 7 span(s) from /v1/chat/completions
+[req_1784952450437_336b50f2c250] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952450437_336b50f2c250] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952451555_f38620fa69b1] [INFO] Privacy filter redacted 50 span(s) from /v1/chat/completions
+[req_1784952451555_f38620fa69b1] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952451555_f38620fa69b1] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952453620_bc74a3cdab7a] [INFO] Privacy filter redacted 52 span(s) from /v1/chat/completions
+[req_1784952453620_bc74a3cdab7a] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952453620_bc74a3cdab7a] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952458550_9cb0b01045fc] [INFO] Privacy filter redacted 55 span(s) from /v1/chat/completions
+[req_1784952458550_9cb0b01045fc] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952458550_9cb0b01045fc] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952460634_f93094ae8754] [INFO] Privacy filter redacted 94 span(s) from /v1/chat/completions
+[req_1784952460634_f93094ae8754] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952460634_f93094ae8754] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952462495_1407ccea02a1] [INFO] Privacy filter redacted 94 span(s) from /v1/chat/completions
+[req_1784952462495_1407ccea02a1] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952462495_1407ccea02a1] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952465112_65bc866023b8] [INFO] Privacy filter redacted 144 span(s) from /v1/chat/completions
+[req_1784952465112_65bc866023b8] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952465112_65bc866023b8] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952483463_51cf73782acd] [INFO] Privacy filter redacted 144 span(s) from /v1/chat/completions
+[req_1784952483463_51cf73782acd] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952483463_51cf73782acd] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952486787_9a68a9001af5] [INFO] Privacy filter redacted 154 span(s) from /v1/chat/completions
+[req_1784952486787_9a68a9001af5] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952486787_9a68a9001af5] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952521410_fee181f8dd96] [INFO] Privacy filter redacted 156 span(s) from /v1/chat/completions
+[req_1784952521410_fee181f8dd96] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952521410_fee181f8dd96] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952549449_fe999d68ff3c] [INFO] Privacy filter redacted 158 span(s) from /v1/chat/completions
+[req_1784952549449_fe999d68ff3c] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952549449_fe999d68ff3c] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952581621_0493ed9d2316] [INFO] Privacy filter redacted 156 span(s) from /v1/chat/completions
+[req_1784952581621_0493ed9d2316] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952581621_0493ed9d2316] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952581627_2624cd454f5b] [INFO] Privacy filter redacted 160 span(s) from /v1/chat/completions
+[req_1784952581627_2624cd454f5b] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952581627_2624cd454f5b] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952612902_d7473fd13f85] [INFO] Privacy filter redacted 162 span(s) from /v1/chat/completions
+[req_1784952612902_d7473fd13f85] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952612902_d7473fd13f85] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952643626_fd16d927c2f6] [INFO] Privacy filter redacted 164 span(s) from /v1/chat/completions
+[req_1784952643626_fd16d927c2f6] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952643626_fd16d927c2f6] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952667338_523543fae56a] [INFO] Privacy filter redacted 166 span(s) from /v1/chat/completions
+[req_1784952667338_523543fae56a] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952667338_523543fae56a] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952692444_47b771c71d79] [INFO] Privacy filter redacted 168 span(s) from /v1/chat/completions
+[req_1784952692444_47b771c71d79] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952692444_47b771c71d79] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952720642_36fcba9a4aad] [INFO] Privacy filter redacted 170 span(s) from /v1/chat/completions
+[req_1784952720642_36fcba9a4aad] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952720642_36fcba9a4aad] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952742658_41d70a71de62] [INFO] Privacy filter redacted 172 span(s) from /v1/chat/completions
+[req_1784952742658_41d70a71de62] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952742658_41d70a71de62] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952769485_8762ba245a0f] [INFO] Privacy filter redacted 174 span(s) from /v1/chat/completions
+[req_1784952769485_8762ba245a0f] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952769485_8762ba245a0f] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952798257_95e6c6d8c3fa] [INFO] Privacy filter redacted 176 span(s) from /v1/chat/completions
+[req_1784952798257_95e6c6d8c3fa] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952798257_95e6c6d8c3fa] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952826992_e1951967d97e] [INFO] Privacy filter redacted 178 span(s) from /v1/chat/completions
+[req_1784952826992_e1951967d97e] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952826992_e1951967d97e] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952855068_ee2606979997] [INFO] Privacy filter redacted 33 span(s) from /v1/chat/completions
+[req_1784952855068_ee2606979997] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952855068_ee2606979997] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952855075_a40d911e6d57] [INFO] Privacy filter redacted 180 span(s) from /v1/chat/completions
+[req_1784952855075_a40d911e6d57] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952855075_a40d911e6d57] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784952884322_d811c27a78f1] [INFO] Privacy filter redacted 39 span(s) from /v1/chat/completions
+[req_1784952884322_d811c27a78f1] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-comp → deepseek-v4-flash
+[req_1784952884322_d811c27a78f1] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/v1/chat/completions model=deepseek-v4-comp upstream=openai-completions
+[req_1784953750136_ff40165964a1] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784953751880_7848a0ff3d9a] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784953754731_f1f1c7b0f1c1] [INFO] /v1beta/models/gemini-3.1-flash-lite-preview:streamGenerateContent for gemini-3.1-flash-lite-preview to https://api.minimaxi.com/v1/chat/completions (openai-completions)
+[req_1784953754736_0afe45a5f512] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784953754731_f1f1c7b0f1c1] [ERROR] Catch Error [model=gemini-3.1-flash-lite-preview status=400 type=invalid_request_error: invalid params, unknown model 'gemini-3.1-flash-lite-preview' (2013)
+[req_1784953758614_eeb09c4aaf2f] [INFO] /v1beta/models/deepseek-v4-comp:streamGenerateContent for deepseek-v4-flash to https://api.deepseek.com/v1/chat/completions (openai-completions)
+[req_1784953807429_0c0e99c7d19a] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784953807429_0c0e99c7d19a] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784953807429_0c0e99c7d19a] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784953809806_cab2cd0320cd] [INFO] Privacy filter redacted 50 span(s) from /v1/chat/completions
+[req_1784953809806_cab2cd0320cd] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784953809806_cab2cd0320cd] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784953811434_23cd516076fb] [INFO] Privacy filter redacted 50 span(s) from /v1/chat/completions
+[req_1784953811434_23cd516076fb] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784953811434_23cd516076fb] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784953815846_d60ba626645b] [INFO] Privacy filter redacted 78 span(s) from /v1/chat/completions
+[req_1784953815846_d60ba626645b] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784953815846_d60ba626645b] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784953820296_32acdac11cb8] [INFO] Privacy filter redacted 78 span(s) from /v1/chat/completions
+[req_1784953820296_32acdac11cb8] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784953820296_32acdac11cb8] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784953825010_ab782b34e0c5] [INFO] Privacy filter redacted 86 span(s) from /v1/chat/completions
+[req_1784953825010_ab782b34e0c5] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784953825010_ab782b34e0c5] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784953852916_bdc6b0c25a2a] [INFO] Privacy filter redacted 88 span(s) from /v1/chat/completions
+[req_1784953852916_bdc6b0c25a2a] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784953852916_bdc6b0c25a2a] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784953874890_3f303dfbf3b7] [INFO] Privacy filter redacted 90 span(s) from /v1/chat/completions
+[req_1784953874890_3f303dfbf3b7] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784953874890_3f303dfbf3b7] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784953903660_fb61cd09ff35] [INFO] Privacy filter redacted 92 span(s) from /v1/chat/completions
+[req_1784953903660_fb61cd09ff35] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784953903660_fb61cd09ff35] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784953950940_8a3c8d370a9f] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784953950940_8a3c8d370a9f] [INFO] /v1/chat/completions composite alias resolved: max-m3-comp → MiniMax-M3
+[req_1784953950940_8a3c8d370a9f] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/v1/chat/completions model=max-m3-comp upstream=openai-completions
+[req_1784953955075_99570615e493] [INFO] Privacy filter redacted 47 span(s) from /v1/chat/completions
+[req_1784953955075_99570615e493] [INFO] /v1/chat/completions composite alias resolved: max-m3-comp → MiniMax-M3
+[req_1784953955075_99570615e493] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/v1/chat/completions model=max-m3-comp upstream=openai-completions
+[req_1784953957122_7f5b0ade5ba4] [INFO] Privacy filter redacted 4 span(s) from /v1/chat/completions
+[req_1784953957122_7f5b0ade5ba4] [INFO] /v1/chat/completions composite alias resolved: max-m3-anth → MiniMax-M3
+[req_1784953957122_7f5b0ade5ba4] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/anthropic/v1/messages model=max-m3-anth upstream=anthropic-messages
+[req_1784953959103_3ad41da22f74] [INFO] Privacy filter redacted 47 span(s) from /v1/chat/completions
+[req_1784953959103_3ad41da22f74] [INFO] /v1/chat/completions composite alias resolved: max-m3-anth → MiniMax-M3
+[req_1784953959103_3ad41da22f74] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/anthropic/v1/messages model=max-m3-anth upstream=anthropic-messages
+[req_1784953960813_49f2289d4c33] [INFO] Privacy filter redacted 50 span(s) from /v1/chat/completions
+[req_1784953960813_49f2289d4c33] [INFO] /v1/chat/completions composite alias resolved: max-m3-anth → MiniMax-M3
+[req_1784953960813_49f2289d4c33] [INFO] /v1/chat/completions passthrough → https://api.minimaxi.com/anthropic/v1/messages model=max-m3-anth upstream=anthropic-messages
+
+=== 2026-07-25 13:49:58 proxy log ===
+
+> model-proxy-v3@3.2.0 start
+> node dist/server.js
+
+Server running on http://0.0.0.0:7777 (version: dev)
+ and dashboard at http://0.0.0.0:7777/dashboard
+[WARN] DEV_PASS_THROUGH is enabled: /v1/chat/completions requests are passed through directly with validation only (no model routing). Do not use in production.
+[WARN] DEV_NO_KEY is enabled: model requests may omit authentication headers. Do not use in production.
+[INFO] Config path: ./proxy_config.toml, Config URL: undefined
+[INFO] Privacy filter active: mode=local entropyThreshold=1
+[req_1784958544690_083ff79207f1] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784958544690_083ff79207f1] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784958545798_bcda74506d50] [INFO] Privacy filter redacted 43 span(s) from /v1/chat/completions
+[req_1784958545798_bcda74506d50] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784958545798_bcda74506d50] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784958547909_bba4f10af307] [INFO] Privacy filter redacted 60 span(s) from /v1/chat/completions
+[req_1784958547909_bba4f10af307] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784958547909_bba4f10af307] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784958551055_1f239f3a0335] [INFO] Privacy filter redacted 94 span(s) from /v1/chat/completions
+[req_1784958551055_1f239f3a0335] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784958551055_1f239f3a0335] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784958553592_63c10d8cf1f8] [INFO] Privacy filter redacted 104 span(s) from /v1/chat/completions
+[req_1784958553592_63c10d8cf1f8] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784958553592_63c10d8cf1f8] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784958556312_ff0f1e371615] [INFO] Privacy filter redacted 164 span(s) from /v1/chat/completions
+[req_1784958556312_ff0f1e371615] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784958556312_ff0f1e371615] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784958558918_b0bd09d5cd72] [INFO] Privacy filter redacted 240 span(s) from /v1/chat/completions
+[req_1784958558918_b0bd09d5cd72] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784958558918_b0bd09d5cd72] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
+[req_1784958561496_bcb551015a55] [INFO] Privacy filter redacted 289 span(s) from /v1/chat/completions
+[req_1784958561496_bcb551015a55] [INFO] /v1/chat/completions composite alias resolved: deepseek-v4-auth → deepseek-v4-flash
+[req_1784958561496_bcb551015a55] [INFO] /v1/chat/completions passthrough → https://api.deepseek.com/anthropic/v1/messages model=deepseek-v4-auth upstream=anthropic-messages
