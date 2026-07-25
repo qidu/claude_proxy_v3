@@ -892,6 +892,7 @@ The [`docs/`](./docs/) folder has deep-dives on specific topics:
 - **Thinking / reasoning** — `docs/claude-extended-thinking.md`, `docs/claude-adaptive-thinking.md`
 - **API formats** — `docs/claude-api-reference.md`, `docs/gemini-api-reference.md`, `docs/openai-api-reference.md`
 - **Fusion & composite design** — `docs/design_fusion_composite_alias.md`
+- **Request/response transform hooks (proposal)** — `docs/design_request_transform_hooks.md` — per-model/per-upstream field & header rewriting via 5 lifecycle hooks
 
 ## 🤝 Contributing
 
