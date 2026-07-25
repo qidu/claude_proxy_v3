@@ -7,6 +7,57 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: TUI model test — inline-table config resolution, fallback mode, and DeepSeek thinking rejection
+
+Three fixes to the TUI's "test model" feature in `src/tui.ts` that improve coverage
+and unblock the test for compat-mode `anthropic-messages` upstreams like DeepSeek.
+
+**Root causes and fixes:**
+
+1. **`deepseek-v4-auth` and other inline-table model entries resolved to section-level defaults**
+   The TUI's `resolveModelTestConfig` recognized the array-form
+   (`"model" = ["target", "base_url", "api_key", "mode"]`) and the bare section-default
+   fallback, but silently fell through to section-level `upstream_mode`/`base_url`/`api_key`
+   for the inline-table form
+   (`"model" = {target = "...", base_url = "...", api_key = "...", mode = "..."}`) used
+   throughout `proxy_config.toml` for `deepseek-v4-auth`, `minimax-m2.7-high`,
+   `minimax-m3-anth`, `gemma-4-*`, and similar entries. The model test for `deepseek-v4-auth`
+   therefore POSTed to `http://192.168.68.179:3000` (the `[models.free]` default) with
+   `openai-completions` mode and no DeepSeek key, instead of the configured
+   `https://api.deepseek.com/anthropic` with `anthropic-messages`.
+   **Fix:** added an inline-table branch in `resolveModelTestConfig` that reads
+   `target`/`base_url`/`api_key`/`mode` per entry with `typeof` guards, then falls back
+   to section/global defaults. `deepseek-v4-auth` now resolves to
+   `upstreamMode="anthropic-messages"`, `targetUrl="https://api.deepseek.com/anthropic"`,
+   `apiKey="sk-..."`, `directModel="deepseek-v4-flash"`.
+   *Note: empty-string per-field values (e.g. `api_key = ""` in `codelite` and
+   `codesmall`) are intentionally preserved as "not set" — the per-field `||` chain
+   falls through to the section/global default rather than rejecting the entry, so
+   the TUI test for these models still resolves to a working key.*
+
+2. **Unresolvable upstream mode silently fell back to `openai-completions`**
+   When the TUI could not resolve any model config (no entry, no section default, no
+   proxy default) it built an OpenAI completions body and sent it to the local proxy's
+   `/v1/messages` endpoint. The proxy's `/v1/messages` natively speaks Claude, and the
+   default OpenAI shape doesn't match that endpoint without a routing decision.
+   **Fix:** the fallback upstream mode in `executeModelTest` is now `'anthropic-messages'`,
+   which is the proxy's primary `/v1/messages` protocol. The TUI now always POSTs a
+   valid body shape to `/v1/messages`, regardless of whether the model is resolvable.
+
+3. **Anthropic-format `thinking: {type: "adaptive"}` rejected by DeepSeek compat shim**
+   `buildTestToolRequest` previously added `thinking: {type: "adaptive"}` to every
+   `anthropic-messages` test body "to exercise the same thinking path real Anthropic
+   traffic uses." Real Claude accepts the omission, but DeepSeek's `/anthropic`
+   compatibility endpoint rejects the combination of `thinking` + forced
+   `tool_choice: {type: "tool", name: "test_tool"}` with
+   *"Thinking mode does not support this tool_choice"* (400). The DeepSeek
+   `thinking_mode` doc (see `docs/deepseek_thinking.md`) describes the OpenAI-format
+   toggle as `{"thinking": {"type": "enabled/disabled"}}` and never documents the
+   Anthropic-format `{"type": "adaptive"}` shape.
+   **Fix:** removed the `thinking` block from `buildTestToolRequest`. The TUI test is a
+   liveness probe for the model route, not a feature exercise; if a dedicated
+   thinking-path test is needed later it should be a separate test mode.
+
 ### Fix: `/v1/chat/completions` DEV_PASS_THROUGH — tool schema types, `content: null`, and multi-turn tool calls
 
 Four interrelated fixes to the `handleChatCompletionsPassthrough` path used by

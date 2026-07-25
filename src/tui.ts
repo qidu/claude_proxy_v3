@@ -341,11 +341,13 @@ export function buildTestToolRequest(upstreamMode: string): Record<string, unkno
   }
 
   const request = buildClaudeToolRequest();
-  // For anthropic-messages models, default to adaptive thinking so the TUI
-  // test exercises the same thinking path real Anthropic traffic uses.
-  if (upstreamMode === 'anthropic-messages') {
-    request.thinking = { type: 'adaptive' };
-  }
+  // No `thinking` block here. The TUI test is a liveness probe for the model
+  // route, not a feature exercise. anthropic-messages upstreams that speak
+  // the protocol natively (real Claude) accept the omission; compat shims
+  // (e.g. DeepSeek's /anthropic endpoint) may reject or misinterpret the
+  // `{"type": "adaptive"}` shape and surface 400s like
+  // "Thinking mode does not support this tool_choice" when combined with a
+  // forced `tool_choice`. See docs/deepseek_thinking.md.
   return request;
 }
 
@@ -1041,7 +1043,7 @@ class DashboardView implements Component {
     const secColor = secColors[sec % 3];
     const hourminTime = this.lastTime.slice(0, -2);
     const secondsTime = secColor(this.lastTime.slice(-2));
-    const inflightIndicator = getActiveRequestCount() > 0 && Math.floor(sec % 2) == 0 ? ` ${green('●')}` : ' ';
+    const inflightIndicator = getActiveRequestCount() > 0 && Math.floor(sec % 2) == 0 ? ` ${green('●')}` : '  ';
     const lines: string[] = [];
     lines.push(bold('Proxy TUI') + dim(`  ${hourminTime}`) + `${secondsTime}${inflightIndicator}` + dim(`  ${this.app.getVersion()}`));
     lines.push(dim('─'.repeat(Math.max(0, width))));
@@ -1947,7 +1949,12 @@ class DashboardApp {
       ? resolveModelTestConfig(snapshot.config, actualModelId, snapshot.compositeResolved)
       : undefined;
 
-    const upstreamMode = modelConfig?.upstreamMode || 'openai-completions';
+    // The TUI always POSTs to the local proxy's /v1/messages endpoint. When we
+    // can resolve the target's upstream mode we build the matching request
+    // schema; when we cannot, fall back to anthropic-messages (the proxy's
+    // primary protocol — /v1/messages natively speaks Claude) so the test
+    // still exercises a valid body shape rather than an arbitrary one.
+    const upstreamMode = modelConfig?.upstreamMode || 'anthropic-messages';
     const isFusionAlias = !!(snapshot?.config.composite?.[actualModelId] as { fusion_options?: unknown } | undefined)?.fusion_options;
     const requestBody = appendTestKeys(isFusionAlias ? buildTestTextRequest(upstreamMode) : buildTestToolRequest(upstreamMode));
     // For fusion aliases, send directly to the resolved panel target model (bypass fusion pipeline)
@@ -2818,6 +2825,20 @@ function resolveModelTestConfig(
           upstreamMode: modelMode || categoryConfig.upstream_mode || config.default_upstream?.upstream_mode || 'openai-completions',
           targetUrl: modelBaseUrl || categoryConfig.base_url || config.default_upstream?.default_base_url || "http://localhost",
           apiKey: categoryConfig.api_key || config.default_upstream?.default_api_key,
+        };
+      }
+      // Inline-table form: e.g. "model" = {target = "...", base_url = "...", api_key = "...", mode = "..."}
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const entry = value as Record<string, unknown>;
+        const mode = typeof entry.mode === 'string' ? entry.mode : undefined;
+        const baseUrl = typeof entry.base_url === 'string' ? entry.base_url : undefined;
+        const apiKey = typeof entry.api_key === 'string' ? entry.api_key : undefined;
+        const target = typeof entry.target === 'string' ? entry.target : undefined;
+        return {
+          upstreamMode: mode || categoryConfig.upstream_mode || config.default_upstream?.upstream_mode || 'openai-completions',
+          targetUrl: baseUrl || categoryConfig.base_url || config.default_upstream?.default_base_url || 'http://localhost',
+          apiKey: apiKey || categoryConfig.api_key || config.default_upstream?.default_api_key,
+          directModel: target || undefined,
         };
       }
       return {
