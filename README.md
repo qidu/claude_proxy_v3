@@ -893,6 +893,32 @@ The [`docs/`](./docs/) folder has deep-dives on specific topics:
 - **API formats** — `docs/claude-api-reference.md`, `docs/gemini-api-reference.md`, `docs/openai-api-reference.md`
 - **Fusion & composite design** — `docs/design_fusion_composite_alias.md`
 
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
+
+## Models and Tools
+### Models Involved
+1. `DeepSeek-R1`, `V3.2`, `V4-Flash`, `V4-Pro`
+2. `Minimax-M2.6`, `M2.7-highspeed`, `M3`
+4. `Kimi-K2.6`, `K2.7-Code`
+5. `GPT-5.4-Mini`, `GPT-5.4`, `GPT-5.5`
+6. `Gemini-2.5-Flash`, `3.0-Preview`, `3.1-Flash`
+7. `Claude-Sonnet-4.5`, `Sonnet-4.6`, `Opus 4.6`, `Opus 4.8`, `Fable 5`
+8. `Nemotron-3-Super-120b`, `gpt-oss-120b`
+9. `GLM-5.2`
+
+### Tools Involved
+1. `Claude Code`
+2. `Kiro`
+3. `Gemini-Cli`
+4. `Pi`
+5. `Codex`
+6. `opencode`
+
 ## License
 
 This project is licensed under the [MIT License](./LICENSE).
