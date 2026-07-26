@@ -264,6 +264,94 @@ base_url = "https://openrouter.ai/api"
 [schedule]
 "saver" = {"maxplan" = [{from = 9, to = 12}, {from = 14, to = 18}], "code-small" = [{from = 0, to = 9, days="weekday"}], "max-m3" = [{days = "weekend"}], "max-m2.7-high" = []}
 
+# Transforms — rewrite request/response bodies and headers at named pipeline hooks.
+#
+# Transforms are declared as named sets under [transforms.<name>]. Each set
+# targets one upstream schema (openai-completions | anthropic-messages |
+# openai-responses | gemini-generatecontent) and wires ops/builtins to one or
+# more hook points in the pipeline:
+#
+#   endpoint_readin   — immediately after the client request body is parsed
+#   before_conversion — before protocol conversion (e.g. OpenAI → Anthropic)
+#   before_upstream   — just before the HTTP call to the upstream (supports headers)
+#   after_upstream    — immediately after the upstream response arrives (non-streaming)
+#   endpoint_writeout — just before the response is written to the client (supports headers)
+#
+# Tier-1 ops (generic field rewrites):
+#   rename     — rename a top-level field or per-message field
+#   set        — set a field to a fixed value (overwrites existing)
+#   default    — set a field only when it is absent or undefined
+#   remove     — delete a field
+#   map_value  — rewrite a field's value when it equals `from` (optional when_sibling guard)
+#
+# Tier-2 builtins (deep recursive / cross-message logic):
+#   lowercase_tool_schema_types   — lowercase every `type` in tool input schemas
+#   recover_tool_message_name     — backfill missing `name` on tool-result messages
+#   inject_missing_tool_results   — synthesize placeholder tool_result blocks for
+#                                   unmatched tool_use ids (required by some upstreams)
+#
+# Op paths:
+#   top-level field       → bare field name, e.g. `max_tokens`
+#   all messages          → `messages[].field`
+#   role-filtered         → `messages[role=assistant].field`
+#   response-side field   → `$response.field`  (applied to the response body)
+#
+# Ops are applied in declaration order. Builtins run before ops within the same hook.
+#
+# Attaching transforms to model entries:
+#   In a [models.*] section, add `transforms = "set_name"` (or a comma-separated
+#   list `"set_a,set_b"`) inside any model's inline table.
+#
+# [transform_defaults] wires sets to every model of a given upstream mode
+#   without touching individual model entries. Keys are upstream-mode names;
+#   values are arrays of transform-set names applied before any per-model sets.
+#
+# Resolution order (left-to-right, each set sees the previous set's output):
+#   mode-defaults (transform_defaults) → category-level transforms → per-entry transforms
+
+# Example: rename `max_tokens` → `max_completion_tokens` for an OpenAI-responses upstream,
+# and inject a fixed `reasoning` effort field.
+# [transforms.openai_responses_compat]
+# schema = "openai-completions"
+# before_upstream.ops = [
+#   {op = "rename", path = "max_tokens", to = "max_completion_tokens"},
+#   {op = "default", path = "reasoning_effort", value = "medium"},
+# ]
+
+# Example: fix tool schema types and recover missing tool-result names for
+# models that require strict schema conformance.
+# [transforms.strict_tools]
+# schema = "openai-completions"
+# before_upstream.builtins = ["lowercase_tool_schema_types", "recover_tool_message_name"]
+
+# Example: inject a custom upstream header (e.g. an extra auth token) and
+# strip a header the upstream rejects.
+# [transforms.add_upstream_header]
+# schema = "openai-completions"
+# before_upstream.ops = [{op = "set", path = "model", value = "gpt-4o"}]
+# before_upstream.headers.set = {"X-Custom-Auth" = "token-abc"}
+# before_upstream.headers.remove = ["x-stainless-os"]
+
+# Example: rewrite a response-side field before it reaches the client.
+# [transforms.mask_model_id]
+# schema = "openai-completions"
+# endpoint_writeout.ops = [{op = "set", path = "$response.model", value = "proxy-model"}]
+
+# Example: attach transforms to a specific model entry.
+# In [models.gpt], add transforms = "strict_tools" to an entry:
+#   "gpt-4o" = {transforms = "strict_tools"}
+#   "o3" = {target = "o3", transforms = "openai_responses_compat,strict_tools"}
+
+# Example: apply a transform to every openai-completions model automatically.
+# [transform_defaults]
+# openai-completions = ["strict_tools"]
+# anthropic-messages = ["inject_missing_tool_results_set"]
+
+# Builtin-only transform for Anthropic upstreams that reject incomplete tool conversations.
+# [transforms.inject_missing_tool_results_set]
+# schema = "anthropic-messages"
+# before_upstream.builtins = ["inject_missing_tool_results"]
+
 # Privacy filter — redacts PII and hash-shaped secrets (API keys / tokens) from
 # outgoing LLM request text and restores them on the response. Two modes:
 #
