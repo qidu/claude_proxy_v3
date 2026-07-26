@@ -110,6 +110,133 @@ function applyBuiltin(name: BuiltinName, body: Record<string, unknown>): void {
     }
     return;
   }
+
+  if (name === 'inject_missing_tool_results') {
+    // Anthropic-format invariant: every tool_use.id in an assistant message
+    // must be matched by a tool_result.tool_use_id in the immediately
+    // following user message (all results in ONE pure-tool_result user message).
+    //
+    // DeepSeek's Anthropic-compatible endpoint enforces three constraints stricter
+    // than the base Anthropic spec:
+    //
+    // A. No mixed assistant content: an assistant message must contain EITHER
+    //    tool_use blocks OR text — not both. When completionsBodyToClaudeBody
+    //    converts Completions-format messages, the Codex SDK often emits the
+    //    assistant turn as two separate Completions messages:
+    //      [i]   assistant {tool_calls}     → assistant [tu:A, tu:B]
+    //      [i+1] assistant "text…"          → assistant [text]
+    //    These become two consecutive assistant messages in the Anthropic body,
+    //    and the tool_results land at [i+2] and [i+3] (one per call).
+    //    We must reorder: move the tool_result user message to IMMEDIATELY after
+    //    the tool_use assistant, before the text-only assistant.
+    //
+    // B. All tool_results for one assistant turn in ONE user message: when
+    //    multiple role:"tool" messages follow one assistant, each becomes its own
+    //    user message. We merge consecutive pure-tool user messages into the first.
+    //
+    // C. No missing tool_result: if after the above steps a tool_use id still
+    //    lacks a matching tool_result, synthesize a placeholder block.
+    //
+    // The algorithm runs a single forward pass. After each handled pair we advance
+    // i past the tool_result user message to avoid re-processing it.
+    if (!Array.isArray(body.messages)) return;
+    const msgs = body.messages as Record<string, unknown>[];
+
+    const isPureToolMessage = (msg: Record<string, unknown>): boolean => {
+      if (msg.role !== 'user') return false;
+      const c = msg.content;
+      return Array.isArray(c) && (c as Array<Record<string, unknown>>).length > 0 &&
+        (c as Array<Record<string, unknown>>).every(b => b.type === 'tool_result');
+    };
+
+    const hasToolUseBlocks = (msg: Record<string, unknown>): boolean => {
+      if (msg.role !== 'assistant') return false;
+      const c = msg.content;
+      return Array.isArray(c) &&
+        (c as Array<Record<string, unknown>>).some(b => b.type === 'tool_use');
+    };
+
+    for (let i = 0; i < msgs.length - 1; i++) {
+      if (!hasToolUseBlocks(msgs[i])) continue;
+
+      // Collect tool_use ids from this assistant message.
+      const assistant = msgs[i];
+      const toolUseIds = new Set<string>();
+      for (const block of assistant.content as Array<Record<string, unknown>>) {
+        if (block.type === 'tool_use' && typeof block.id === 'string') {
+          toolUseIds.add(block.id);
+        }
+      }
+      // toolUseIds is guaranteed non-empty by hasToolUseBlocks.
+
+      // CONSTRAINT A: skip any consecutive text-only assistant messages between
+      // this assistant and the tool_result user messages. Collect them into a
+      // "tail" list so we can put them back after the tool_result message.
+      const tailAssistants: Array<Record<string, unknown>> = [];
+      let j = i + 1;
+      while (j < msgs.length && msgs[j].role === 'assistant' && !hasToolUseBlocks(msgs[j])) {
+        tailAssistants.push(msgs[j]);
+        j++;
+      }
+
+      // j now points to the first non-assistant message after the tail.
+      // This should be the user message with tool_results (or end of array).
+      if (j >= msgs.length || msgs[j].role !== 'user') {
+        // No user message follows — nothing we can do. Skip.
+        continue;
+      }
+
+      // CONSTRAINT B: collect all consecutive pure-tool user messages starting at j,
+      // merging their blocks into a single list.
+      const toolResultBlocks: Array<Record<string, unknown>> = [];
+      const presentIds = new Set<string>();
+      let k = j;
+      while (k < msgs.length && isPureToolMessage(msgs[k])) {
+        for (const block of msgs[k].content as Array<Record<string, unknown>>) {
+          toolResultBlocks.push(block);
+          if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+            presentIds.add(block.tool_use_id);
+          }
+        }
+        k++;
+      }
+      // k is now the index just past the last pure-tool message.
+
+      // CONSTRAINT C: synthesize any missing tool_result blocks.
+      for (const toolUseId of toolUseIds) {
+        if (!presentIds.has(toolUseId)) {
+          toolResultBlocks.push({ type: 'tool_result', tool_use_id: toolUseId, content: '' });
+        }
+      }
+
+      if (tailAssistants.length === 0 && k - j === 1 && toolResultBlocks.length === (msgs[j].content as Array<unknown>).length) {
+        // Happy path: already [tool_use_assistant, single_pure_tool_user, ...].
+        // No structural changes needed — all tool_results are present and already
+        // in a single user message immediately after the assistant.
+        i++; // skip the tool_result user message
+        continue;
+      }
+
+      // Restructure: remove the tail assistants and all the pure-tool user messages
+      // from their current positions, then re-insert in the correct order:
+      //   [i]   tool_use_assistant  (unchanged)
+      //   [i+1] user (single consolidated pure-tool_result message)
+      //   [i+2…] tailAssistants (text-only assistants come AFTER the tool_results)
+      //   [k…]  whatever came after k
+      //
+      // We do this by splicing out indices [i+1 .. k-1] and replacing them with
+      // [consolidated_user_msg, ...tailAssistants].
+      const toolResultMsg: Record<string, unknown> = {
+        role: 'user',
+        content: toolResultBlocks,
+      };
+      msgs.splice(i + 1, k - (i + 1), toolResultMsg, ...tailAssistants);
+
+      // Advance i past the consolidated user message so we don't re-examine it.
+      i++;
+    }
+    return;
+  }
 }
 
 // ---------------------------------------------------------------------------

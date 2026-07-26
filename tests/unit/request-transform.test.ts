@@ -276,6 +276,302 @@ describe('Tier-2 builtin: recover_tool_message_name', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tier-2 builtin: inject_missing_tool_results (Anthropic-format)
+// ---------------------------------------------------------------------------
+
+describe('Tier-2 builtin: inject_missing_tool_results', () => {
+  const set: TransformSet = {
+    name: 'inject_tool_results',
+    schema: 'anthropic-messages',
+    before_upstream: { builtins: ['inject_missing_tool_results'] },
+  };
+
+  function makeAnthropicCtx(): HookContext {
+    return {
+      hook: 'before_upstream',
+      route: makeRoute([set]),
+      upstreamMode: 'anthropic-messages',
+      clientModel: 'test-model',
+      requestId: 'req-1',
+      streaming: false,
+      logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } as any,
+    };
+  }
+
+  it('inserts a new user message with tool_result when the next user message has text content', () => {
+    // DeepSeek rejects mixing tool_result and text in the same user message.
+    // The built-in inserts a dedicated user message with only tool_result blocks
+    // immediately after the assistant turn, leaving the text message intact.
+    const body = {
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'do the thing' }] },
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'call_a', name: 'do_thing', input: {} }],
+        },
+        { role: 'user', content: [{ type: 'text', text: 'next prompt' }] },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), makeAnthropicCtx());
+    const msgs = result.body.messages as any[];
+    // A new message was inserted at index 2; the original text message is now at index 3.
+    assert.equal(msgs.length, 4, 'a new tool_result message must have been inserted');
+    const inserted = msgs[2];
+    assert.equal(inserted.role, 'user');
+    assert.ok(Array.isArray(inserted.content));
+    assert.equal(inserted.content.length, 1);
+    assert.equal(inserted.content[0].type, 'tool_result');
+    assert.equal(inserted.content[0].tool_use_id, 'call_a');
+    assert.equal(inserted.content[0].content, '');
+    const originalTextMsg = msgs[3];
+    assert.deepEqual(originalTextMsg.content, [{ type: 'text', text: 'next prompt' }], 'original text message must be unchanged');
+  });
+
+  it('inserts a new user message when the following user message has a string content', () => {
+    const body = {
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'call_a', name: 'do_thing', input: {} }],
+        },
+        { role: 'user', content: 'Did you call?' },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), makeAnthropicCtx());
+    const msgs = result.body.messages as any[];
+    assert.equal(msgs.length, 3, 'a new tool_result message must have been inserted');
+    const inserted = msgs[1];
+    assert.equal(inserted.role, 'user');
+    assert.ok(Array.isArray(inserted.content));
+    assert.equal(inserted.content[0].type, 'tool_result');
+    assert.equal(inserted.content[0].tool_use_id, 'call_a');
+    assert.equal(inserted.content[0].content, '');
+    const originalMsg = msgs[2];
+    assert.equal(originalMsg.content, 'Did you call?', 'original string message must be unchanged');
+  });
+
+  it('inserts a new user message with multiple missing tool_result blocks', () => {
+    const body = {
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'call_a', name: 'foo', input: {} },
+            { type: 'tool_use', id: 'call_b', name: 'bar', input: {} },
+          ],
+        },
+        { role: 'user', content: [{ type: 'text', text: 'next' }] },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), makeAnthropicCtx());
+    const msgs = result.body.messages as any[];
+    assert.equal(msgs.length, 3, 'a synthetic tool_result message must have been inserted');
+    const inserted = msgs[1];
+    assert.ok(Array.isArray(inserted.content));
+    const synthesized = (inserted.content as Array<Record<string, unknown>>).filter((b) => b.type === 'tool_result');
+    assert.equal(synthesized.length, 2);
+    const ids = new Set(synthesized.map((b) => b.tool_use_id));
+    assert.ok(ids.has('call_a'));
+    assert.ok(ids.has('call_b'));
+  });
+
+  it('only synthesizes missing ids, leaves existing tool_results alone', () => {
+    const body = {
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'call_a', name: 'foo', input: {} },
+            { type: 'tool_use', id: 'call_b', name: 'bar', input: {} },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'call_a', content: 'existing result for a' },
+          ],
+        },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), makeAnthropicCtx());
+    const userContent = (result.body.messages as any[])[1].content as Array<Record<string, unknown>>;
+    assert.equal(userContent.length, 2);
+    const existing = userContent.find((b) => (b as any).tool_use_id === 'call_a');
+    assert.equal((existing as any).content, 'existing result for a', 'existing result must be untouched');
+    const synthesized = userContent.find((b) => (b as any).tool_use_id === 'call_b');
+    assert.ok(synthesized, 'call_b must be synthesized');
+    assert.equal((synthesized as any).content, '');
+  });
+
+  it('does not synthesize when all tool_results are already present', () => {
+    const body = {
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'call_a', name: 'foo', input: {} },
+            { type: 'tool_use', id: 'call_b', name: 'bar', input: {} },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'call_a', content: 'a result' },
+            { type: 'tool_result', tool_use_id: 'call_b', content: 'b result' },
+          ],
+        },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), makeAnthropicCtx());
+    const userContent = (result.body.messages as any[])[1].content as Array<Record<string, unknown>>;
+    assert.equal(userContent.length, 2, 'no extra blocks must be added');
+    assert.equal((userContent[0] as any).content, 'a result');
+    assert.equal((userContent[1] as any).content, 'b result');
+  });
+
+  it('does not synthesize when the assistant message has no tool_use blocks', () => {
+    const body = {
+      messages: [
+        { role: 'assistant', content: [{ type: 'text', text: 'just text' }] },
+        { role: 'user', content: [{ type: 'text', text: 'no tool calls happened' }] },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), makeAnthropicCtx());
+    const userContent = (result.body.messages as any[])[1].content as Array<Record<string, unknown>>;
+    assert.equal(userContent.length, 1);
+    assert.equal(userContent[0].type, 'text');
+  });
+
+  it('does not synthesize when the assistant is followed by another assistant', () => {
+    const body = {
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'call_a', name: 'foo', input: {} }],
+        },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'second turn from assistant' }],
+        },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), makeAnthropicCtx());
+    const secondAsst = (result.body.messages as any[])[1];
+    assert.equal(secondAsst.content.length, 1, 'must not inject into a non-user message');
+    assert.equal(secondAsst.content[0].type, 'text');
+  });
+
+  it('merges consecutive pure-tool user messages into one and synthesizes missing ids', () => {
+    // Simulates the pattern produced by completionsBodyToClaudeBody when the
+    // client sends multiple role:"tool" messages (one per call) after one
+    // assistant turn with multiple tool_use blocks.
+    //
+    //   [0] assistant (tool_use A, tool_use B)
+    //   [1] user (tool_result A)   <- pure-tool, separate message
+    //   [2] user (tool_result B)   <- pure-tool, separate message — will be merged into [1]
+    //
+    // After built-in: [0] assistant, [1] user (tool_result A, tool_result B)
+    const body = {
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'call_a', name: 'foo', input: {} },
+            { type: 'tool_use', id: 'call_b', name: 'bar', input: {} },
+          ],
+        },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_a', content: 'a result' }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_b', content: 'b result' }] },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), makeAnthropicCtx());
+    const msgs = result.body.messages as any[];
+    assert.equal(msgs.length, 2, 'both pure-tool messages must be merged into one');
+    const merged = msgs[1];
+    assert.equal(merged.role, 'user');
+    assert.equal(merged.content.length, 2, 'merged message must have both tool_result blocks');
+    const ids = new Set(merged.content.map((b: any) => b.tool_use_id));
+    assert.ok(ids.has('call_a'));
+    assert.ok(ids.has('call_b'));
+    assert.equal(merged.content.find((b: any) => b.tool_use_id === 'call_a').content, 'a result');
+    assert.equal(merged.content.find((b: any) => b.tool_use_id === 'call_b').content, 'b result');
+  });
+
+  it('merges consecutive pure-tool messages and synthesizes any still-missing ids', () => {
+    // Three tool_use blocks, two are covered by separate messages, one is missing entirely.
+    const body = {
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'call_a', name: 'foo', input: {} },
+            { type: 'tool_use', id: 'call_b', name: 'bar', input: {} },
+            { type: 'tool_use', id: 'call_c', name: 'baz', input: {} },
+          ],
+        },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_a', content: 'a' }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_b', content: 'b' }] },
+        // call_c has no tool_result at all
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), makeAnthropicCtx());
+    const msgs = result.body.messages as any[];
+    assert.equal(msgs.length, 2, 'all three become one merged+synthesized message');
+    const merged = msgs[1].content as any[];
+    assert.equal(merged.length, 3);
+    const ids = new Set(merged.map((b: any) => b.tool_use_id));
+    assert.ok(ids.has('call_a'));
+    assert.ok(ids.has('call_b'));
+    assert.ok(ids.has('call_c'), 'missing call_c must be synthesized');
+    assert.equal(merged.find((b: any) => b.tool_use_id === 'call_c').content, '');
+  });
+
+  it('handles split-assistant pattern: inserts tool_result between tool_use and text assistants', () => {
+    // Codex SDK via Responses API sometimes emits two consecutive assistant messages:
+    // one with tool_calls, one with text. The tool_results land after the text assistant.
+    // DeepSeek requires the tool_result user message IMMEDIATELY after the tool_use assistant
+    // (no other assistant in between). We reorder: move tool_results before the text assistant.
+    //
+    //   [0] assistant (tool_use A, tool_use B)
+    //   [1] assistant (text "Let me search...")  <- text-only, no tool_use
+    //   [2] user (tool_result A)
+    //   [3] user (tool_result B)
+    //
+    // After built-in:
+    //   [0] assistant (tool_use A, tool_use B)
+    //   [1] user (tool_result A, tool_result B)  <- consolidated, moved before text assistant
+    //   [2] assistant (text "Let me search...")  <- moved after
+    const body = {
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'call_a', name: 'foo', input: {} },
+            { type: 'tool_use', id: 'call_b', name: 'bar', input: {} },
+          ],
+        },
+        { role: 'assistant', content: [{ type: 'text', text: 'Let me search...' }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_a', content: 'a result' }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_b', content: 'b result' }] },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), makeAnthropicCtx());
+    const msgs = result.body.messages as any[];
+    assert.equal(msgs.length, 3, 'must reorder to 3 messages');
+    assert.equal(msgs[0].role, 'assistant');
+    assert.ok(msgs[0].content.every((b: any) => b.type === 'tool_use'), 'assistant content must be pure tool_use');
+    assert.equal(msgs[1].role, 'user', 'user with tool_results must be at index 1');
+    assert.ok(msgs[1].content.every((b: any) => b.type === 'tool_result'), 'user content must be pure tool_result');
+    assert.equal(msgs[1].content.length, 2, 'both tool_results must be merged into one message');
+    const ids = new Set(msgs[1].content.map((b: any) => b.tool_use_id));
+    assert.ok(ids.has('call_a'));
+    assert.ok(ids.has('call_b'));
+    assert.equal(msgs[2].role, 'assistant', 'text-only assistant must be at index 2');
+    assert.equal(msgs[2].content[0].text, 'Let me search...');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Header transforms
 // ---------------------------------------------------------------------------
 

@@ -262,9 +262,114 @@ Multi-agent run (`npx tsx tests/multi-agents-test.ts 0 0 2`) post-fix:
   bugs explicitly out of scope for this entry**:
   - Anthropic-format `tool_use`/`tool_result` pairing invariant on
     `deepseek-v4-auth` (different bug — Claude-format pairing invariant,
-    not a thinking-content issue).
+    not a thinking-content issue). **Fixed in Step 15 below.**
   - Agent SDK package not on disk: `@earendil-works/pi-agent-core`.
   - CLI not on PATH: `opencode`.
   - Codex returning empty output on `openai-responses` for reasons
     unrelated to thinking content.
+
+---
+
+## Anthropic tool_use/tool_result pairing injection (Step 15)
+
+Surfaced by the same `tests/multi-agents-test.ts 0 0 2` run: Codex agent
+against `deepseek-v4-auth` failed with:
+
+```
+messages.10:`tool_use` ids were found without `tool_result` blocks
+immediately after: call_01_03Gzqg0ZesbKUPXLqCUP0307,
+call_02_eiiMJfdmKVzoCro2OGCk3825. Each `tool_use` block must have a
+corresponding `tool_result` block in the next message.
+```
+
+DeepSeek's Anthropic-compatible endpoint enforces that every `tool_use.id`
+in an assistant message is followed by a matching `tool_result.tool_use_id`
+in the immediately following user message. When the client (Codex SDK via the
+OpenAI Responses API) truncates or omits tool results from conversation
+history, the upstream rejects the request.
+
+### Why a new built-in (not Tier-1 ops or a converter patch)
+
+Tier-1 ops can only modify a single shallow field — they cannot walk adjacent
+message pairs. A converter patch would only fix one entry point. A new Tier-2
+built-in mirrors the existing `recover_tool_message_name` pattern and is
+gated by schema (`anthropic-messages`), so it only fires on the one upstream
+that enforces the invariant.
+
+### Algorithm
+
+`inject_missing_tool_results` runs a single forward pass over `body.messages`.
+For each assistant message with `tool_use` blocks:
+
+**Step A — skip interleaved text-only assistant messages** (the Codex SDK via
+Responses API sometimes emits the same turn as two consecutive Completions
+messages: one with `tool_calls`, one with text content). These become two
+consecutive `assistant` messages in the Anthropic body with the `tool_result`
+user messages landing AFTER the text assistant. DeepSeek requires the
+`tool_result` user message to be IMMEDIATELY after the `tool_use` assistant.
+We collect the text-only assistants into a tail list, then re-insert them
+after the consolidated `tool_result` message.
+
+**Step B — merge consecutive pure-tool user messages**: when multiple
+`role:"tool"` Completions messages follow one assistant turn (one per call),
+each becomes its own `user` message. Anthropic spec requires all tool_results
+for one turn in a single user message. We merge all consecutive pure-tool user
+messages into one by collecting their blocks.
+
+**Step C — synthesize missing tool_result blocks**: after merging, if any
+`tool_use.id` still lacks a matching `tool_result`, synthesize a placeholder
+block with `content: ''`.
+
+**Restructure**: the three steps are combined — after collecting all
+`tool_result` blocks (existing + synthesized), the slice `[i+1 .. j+k-1]` is
+replaced with `[consolidated_user_msg, ...tail_text_assistants]`. This ensures
+DeepSeek sees `tool_use_assistant → user(only tool_results) → text_assistant`.
+
+### Wiring gap found during verification
+
+`handleAsAnthropicMessages` in `src/handlers/responses.ts` was missing a
+`before_upstream` hook call — it built the Anthropic-format body and fetched
+directly without applying transforms. Added `route` and `upstreamMode`
+parameters and wired `runHook('before_upstream', ...)` before fetch (mirrors
+the existing pattern in `handleAsCompletions` in the same file).
+
+### Config
+
+```toml
+[transforms.deepseek_v4_anthropic_compat]
+schema = "anthropic-messages"
+before_upstream.builtins = ["inject_missing_tool_results"]
+
+# in [models.free]:
+deepseek-v4-auth = { ..., mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat" }
+```
+
+### Tests
+
+10 unit tests in `tests/unit/request-transform.test.ts`:
+
+1. Inserts new user message with tool_result when next user message has
+   text content array (pure-insert path).
+2. Inserts new user message when next user message has string content.
+3. Inserts new user message with multiple missing tool_result blocks.
+4. Appends synthesized missing block to existing pure-tool_result user message.
+5. No-op when all tool_results already present in single message.
+6. No-op when assistant has no tool_use blocks.
+7. No-op when assistant is followed by another assistant (no user follows).
+8. Merges consecutive pure-tool user messages into one.
+9. Merges consecutive pure-tool messages and synthesizes still-missing ids.
+10. Split-assistant: moves consolidated tool_results before text-only assistant.
+
+### Live verification
+
+`POST /v1/responses` with model `deepseek-v4-auth` and a 3-item input
+containing a `function_call` item followed by a user message (no
+`function_call_output`) → **HTTP 200**. The proxy inserted a synthetic
+`tool_result` user message before the text user message; DeepSeek accepted
+and returned a valid response.
+
+Multi-agent run `tests/multi-agents-test.ts 0 0 2` post-fix: the
+`tool_use ids were found without tool_result blocks` error no longer
+reproduces for Codex agent against `deepseek-v4-auth`. The fix required
+three iterations to handle all patterns the Codex SDK emits.
 

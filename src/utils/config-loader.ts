@@ -95,7 +95,7 @@ export type TransformOp =
   | { op: 'remove';    path: string }
   | { op: 'map_value'; path: string; from: unknown; to: unknown; when_sibling?: string };
 
-export type BuiltinName = 'lowercase_tool_schema_types' | 'recover_tool_message_name';
+export type BuiltinName = 'lowercase_tool_schema_types' | 'recover_tool_message_name' | 'inject_missing_tool_results';
 
 /** A named transform set declared under [transforms.<name>] */
 export interface TransformSet {
@@ -147,7 +147,7 @@ const SCHEMA_PATHS: Record<TransformSchema, Set<string>> = {
   ]),
 };
 
-const BUILTIN_NAMES: Set<BuiltinName> = new Set(['lowercase_tool_schema_types', 'recover_tool_message_name']);
+const BUILTIN_NAMES: Set<BuiltinName> = new Set(['lowercase_tool_schema_types', 'recover_tool_message_name', 'inject_missing_tool_results']);
 
 export interface TransformValidationError {
   set: string;

@@ -85,7 +85,7 @@ export async function handleResponsesRequest(
   }
 
   if (upstreamMode === 'anthropic-messages') {
-    return handleAsAnthropicMessages(request, targetUrl, authHeaders, requestId, model, activeLogger, requestBody, isStreaming, env);
+    return handleAsAnthropicMessages(request, targetUrl, authHeaders, requestId, model, activeLogger, requestBody, isStreaming, env, route, upstreamMode);
   }
 
   if (upstreamMode === 'gemini-generatecontent' || upstreamMode === 'gemini-interactions') {
@@ -447,12 +447,34 @@ async function handleAsAnthropicMessages(
   logger: Logger,
   requestBody: Record<string, unknown>,
   isStreaming: boolean,
-  env?: Env
+  env?: Env,
+  route?: ModelRouteConfig,
+  upstreamMode?: string,
 ): Promise<Response> {
   const completionsRequest = convertResponsesToChatCompletions(requestBody, model);
-  const claudeBody = completionsBodyToClaudeBody(completionsRequest, model);
+  let claudeBody: Record<string, unknown> = completionsBodyToClaudeBody(completionsRequest, model);
+
+  // before_upstream: apply declared transforms to the upstream-format body.
+  // Required for anthropic-messages routes so per-model quirks (e.g. inject
+  // missing tool_result blocks for DeepSeek's Anthropic-compatible endpoint)
+  // can rewrite the Anthropic-format body before fetch.
+  if (route) {
+    const hookCtx: HookContext = {
+      hook: 'before_upstream',
+      route,
+      upstreamMode: upstreamMode || 'anthropic-messages',
+      clientModel: model,
+      requestId,
+      streaming: isStreaming,
+      logger,
+    };
+    ({ body: claudeBody } = runHook('before_upstream', { body: claudeBody, headers: authHeaders }, hookCtx));
+  }
 
   logger.debug(requestId, `Responses->anthropic-messages: ${JSON.stringify(claudeBody).substring(0, 500)}`);
+  if (Array.isArray(claudeBody.messages)) {
+    logger.debug(requestId, `Responses->anthropic-messages msg structure: ${JSON.stringify((claudeBody.messages as Array<Record<string, unknown>>).map(m => ({ role: m.role, content: Array.isArray(m.content) ? (m.content as Array<Record<string, unknown>>).map(b => b.type === 'tool_use' ? `tu:${b.id}` : b.type === 'tool_result' ? `tr:${b.tool_use_id}` : String(b.type)) : `str:${String(m.content).substring(0, 20)}` })))}`);
+  }
 
   const response = await fetch(targetUrl, {
     method: 'POST',

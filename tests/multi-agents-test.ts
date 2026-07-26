@@ -9,8 +9,12 @@
  * against every task, producing `len(USER_TASKS) * len(MODELS) * 5` total runs
  * (modulated by the CLI selection below).
  *
+ * Testing Sever:
+ *   start proxy with `DEV_PASS_THROUGH=true` to enable `/v1/chat/completions` endpoint
+ *   start proxy with `DEV_NO_KEY=true` to skip auth headers checking on proxy
+ *   start proxy with `PORT=7777` on testing port, use lsof to check testing port and get right pid of proxy
+ *
  * Usage:
- *   start proxy with `DEV_PASS_THROUGH=true` to enable also `/v1/chat/completions` endpoint for codex.
  *
  *   export API_KEY=a-valid-key
  *   export CODEX_API_KEY=$API_KEY

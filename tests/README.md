@@ -293,17 +293,6 @@ export GEMINI_BASE_URL=https://api.qnaigc.com/v1
 export GEMINI_API_KEY=your_openai_compatible_api_key
 ```
 
-### wrangler.toml
-```toml
-# Default configuration (OpenAI-compatible)
-GEMINI_ENDPOINT_TYPE = "openai-compatible"
-
-# For native Gemini API
-# GEMINI_ENDPOINT_TYPE = "native"
-# GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
-# GEMINI_API_VERSION = "v1beta"
-```
-
 ## Running Tests
 
 1. **Start the proxy**:

@@ -7,6 +7,60 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: Anthropic tool_use/tool_result pairing injection (Step 15)
+
+Multi-agent live test (`tests/multi-agents-test.ts`, Codex agent × `deepseek-v4-auth`) surfaced:
+
+```
+messages.10: `tool_use` ids were found without `tool_result` blocks immediately after: ...
+```
+
+DeepSeek's Anthropic-compatible endpoint enforces that every `tool_use.id` in an
+assistant message is immediately followed by a `tool_result` block in the next
+user message. When the Codex SDK sends conversation history where tool results
+are missing or out of position, the upstream rejects the request.
+
+**Fix — new `inject_missing_tool_results` Tier-2 built-in**
+
+Runs a single forward pass over the `messages` array. Handles three patterns
+(all discovered during multi-agent live verification):
+
+1. **Split-assistant**: the Codex SDK emits one Completions assistant turn as
+   two messages — `{tool_calls}` then `"text"`. After conversion these become
+   two consecutive assistant messages with the `tool_result` user messages landing
+   AFTER the text assistant. We reorder: collect the text-only assistants as a
+   tail, insert the consolidated `tool_result` user message immediately after the
+   `tool_use` assistant, then re-append the tail. Result:
+   `tool_use_asst → user(tool_results) → text_asst`.
+
+2. **Scattered tool_results**: multiple `role:"tool"` Completions messages
+   (one per call) become separate user messages. Anthropic spec (and DeepSeek)
+   require all tool_results for one turn in a single user message. We merge
+   consecutive pure-tool user messages into one.
+
+3. **Missing tool_result**: after the above, if any `tool_use.id` has no
+   matching `tool_result`, we synthesize a placeholder block with `content: ''`.
+
+Bound to `deepseek-v4-auth` via a new `deepseek_v4_anthropic_compat` transform set
+(`schema = "anthropic-messages"`). The schema-anchor gates application to
+anthropic-messages routes only.
+
+**Wiring fix — `handleAsAnthropicMessages` in `src/handlers/responses.ts`**
+
+This handler (`/v1/responses` → `anthropic-messages`) was missing a
+`before_upstream` hook call — it built the Anthropic-format body and fetched
+directly. Added `route` and `upstreamMode` parameters and wired
+`runHook('before_upstream', ...)` before fetch.
+
+**Tests** — 10 unit tests in `tests/unit/request-transform.test.ts`:
+text-next insertion, string-content insertion, multiple missing ids,
+partial synthesis, all-present no-op, no-tool-use no-op, assistant-not-user no-op,
+merge consecutive pure-tool messages, merge + synthesize, split-assistant reorder.
+
+**Verified** — `tests/multi-agents-test.ts 0 0 2` (Codex × `deepseek-v4-auth`):
+`tool_use ids were found without tool_result blocks` error no longer reproduces.
+All 400 errors remaining are unrelated (thinking round-trip — Step 14).
+
 ### Fix: Multi-turn thinking-content round-trip vs DeepSeek thinking-mode
 
 Multi-agent live test on port `7777` (`tests/multi-agents-test.ts`, 4 models ×
