@@ -353,6 +353,7 @@ async function runGeminiAgent(prompt: string, model: string) {
     }
 
     const fcParts: any[] = [];
+    const thoughtParts: any[] = [];
     const frParts: any[] = [];
     let sawText = false;
 
@@ -381,6 +382,12 @@ async function runGeminiAgent(prompt: string, model: string) {
             response: { result },
           },
         });
+      } else if (part.thought && part.text !== undefined) {
+        // Thinking/reasoning content from thinking-mode upstreams (e.g. DeepSeek).
+        // Must be included in the model-turn history so the upstream can round-trip
+        // the reasoning on the next request without rejecting with
+        // "reasoning_content must be passed back".
+        thoughtParts.push({ thought: true, text: part.text });
       } else if (part.text) {
         if (!sawText) console.log("Gemini output:");
         console.log(part.text);
@@ -391,7 +398,9 @@ async function runGeminiAgent(prompt: string, model: string) {
     }
 
     if (fcParts.length > 0) {
-      history.push({ role: "model", parts: fcParts });
+      // Include thought parts before function call parts in the model history turn
+      // so thinking-mode upstreams see the full assistant content (thought + tool calls).
+      history.push({ role: "model", parts: [...thoughtParts, ...fcParts] });
       history.push({ role: "user", parts: frParts });
     } else {
       completed = true;

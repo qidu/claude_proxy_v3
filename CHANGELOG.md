@@ -7,6 +7,28 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: thinking/reasoning round-trip for streaming, non-streaming, and Gemini paths
+
+Surfaced by multi-agent live run (`tests/multi-agents-test.ts`, Claude + Gemini agents × `deepseek-v4-comp` / `deepseek-v4-auth`). Three converter bugs caused thinking-mode responses to drop `reasoning_content` on the way back to the client, breaking subsequent multi-turn requests that require the reasoning to be passed back.
+
+**Bug 1 — `src/converters/streaming.ts`: `reasoning_content` gated behind `includeThinking` flag**
+
+`delta.reasoning_content` (DeepSeek auto-thinking in streaming mode) was only forwarded as a `{type:'thinking'}` SSE block when `includeThinking` was set. Claude/Gemini agent SDKs never set that flag, so streaming thinking content was silently dropped.
+
+Fix: removed the `if (includeThinking)` guard from the `reasoning_content` / `delta.reasoning` branch — `reasoning_content` is now always forwarded unconditionally. The flag continues to gate only the legacy `<think>` tag extraction path.
+
+**Bug 2 — `src/converters/openai-to-claude.ts`: `reasoning_content` ignored in non-streaming path**
+
+`convertOpenAIToClaudeResponse` iterated only `message.content`; `message.reasoning_content` from DeepSeek's non-streaming response was silently ignored, so the next assistant turn carried no thinking block.
+
+Fix: a `{type:'thinking', thinking: inlineReasoning}` block is now prepended to `contentBlocks` when `message.reasoning_content` is present, before the text block — matching the order required by `convertClaudeToOpenAIRequest` for round-trip preservation.
+
+**Bug 3 — `src/handlers/openai.ts:claudeJsonToSyntheticCompletions`: thinking blocks dropped**
+
+When converting Anthropic-format responses to synthetic completions (used by the Gemini→Anthropic→Gemini path), `{type:'thinking'}` content blocks were discarded. Downstream converters (`convertOpenAIToGeminiGenerateContent`) therefore never saw `reasoning_content` and could not emit `{thought:true}` parts for the Gemini SDK's history.
+
+Fix: thinking blocks are now collected and joined into a `reasoning_content` field on the synthetic `message`, using the existing `as unknown as Record<string, unknown>` cast pattern.
+
 ### Fix: TUI composite target editing — saves blocked by transform validation in parser
 
 Two bugs prevented `Edit Composite Aliases Config` from saving changes to

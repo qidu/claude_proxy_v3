@@ -375,8 +375,14 @@ export function createStreamTransformer(
                         }
                     }
 
-                    // Handle thinking/reasoning content (OpenAI-compatible thinking mode)
-                    if (includeThinking) {
+                    // Handle thinking/reasoning content (OpenAI-compatible thinking mode).
+                    // `delta.reasoning_content` is always forwarded as a thinking block —
+                    // upstream thinking models (e.g. DeepSeek) may produce it even when the
+                    // client did not explicitly request thinking, and the round-trip requires
+                    // it to be present in the assistant history on the next turn.
+                    // The `includeThinking` flag gates only the legacy <think> tag path;
+                    // the dedicated reasoning_content field is unconditional.
+                    {
                         // Handle reasoning_content (common in thinking-enabled models)
                         const reasoningContent = delta.reasoning_content || delta.reasoning;
                         if (reasoningContent && typeof reasoningContent === 'string') {

@@ -667,6 +667,11 @@ async function forwardCompletionsAsAnthropicMessages(
 export function claudeJsonToSyntheticCompletions(claudeJson: Record<string, unknown>, model: string): Record<string, unknown> {
   const contentBlocks = (claudeJson.content as Array<Record<string, unknown>>) ?? [];
   const toolUseBlocks = contentBlocks.filter(c => c.type === 'tool_use');
+  // Preserve thinking blocks as reasoning_content so downstream converters
+  // (convertOpenAIToGeminiGenerateContent) can emit {thought:true} parts and
+  // the Gemini SDK can round-trip reasoning on the next turn for thinking-mode
+  // upstreams (e.g. DeepSeek Anthropic-compatible endpoint).
+  const thinkingText = contentBlocks.filter(c => c.type === 'thinking').map(c => c.thinking ?? '').join('\n');
   return {
     id: claudeJson.id ?? `chatcmpl_${Date.now()}`,
     object: 'chat.completion',
@@ -689,6 +694,7 @@ export function claudeJsonToSyntheticCompletions(claudeJson: Record<string, unkn
             function: { name: tc.name ?? '', arguments: JSON.stringify(tc.input ?? {}) },
           })),
         } : {}),
+        ...(thinkingText ? { reasoning_content: thinkingText } : {}),
       },
       finish_reason: toolUseBlocks.length > 0 ? 'tool_calls' : (claudeJson.stop_reason === 'max_tokens' ? 'length' : 'stop'),
     }],

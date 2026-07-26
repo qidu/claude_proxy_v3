@@ -1,0 +1,33 @@
+[transforms.deepseek_compat]
+schema = "openai-completions"
+endpoint_readin.builtins = ["lowercase_tool_schema_types"]
+before_upstream.builtins = ["recover_tool_message_name"]
+before_upstream.ops = [
+  {op = "map_value", path = "messages[role=assistant].content", when_sibling = "tool_calls", from = "", to = null},
+]
+
+[transforms.deepseek_v4_anthropic_compat]
+schema = "anthropic-messages"
+before_upstream.builtins = ["inject_missing_tool_results"]
+
+[transforms.minimax_compat]
+schema = "openai-completions"
+before_upstream.ops = [
+  {op = "map_value", path = "messages[role=assistant].content", when_sibling = "tool_calls", from = "", to = null},
+]
+
+[transforms.max_tokens_rename]
+schema = "openai-completions"
+before_upstream.ops = [
+  {op = "rename", path = "max_tokens", to = "max_completion_tokens"},
+]
+
+[transforms.writeout_marker]
+schema = "openai-completions"
+endpoint_writeout.ops = [
+  {op = "set", path = "$response.id", value = "step12_response_path_active"},
+]
+
+[transform_defaults]
+openai-completions = ["max_tokens_rename"]
+openai-responses = ["max_tokens_rename"]
