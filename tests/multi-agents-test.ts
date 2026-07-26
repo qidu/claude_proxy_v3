@@ -62,16 +62,10 @@ const PROXY_BASE = process.env.PROXY_BASE || "http://127.0.0.1:8788";
 const WORK_DIR = "./tests/";
 
 const MODELS = [
-  "MiniMaxAI/MiniMax-M3",           // local test
-  "gpt-5.5",                        // gpt
-  "deepseek/deepseek-v4-flash",     // deepseek
-  "minimax/minimax-m3",             // minimax
-  "google/gemini-3.1-flash-lite",   // gemini
-  "claude-4.5-haiku",               // claude
-  "openai/gpt-5.4-mini",            // gpt
-  "qwen3-max-preview",              // qwen3
-  "moonshotai/kimi-k2.7-code",      // moonshot-kimi
-  "z-ai/glm-5.2",                   // z-ai-glm
+  "deepseek-v4-comp",               // deepseek via openai-completions
+  "deepseek-v4-auth",               // deepseek via anthropic-messages
+  "max-m3-comp",                    // minimax via openai-completions
+  "max-m3-anth",                    // minimax via anthropic-messages
 ];
 
 // Each task targets a different AI-coding / agent capability so model
@@ -331,13 +325,19 @@ async function runGeminiAgent(prompt: string, model: string) {
   let completed = false;
 
   for (let turn = 0; turn < 20; turn++) {
-    const resp = await ai.models.generateContent({
-      model,
-      contents: history,
-      config: {
-        tools: GEMINI_TOOLS,
-      },
-    });
+    let resp;
+    try {
+      resp = await ai.models.generateContent({
+        model,
+        contents: history,
+        config: {
+          tools: GEMINI_TOOLS,
+        },
+      });
+    } catch (e: any) {
+      console.error(`Gemini API error: ${e?.message ?? e}`);
+      return;
+    }
 
     const candidate = resp.candidates?.[0];
     const parts = candidate?.content?.parts ?? [];
@@ -396,16 +396,22 @@ async function runGeminiAgent(prompt: string, model: string) {
 
   if (!completed) {
     console.log("Gemini: reached 20 tool turns; forcing final output without tools");
-    const finalResp = await ai.models.generateContent({
-      model,
-      contents: [
-        ...history,
-        {
-          role: "user",
-          parts: [{ text: "No more tool calls. Provide the final answer now based on the information gathered." }],
-        },
-      ],
-    });
+    let finalResp;
+    try {
+      finalResp = await ai.models.generateContent({
+        model,
+        contents: [
+          ...history,
+          {
+            role: "user",
+            parts: [{ text: "No more tool calls. Provide the final answer now based on the information gathered." }],
+          },
+        ],
+      });
+    } catch (e: any) {
+      console.error(`Gemini API error: ${e?.message ?? e}`);
+      return;
+    }
     const finalParts = finalResp.candidates?.[0]?.content?.parts ?? [];
     const textParts = finalParts.filter((part) => part.text).map((part) => part.text);
     if (textParts.length > 0) {

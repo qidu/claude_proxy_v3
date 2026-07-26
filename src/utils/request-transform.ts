@@ -116,31 +116,41 @@ function applyBuiltin(name: BuiltinName, body: Record<string, unknown>): void {
 // Tier-1 path resolution helpers
 // ---------------------------------------------------------------------------
 
-/** Splits a path into (field, roleFilter | null, isMessages). */
+/** Splits a path into (kind, field, roleFilter | null). */
 function parsePath(path: string): {
-  isTopLevel: boolean;
-  isMessages: boolean;
+  kind: 'top' | 'messages' | 'response';
   field: string;
   roleFilter: string | null;
 } {
   // messages[].field  or  messages[role=X].field
   const msgMatch = path.match(/^messages\[(?:role=(\w+))?\]\.(.+)$/);
   if (msgMatch) {
-    return { isTopLevel: false, isMessages: true, roleFilter: msgMatch[1] ?? null, field: msgMatch[2] };
+    return { kind: 'messages', field: msgMatch[2], roleFilter: msgMatch[1] ?? null };
+  }
+  // $response.<field> — response-side path, applied to the body root (the
+  // response schema mirrors the request schema, so we just rewrite a top-level
+  // field of the same shape). Bracket suffixes like `choices[].message.role`
+  // are not yet supported; the validator accepts them but they will fall back
+  // to literal-key assignment until path-walk is added.
+  if (path.startsWith('$response.')) {
+    return { kind: 'response', field: path.slice('$response.'.length), roleFilter: null };
   }
   // top-level single segment (no dots, no brackets)
-  return { isTopLevel: true, isMessages: false, roleFilter: null, field: path };
+  return { kind: 'top', field: path, roleFilter: null };
 }
 
 function applyOpToBody(op: TransformOp, body: Record<string, unknown>): void {
   const parsed = parsePath(op.path);
 
-  if (parsed.isTopLevel) {
+  if (parsed.kind === 'top' || parsed.kind === 'response') {
+    // Both 'top' and 'response' rewrite a top-level field of the body. The
+    // distinction exists only for the parsePath API so callers can tell what
+    // side they're touching; the body shape is the same.
     applyOpToObject(op, body, parsed.field);
     return;
   }
 
-  if (parsed.isMessages && Array.isArray(body.messages)) {
+  if (parsed.kind === 'messages' && Array.isArray(body.messages)) {
     const msgs = body.messages as Record<string, unknown>[];
     for (const msg of msgs) {
       if (parsed.roleFilter && msg.role !== parsed.roleFilter) continue;
@@ -333,4 +343,171 @@ export function buildEventTransformer(
     }
     return body;
   };
+}
+
+/**
+ * Check whether any declared transform set has ops at `hook` — used as a fast-path
+ * gate by `applyWriteoutBody` and `pipeEventTransformer` to avoid cloning/buffering
+ * when no rules fire.
+ */
+export function hasHookOps(hook: HookPoint, transforms: TransformSet[] | undefined): boolean {
+  if (!transforms || transforms.length === 0) return false;
+  return transforms.some(s => s[hook] !== undefined);
+}
+
+/**
+ * Apply `endpoint_writeout` body transforms to a final client Response.
+ *
+ * - Fast-path: when no transforms declare `endpoint_writeout` ops, returns the
+ *   original Response unchanged (no buffering).
+ * - Buffered JSON: buffers the body, applies ops, returns a new Response with
+ *   the rewritten JSON body (status/headers preserved).
+ * - Non-JSON bodies (including SSE streams): passed through unchanged.
+ *
+ * Streaming transform support lives in `pipeEventTransformer` — call sites that
+ * want per-event SSE rewriting for the writeout hook wrap their stream with it.
+ *
+ * Mirror of `applyAfterUpstream` but on the client-schema response.
+ */
+export async function applyWriteoutBody(
+  response: Response,
+  ctx: HookContext,
+): Promise<Response> {
+  if (!hasHookOps('endpoint_writeout', ctx.route.transforms)) return response;
+
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) return response;
+
+  // Buffer body and parse JSON.
+  const text = await response.text();
+  let body: Record<string, unknown>;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return new Response(text, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  }
+
+  // Apply ops.
+  const hookCtx: HookContext = { ...ctx, status: response.status };
+  let headers: Record<string, string> = {};
+  for (const set of ctx.route.transforms!) {
+    const slot = set['endpoint_writeout'];
+    if (!slot) continue;
+    ({ body, headers } = applyTransformSet(set, 'endpoint_writeout', body, headers));
+    void headers; // header ops on endpoint_writeout run in index.ts central wrap
+  }
+  void hookCtx;
+
+  const responseHeaders = new Headers(response.headers);
+  return new Response(JSON.stringify(body), {
+    status: response.status,
+    statusText: response.statusText,
+    headers: responseHeaders,
+  });
+}
+
+/**
+ * Wrap an SSE byte stream so each `data: {...}\n\n` event passes through the
+ * writeout hook's per-event transformer before being written to the new stream.
+ *
+ * Returns the original stream body unchanged when no transforms declare
+ * `endpoint_writeout` ops (fast path). Events whose transformer returns null are
+ * dropped. Other events are re-emitted as `data: <json>\n\n`. Non-data lines and
+ * blank-line-terminated comments are passed through verbatim.
+ */
+export function pipeEventTransformer(
+  responseBody: ReadableStream<Uint8Array>,
+  ctx: HookContext,
+): ReadableStream<Uint8Array> | null {
+  const transformer = buildEventTransformer('endpoint_writeout', ctx);
+  if (!transformer) return null;
+
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = '';
+
+  return new ReadableStream({
+    async start(controller) {
+      const reader = responseBody.getReader();
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          // SSE events are delimited by blank line.
+          const events = buffer.split('\n\n');
+          buffer = events.pop() ?? '';
+          for (const ev of events) {
+            if (!ev.trim()) continue;
+            const transformed = transformSseEvent(ev, transformer, ctx, controller, encoder);
+            if (transformed === null) continue; // dropped
+            // `transformSseEvent` already pushed bytes when applicable
+          }
+        }
+        // flush trailing buffer
+        if (buffer.trim()) {
+          transformSseEvent(buffer, transformer, ctx, controller, encoder);
+        }
+        controller.close();
+      } catch (e) {
+        controller.error(e);
+      }
+    },
+  });
+}
+
+function transformSseEvent(
+  eventText: string,
+  transformer: EventTransformer,
+  ctx: HookContext,
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  encoder: TextEncoder,
+): null | undefined {
+  // Find the data: line(s); multi-data events are concatenated as a JSON array by spec
+  // but most providers use one data: line per event. We treat single-line events.
+  const lines = eventText.split('\n');
+  const dataParts: string[] = [];
+  const otherLines: string[] = [];
+  let terminated = false;
+  for (const line of lines) {
+    if (line.startsWith('data:')) {
+      // data: payload (no space) or "data: payload" (single space).
+      const payload = line.startsWith('data: ') ? line.slice(6) : line.slice(5);
+      if (payload === '[DONE]') {
+        // Sentinel — always pass through unchanged so clients terminate cleanly.
+        controller.enqueue(encoder.encode(`${line}\n\n`));
+        continue;
+      }
+      dataParts.push(payload);
+    } else if (line === '') {
+      terminated = true;
+    } else {
+      otherLines.push(line);
+    }
+  }
+  if (dataParts.length === 0) {
+    // Comments / event: / id: lines — pass through verbatim
+    controller.enqueue(encoder.encode(`${eventText}\n\n`));
+    return undefined;
+  }
+  // Parse the data payload (assume JSON; non-JSON falls through unchanged).
+  const json = dataParts.join('\n');
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    controller.enqueue(encoder.encode(`${eventText}\n\n`));
+    return undefined;
+  }
+  const next = transformer(parsed, ctx);
+  if (next === null) return null; // dropped
+  const reSerialized = `data: ${JSON.stringify(next)}`;
+  controller.enqueue(encoder.encode(`${reSerialized}\n\n`));
+  void terminated;
+  void otherLines;
+  return undefined;
 }

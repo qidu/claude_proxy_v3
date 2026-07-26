@@ -154,6 +154,40 @@ export interface TransformValidationError {
   message: string;
 }
 
+/**
+ * Engine-walkable path predicate.
+ *
+ * The Tier-1 op runner (`applyOpToBody` → `parsePath`) can only target:
+ *   - top-level fields with a name containing neither `.` nor `[` (e.g. `max_tokens`)
+ *   - role-filtered message fields (`messages[role=assistant].content`) — single
+ *     segment, no further nesting
+ *   - shallow response fields (`$response.id`) — single segment, no `.` or `[`
+ *
+ * Anything else (e.g. `$response.choices[].message.content`, `tools[0].function`)
+ * would silently create literal-bracketed/dotted keys on the body, so it must be
+ * rejected at load time (CLAUDE.md §8 Fail Loud). The validator consults this
+ * helper *after* checking `SCHEMA_PATHS` so a path can be both known-to-the-schema
+ * and not-yet-walkable by the engine.
+ *
+ * Named built-ins (`lowercase_tool_schema_types`, `recover_tool_message_name`)
+ * cover the deep-field cases that shallow paths can't reach.
+ */
+function isPathWalkable(path: string): boolean {
+  if (path.startsWith('$response.')) {
+    const rest = path.slice('$response.'.length);
+    return !rest.includes('.') && !rest.includes('[');
+  }
+  if (path.startsWith('messages[')) {
+    // messages[] or messages[role=X] — never nested beyond one segment
+    const rest = path.slice('messages['.length);
+    // rest must be "]" or "role=X].<field>" with no further dots/brackets in <field>
+    const m = rest.match(/^(?:role=(\w+))?\]\.([^.\[]+)$/);
+    return m !== null;
+  }
+  // top-level: single name, no dots, no brackets
+  return !path.includes('.') && !path.includes('[');
+}
+
 export function validateTransformSet(name: string, set: TransformSet): TransformValidationError[] {
   const errs: TransformValidationError[] = [];
   const legalPaths = SCHEMA_PATHS[set.schema];
@@ -169,6 +203,16 @@ export function validateTransformSet(name: string, set: TransformSet): Transform
     for (const op of slot.ops ?? []) {
       if (!legalPaths.has(op.path)) {
         errs.push({ set: name, message: `[${hook}] unknown path "${op.path}" for schema "${set.schema}"` });
+        continue;
+      }
+      if (!isPathWalkable(op.path)) {
+        errs.push({
+          set: name,
+          message:
+            `[${hook}] path "${op.path}" is declared for schema "${set.schema}" but the engine ` +
+            `cannot walk it (nested arrays/objects). Use a named builtin or a shallow ` +
+            `(single-segment) path instead.`,
+        });
       }
     }
     for (const b of slot.builtins ?? []) {
@@ -1790,6 +1834,32 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
           if (typeof mode !== 'string') {
             errors.push({ path: `models.${categoryName}.${key}`, message: `mode must be a string` });
           }
+        } else if (value.length === 5) {
+          // 5 elements = target + base_url + api_key + mode + transforms CSV
+          const target = value[0] as unknown;
+          const baseUrl = value[1] as unknown;
+          const apiKey = value[2] as unknown;
+          const mode = value[3] as unknown;
+          const transformsCsv = value[4] as unknown;
+
+          if (typeof target !== 'string' || (target.trim() === '' && !String(target).includes('*'))) {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `target cannot be empty` });
+          }
+          if (typeof baseUrl !== 'string') {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `base_url must be a string` });
+          } else if (baseUrl.trim() === '' && !categoryBaseUrl) {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `base_url is empty and not set in category` });
+          }
+          if (typeof apiKey !== 'string') {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `api_key must be a string` });
+          }
+          // Empty api_key is fine — proxy uses the caller's auth header
+          if (typeof mode !== 'string') {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `mode must be a string` });
+          }
+          if (typeof transformsCsv !== 'string') {
+            errors.push({ path: `models.${categoryName}.${key}`, message: `transforms must be a comma-separated string` });
+          }
         } else {
           errors.push({ path: `models.${categoryName}.${key}`, message: `must be [target] or [target, base_url, api_key] or [target, base_url, api_key, mode] (got ${value.length} elements)` });
         }
@@ -2347,7 +2417,23 @@ export function parseSimpleToml(content: string): ProxyConfig {
         seenKeys.add(seenKeyIdTable);
         const tableBody = modelTableMatch[2].slice(1, -1); // strip outer braces
         const fields: Record<string, string> = {};
-        for (const field of tableBody.split(',')) {
+        // Split on top-level commas only — must not split inside quoted values,
+        // since `transforms = "a,b,c"` carries a CSV.
+        const fieldParts: string[] = [];
+        let buf = '';
+        let inQuote = false;
+        for (let ci = 0; ci < tableBody.length; ci++) {
+          const ch = tableBody[ci];
+          if (ch === '"') inQuote = !inQuote;
+          if (ch === ',' && !inQuote) {
+            fieldParts.push(buf);
+            buf = '';
+          } else {
+            buf += ch;
+          }
+        }
+        if (buf.trim()) fieldParts.push(buf);
+        for (const field of fieldParts) {
           const kv = field.trim().match(/^(\w+)\s*=\s*"([^"]*)"$/);
           if (kv) fields[kv[1]] = kv[2];
         }
@@ -2357,7 +2443,7 @@ export function parseSimpleToml(content: string): ProxyConfig {
         const entry: string[] = [target, fields['base_url'] ?? '', fields['api_key'] ?? '', mode];
         if (fields['transforms']) entry.push(fields['transforms']);
         const category = config.models[currentCategory] as ModelCategoryConfig;
-        category[cleanKey] = entry as [string, string, string, string];
+        category[cleanKey] = entry as [string, string, string, string, string];
         continue;
       }
     }

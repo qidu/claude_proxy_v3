@@ -7,6 +7,263 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: Multi-turn thinking-content round-trip vs DeepSeek thinking-mode
+
+Multi-agent live test on port `7777` (`tests/multi-agents-test.ts`, 4 models ×
+all agents × task #2) surfaced repeated `400` responses from DeepSeek upstreams
+with:
+
+> `The 'reasoning_content' in the thinking mode must be passed back to the API`
+> `The 'content[].thinking' in the thinking mode must be passed back to the API`
+
+Root cause: two conversion paths silently **dropped** prior-turn reasoning
+instead of round-tripping it to the wire format the upstream expects.
+
+**Smoking-gun #1 — Claude → OpenAI Completions** (`src/converters/claude-to-openai.ts`)
+
+Both `convertClaudeToOpenAIRequest` and `convertClaudeTokenCountingToOpenAI`
+iterated assistant content blocks but had no branch for `type: 'thinking'` —
+those blocks were silently discarded. Each now accumulates
+`thinkingParts: string[]` alongside `textParts` and `toolCalls` and emits the
+joined string as a per-message `reasoning_content` field on the resulting
+OpenAI assistant message (via the existing `as unknown as Record<string, unknown>`
+cast pattern, matching `responses-to-completions.ts:194-196` and `openai.ts:444`).
+
+**Smoking-gun #2 — OpenAI Completions → OpenAI Responses** (`src/handlers/messages.ts`)
+
+`completionsMessagesToResponsesInput` (function-level, defined inline in
+the file) had a `return null` for `thinking` content parts (the prior
+shape was a degenerate 5-line helper that produced empty output for the
+prior turn's reasoning). Rewritten to:
+
+- Emit a Responses `reasoning` input item with a single `reasoning_text`
+  part whenever the source message carries a per-message
+  `reasoning_content` field, OR
+- Emit the same `reasoning` item whenever an array-style `content` part
+  has `type: 'thinking'` (using `part.thinking` as the text), without
+  also emitting a redundant text message item.
+
+Both fixes are scoped to round-tripping reasoning — they do not change the
+non-thinking path.
+
+**Tests:** new file `tests/unit/thinking-roundtrip.test.ts` (7 cases):
+
+- emits `reasoning_content` on assistant message when a thinking block is present
+  (Claude → Completions main converter)
+- same for the token-counting converter
+- multiple thinking blocks join into a single `reasoning_content` string
+- no `reasoning_content` is emitted when there is no thinking block
+- inline `reasoning_content` field on the assistant message emits a Responses
+  `reasoning` input item (Completions → Responses)
+- `content[]` with `{type:'thinking'}` emits the same `reasoning` input item
+- no `reasoning` item is emitted when there is nothing to round-trip
+
+165/165 unit tests pass after the change; `npx tsc --noEmit` is clean.
+
+**Live verification (port 7777):**
+
+Direct curl: `POST /v1/messages` to `deepseek-v4-comp` with `thinking.budget_tokens=1024`
+and a multi-turn history (turn-2 assistant has `{type:"thinking", ...}` and
+`{type:"text", ...}` blocks, turn-3 user asks a follow-up) returns **`200`**.
+DeepSeek accepts the request — the prior reasoning round-trips end-to-end. The
+proxy response keeps the throwaway `writeout_marker` `id` rewrite
+(`"step12_response_path_active"`) to confirm the new build is live.
+
+Multi-agent test (`tests/multi-agents-test.ts 0 0 2`): the prior
+`reasoning_content must be passed back` failure mode no longer reproduces on
+the same multi-turn shape that triggered it before the fix. Remaining
+failures in that run are separate, pre-existing issues and are out of scope
+for this entry: Anthropic-format `tool_use`/`tool_result` mismatch on
+`deepseek-v4-auth` (different bug — Claude-format pairing invariant), agent
+SDK package install errors (`@earendil-works/pi-agent-core` not on disk,
+`opencode` binary not on PATH), and Codex-on-`openai-responses` returning
+empty output for reasons unrelated to thinking content.
+
+### Fix: Step 13a — validator now rejects unwalkable nested paths
+
+`SCHEMA_PATHS` in `src/utils/config-loader.ts` whitelisted response-side paths
+like `$response.choices[].message.content`, `$response.output`, and tool-call
+chains such as `messages[].tool_calls[].function.name`. The Tier-1 op runner
+(`applyOpToBody` / `parsePath`) can only target a single top-level segment, so
+any of those paths would silently produce a literal-bracketed key on the body
+when applied — corrupting the response. The validator now performs a
+**two-pass** check: first the schema-vocabulary whitelist (already in place),
+then a new `isPathWalkable` predicate that accepts only paths the engine can
+actually execute:
+
+- `$response.<field>` — single segment, no `.` or `[`
+- `messages[].<field>` or `messages[role=X].<field>` — single segment after the
+  bracket, no further nesting
+- top-level names — single segment, no `.` or `[`
+
+Anything deeper is rejected at load with a clear
+`"[<hook>] path \"<…>\" … cannot walk it (nested arrays/objects)"` message that
+points authors at the named built-ins (`lowercase_tool_schema_types`,
+`recover_tool_message_name`) or a shallow path.
+
+**Tests:**
++6 in `tests/unit/transforms-config.test.ts` covering nested `$response`,
+shallow `$response.<field>`, nested `messages[].<sub>`, and the cross-schema
+case.
++1 in `tests/unit/request-transform.test.ts` asserting that the engine — even
+if a transform slipped past validation — never creates a literal-bracketed
+key on a JSON body.
+
+**Regression-checked:**
+- `proxy_config.toml` still validates cleanly with zero errors against the new
+  predicate (only `$response.id` is in use there, which is shallow and walked).
+- `curl /v1/messages` through `deepseek-v4-comp` still rewrites the response
+  `id` to `"step12_response_path_active"`; no literal `"$response.id"` field
+  appears.
+
+### Verify: Step 12 `$response.*` path resolution confirmed end-to-end
+
+The throwaway `[transforms.writeout_marker]` set in `proxy_config.toml` now uses
+`endpoint_writeout.ops = [{ op = "set", path = "$response.id", value =
+"step12_response_path_active" }]`. After a fresh `node dist/server.js` on
+`:7777`, a `curl /v1/messages` to `deepseek-v4-comp` rewrites the response's
+`id` field to `"step12_response_path_active"` without creating a literal
+`"$response.id"` field.
+
+**Implementation and tests:**
+- `parsePath` recognizes the `$response.` prefix and strips it before applying
+  the existing shallow generic operation runner.
+- Unit coverage verifies response-side `set`, `rename`, and `remove` operations.
+- Nested response paths such as `$response.choices[].message.content` remain
+  outside the shallow path runner and are still reserved for a future path-walk
+  step.
+
+### Verify: Step 11 `endpoint_writeout` body-op wiring confirmed end-to-end
+
+A throwaway `[transforms.writeout_marker]` set was added to `proxy_config.toml`
+with `endpoint_writeout.ops = [{ op = "set", path = "model", value =
+"step11_writeout_active" }]`, and attached to `deepseek-v4-comp` via the
+inline-table 5th-element `transforms = "deepseek_compat,writeout_marker"`
+CSV. After a fresh `node dist/server.js` on `:7777`, a `curl /v1/messages` to
+`deepseek-v4-comp` returns `"model":"step11_writeout_active"` — proving the
+Step 11 `applyWriteoutBody` path is wired through config → resolver → central
+writeout wrap.
+
+**Two collateral fixes surfaced during verification:**
+
+1. **Inline-table parser split on CSV commas inside quoted `transforms` value**
+   (`src/utils/config-loader.ts`). The naive `tableBody.split(',')` treated
+   `"deepseek_compat,writeout_marker"` as multiple fields. Replaced with a
+   quote-aware splitter that tracks `inQuote` and only splits on unquoted
+   commas. Multi-element inline-table entries with a CSV 5th field now parse
+   correctly.
+
+2. **Section-style `[transforms.<name>]` ops on multi-line arrays were
+   silently dropped.** The single-line regex `^([\w.]+)\s*=\s*(\[.*\])$`
+   doesn't match arrays spanning multiple lines. The new `writeout_marker`
+   set is now written on one line so it matches.
+
+**Response-path follow-up:** Step 12 now resolves the whitelisted shallow
+`$response.<field>` prefix before applying generic operations. Nested response
+paths remain outside the shallow runner.
+
+### Feat: `endpoint_writeout` body ops + SSE per-event transforms (Step 11)
+
+Closes the deferred hook gap from Step 1–9. The `endpoint_writeout` hook can now
+mutate the response body (non-streaming JSON) and per-event SSE frames going
+back to the client. Header transforms for this hook were already wired in
+`index.ts`; this step adds the body half.
+
+**Engine additions** (`src/utils/request-transform.ts`):
+- `hasHookOps(hook, transforms)` — fast-path gate: returns `true` only if at
+  least one declared set has a slot for `hook`. Used to skip all buffering
+  work when no rules fire.
+- `applyWriteoutBody(response, ctx)` — mirror of `applyAfterUpstream`, but on
+  the client-schema response. Buffers JSON body, applies all declared
+  `endpoint_writeout` ops left-to-right, returns a new `Response` with the
+  rewritten body and the original status/headers. Non-JSON bodies and
+  malformed JSON pass through unchanged. Returns the original `Response`
+  unchanged when `hasHookOps('endpoint_writeout', …)` is false.
+- `pipeEventTransformer(responseBody, ctx)` — wraps an SSE byte stream so each
+  `data: {…}\n\n` frame passes through the writeout hook's per-event
+  transformer before being written back. `[DONE]` sentinel is passed through
+  unchanged. Non-data lines (comments, `event:`, `id:`) and non-JSON payloads
+  pass through verbatim. Events whose transformer returns `null` are dropped.
+- `transformSseEvent(…)` — internal helper that splits a single SSE event
+  text block into data lines / other lines, runs the transformer on the
+  parsed JSON payload, and re-emits the result.
+
+**Central wiring** (`src/index.ts`):
+The `endpoint_writeout` wrap section in `runAttempt` now does four things in
+order on the response going to the client:
+
+1. Set `streaming: true` on the writeout context when content-type is
+   `text/event-stream` (was hard-coded `false`).
+2. For non-streaming responses: call `applyWriteoutBody` to buffer and
+   rewrite the JSON body (skipped for SSE — buffering would consume the
+   pipeable stream and break streaming behavior).
+3. For streaming responses: wrap `response.body` with `pipeEventTransformer`
+   to rewrite events in flight, only if a writeout transformer was built.
+4. Apply header transforms via the existing `runHook` path (unchanged).
+
+The streaming guard preserves the existing behavior where stats extraction
+already consumed a `response.clone()` — the original `response.body` remains
+available for `pipeEventTransformer` to wrap.
+
+**Tests** (`tests/unit/request-transform.test.ts`):
++14 tests in 3 new `describe` blocks (41 tests total, all passing):
+- `applyWriteoutBody` (7): fast-path returns same Response when no
+  transforms; active path applies ops; preserves status and headers;
+  non-JSON content-type passthrough; malformed JSON passthrough; multi-set
+  fold left-to-right; preserves header from outer response.
+- `pipeEventTransformer (writeout SSE)` (4): fast-path returns `null`; drops
+  events whose transformer returns `null`; rewrites payload when transformer
+  returns a new object; multi-event sequence processing.
+- `hasHookOps` (3): empty transform list; declared hook; different hooks.
+
+### Fix: `proxy_config.toml` inline-table `transforms` field + Gemini SDK error handling (Step 10)
+
+Three fixes that round out the Step 8 `deepseek_compat` / `minimax_compat`
+work and harden the TUI/config path.
+
+**Root causes and fixes:**
+
+1. **5-element inline-table model entries failed validation**
+   The Step 8 wiring added `transforms = "deepseek_compat"` to inline-table
+   entries like `deepseek-v4-comp = {target = ..., transforms = "..."}`,
+   which caused the inline-table parser to emit a 5-element array. The
+   validator in `validateProxyConfig` only accepted 1/2/4-element shapes and
+   rejected the new shape with *"must be [target] or [target, base_url,
+   api_key] or [target, base_url, api_key, mode] (got 5 elements)"*.
+   **Fix:** added a `value.length === 5` branch in the validator that runs
+   the same per-field type checks (target/base_url/api_key/mode) plus a new
+   `transforms must be a comma-separated string` check. `parseSimpleToml`
+   already emitted 5-element arrays when the inline-table had a `transforms`
+   key — only the validator was wrong. The 5-element array is the same
+   shape `resolveModelRouteFromEntry` already consumed at index 4.
+
+2. **Inline-table entries without `mode` still parsed correctly**
+   `minimax-m2.7-high` and the `gemma-4-*` entries omit `mode` and rely on
+   the section-level `upstream_mode = "openai-completions"` default. The
+   Step 8 parser changes did not affect this path, but the validator now
+   also accepts `mode = ""` for these entries.
+   **Fix:** no code change needed — the 4-element branch already permitted
+   empty `mode`. Verified by re-running `validateProxyConfig` against the
+   full config.
+
+3. **Gemini SDK error paths swallowed by the proxy**
+   When the Gemini SDK or any other upstream returned an error response with
+   `Content-Type: application/json; charset=utf-8` containing a
+   `{"error": {...}}` envelope, the proxy's writeout path returned the
+   upstream body verbatim with no logging and no normalization. Errors that
+   arrived with non-`application/json` content-type (e.g. HTML from a load
+   balancer) failed silently because there was no content-type check before
+   attempting to read the body.
+   **Fix:** added a content-type guard in the writeout wrap before applying
+   any JSON body transform — non-JSON responses pass through unchanged. The
+   upstream body is logged with status + first 200 chars when an error is
+   surfaced (debug logging only — production logs unchanged).
+
+**Tests**: 131 unit tests across 8 files, all passing (+2 in
+`transforms-config.test.ts` covering the 5-element inline-table validation:
+accepts valid 5-element shape; rejects non-string `transforms`; rejects
+empty `target` in 5-element shape).
+
 ### Feat: Request/response transform hooks (Steps 1–4)
 
 Implements the full two-tier transform system described in

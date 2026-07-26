@@ -80,7 +80,7 @@ import {
 import { getKompressConfig, shouldCompressPath, compressBody } from './utils/kompress.js';
 import { eraseBlockedTools } from './utils/tool-blocklist.js';
 import { buildModelUsageRecordPayload, recordModelUsageToRemote } from './utils/model-usage-recorder.js';
-import { runHook, type HookContext } from './utils/request-transform.js';
+import { runHook, applyWriteoutBody, pipeEventTransformer, type HookContext } from './utils/request-transform.js';
 
 let hasLoggedUpstreamConfig = false;
 
@@ -2189,18 +2189,48 @@ export default {
           }
         }
 
-        // endpoint_writeout: apply header transforms on the response going back to the client.
+        // endpoint_writeout: apply header + body transforms on the response going back to the client.
         if (attemptRoute && attemptRoute.transforms.length > 0) {
+          // Re-read content-type after any streaming filter pipes applied above.
+          const writeoutContentType = response.headers.get('content-type') || '';
           const writeoutCtx: HookContext = {
             hook: 'endpoint_writeout',
             route: attemptRoute,
             upstreamMode: attemptUpstreamMode || 'openai-completions',
             clientModel: attemptModelId || 'unknown',
             requestId,
-            streaming: false,
+            streaming: writeoutContentType.includes('text/event-stream'),
             logger,
             status: response.status,
           };
+
+          // Body ops: buffered JSON rewrite (mirrors applyAfterUpstream shape).
+          // Note: stats extraction above used response.clone() so its body is
+          // already consumed — applyWriteoutBody works on the original here.
+          // For streams: skip buffered JSON rewrite (would break streaming) and
+          // let pipeEventTransformer handle per-event rewriting below.
+          if (!writeoutCtx.streaming) {
+            response = await applyWriteoutBody(response, writeoutCtx);
+          }
+
+          // SSE per-event rewrite: only when no JSON body ops changed the
+          // response and content is still a stream. applyWriteoutBody is a no-op
+          // for non-JSON, so response.body is intact.
+          const responseContentType = response.headers.get('content-type') || '';
+          if (response.body && responseContentType.includes('text/event-stream')) {
+            const evtStream = pipeEventTransformer(response.body, writeoutCtx);
+            if (evtStream) {
+              const newHeaders = new Headers(response.headers);
+              response = new Response(evtStream, {
+                status: response.status,
+                statusText: response.statusText,
+                headers: newHeaders,
+              });
+            }
+          }
+
+          // Header ops: also wired centrally here (run before body so headers
+          // shape the new Response).
           const responseHeaders: Record<string, string> = {};
           response.headers.forEach((v, k) => { responseHeaders[k] = v; });
           const { headers: transformedHeaders } = runHook('endpoint_writeout', { body: {}, headers: responseHeaders }, writeoutCtx);

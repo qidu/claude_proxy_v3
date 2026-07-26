@@ -97,6 +97,19 @@ function completionsMessagesToResponsesInput(messages: unknown[]): unknown[] {
     const role = msg.role as string | undefined;
     const content = msg.content;
 
+    // Extract reasoning carried on the message itself (OpenAI wire-format
+    // `reasoning_content` is a per-message field set by thinking-mode upstreams
+    // such as DeepSeek). Emit a Responses-side `reasoning` item so the prior
+    // turn's reasoning round-trips and DeepSeek doesn't reject the next turn
+    // with "reasoning_content must be passed back".
+    const inlineReasoning = msg.reasoning_content;
+    if (role === 'assistant' && typeof inlineReasoning === 'string' && inlineReasoning) {
+      input.push({
+        type: 'reasoning',
+        content: [{ type: 'reasoning_text', text: inlineReasoning }],
+      });
+    }
+
     // assistant message with tool_calls → emit function_call items (no message item)
     if (role === 'assistant' && Array.isArray(msg.tool_calls)) {
       for (const tc of msg.tool_calls as Array<Record<string, unknown>>) {
@@ -129,13 +142,25 @@ function completionsMessagesToResponsesInput(messages: unknown[]): unknown[] {
     if (typeof content === 'string') {
       contentParts = [{ type: textType, text: content }];
     } else if (Array.isArray(content)) {
-      contentParts = (content as Array<Record<string, unknown>>).map(part => {
+      const parts: unknown[] = [];
+      for (const part of content as Array<Record<string, unknown>>) {
         const pType = part.type as string;
-        if (pType === 'text') return { type: textType, text: part.text ?? '' };
-        if (pType === 'image_url') return { type: 'input_image', image_url: part.image_url };
-        // thinking parts have no Responses equivalent; drop them
-        return null;
-      }).filter(p => p !== null);
+        if (pType === 'text') {
+          parts.push({ type: textType, text: part.text ?? '' });
+        } else if (pType === 'image_url') {
+          parts.push({ type: 'input_image', image_url: part.image_url });
+        } else if (pType === 'thinking') {
+          // Thinking-mode content parts: emit a Responses `reasoning` item
+          // carrying a single `reasoning_text` part so the prior reasoning
+          // round-trips to thinking-mode upstreams (DeepSeek requires it).
+          input.push({
+            type: 'reasoning',
+            content: [{ type: 'reasoning_text', text: part.thinking ?? '' }],
+          });
+        }
+        // unknown part types are dropped (intentional; narrower than silent swallow)
+      }
+      contentParts = parts;
     } else {
       contentParts = [{ type: textType, text: JSON.stringify(content ?? '') }];
     }

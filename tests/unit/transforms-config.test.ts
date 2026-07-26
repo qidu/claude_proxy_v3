@@ -133,6 +133,64 @@ describe('validateTransformSet', () => {
     assert.equal(errs.length, 1);
     assert.ok(errs[0].message.includes('frequency_penalty'));
   });
+
+  // Step 13a: nested response / message paths are whitelisted by the schema's
+  // field vocabulary but cannot be walked by the Tier-1 op runner. The
+  // validator must reject them so they never silently create literal-bracketed
+  // keys on the body.
+  it('rejects nested $response path that the engine cannot walk', () => {
+    const set: TransformSet = {
+      name: 'bad',
+      schema: 'openai-completions',
+      endpoint_writeout: { ops: [{ op: 'set', path: '$response.choices[].message.content', value: 'x' }] },
+    };
+    const errs = validateTransformSet('bad', set);
+    assert.equal(errs.length, 1);
+    assert.ok(errs[0].message.includes('cannot walk'));
+    assert.ok(errs[0].message.includes('$response.choices[].message.content'));
+  });
+
+  it('accepts shallow $response.<field> paths', () => {
+    const set: TransformSet = {
+      name: 'good',
+      schema: 'openai-completions',
+      endpoint_writeout: { ops: [{ op: 'set', path: '$response.id', value: 'x' }] },
+    };
+    assert.deepEqual(validateTransformSet('good', set), []);
+  });
+
+  it('rejects $response.<field> with further nesting under anthropic-messages', () => {
+    const set: TransformSet = {
+      name: 'bad',
+      schema: 'anthropic-messages',
+      endpoint_writeout: { ops: [{ op: 'set', path: '$response.content[0].text', value: 'x' }] },
+    };
+    // First, the schema check: $response.content[0].text is NOT in the
+    // anthropic-messages whitelist, so the validator already fails for that
+    // reason. The error must still surface — second-layer walkable check is
+    // never reached.
+    const errs = validateTransformSet('bad', set);
+    assert.ok(errs.length >= 1);
+  });
+
+  it('accepts bare messages[].<field> path (no role filter)', () => {
+    const set: TransformSet = {
+      name: 'good',
+      schema: 'openai-completions',
+      before_upstream: { ops: [{ op: 'set', path: 'messages[].name', value: 'x' }] },
+    };
+    assert.deepEqual(validateTransformSet('good', set), []);
+  });
+
+  it('rejects messages[].<field>.<sub> nested object path', () => {
+    const set: TransformSet = {
+      name: 'bad',
+      schema: 'openai-completions',
+      before_upstream: { ops: [{ op: 'set', path: 'messages[].tool_calls[].function.name', value: 'x' }] },
+    };
+    const errs = validateTransformSet('bad', set);
+    assert.ok(errs.length >= 1, 'must reject multi-segment tool_calls walk');
+  });
 });
 
 // ---------------------------------------------------------------------------
