@@ -570,7 +570,6 @@ class CompositeAliasesOverlay implements Component, Focusable {
   invalidate(): void {}
 
   handleInput(data: string): void {
-    console.error('[DEBUG] handleInput:', JSON.stringify(data), [...data].map((c) => c.charCodeAt(0)));
     if (matchesKey(data, 'escape')) {
       this.app.closeOverlay();
       return;
@@ -1232,6 +1231,7 @@ class DashboardApp {
   private lastDumpedDate = '';
   private stopped = false;
   private refreshing = false;
+  private pendingMutationRefresh = false;
   private renderPending = false;
   private renderTimer: ReturnType<typeof setTimeout> | null = null;
   // Cached unsanitized ProxyConfig (includes api_key). The snapshot config
@@ -1307,11 +1307,17 @@ class DashboardApp {
   }
 
   async refresh(fromMutation = false, forceReload = false): Promise<void> {
-    if (this.refreshing) return;
+    if (this.refreshing) {
+      // A mutation save must not be silently dropped — mark it pending so the
+      // in-flight refresh loop picks it up as a forced reload immediately after.
+      if (fromMutation) this.pendingMutationRefresh = true;
+      return;
+    }
     if (fromMutation) this.view.setConfigStatus('changed');
     this.refreshing = true;
     try {
-      const proxyConfig = await this.source.loadConfig(forceReload);
+      const effectiveForceReload = forceReload || fromMutation;
+      const proxyConfig = await this.source.loadConfig(effectiveForceReload);
       this.proxyConfig = proxyConfig;
       const validationErrors = (proxyConfig as unknown as { _validationErrors?: ConfigValidationError[]; _validationWarnings?: ConfigValidationError[] })._validationErrors;
       const validationWarnings = (proxyConfig as unknown as { _validationWarnings?: ConfigValidationError[] })._validationWarnings;
@@ -1340,6 +1346,10 @@ class DashboardApp {
       this.view.setMessage((error as Error).message);
     } finally {
       this.refreshing = false;
+      if (this.pendingMutationRefresh) {
+        this.pendingMutationRefresh = false;
+        void this.refresh(true);
+      }
     }
   }
 
@@ -2139,11 +2149,19 @@ class DashboardApp {
       });
       return;
     }
-    this.openPrompt(`Edit ${alias}.${bold(target)}`, 'input <share> <primary> <fallback>', '', async (value) => {
+    const currentCfg = this.viewSnapshot()?.config.composite?.[alias]?.[target] as CompositeTargetConfig | undefined;
+    const defaultValue = [
+      currentCfg?.share !== undefined ? String(currentCfg.share) : '1',
+      currentCfg?.primary ? 'true' : currentCfg?.primary === false ? 'false' : '',
+      currentCfg?.fallback !== undefined ? String(currentCfg.fallback) : '',
+    ].join(' ').trimEnd();
+    this.openPrompt(`Edit ${alias}.${bold(target)}`, 'share [primary] [fallback]', defaultValue, async (value) => {
       const parts = value.trim().split(/\s+/).filter(Boolean);
       if (parts.length < 1 || parts.length > 3) {
         this.view.setMessage('Use: share [primary] [fallback]');
         await this.refresh();
+        this.compositeOverlay?.focusAlias(alias);
+        this.requestRender();
         return;
       }
 
@@ -2152,6 +2170,8 @@ class DashboardApp {
       if (Number.isNaN(share)) {
         this.view.setMessage('Share must be a number');
         await this.refresh();
+        this.compositeOverlay?.focusAlias(alias);
+        this.requestRender();
         return;
       }
 
@@ -2159,6 +2179,8 @@ class DashboardApp {
       if (parsedPrimary === null) {
         this.view.setMessage('Primary must be true, 1, false, or 0');
         await this.refresh();
+        this.compositeOverlay?.focusAlias(alias);
+        this.requestRender();
         return;
       }
 
@@ -2166,6 +2188,8 @@ class DashboardApp {
       if (fallbackText !== undefined && Number.isNaN(fallback)) {
         this.view.setMessage('Fallback must be a number');
         await this.refresh();
+        this.compositeOverlay?.focusAlias(alias);
+        this.requestRender();
         return;
       }
 
@@ -2177,9 +2201,12 @@ class DashboardApp {
         });
         this.view.setMessage(`updated ${alias}.${target}`);
         await this.refresh(true);
+        this.compositeOverlay?.focusAlias(alias);
       } catch (err) {
         this.view.setMessage((err as Error).message);
         await this.refresh();
+        this.compositeOverlay?.focusAlias(alias);
+        this.requestRender();
       }
     });
   }

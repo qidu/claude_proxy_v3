@@ -2601,13 +2601,22 @@ export function parseSimpleToml(content: string): ProxyConfig {
   (config as unknown as { _validationErrors?: ConfigValidationError[]; _validationWarnings?: ConfigValidationError[] })._validationErrors = validation.errors;
   (config as unknown as { _validationWarnings?: ConfigValidationError[] })._validationWarnings = validation.warnings;
 
-  // Validate transform sets — fail loud on unknown paths or undefined references
+  // Log transform errors — do NOT throw here. parseSimpleToml is called both
+  // for normal config loading and for the integrity round-trip inside
+  // persistProxyConfigToPath. Throwing in the round-trip path blocks every
+  // mutation save (add/edit/delete composite targets) when any transform set
+  // reference is invalid. Transform errors are surfaced via _validationErrors
+  // in loadProxyConfig where they can be shown in the dashboard status bar.
   const transformErrs = validateAllTransforms(config);
   for (const err of transformErrs) {
     console.error(`[ERROR] transforms.${err.set}: ${err.message}`);
   }
   if (transformErrs.length > 0) {
-    throw new Error(`Config invalid: ${transformErrs.length} transform error(s). See logs above.`);
+    const existing = (config as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors ?? [];
+    (config as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors = [
+      ...existing,
+      ...transformErrs.map((e) => ({ path: `transforms.${e.set}`, message: e.message })),
+    ];
   }
 
   return config;

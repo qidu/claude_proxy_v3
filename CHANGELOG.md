@@ -7,6 +7,54 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: TUI composite target editing — saves blocked by transform validation in parser
+
+Two bugs prevented `Edit Composite Aliases Config` from saving changes to
+`proxy_config.toml` and reflecting them in the overlay.
+
+**Bug 1 — `parseSimpleToml` threw on transform errors, blocking every write**
+(`src/utils/config-loader.ts`)
+
+The `transforms_hooks` branch added `validateAllTransforms` at the end of
+`parseSimpleToml` and threw if any transform set reference was undefined.
+`persistProxyConfigToPath` calls `parseSimpleToml(serialized)` for its
+round-trip integrity check — so every mutation save (add/edit/delete composite
+targets) threw before touching the disk. The error was swallowed by the TUI
+`try/catch`, leaving the overlay on stale data with no visible feedback.
+
+Fix: remove the throw from `parseSimpleToml`. The function is a parser used in
+multiple contexts; validation belongs only in callers that load config for
+active use. Transform errors are now appended to `_validationErrors` (surfaced
+in the dashboard status bar) and logged to stderr, but they no longer block
+writes.
+
+**Bug 2 — mutation `refresh(true)` silently dropped if a background poll was in-flight**
+(`src/tui.ts`)
+
+`DashboardApp.refresh()` bailed out immediately (`if (this.refreshing) return`)
+when a concurrent refresh was running. The 500 ms background poll meant this
+race was common: save succeeded, `refresh(true)` returned without re-reading the
+file, overlay kept the old snapshot.
+
+Fix: added `pendingMutationRefresh` flag. When `refresh(true)` finds
+`this.refreshing`, it sets the flag instead of returning silently. The in-flight
+refresh checks the flag in its `finally` block and immediately fires another
+`refresh(true)` with a forced cache-bust. Additionally, mutation refreshes now
+always pass `forceReload = true` to `loadConfig` regardless of the caller's
+argument.
+
+**Additional TUI fixes** (`src/tui.ts`)
+
+- Edit prompt for composite targets now pre-fills current `share`/`primary`/
+  `fallback` values instead of opening blank.
+- Format hint corrected from `input <share> <primary> <fallback>` to
+  `share [primary] [fallback]`.
+- After validation errors in the edit prompt, `focusAlias` and `requestRender`
+  are now called (matching the add-target path) so the composite overlay regains
+  focus.
+- Removed a leftover `console.error('[DEBUG] handleInput: ...')` that spammed
+  stderr on every keypress in the composite overlay.
+
 ### Fix: Anthropic tool_use/tool_result pairing injection (Step 15)
 
 Multi-agent live test (`tests/multi-agents-test.ts`, Codex agent × `deepseek-v4-auth`) surfaced:
