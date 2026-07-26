@@ -16,7 +16,9 @@ import { handleTargetApiError } from '../utils/errors.js';
 import { normalizeOpenAIToClaudeThinking } from '../utils/thinking.js';
 import { validateBetaFeatures, hasBetaFeature } from '../utils/beta-features.js';
 import { isSdkUrl, handleSdkOpenAIRequest, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
-import { addForwardedHeaders, mapMaxTokensForUpstream, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
+import { addForwardedHeaders, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
+import { runHook, applyAfterUpstream, type HookContext } from '../utils/request-transform.js';
+import type { ModelRouteConfig } from '../utils/config-loader.js';
 import { countClaudeRequestTokens, getLocalTokenCountingConfig, TokenCountingOptions } from '../utils/token-counting.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
@@ -158,7 +160,8 @@ export async function handleMessagesRequest(
   env?: Env,
   logger?: Logger,
   conversionOptions?: ThinkingConversionOptions,
-  upstreamMode?: string
+  upstreamMode?: string,
+  route?: ModelRouteConfig,
 ): Promise<Response> {
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
@@ -293,7 +296,7 @@ export async function handleMessagesRequest(
       if (openaiRequestBody.tools !== undefined) responsesBody.tools = completionsToolsToResponsesTools(openaiRequestBody.tools as unknown[]);
       if (openaiRequestBody.tool_choice !== undefined) responsesBody.tool_choice = completionsToolChoiceToResponsesToolChoice(openaiRequestBody.tool_choice);
 
-      const responsesResponse = await fetch(targetUrl, {
+      let responsesResponse = await fetch(targetUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -302,6 +305,14 @@ export async function handleMessagesRequest(
         body: JSON.stringify(responsesBody),
         signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
       });
+
+      if (route) {
+        responsesResponse = await applyAfterUpstream(responsesResponse, {
+          hook: 'after_upstream', route, upstreamMode: 'openai-responses',
+          clientModel: (requestBody.model as string) || modelId || 'unknown',
+          requestId, streaming: isStreaming, logger: activeLogger,
+        });
+      }
 
       recordResponseStatusCodeFromUpstream(responsesResponse.status);
       recordUpstreamResponseToolCount('openai-responses', 0);
@@ -355,16 +366,39 @@ export async function handleMessagesRequest(
       });
     }
 
-      const response = await fetch(targetUrl, {
-
+    // before_upstream: apply declared transforms to the upstream body.
+    // (max_tokens → max_completion_tokens rename is now handled by the transform
+    //  engine via the mode-default "max_tokens_rename" set in proxy_config.toml)
+    let upstreamBodyOpenai: Record<string, unknown> = openaiRequestBody as unknown as Record<string, unknown>;
+    if (route) {
+      const hookCtx: HookContext = {
+        hook: 'before_upstream',
+        route,
+        upstreamMode: upstreamMode || 'openai-completions',
+        clientModel: (requestBody.model as string) || modelId || 'unknown',
+        requestId,
+        streaming: requestBody.stream === true,
+        logger: activeLogger,
+      };
+      ({ body: upstreamBodyOpenai } = runHook('before_upstream', { body: upstreamBodyOpenai, headers: authHeaders }, hookCtx));
+    }
+    let response = await fetch(targetUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
       },
-      body: JSON.stringify(mapMaxTokensForUpstream(openaiRequestBody, targetUrl, upstreamMode)),
+      body: JSON.stringify(upstreamBodyOpenai),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
+
+    if (route) {
+      response = await applyAfterUpstream(response, {
+        hook: 'after_upstream', route, upstreamMode: upstreamMode || 'openai-completions',
+        clientModel: (requestBody.model as string) || modelId || 'unknown',
+        requestId, streaming: isStreaming, logger: activeLogger,
+      });
+    }
 
     // Debug log upstream response for test model requests (openai-passthrough, LOG_LEVEL=debug)
     if (env?.LOG_LEVEL === 'debug') {
@@ -482,6 +516,23 @@ export async function handleMessagesRequest(
       );
   }
 
+  // before_conversion: apply client-schema transforms that need route/upstreamMode resolved
+  // but must run before format conversion (e.g. drop fields only for a specific upstream).
+  if (route) {
+    const hookCtxConv: HookContext = {
+      hook: 'before_conversion',
+      route,
+      upstreamMode: upstreamMode || 'openai-completions',
+      clientModel: targetModelId || claudeRequest.model || 'unknown',
+      requestId,
+      streaming: claudeRequest.stream === true,
+      logger: activeLogger,
+    };
+    const convResult = runHook('before_conversion', { body: requestBody as Record<string, unknown>, headers: authHeaders }, hookCtxConv);
+    // Re-read any fields that may have been mutated (shallow merge for typed claudeRequest)
+    Object.assign(claudeRequest, convResult.body);
+  }
+
   // Convert to OpenAI format
   const openaiRequest: OpenAIRequest = convertClaudeToOpenAIRequest(claudeRequest, targetModelId, conversionOptions);
 
@@ -512,7 +563,7 @@ export async function handleMessagesRequest(
     if (openaiRequest.tools !== undefined) responsesBody.tools = completionsToolsToResponsesTools(openaiRequest.tools);
     if (openaiRequest.tool_choice !== undefined) responsesBody.tool_choice = completionsToolChoiceToResponsesToolChoice(openaiRequest.tool_choice);
 
-    const responsesResponse = await fetch(targetUrl, {
+    let responsesResponse = await fetch(targetUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -521,6 +572,14 @@ export async function handleMessagesRequest(
       body: JSON.stringify(responsesBody),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
+
+    if (route) {
+      responsesResponse = await applyAfterUpstream(responsesResponse, {
+        hook: 'after_upstream', route, upstreamMode: 'openai-responses',
+        clientModel: (requestBody.model as string) || modelId || 'unknown',
+        requestId, streaming: isStreaming, logger: activeLogger,
+      });
+    }
 
     recordResponseStatusCodeFromUpstream(responsesResponse.status);
     recordUpstreamResponseToolCount('openai-responses', 0);
@@ -595,16 +654,38 @@ export async function handleMessagesRequest(
     activeLogger.debug(requestId, `Upstream x-api-key: ${masked}`);
   }
 
-    const response = await fetch(targetUrl, {
-
+  // before_upstream: apply declared transforms to the converted upstream body.
+  // (max_tokens → max_completion_tokens rename handled by the transform engine)
+  let upstreamBodyClaude: Record<string, unknown> = openaiRequest as unknown as Record<string, unknown>;
+  if (route) {
+    const hookCtxClaude: HookContext = {
+      hook: 'before_upstream',
+      route,
+      upstreamMode: upstreamMode || 'openai-completions',
+      clientModel: (requestBody.model as string) || modelId || 'unknown',
+      requestId,
+      streaming: requestBody.stream === true,
+      logger: activeLogger,
+    };
+    ({ body: upstreamBodyClaude } = runHook('before_upstream', { body: upstreamBodyClaude, headers: authHeaders }, hookCtxClaude));
+  }
+  let response = await fetch(targetUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
     },
-    body: JSON.stringify(mapMaxTokensForUpstream(openaiRequest, targetUrl, upstreamMode)),
+    body: JSON.stringify(upstreamBodyClaude),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
+
+  if (route) {
+    response = await applyAfterUpstream(response, {
+      hook: 'after_upstream', route, upstreamMode: upstreamMode || 'openai-completions',
+      clientModel: (requestBody.model as string) || modelId || 'unknown',
+      requestId, streaming: requestBody.stream === true, logger: activeLogger,
+    });
+  }
 
   // Debug log upstream response for test model requests (claude->openai, LOG_LEVEL=debug)
   if (env?.LOG_LEVEL === 'debug') {

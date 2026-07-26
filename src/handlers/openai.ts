@@ -5,7 +5,9 @@ import { convertOpenAIToGeminiGenerateContent, convertOpenAIToGeminiInteractions
 import { createLogger } from '../utils/logger.js';
 import { isSdkUrl, handleSdkOpenAIRequest } from '../utils/sdk-handler.js';
 import type { Env, Logger } from '../types/shared.js';
-import { addForwardedHeaders, mapMaxTokensForUpstream, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
+import { addForwardedHeaders, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
+import { runHook, applyAfterUpstream, type HookContext } from '../utils/request-transform.js';
+import type { ModelRouteConfig } from '../utils/config-loader.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
 import { handleTargetApiError } from '../utils/errors.js';
@@ -209,29 +211,6 @@ function defaultMissingOpenAIMessageRoles(openaiRequest: Record<string, unknown>
     const msg = message as Record<string, unknown>;
     return msg.role == null ? { ...msg, role: 'user' } : msg;
   });
-}
-
-/**
- * Some upstreams (e.g. DeepSeek) require `name` on tool-role messages, but not
- * every converter/SDK populates it. Recover it from the preceding assistant
- * turn's tool_calls, matched by tool_call_id.
- */
-function fillMissingToolMessageNames(openaiRequest: Record<string, unknown>): void {
-  if (!Array.isArray(openaiRequest.messages)) return;
-  const idToName = new Map<string, string>();
-  for (const message of openaiRequest.messages as Record<string, unknown>[]) {
-    if (!message || typeof message !== 'object') continue;
-    if (message.role === 'assistant' && Array.isArray(message.tool_calls)) {
-      for (const tc of message.tool_calls as Record<string, unknown>[]) {
-        const id = tc.id as string | undefined;
-        const name = (tc.function as Record<string, unknown> | undefined)?.name as string | undefined;
-        if (id && name) idToName.set(id, name);
-      }
-    } else if (message.role === 'tool' && !message.name) {
-      const name = idToName.get(message.tool_call_id as string);
-      if (name) message.name = name;
-    }
-  }
 }
 
 function openAIContentToText(content: OpenAIContent | null | undefined): string {
@@ -747,19 +726,36 @@ async function forwardCompletionsAsOpenAIResponses(
   isInteractionsRequest?: boolean,
   isGenerateContentRequest?: boolean,
   isStreaming?: boolean,
+  route?: ModelRouteConfig,
 ): Promise<Response> {
-  const responsesBody = completionsToResponsesBody(openaiRequest, model);
+  let responsesBody: Record<string, unknown> = completionsToResponsesBody(openaiRequest, model);
   logger.debug(requestId, `Interactions/generateContent -> openai-responses body: ${JSON.stringify(responsesBody).substring(0, 500)}`);
 
-  const response = await fetch(targetUrl, {
+  if (route) {
+    const hookCtx: HookContext = {
+      hook: 'before_upstream', route,
+      upstreamMode: 'openai-responses',
+      clientModel: model, requestId, streaming: isStreaming ?? false, logger,
+    };
+    ({ body: responsesBody } = runHook('before_upstream', { body: responsesBody, headers: authHeaders }, hookCtx));
+  }
+
+  let response = await fetch(targetUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), originalRequest),
     },
-    body: JSON.stringify(mapMaxTokensForUpstream(responsesBody, targetUrl)),
+    body: JSON.stringify(responsesBody),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
+
+  if (route) {
+    response = await applyAfterUpstream(response, {
+      hook: 'after_upstream', route, upstreamMode: 'openai-responses',
+      clientModel: model, requestId, streaming: isStreaming ?? false, logger,
+    });
+  }
 
   recordResponseStatusCodeFromUpstream(response.status);
   recordUpstreamResponseToolCount('openai-responses', 0);
@@ -842,7 +838,8 @@ export async function handleOpenAIRequest(
     logger?: Logger,
     forceStreaming?: boolean,
     conversionOptions?: ThinkingConversionOptions,
-    upstreamMode?: string
+    upstreamMode?: string,
+    route?: ModelRouteConfig,
 ): Promise<Response> {
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
@@ -880,7 +877,7 @@ export async function handleOpenAIRequest(
     }
 
     // Parse request body
-    const requestBody = await request.json() as Record<string, unknown>;
+    let requestBody = await request.json() as Record<string, unknown>;
     
     // Detect Gemini CLI and force non-streaming to avoid JSON parsing issues
     const userAgent = request.headers.get('user-agent') || '';
@@ -892,6 +889,21 @@ export async function handleOpenAIRequest(
 
     let openaiRequest: Record<string, unknown>;
     let isStreaming: boolean;
+
+    // before_conversion: client-schema transforms that need route/upstreamMode known
+    // but must run before the format converter sees the body.
+    if (route) {
+      const hookCtxConv: HookContext = {
+        hook: 'before_conversion',
+        route,
+        upstreamMode: upstreamMode || 'openai-completions',
+        clientModel: (requestBody.model as string) || modelId || 'unknown',
+        requestId,
+        streaming: requestBody.stream === true,
+        logger: activeLogger,
+      };
+      ({ body: requestBody } = runHook('before_conversion', { body: requestBody, headers: authHeaders }, hookCtxConv));
+    }
 
     // Detect input format and convert to OpenAI
     if (isGeminiInteractionsRequest(requestBody)) {
@@ -931,9 +943,6 @@ export async function handleOpenAIRequest(
       defaultMissingOpenAIMessageRoles(openaiRequest);
     }
 
-    // Ensure tool messages carry a `name` (required by some upstreams like DeepSeek).
-    fillMissingToolMessageNames(openaiRequest);
-
     // Cross-mode routes: re-target the converted Completions body to a different
     // upstream family. Done after the Gemini/Claude → Completions conversion so
     // we reuse that conversion ("through openai-completions transforming").
@@ -947,7 +956,7 @@ export async function handleOpenAIRequest(
       return forwardCompletionsAsOpenAIResponses(
         openaiRequest, targetUrl, authHeaders, requestId,
         openaiRequest.model as string, activeLogger, request, env,
-        isInteractionsRequest, isGenerateContentRequest, isStreaming,
+        isInteractionsRequest, isGenerateContentRequest, isStreaming, route,
       );
     }
 
@@ -991,12 +1000,36 @@ export async function handleOpenAIRequest(
             );
         }
 
-        const response = await fetch(targetUrl, {
+        // before_upstream: apply declared transforms to the upstream body.
+        // (max_tokens → max_completion_tokens rename handled by the transform engine)
+        let upstreamBody: Record<string, unknown> = openaiRequest as unknown as Record<string, unknown>;
+        if (route) {
+          const hookCtx: HookContext = {
+            hook: 'before_upstream',
+            route,
+            upstreamMode: upstreamMode || 'openai-completions',
+            clientModel: (openaiRequest.model as string) || modelId || 'unknown',
+            requestId,
+            streaming: isStreaming,
+            logger: activeLogger,
+          };
+          ({ body: upstreamBody } = runHook('before_upstream', { body: upstreamBody, headers: authHeaders }, hookCtx));
+        }
+        let response = await fetch(targetUrl, {
             method: 'POST',
             headers: addForwardedHeaders(headers, request),
-            body: JSON.stringify(mapMaxTokensForUpstream(openaiRequest, targetUrl)),
+            body: JSON.stringify(upstreamBody),
             signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
         });
+
+        if (route) {
+          response = await applyAfterUpstream(response, {
+            hook: 'after_upstream', route,
+            upstreamMode: upstreamMode || 'openai-completions',
+            clientModel: (openaiRequest.model as string) || modelId || 'unknown',
+            requestId, streaming: isStreaming, logger: activeLogger,
+          });
+        }
 
         recordResponseStatusCodeFromUpstream(response.status);
         recordUpstreamResponseToolCount('openai-completions', 0);

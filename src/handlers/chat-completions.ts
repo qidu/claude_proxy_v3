@@ -5,35 +5,15 @@
  */
 
 import type { Env, Logger } from '../types/shared.js';
-import { addForwardedHeaders, mapMaxTokensForUpstream, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
+import { addForwardedHeaders, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream } from '../utils/dashboard-stats.js';
 import { validateOpenAICompletionsRequest } from '../utils/validation.js';
 import { ValidationError } from '../utils/errors.js';
 import { completionsToResponsesBody, completionsToClaudeBody, claudeJsonToSyntheticCompletions } from './openai.js';
+import { runHook, applyAfterUpstream, type HookContext } from '../utils/request-transform.js';
+import type { ModelRouteConfig } from '../utils/config-loader.js';
 
-/**
- * Recursively lowercase JSON Schema `type` values.
- * Some SDKs (e.g. google-antigravity) emit uppercase types like "STRING" or "INTEGER"
- * which are rejected by strict upstreams. Mutates the schema object in place.
- */
-function normalizeJsonSchemaTypes(schema: Record<string, unknown>): void {
-  if (typeof schema.type === 'string') {
-    schema.type = schema.type.toLowerCase();
-  }
-  if (schema.properties && typeof schema.properties === 'object') {
-    for (const prop of Object.values(schema.properties as Record<string, unknown>)) {
-      if (prop && typeof prop === 'object') normalizeJsonSchemaTypes(prop as Record<string, unknown>);
-    }
-  }
-  if (Array.isArray(schema.items)) {
-    for (const item of schema.items) {
-      if (item && typeof item === 'object') normalizeJsonSchemaTypes(item as Record<string, unknown>);
-    }
-  } else if (schema.items && typeof schema.items === 'object') {
-    normalizeJsonSchemaTypes(schema.items as Record<string, unknown>);
-  }
-}
 
 export async function handleChatCompletionsPassthrough(
   request: Request,
@@ -44,6 +24,7 @@ export async function handleChatCompletionsPassthrough(
   env: Env,
   modelId?: string,
   upstreamMode?: string,
+  route?: ModelRouteConfig,
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -74,40 +55,18 @@ export async function handleChatCompletionsPassthrough(
   const isStreaming = parsedBody.stream === true;
   logger.debug(requestId, `${path} req: model=${parsedBody.model} messages=${Array.isArray(parsedBody.messages) ? (parsedBody.messages as unknown[]).length : 0} stream=${isStreaming}`);
 
-  // Some SDK clients (e.g. google-antigravity) emit uppercase JSON Schema type strings
-  // ("STRING", "INTEGER", "BOOLEAN", "OBJECT", "ARRAY", "NUMBER") that are invalid per
-  // the OpenAI spec and rejected by upstreams like DeepSeek. Lowercase them in place.
-  if (Array.isArray(parsedBody.tools)) {
-    for (const tool of parsedBody.tools as Record<string, unknown>[]) {
-      const fn = tool.function as Record<string, unknown> | undefined;
-      if (fn?.parameters && typeof fn.parameters === 'object') {
-        normalizeJsonSchemaTypes(fn.parameters as Record<string, unknown>);
-      }
-    }
-  }
-
-  // Some SDK clients (e.g. Antigravity LocalOpenAIAgentConfig) omit the `name`
-  // field on tool messages. DeepSeek and some other upstreams require it.
-  // Recover the name from the preceding assistant turn's tool_calls by tool_call_id.
-  // Also fix assistant messages that have tool_calls but content="" — DeepSeek and
-  // MiniMax require content to be null (not empty string) in that case.
-  if (Array.isArray(parsedBody.messages)) {
-    const toolCallIndex = new Map<string, string>();
-    let bodyPatched = false;
-    for (const msg of parsedBody.messages as Record<string, unknown>[]) {
-      if (msg.role === 'assistant' && Array.isArray(msg.tool_calls)) {
-        for (const tc of msg.tool_calls as Record<string, unknown>[]) {
-          const id = tc.id as string | undefined;
-          const name = (tc.function as Record<string, unknown> | undefined)?.name as string | undefined;
-          if (id && name) toolCallIndex.set(id, name);
-        }
-        if (msg.content === '') { msg.content = null; bodyPatched = true; }
-      } else if (msg.role === 'tool' && !msg.name) {
-        const name = toolCallIndex.get(msg.tool_call_id as string);
-        if (name) { msg.name = name; bodyPatched = true; }
-      }
-    }
-    if (bodyPatched) logger.debug(requestId, `${path} patched missing tool message name(s)`);
+  // before_upstream: apply any declared transforms (builtins + ops) before forwarding.
+  if (route) {
+    const hookCtx: HookContext = {
+      hook: 'before_upstream',
+      route,
+      upstreamMode: upstreamMode || 'openai-completions',
+      clientModel: (parsedBody.model as string) || modelId || 'unknown',
+      requestId,
+      streaming: isStreaming,
+      logger,
+    };
+    ({ body: parsedBody } = runHook('before_upstream', { body: parsedBody, headers: authHeaders }, hookCtx));
   }
 
   // When the upstream is anthropic-messages, convert completions body → Claude Messages,
@@ -125,7 +84,7 @@ export async function handleChatCompletionsPassthrough(
       delete anthropicHeaders['Authorization'];
     }
 
-    const upstreamResponse = await fetch(targetUrl, {
+    let upstreamResponse = await fetch(targetUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -135,6 +94,13 @@ export async function handleChatCompletionsPassthrough(
       body: JSON.stringify(claudeBody),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env as Record<string, unknown>)),
     });
+
+    if (route) {
+      upstreamResponse = await applyAfterUpstream(upstreamResponse, {
+        hook: 'after_upstream', route, upstreamMode: 'anthropic-messages',
+        clientModel: model, requestId, streaming: isStreaming, logger,
+      });
+    }
 
     recordResponseStatusCodeFromUpstream(upstreamResponse.status);
     logger.debug(requestId, `${path} resp: status=${upstreamResponse.status} stream=${isStreaming}`);
@@ -222,33 +188,55 @@ export async function handleChatCompletionsPassthrough(
   // When the upstream is openai-responses, convert the completions body to Responses API format
   if (upstreamMode === 'openai-responses') {
     const model = (modelId || parsedBody.model as string || 'unknown');
-    const responsesBody = completionsToResponsesBody(parsedBody, model);
+    let responsesBody: Record<string, unknown> = completionsToResponsesBody(parsedBody, model);
     logger.debug(requestId, `${path} converted to openai-responses body`);
 
-    const upstreamResponse = await fetch(targetUrl, {
+    // before_upstream on the converted responses body (handles max_tokens rename etc.)
+    if (route) {
+      const hookCtxResp: HookContext = {
+        hook: 'before_upstream',
+        route,
+        upstreamMode: 'openai-responses',
+        clientModel: (parsedBody.model as string) || modelId || 'unknown',
+        requestId,
+        streaming: isStreaming,
+        logger,
+      };
+      ({ body: responsesBody } = runHook('before_upstream', { body: responsesBody, headers: authHeaders }, hookCtxResp));
+    }
+
+    let responsesUpstreamResponse = await fetch(targetUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
       },
-      body: JSON.stringify(mapMaxTokensForUpstream(responsesBody, targetUrl)),
+      body: JSON.stringify(responsesBody),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env as Record<string, unknown>)),
     });
 
-    recordResponseStatusCodeFromUpstream(upstreamResponse.status);
-    logger.debug(requestId, `${path} resp: status=${upstreamResponse.status} stream=${isStreaming}`);
+    if (route) {
+      responsesUpstreamResponse = await applyAfterUpstream(responsesUpstreamResponse, {
+        hook: 'after_upstream', route, upstreamMode: 'openai-responses',
+        clientModel: (parsedBody.model as string) || modelId || 'unknown',
+        requestId, streaming: isStreaming, logger,
+      });
+    }
 
-    const responseHeaders = new Headers(upstreamResponse.headers);
+    recordResponseStatusCodeFromUpstream(responsesUpstreamResponse.status);
+    logger.debug(requestId, `${path} resp: status=${responsesUpstreamResponse.status} stream=${isStreaming}`);
+
+    const responseHeaders = new Headers(responsesUpstreamResponse.headers);
     responseHeaders.set('x-request-id', requestId);
 
-    return new Response(upstreamResponse.body, {
-      status: upstreamResponse.status,
-      statusText: upstreamResponse.statusText,
+    return new Response(responsesUpstreamResponse.body, {
+      status: responsesUpstreamResponse.status,
+      statusText: responsesUpstreamResponse.statusText,
       headers: responseHeaders,
     });
   }
 
-  const upstreamResponse = await fetch(targetUrl, {
+  let upstreamResponse = await fetch(targetUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -257,6 +245,14 @@ export async function handleChatCompletionsPassthrough(
     body: JSON.stringify(parsedBody),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env as Record<string, unknown>)),
   });
+
+  if (route) {
+    upstreamResponse = await applyAfterUpstream(upstreamResponse, {
+      hook: 'after_upstream', route, upstreamMode: 'openai-completions',
+      clientModel: (parsedBody.model as string) || modelId || 'unknown',
+      requestId, streaming: isStreaming, logger,
+    });
+  }
 
   recordResponseStatusCodeFromUpstream(upstreamResponse.status);
   logger.debug(requestId, `${path} resp: status=${upstreamResponse.status} stream=${isStreaming}`);

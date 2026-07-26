@@ -9,7 +9,9 @@ import { Env } from '../types/shared.js';
 import { Logger, createLogger } from '../utils/logger.js';
 import { OpenAIRequest, OpenAIResponse } from '../types/openai.js';
 import { handleTargetApiError } from '../utils/errors.js';
-import { addForwardedHeaders, mapMaxTokensForUpstream, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
+import { addForwardedHeaders, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
+import { runHook, applyAfterUpstream, type HookContext } from '../utils/request-transform.js';
+import type { ModelRouteConfig } from '../utils/config-loader.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { convertResponsesToChatCompletions } from '../converters/responses-to-completions.js';
 import { convertCompletionsToResponses, convertCompletionsToCompactedResponse } from '../converters/completions-to-responses.js';
@@ -63,7 +65,8 @@ export async function handleResponsesRequest(
   modelId?: string,
   env?: Env,
   logger?: Logger,
-  upstreamMode?: string
+  upstreamMode?: string,
+  route?: ModelRouteConfig,
 ): Promise<Response> {
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
@@ -78,7 +81,7 @@ export async function handleResponsesRequest(
   // Handle based on upstream mode
   if (upstreamMode === 'openai-completions') {
     // Convert Responses API format to Chat Completions format
-    return handleAsCompletions(request, targetUrl, authHeaders, requestId, model, activeLogger, requestBody, isStreaming, env);
+    return handleAsCompletions(request, targetUrl, authHeaders, requestId, model, activeLogger, requestBody, isStreaming, env, route, upstreamMode);
   }
 
   if (upstreamMode === 'anthropic-messages') {
@@ -90,7 +93,7 @@ export async function handleResponsesRequest(
   }
 
   // Default: Pass through to OpenAI Responses API upstream
-  return handleAsPassthrough(request, targetUrl, authHeaders, requestId, activeLogger, requestBody, isStreaming, env);
+  return handleAsPassthrough(request, targetUrl, authHeaders, requestId, activeLogger, requestBody, isStreaming, env, route);
 }
 
 /**
@@ -555,7 +558,9 @@ async function handleAsCompletions(
   logger: Logger,
   requestBody: Record<string, unknown>,
   isStreaming: boolean,
-  env?: Env
+  env?: Env,
+  route?: ModelRouteConfig,
+  upstreamMode?: string,
 ): Promise<Response> {
   const conversationEnabled = env?.CONVERSATION === 'true' || env?.CONVERSATION === '1';
   const previousResponseId = requestBody.previous_response_id as string | undefined;
@@ -577,8 +582,22 @@ async function handleAsCompletions(
 
   // Build effective request body: use merged input, drop previous_response_id
   // (Chat Completions upstream does not understand it)
-  const effectiveBody: Record<string, unknown> = { ...requestBody, input: mergedInput };
+  let effectiveBody: Record<string, unknown> = { ...requestBody, input: mergedInput };
   delete effectiveBody.previous_response_id;
+
+  // before_conversion: client-schema transforms before format conversion
+  if (route) {
+    const hookCtxConv: HookContext = {
+      hook: 'before_conversion',
+      route,
+      upstreamMode: upstreamMode || 'openai-completions',
+      clientModel: model,
+      requestId,
+      streaming: isStreaming,
+      logger,
+    };
+    ({ body: effectiveBody } = runHook('before_conversion', { body: effectiveBody, headers: authHeaders }, hookCtxConv));
+  }
 
   // Convert Responses API request to Chat Completions format
   const completionsRequest = convertResponsesToChatCompletions(effectiveBody, model);
@@ -605,15 +624,37 @@ async function handleAsCompletions(
 
   logger.debug(requestId, `Converted to completions format: ${JSON.stringify(completionsRequest)}`);
 
-  const response = await fetch(targetUrl, {
+  // before_upstream: apply declared transforms to the upstream body.
+  // (max_tokens → max_completion_tokens rename handled by the transform engine)
+  let upstreamBodyResponses: Record<string, unknown> = completionsRequest as unknown as Record<string, unknown>;
+  if (route) {
+    const hookCtx: HookContext = {
+      hook: 'before_upstream',
+      route,
+      upstreamMode: upstreamMode || 'openai-completions',
+      clientModel: model || 'unknown',
+      requestId,
+      streaming: isStreaming,
+      logger,
+    };
+    ({ body: upstreamBodyResponses } = runHook('before_upstream', { body: upstreamBodyResponses, headers: authHeaders }, hookCtx));
+  }
+  let response = await fetch(targetUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
     },
-    body: JSON.stringify(mapMaxTokensForUpstream(completionsRequest, targetUrl, 'openai-completions')),
+    body: JSON.stringify(upstreamBodyResponses),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
+
+  if (route) {
+    response = await applyAfterUpstream(response, {
+      hook: 'after_upstream', route, upstreamMode: upstreamMode || 'openai-completions',
+      clientModel: model, requestId, streaming: isStreaming, logger,
+    });
+  }
 
   recordResponseStatusCodeFromUpstream(response.status);
   recordUpstreamResponseToolCount('openai-completions', 0);
@@ -1078,7 +1119,8 @@ export async function handleResponsesInputTokensRequest(
   modelId?: string,
   env?: Env,
   logger?: Logger,
-  upstreamMode?: string
+  upstreamMode?: string,
+  route?: ModelRouteConfig,
 ): Promise<Response> {
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
@@ -1090,24 +1132,40 @@ export async function handleResponsesInputTokensRequest(
   if (upstreamMode === 'openai-completions') {
     // Convert to completions format, call with max_tokens=1, extract prompt_tokens from usage
     const completionsRequest = convertResponsesToChatCompletions(requestBody, model);
-    const countRequest = { ...completionsRequest, max_tokens: 1, stream: false };
+    let countRequest: Record<string, unknown> = { ...completionsRequest, max_tokens: 1, stream: false };
 
     activeLogger.debug(requestId, `input_tokens -> completions count: ${JSON.stringify(countRequest).substring(0, 500)}`);
 
-    const response = await fetch(targetUrl, {
+    if (route) {
+      const hookCtx: HookContext = {
+        hook: 'before_upstream', route,
+        upstreamMode: 'openai-completions',
+        clientModel: model, requestId, streaming: false, logger: activeLogger,
+      };
+      ({ body: countRequest } = runHook('before_upstream', { body: countRequest, headers: authHeaders }, hookCtx));
+    }
+
+    let response = await fetch(targetUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
       },
-      body: JSON.stringify(mapMaxTokensForUpstream(countRequest as Record<string, unknown>, targetUrl, 'openai-completions')),
+      body: JSON.stringify(countRequest),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 
-    recordResponseStatusCodeFromUpstream(response.status);
-  recordUpstreamResponseToolCount('openai-completions', 0);
+    if (route) {
+      response = await applyAfterUpstream(response, {
+        hook: 'after_upstream', route, upstreamMode: 'openai-completions',
+        clientModel: model, requestId, streaming: false, logger: activeLogger,
+      });
+    }
 
-  if (!response.ok) {
+    recordResponseStatusCodeFromUpstream(response.status);
+    recordUpstreamResponseToolCount('openai-completions', 0);
+
+    if (!response.ok) {
       const upstreamErrorBody = await response.text();
       activeLogger.error(requestId, `Responses input_tokens error: ${response.status}, URL: ${targetUrl}`);
       handleTargetApiError(response, 'Responses input_tokens (via Completions)', { url: targetUrl, upstreamBody: upstreamErrorBody });
@@ -1127,26 +1185,42 @@ export async function handleResponsesInputTokensRequest(
   }
 
   // Passthrough to OpenAI Responses API upstream /responses/input_tokens
-  const response = await fetch(targetUrl, {
+  let passthroughBodyInputTokens: Record<string, unknown> = requestBody;
+  if (route) {
+    const hookCtx: HookContext = {
+      hook: 'before_upstream', route,
+      upstreamMode: upstreamMode || 'openai-responses',
+      clientModel: model, requestId, streaming: false, logger: activeLogger,
+    };
+    ({ body: passthroughBodyInputTokens } = runHook('before_upstream', { body: passthroughBodyInputTokens, headers: authHeaders }, hookCtx));
+  }
+  let passthroughInputTokensResponse = await fetch(targetUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
     },
-    body: JSON.stringify(mapMaxTokensForUpstream(requestBody, targetUrl, 'openai-responses')),
+    body: JSON.stringify(passthroughBodyInputTokens),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
-  recordResponseStatusCodeFromUpstream(response.status);
-  recordUpstreamResponseToolCount('openai-completions', 0);
-
-  if (!response.ok) {
-    const upstreamErrorBody = await response.text();
-    activeLogger.error(requestId, `Responses input_tokens passthrough error: ${response.status}, URL: ${targetUrl}`);
-    handleTargetApiError(response, 'Responses input_tokens', { url: targetUrl, upstreamBody: upstreamErrorBody });
+  if (route) {
+    passthroughInputTokensResponse = await applyAfterUpstream(passthroughInputTokensResponse, {
+      hook: 'after_upstream', route, upstreamMode: upstreamMode || 'openai-responses',
+      clientModel: model, requestId, streaming: false, logger: activeLogger,
+    });
   }
 
-  return new Response(response.body, {
+  recordResponseStatusCodeFromUpstream(passthroughInputTokensResponse.status);
+  recordUpstreamResponseToolCount('openai-completions', 0);
+
+  if (!passthroughInputTokensResponse.ok) {
+    const upstreamErrorBody = await passthroughInputTokensResponse.text();
+    activeLogger.error(requestId, `Responses input_tokens passthrough error: ${passthroughInputTokensResponse.status}, URL: ${targetUrl}`);
+    handleTargetApiError(passthroughInputTokensResponse, 'Responses input_tokens', { url: targetUrl, upstreamBody: upstreamErrorBody });
+  }
+
+  return new Response(passthroughInputTokensResponse.body, {
     status: 200,
     headers: {
       'Content-Type': 'application/json',
@@ -1169,7 +1243,8 @@ export async function handleResponsesCompactRequest(
   modelId?: string,
   env?: Env,
   logger?: Logger,
-  upstreamMode?: string
+  upstreamMode?: string,
+  route?: ModelRouteConfig,
 ): Promise<Response> {
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
@@ -1180,30 +1255,46 @@ export async function handleResponsesCompactRequest(
 
   if (upstreamMode === 'openai-completions') {
     // Convert to chat completions, call upstream, wrap as CompactedResponse
-    const completionsRequest = convertResponsesToChatCompletions(requestBody, model);
+    let completionsRequest: Record<string, unknown> = convertResponsesToChatCompletions(requestBody, model) as unknown as Record<string, unknown>;
 
     activeLogger.debug(requestId, `Compact -> completions: ${JSON.stringify(completionsRequest).substring(0, 500)}`);
 
-    const response = await fetch(targetUrl, {
+    if (route) {
+      const hookCtx: HookContext = {
+        hook: 'before_upstream', route,
+        upstreamMode: 'openai-completions',
+        clientModel: model, requestId, streaming: false, logger: activeLogger,
+      };
+      ({ body: completionsRequest } = runHook('before_upstream', { body: completionsRequest, headers: authHeaders }, hookCtx));
+    }
+
+    let compactCompletionsResponse = await fetch(targetUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
       },
-      body: JSON.stringify(mapMaxTokensForUpstream(completionsRequest, targetUrl, 'openai-completions')),
+      body: JSON.stringify(completionsRequest),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 
-    recordResponseStatusCodeFromUpstream(response.status);
-  recordUpstreamResponseToolCount('openai-completions', 0);
-
-  if (!response.ok) {
-      const upstreamErrorBody = await response.text();
-      activeLogger.error(requestId, `Responses compact error: ${response.status}, URL: ${targetUrl}`);
-      handleTargetApiError(response, 'Responses compact (via Completions)', { url: targetUrl, upstreamBody: upstreamErrorBody });
+    if (route) {
+      compactCompletionsResponse = await applyAfterUpstream(compactCompletionsResponse, {
+        hook: 'after_upstream', route, upstreamMode: 'openai-completions',
+        clientModel: model, requestId, streaming: false, logger: activeLogger,
+      });
     }
 
-    const responseText = await response.text();
+    recordResponseStatusCodeFromUpstream(compactCompletionsResponse.status);
+    recordUpstreamResponseToolCount('openai-completions', 0);
+
+    if (!compactCompletionsResponse.ok) {
+      const upstreamErrorBody = await compactCompletionsResponse.text();
+      activeLogger.error(requestId, `Responses compact error: ${compactCompletionsResponse.status}, URL: ${targetUrl}`);
+      handleTargetApiError(compactCompletionsResponse, 'Responses compact (via Completions)', { url: targetUrl, upstreamBody: upstreamErrorBody });
+    }
+
+    const responseText = await compactCompletionsResponse.text();
     const completionsResponse = JSON.parse(responseText) as OpenAIResponse;
     const compactedResponse = convertCompletionsToCompactedResponse(completionsResponse, model);
 
@@ -1217,26 +1308,42 @@ export async function handleResponsesCompactRequest(
   }
 
   // Passthrough to OpenAI Responses API upstream /responses/compact
-  const response = await fetch(targetUrl, {
+  let passthroughBodyCompact: Record<string, unknown> = requestBody;
+  if (route) {
+    const hookCtx: HookContext = {
+      hook: 'before_upstream', route,
+      upstreamMode: upstreamMode || 'openai-responses',
+      clientModel: model, requestId, streaming: false, logger: activeLogger,
+    };
+    ({ body: passthroughBodyCompact } = runHook('before_upstream', { body: passthroughBodyCompact, headers: authHeaders }, hookCtx));
+  }
+  let compactPassthroughResponse = await fetch(targetUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
     },
-    body: JSON.stringify(mapMaxTokensForUpstream(requestBody, targetUrl, 'openai-responses')),
+    body: JSON.stringify(passthroughBodyCompact),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
-  recordResponseStatusCodeFromUpstream(response.status);
-  recordUpstreamResponseToolCount('openai-completions', 0);
-
-  if (!response.ok) {
-    const upstreamErrorBody = await response.text();
-    activeLogger.error(requestId, `Responses compact passthrough error: ${response.status}, URL: ${targetUrl}`);
-    handleTargetApiError(response, 'Responses compact', { url: targetUrl, upstreamBody: upstreamErrorBody });
+  if (route) {
+    compactPassthroughResponse = await applyAfterUpstream(compactPassthroughResponse, {
+      hook: 'after_upstream', route, upstreamMode: upstreamMode || 'openai-responses',
+      clientModel: model, requestId, streaming: false, logger: activeLogger,
+    });
   }
 
-  return new Response(response.body, {
+  recordResponseStatusCodeFromUpstream(compactPassthroughResponse.status);
+  recordUpstreamResponseToolCount('openai-completions', 0);
+
+  if (!compactPassthroughResponse.ok) {
+    const upstreamErrorBody = await compactPassthroughResponse.text();
+    activeLogger.error(requestId, `Responses compact passthrough error: ${compactPassthroughResponse.status}, URL: ${targetUrl}`);
+    handleTargetApiError(compactPassthroughResponse, 'Responses compact', { url: targetUrl, upstreamBody: upstreamErrorBody });
+  }
+
+  return new Response(compactPassthroughResponse.body, {
     status: 200,
     headers: {
       'Content-Type': 'application/json',
@@ -1256,17 +1363,36 @@ async function handleAsPassthrough(
   logger: Logger,
   requestBody: Record<string, unknown>,
   isStreaming: boolean,
-  env?: Env
+  env?: Env,
+  route?: ModelRouteConfig,
 ): Promise<Response> {
-  const response = await fetch(targetUrl, {
+  let upstreamBodyPassthrough: Record<string, unknown> = requestBody;
+  if (route) {
+    const hookCtx: HookContext = {
+      hook: 'before_upstream', route,
+      upstreamMode: 'openai-responses',
+      clientModel: (requestBody.model as string) || 'unknown',
+      requestId, streaming: isStreaming, logger,
+    };
+    ({ body: upstreamBodyPassthrough } = runHook('before_upstream', { body: upstreamBodyPassthrough, headers: authHeaders }, hookCtx));
+  }
+  let response = await fetch(targetUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
     },
-    body: JSON.stringify(mapMaxTokensForUpstream(requestBody, targetUrl, 'openai-responses')),
+    body: JSON.stringify(upstreamBodyPassthrough),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
+
+  if (route) {
+    response = await applyAfterUpstream(response, {
+      hook: 'after_upstream', route, upstreamMode: 'openai-responses',
+      clientModel: (requestBody.model as string) || 'unknown',
+      requestId, streaming: isStreaming, logger,
+    });
+  }
 
   recordResponseStatusCodeFromUpstream(response.status);
   recordUpstreamResponseToolCount('openai-completions', 0);

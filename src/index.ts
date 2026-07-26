@@ -80,6 +80,7 @@ import {
 import { getKompressConfig, shouldCompressPath, compressBody } from './utils/kompress.js';
 import { eraseBlockedTools } from './utils/tool-blocklist.js';
 import { buildModelUsageRecordPayload, recordModelUsageToRemote } from './utils/model-usage-recorder.js';
+import { runHook, type HookContext } from './utils/request-transform.js';
 
 let hasLoggedUpstreamConfig = false;
 
@@ -1042,6 +1043,8 @@ export default {
          *  and response-side records share one (prefix, ua) key. Optional for
          *  legacy callers — defaults to UA-only. */
         agent?: ResolvedAgent;
+        /** Resolved route config for this attempt; carries the transforms list. */
+        route?: ModelRouteConfig;
       };
       let compositeAttempts: RouteAttempt[] | undefined;
       let compositeAliasName: string | undefined;
@@ -1431,6 +1434,7 @@ export default {
                 authHeaders: candidateAuthHeaders,
                 compositeTargetName: compositeAliasName ? candidateName : undefined,
                 compositeTargetConfig: compositeAliasName ? targetConfig : undefined,
+                route,
               };
             });
 
@@ -1722,6 +1726,7 @@ export default {
           upstreamMode: candidateUpstreamMode,
           forceStreaming: candidateForceStreaming,
           authHeaders: candidateAuthHeaders,
+          route,
         };
       };
 
@@ -1979,13 +1984,39 @@ export default {
       };
 
       const runAttempt = async (attempt: RouteAttempt): Promise<Response> => {
-        const attemptRequest = attempt.request;
+        let attemptRequest = attempt.request;
         const attemptTargetUrl = attempt.targetUrl;
         const attemptHandlerType = attempt.handlerType;
         const attemptModelId = attempt.modelId;
         const attemptUpstreamMode = attempt.upstreamMode;
         const attemptForceStreaming = attempt.forceStreaming;
-        const attemptAuthHeaders = attempt.authHeaders;
+        let attemptAuthHeaders = attempt.authHeaders;
+        const attemptRoute = attempt.route;
+
+        // endpoint_readin: apply transforms to the inbound body before any handler sees it.
+        if (attemptRoute && attemptRoute.transforms.length > 0) {
+          const bodyText = await attemptRequest.clone().text();
+          let parsedBody: Record<string, unknown>;
+          try { parsedBody = JSON.parse(bodyText); } catch { parsedBody = {}; }
+          const hookCtx: HookContext = {
+            hook: 'endpoint_readin',
+            route: attemptRoute,
+            upstreamMode: attemptUpstreamMode || 'openai-completions',
+            clientModel: (parsedBody.model as string) || attemptModelId || 'unknown',
+            requestId,
+            streaming: parsedBody.stream === true,
+            logger,
+          };
+          const transformed = runHook('endpoint_readin', { body: parsedBody, headers: attemptAuthHeaders }, hookCtx);
+          if (transformed.body !== parsedBody || transformed.headers !== attemptAuthHeaders) {
+            attemptRequest = new Request(attemptRequest.url, {
+              method: attemptRequest.method,
+              headers: attemptRequest.headers,
+              body: JSON.stringify(transformed.body),
+            });
+            attemptAuthHeaders = transformed.headers;
+          }
+        }
 
         // Debug log routing info for test model requests (LOG_LEVEL=debug)
         if (path === '/v1/messages' && env.LOG_LEVEL === 'debug') {
@@ -2048,47 +2079,47 @@ export default {
 
           case 'messages':
             if (attemptUpstreamMode === 'anthropic-messages') {
-              response = await handleClaudeRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger);
+              response = await handleClaudeRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptRoute);
             } else if (attemptUpstreamMode === 'gemini-generatecontent' || attemptUpstreamMode === 'gemini-interactions') {
-              response = await handleGeminiRequestForMessages(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger);
+              response = await handleGeminiRequestForMessages(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptRoute);
             } else {
               // covers openai-completions and openai-responses
-              response = await handleMessagesRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, conversionOptions, attemptUpstreamMode);
+              response = await handleMessagesRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, conversionOptions, attemptUpstreamMode, attemptRoute);
             }
             break;
 
           case 'interactions':
             if (attemptUpstreamMode === 'gemini-generatecontent' || attemptUpstreamMode === 'gemini-interactions') {
-              response = await handleGeminiRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger);
+              response = await handleGeminiRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptRoute);
             } else {
-              response = await handleOpenAIRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptForceStreaming, conversionOptions, attemptUpstreamMode);
+              response = await handleOpenAIRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptForceStreaming, conversionOptions, attemptUpstreamMode, attemptRoute);
             }
             break;
 
           case 'generateContent':
             if (attemptUpstreamMode === 'gemini-generatecontent' || attemptUpstreamMode === 'gemini-interactions') {
-              response = await handleGeminiRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger);
+              response = await handleGeminiRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptRoute);
             } else {
-              response = await handleOpenAIRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptForceStreaming, conversionOptions, attemptUpstreamMode);
+              response = await handleOpenAIRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptForceStreaming, conversionOptions, attemptUpstreamMode, attemptRoute);
             }
             break;
 
           case 'responses':
-            response = await handleResponsesRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptUpstreamMode);
+            response = await handleResponsesRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptUpstreamMode, attemptRoute);
             break;
 
           case 'responses-input-tokens':
-            response = await handleResponsesInputTokensRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptUpstreamMode);
+            response = await handleResponsesInputTokensRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptUpstreamMode, attemptRoute);
             break;
 
           case 'responses-compact':
-            response = await handleResponsesCompactRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptUpstreamMode);
+            response = await handleResponsesCompactRequest(attemptRequest, attemptTargetUrl, attemptAuthHeaders, requestId, attemptModelId, env, logger, attemptUpstreamMode, attemptRoute);
             break;
 
           case 'chat-completions':
             response = await handleChatCompletionsPassthrough(
               attemptRequest, attemptTargetUrl, attemptAuthHeaders,
-              requestId, logger, env, attemptModelId, attemptUpstreamMode
+              requestId, logger, env, attemptModelId, attemptUpstreamMode, attemptRoute
             );
             break;
 
@@ -2155,6 +2186,27 @@ export default {
             );
             const toolStream = createResponseToolTrackingTransformStream((names, agent) => recordUpstreamResponseToolNames(names, agent), attempt.agent);
             response = new Response(response.body!.pipeThrough(usageStream).pipeThrough(toolStream), response);
+          }
+        }
+
+        // endpoint_writeout: apply header transforms on the response going back to the client.
+        if (attemptRoute && attemptRoute.transforms.length > 0) {
+          const writeoutCtx: HookContext = {
+            hook: 'endpoint_writeout',
+            route: attemptRoute,
+            upstreamMode: attemptUpstreamMode || 'openai-completions',
+            clientModel: attemptModelId || 'unknown',
+            requestId,
+            streaming: false,
+            logger,
+            status: response.status,
+          };
+          const responseHeaders: Record<string, string> = {};
+          response.headers.forEach((v, k) => { responseHeaders[k] = v; });
+          const { headers: transformedHeaders } = runHook('endpoint_writeout', { body: {}, headers: responseHeaders }, writeoutCtx);
+          if (transformedHeaders !== responseHeaders) {
+            const newHeaders = new Headers(transformedHeaders);
+            response = new Response(response.body, { status: response.status, statusText: response.statusText, headers: newHeaders });
           }
         }
 

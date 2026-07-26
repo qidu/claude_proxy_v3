@@ -8,6 +8,8 @@ import { createLogger } from '../utils/logger.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { isSdkUrl, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
 import { addForwardedHeaders } from '../utils/routing.js';
+import { runHook, applyAfterUpstream, type HookContext } from '../utils/request-transform.js';
+import type { ModelRouteConfig } from '../utils/config-loader.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount, createUsageTrackingTransformStream, extractUsageFromResponsePayload, recordModelUsage, extractToolNamesFromResponsePayload, recordUpstreamResponseToolNames } from '../utils/dashboard-stats.js';
 
@@ -21,7 +23,8 @@ export async function handleClaudeRequest(
     requestId: string,
     modelId?: string,
     env?: Env,
-    logger?: Logger
+    logger?: Logger,
+    route?: ModelRouteConfig,
 ): Promise<Response> {
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
@@ -108,18 +111,41 @@ export async function handleClaudeRequest(
         );
     }
 
+    // before_upstream: apply declared transforms to the upstream body.
+    let upstreamBody: Record<string, unknown> = requestBody;
+    if (route) {
+        const hookCtx: HookContext = {
+            hook: 'before_upstream',
+            route,
+            upstreamMode: 'anthropic-messages',
+            clientModel: (requestBody.model as string) || modelId || 'unknown',
+            requestId,
+            streaming: requestBody.stream === true,
+            logger: activeLogger,
+        };
+        ({ body: upstreamBody } = runHook('before_upstream', { body: upstreamBody, headers: authHeaders }, hookCtx));
+    }
+
     // Pass through to native Claude API
-    const requestBodyStr = JSON.stringify(requestBody);
-    activeLogger.debug(requestId, `Sending to upstream: ${requestBodyStr}`);
-    const response = await fetch(targetUrl, {
+    activeLogger.debug(requestId, `Sending to upstream: ${JSON.stringify(upstreamBody).substring(0, 500)}`);
+    let response = await fetch(targetUrl, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             ...addForwardedHeaders(authHeaders, request),
         },
-        body: JSON.stringify(requestBody),
+        body: JSON.stringify(upstreamBody),
         signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
+
+    // after_upstream: apply response transforms before !ok check (fires on both success and error).
+    if (route) {
+        response = await applyAfterUpstream(response, {
+            hook: 'after_upstream', route, upstreamMode: 'anthropic-messages',
+            clientModel: (requestBody.model as string) || modelId || 'unknown',
+            requestId, streaming: requestBody.stream === true, logger: activeLogger,
+        });
+    }
 
     recordResponseStatusCodeFromUpstream(response.status);
     recordUpstreamResponseToolCount('anthropic-messages', 0);

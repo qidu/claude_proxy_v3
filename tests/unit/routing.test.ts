@@ -7,7 +7,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildUpstreamUrl, shouldUseMaxCompletionTokens, mapMaxTokensForUpstream } from '../../src/utils/routing.js';
+import { buildUpstreamUrl } from '../../src/utils/routing.js';
 import { decayEffectiveCompositeShare, getEffectiveCompositeShare, resetEffectiveCompositeSharesForTest } from '../../src/index.js';
 
 describe('composite primary effective share decay', () => {
@@ -236,48 +236,5 @@ describe('buildUpstreamUrl', () => {
       buildUpstreamUrl('https://api.example.com/v1/models', 'v1/models'),
       'https://api.example.com/v1/models'
     );
-  });
-});
-
-describe('shouldUseMaxCompletionTokens', () => {
-  it('keeps max_tokens for api.qnaigc.com', () => {
-    assert.equal(shouldUseMaxCompletionTokens('https://api.qnaigc.com/v1/chat/completions'), false);
-  });
-
-  it('uses max_completion_tokens for Azure OpenAI', () => {
-    assert.equal(shouldUseMaxCompletionTokens('https://jiukunsctix.cognitiveservices.azure.com/openai/deployments/gpt-5.4/chat/completions'), true);
-  });
-
-  it('uses max_completion_tokens for OpenAI direct', () => {
-    assert.equal(shouldUseMaxCompletionTokens('https://api.openai.com/v1/chat/completions'), true);
-  });
-
-  it('returns false for non-OpenAI upstream modes', () => {
-    assert.equal(shouldUseMaxCompletionTokens('https://api.anthropic.com/v1/messages', 'anthropic-messages'), false);
-    assert.equal(shouldUseMaxCompletionTokens('https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent', 'gemini-generatecontent'), false);
-  });
-
-  it('returns false for non-HTTP schemes (e.g. sdk://)', () => {
-    assert.equal(shouldUseMaxCompletionTokens('sdk://chatjimmy.ai/api', 'openai-completions'), false);
-  });
-});
-
-describe('mapMaxTokensForUpstream', () => {
-  it('translates max_tokens to max_completion_tokens for non-qnaigc upstreams', () => {
-    const result = mapMaxTokensForUpstream({ model: 'gpt-5.4', max_tokens: 256 }, 'https://api.openai.com/v1/chat/completions');
-    assert.deepEqual(result, { model: 'gpt-5.4', max_completion_tokens: 256 });
-    assert.equal('max_tokens' in result, false);
-  });
-
-  it('leaves max_tokens unchanged for api.qnaigc.com', () => {
-    const result = mapMaxTokensForUpstream({ model: 'deepseek-v3', max_tokens: 128 }, 'https://api.qnaigc.com/v1/chat/completions');
-    assert.deepEqual(result, { model: 'deepseek-v3', max_tokens: 128 });
-    assert.equal('max_completion_tokens' in result, false);
-  });
-
-  it('passes through bodies without max_tokens', () => {
-    const body = { model: 'gpt-5.4', messages: [] };
-    const result = mapMaxTokensForUpstream(body, 'https://api.openai.com/v1/chat/completions');
-    assert.strictEqual(result, body);
   });
 });

@@ -33,6 +33,8 @@ export interface ProxyConfig {
   models?: Record<string, ModelCategoryConfig | ModelArrayConfig>;
   composite?: Record<string, CompositeModelConfig>;
   schedule?: Record<string, ScheduleConfig>;
+  transforms?: Record<string, TransformSet>;
+  transform_defaults?: Record<string, string[]>;
   defaults?: {
     upstream_mode?: string;
   };
@@ -75,6 +77,152 @@ export interface ProxyConfig {
     whitelist_file?: string;
   };
 }
+
+// ---------------------------------------------------------------------------
+// Transform types
+// ---------------------------------------------------------------------------
+
+export type TransformSchema =
+  | 'openai-completions'
+  | 'anthropic-messages'
+  | 'openai-responses'
+  | 'gemini-generatecontent';
+
+export type TransformOp =
+  | { op: 'rename';    path: string; to: string }
+  | { op: 'set';       path: string; value: unknown }
+  | { op: 'default';   path: string; value: unknown }
+  | { op: 'remove';    path: string }
+  | { op: 'map_value'; path: string; from: unknown; to: unknown; when_sibling?: string };
+
+export type BuiltinName = 'lowercase_tool_schema_types' | 'recover_tool_message_name';
+
+/** A named transform set declared under [transforms.<name>] */
+export interface TransformSet {
+  name: string;
+  schema: TransformSchema;
+  // ops/builtins may be scoped to a hook or declared at the top level (apply to all hooks)
+  endpoint_readin?: { ops?: TransformOp[]; builtins?: BuiltinName[] };
+  before_conversion?: { ops?: TransformOp[]; builtins?: BuiltinName[] };
+  before_upstream?: { ops?: TransformOp[]; builtins?: BuiltinName[]; headers?: { set?: Record<string, string>; remove?: string[] } };
+  after_upstream?: { ops?: TransformOp[]; builtins?: BuiltinName[] };
+  endpoint_writeout?: { ops?: TransformOp[]; builtins?: BuiltinName[]; headers?: { set?: Record<string, string>; remove?: string[] } };
+}
+
+// Legal shallow paths per schema (used for load-time validation)
+const SCHEMA_PATHS: Record<TransformSchema, Set<string>> = {
+  'openai-completions': new Set([
+    // top-level params
+    'model', 'max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'stop',
+    'stream', 'stream_options', 'response_format', 'tools', 'tool_choice',
+    'frequency_penalty', 'presence_penalty', 'logit_bias', 'seed', 'logprobs',
+    'top_logprobs', 'thinking', 'reasoning_effort', 'prompt_cache_key', 'output_config',
+    // message fields (bare)
+    'messages[].content', 'messages[].name', 'messages[].tool_calls', 'messages[].tool_call_id', 'messages[].role',
+    // role-filtered
+    'messages[role=system].content', 'messages[role=user].content',
+    'messages[role=assistant].content', 'messages[role=assistant].tool_calls',
+    'messages[role=tool].content', 'messages[role=tool].name', 'messages[role=tool].tool_call_id',
+    // response-side ($response prefix)
+    '$response.id', '$response.model', '$response.choices[].message.content',
+    '$response.choices[].message.role', '$response.choices[].finish_reason', '$response.usage',
+  ]),
+  'anthropic-messages': new Set([
+    'model', 'max_tokens', 'system', 'temperature', 'top_p', 'top_k', 'stop_sequences',
+    'stream', 'tools', 'tool_choice', 'thinking', 'reasoning_effort', 'output_config',
+    'service_tier', 'metadata', 'cached_content',
+    'messages[].content', 'messages[].role',
+    'messages[role=user].content', 'messages[role=assistant].content',
+    '$response.id', '$response.model', '$response.content', '$response.stop_reason', '$response.usage',
+  ]),
+  'openai-responses': new Set([
+    'model', 'input', 'max_output_tokens', 'temperature', 'top_p', 'tools',
+    'tool_choice', 'reasoning', 'stream', 'previous_response_id', 'metadata',
+    '$response.id', '$response.model', '$response.output', '$response.usage',
+  ]),
+  'gemini-generatecontent': new Set([
+    'model', 'contents', 'systemInstruction', 'generationConfig', 'tools',
+    'toolConfig', 'safetySettings', 'cachedContent',
+    '$response.candidates', '$response.usageMetadata',
+  ]),
+};
+
+const BUILTIN_NAMES: Set<BuiltinName> = new Set(['lowercase_tool_schema_types', 'recover_tool_message_name']);
+
+export interface TransformValidationError {
+  set: string;
+  message: string;
+}
+
+export function validateTransformSet(name: string, set: TransformSet): TransformValidationError[] {
+  const errs: TransformValidationError[] = [];
+  const legalPaths = SCHEMA_PATHS[set.schema];
+  if (!legalPaths) {
+    errs.push({ set: name, message: `unknown schema "${set.schema}"` });
+    return errs;
+  }
+
+  const hookNames = ['endpoint_readin', 'before_conversion', 'before_upstream', 'after_upstream', 'endpoint_writeout'] as const;
+  for (const hook of hookNames) {
+    const slot = set[hook];
+    if (!slot) continue;
+    for (const op of slot.ops ?? []) {
+      if (!legalPaths.has(op.path)) {
+        errs.push({ set: name, message: `[${hook}] unknown path "${op.path}" for schema "${set.schema}"` });
+      }
+    }
+    for (const b of slot.builtins ?? []) {
+      if (!BUILTIN_NAMES.has(b)) {
+        errs.push({ set: name, message: `[${hook}] unknown builtin "${b}"` });
+      }
+    }
+  }
+  return errs;
+}
+
+export function validateAllTransforms(config: ProxyConfig): TransformValidationError[] {
+  const errs: TransformValidationError[] = [];
+  const defined = config.transforms ?? {};
+
+  // Validate each declared transform set
+  for (const [name, set] of Object.entries(defined)) {
+    errs.push(...validateTransformSet(name, set));
+  }
+
+  // Validate transform_defaults references
+  for (const [mode, names] of Object.entries(config.transform_defaults ?? {})) {
+    for (const n of names) {
+      if (!defined[n]) {
+        errs.push({ set: `transform_defaults.${mode}`, message: `references undefined transform set "${n}"` });
+      }
+    }
+  }
+
+  // Validate per-model entry transform references
+  if (config.models) {
+    for (const [catName, catConfig] of Object.entries(config.models)) {
+      if (Array.isArray(catConfig)) continue;
+      const cat = catConfig as ModelCategoryConfig;
+      for (const [key, val] of Object.entries(cat)) {
+        if (!Array.isArray(val)) continue;
+        const entry = val as string[];
+        // entry[4] is transforms CSV if present (index 4 in the 5-element form)
+        const transformsCsv = entry[4];
+        if (transformsCsv) {
+          for (const n of transformsCsv.split(',').map(s => s.trim()).filter(Boolean)) {
+            if (!defined[n]) {
+              errs.push({ set: `models.${catName}.${key}`, message: `references undefined transform set "${n}"` });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return errs;
+}
+
+// ---------------------------------------------------------------------------
 
 export interface ModelCategoryConfig {
   upstream_mode?: string;
@@ -195,6 +343,7 @@ export interface ModelRouteConfig {
   upstreamMode: string;
   modelAlias?: string;
   section?: string;
+  transforms: TransformSet[];  // resolved & merged: mode-defaults → sector-defaults → entry
 }
 
 export interface CompositeRouteSelection {
@@ -214,6 +363,26 @@ interface CompositeResolvedTarget {
   targetConfig: CompositeTargetConfig;
   route: ModelRouteConfig;
   index: number;
+}
+
+/**
+ * Resolve the merged transform list for a route.
+ * Order (design doc §3b / open-question #8): mode-defaults → sector-defaults → entry transforms.
+ * Each level's names are looked up from proxyConfig.transforms.
+ */
+function resolveTransforms(
+  upstreamMode: string,
+  categoryTransforms: string | undefined,
+  entryTransforms: string | undefined,
+  proxyConfig: ProxyConfig,
+): TransformSet[] {
+  const defined = proxyConfig.transforms ?? {};
+  const lookup = (csv: string | undefined): TransformSet[] =>
+    (csv ?? '').split(',').map(n => n.trim()).filter(Boolean).map(n => defined[n]).filter((s): s is TransformSet => s !== undefined);
+
+  const modeNames = proxyConfig.transform_defaults?.[upstreamMode] ?? [];
+  const modeSets = modeNames.map(n => defined[n]).filter((s): s is TransformSet => s !== undefined);
+  return [...modeSets, ...lookup(categoryTransforms), ...lookup(entryTransforms)];
 }
 
 function resolveModelRouteFromEntry(
@@ -254,12 +423,15 @@ function resolveModelRouteFromEntry(
     }
 
     const resolvedMode = modelMode || categoryUpstreamMode;
+    const entryTransformsCsv = modelEntry[4]; // index 4: comma-separated transform set names
+    const categoryTransformsCsv = (categoryConfig as Record<string, unknown>)['transforms'] as string | undefined;
     return {
       targetUrl: modelBaseUrl || categoryBaseUrl,
       apiKey: parseApiKey(modelApiKey || categoryApiKey),
       upstreamMode: resolvedMode,
       modelAlias: resolvedTarget || undefined,
       section: sectionName,
+      transforms: resolveTransforms(resolvedMode, categoryTransformsCsv, entryTransformsCsv, proxyConfig),
     };
   }
 
@@ -269,6 +441,7 @@ function resolveModelRouteFromEntry(
     upstreamMode: categoryUpstreamMode,
     modelAlias: modelEntry || undefined,
     section: sectionName,
+    transforms: resolveTransforms(categoryUpstreamMode, undefined, undefined, proxyConfig),
   };
 }
 
@@ -439,6 +612,7 @@ function getDefaultModelRoute(proxyConfig: ProxyConfig): ModelRouteConfig {
     targetUrl: defaultBaseUrl,
     apiKey: parseApiKey(defaultApiKey),
     upstreamMode: defaultMode,
+    transforms: resolveTransforms(defaultMode, undefined, undefined, proxyConfig),
   };
 }
 
@@ -907,6 +1081,97 @@ function parseCompositeTargetConfig(value: string): CompositeTargetConfig {
   return config;
 }
 
+// ---------------------------------------------------------------------------
+// Transform parsing helpers
+// ---------------------------------------------------------------------------
+
+type TransformHookSlot = NonNullable<TransformSet['before_upstream']>;
+type HookKey = 'endpoint_readin' | 'before_conversion' | 'before_upstream' | 'after_upstream' | 'endpoint_writeout';
+const HOOK_KEYS = new Set<string>(['endpoint_readin', 'before_conversion', 'before_upstream', 'after_upstream', 'endpoint_writeout']);
+
+/**
+ * Parse a TOML array of quoted strings into a string[].
+ * Input example: `["a", "b"]` → already split by the parser into elements.
+ * Here `elements` is already split by the array parser.
+ */
+function parseTransformArrayField(set: TransformSet, cleanKey: string, elements: string[]): void {
+  // cleanKey may be "builtins", "before_upstream.builtins", "endpoint_readin.ops", etc.
+  const dotIdx = cleanKey.indexOf('.');
+  if (dotIdx === -1) {
+    // top-level (no hook scope): treat "builtins" as applying to all hooks isn't supported;
+    // only "schema" is valid at top level (handled in string branch). Ignore unknowns.
+    return;
+  }
+  const hookPart = cleanKey.slice(0, dotIdx) as HookKey;
+  const fieldPart = cleanKey.slice(dotIdx + 1);
+  if (!HOOK_KEYS.has(hookPart)) return;
+
+  if (!set[hookPart]) set[hookPart] = {} as TransformHookSlot;
+  const slot = set[hookPart] as TransformHookSlot;
+
+  if (fieldPart === 'builtins') {
+    slot.builtins = elements as BuiltinName[];
+  }
+  // ops and headers are complex objects — handled by the inline-object branch below
+}
+
+/**
+ * Parse a hook-scoped ops array from an inline TOML array of inline tables.
+ * Input: `[{op="rename",path="max_tokens",to="max_completion_tokens"}]`
+ * Returns parsed TransformOp[].
+ */
+export function parseTransformOpsInline(raw: string): TransformOp[] {
+  const ops: TransformOp[] = [];
+  // Strip outer [ ]
+  const inner = raw.trim().replace(/^\[/, '').replace(/\]$/, '').trim();
+  if (!inner) return ops;
+
+  // Split on top-level commas between } and {
+  const tableStrs: string[] = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of inner) {
+    if (ch === '{') { depth++; cur += ch; }
+    else if (ch === '}') { depth--; cur += ch; if (depth === 0) { tableStrs.push(cur.trim()); cur = ''; } }
+    else if (ch === ',' && depth === 0) { /* separator between tables */ }
+    else { cur += ch; }
+  }
+
+  for (const tableStr of tableStrs) {
+    const body = tableStr.replace(/^\{/, '').replace(/\}$/, '').trim();
+    const fields: Record<string, string> = {};
+    // Parse key = "value" pairs (values always quoted in our schema)
+    for (const m of body.matchAll(/(\w+)\s*=\s*"([^"]*)"/g)) {
+      fields[m[1]] = m[2];
+    }
+    // Also handle null value: to = null
+    const nullMatch = body.match(/\bto\s*=\s*null\b/);
+    const toIsNull = nullMatch !== null;
+
+    const op = fields['op'];
+    const path = fields['path'];
+    if (!op || !path) continue;
+
+    if (op === 'rename' && fields['to']) {
+      ops.push({ op: 'rename', path, to: fields['to'] });
+    } else if (op === 'set' && 'value' in fields) {
+      ops.push({ op: 'set', path, value: fields['value'] });
+    } else if (op === 'default' && 'value' in fields) {
+      ops.push({ op: 'default', path, value: fields['value'] });
+    } else if (op === 'remove') {
+      ops.push({ op: 'remove', path });
+    } else if (op === 'map_value') {
+      const from = fields['from'] ?? '';
+      const to: unknown = toIsNull ? null : (fields['to'] ?? '');
+      const when_sibling = fields['when_sibling'];
+      ops.push({ op: 'map_value', path, from, to, ...(when_sibling ? { when_sibling } : {}) });
+    }
+  }
+  return ops;
+}
+
+// ---------------------------------------------------------------------------
+
 function parseCompositeModelConfig(rawValue: string): CompositeModelConfig {
   const config: CompositeModelConfig = {};
   const trimmed = rawValue.trim();
@@ -1193,25 +1458,26 @@ function serializeTomlSection(section: Record<string, unknown>): string[] {
  * The alias key is passed so target-equals-alias can be omitted entirely.
  */
 function serializeModelEntry(entry: string[], aliasKey: string): string {
-  const [target = '', base_url = '', api_key = '', mode = ''] = entry;
+  const [target = '', base_url = '', api_key = '', mode = '', transforms = ''] = entry;
   const hasOverrides = base_url !== '' || api_key !== '' || mode !== '';
   const targetIsAlias = target === aliasKey || target === '';
+  const transformsSuffix = transforms ? `, transforms = ${JSON.stringify(transforms)}` : '';
   if (!hasOverrides && targetIsAlias) {
-    return `{}`;
+    return transforms ? `{transforms = ${JSON.stringify(transforms)}}` : `{}`;
   }
   if (!hasOverrides) {
-    return `{target = ${JSON.stringify(target)}}`;
+    return `{target = ${JSON.stringify(target)}${transformsSuffix}}`;
   }
   if (targetIsAlias) {
     if (mode !== '') {
-      return `{base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}, mode = ${JSON.stringify(mode)}}`;
+      return `{base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}, mode = ${JSON.stringify(mode)}${transformsSuffix}}`;
     }
-    return `{base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}}`;
+    return `{base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}${transformsSuffix}}`;
   }
   if (mode !== '') {
-    return `{target = ${JSON.stringify(target)}, base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}, mode = ${JSON.stringify(mode)}}`;
+    return `{target = ${JSON.stringify(target)}, base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}, mode = ${JSON.stringify(mode)}${transformsSuffix}}`;
   }
-  return `{target = ${JSON.stringify(target)}, base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}}`;
+  return `{target = ${JSON.stringify(target)}, base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}${transformsSuffix}}`;
 }
 
 /** Serialize a model category section, emitting model entries as inline tables. */
@@ -2001,6 +2267,15 @@ export function parseSimpleToml(content: string): ProxyConfig {
         currentSection = 'privacy_filter';
         currentCategory = null;
         config.privacy_filter = {};
+      } else if (parts[0] === 'transforms' && parts[1]) {
+        currentSection = 'transforms';
+        currentCategory = parts[1];
+        if (!config.transforms) config.transforms = {};
+        config.transforms[currentCategory] = { name: currentCategory, schema: 'openai-completions' };
+      } else if (parts[0] === 'transform_defaults') {
+        currentSection = 'transform_defaults';
+        currentCategory = null;
+        if (!config.transform_defaults) config.transform_defaults = {};
       }
       continue;
     }
@@ -2049,6 +2324,11 @@ export function parseSimpleToml(content: string): ProxyConfig {
         if (cleanKey === 'filter_mode' || cleanKey === 'filter_url' || cleanKey === 'whitelist_file') {
           (config.privacy_filter as any)[cleanKey] = value;
         }
+      } else if (currentSection === 'transforms' && currentCategory && config.transforms) {
+        const set = config.transforms[currentCategory];
+        if (cleanKey === 'schema') {
+          set.schema = value as TransformSchema;
+        }
       }
       continue;
     }
@@ -2075,6 +2355,7 @@ export function parseSimpleToml(content: string): ProxyConfig {
         const target = fields['target'] ?? cleanKey;
         const mode = fields['mode'] ?? '';
         const entry: string[] = [target, fields['base_url'] ?? '', fields['api_key'] ?? '', mode];
+        if (fields['transforms']) entry.push(fields['transforms']);
         const category = config.models[currentCategory] as ModelCategoryConfig;
         category[cleanKey] = entry as [string, string, string, string];
         continue;
@@ -2099,6 +2380,34 @@ export function parseSimpleToml(content: string): ProxyConfig {
       const cleanKey = key.trim().replace(/^"|"$/g, '');
       config.schedule[cleanKey] = parseScheduleConfig(value.trim());
       continue;
+    }
+
+    // Handle transforms hook-scoped ops/builtins arrays (may contain nested {} tables)
+    if (currentSection === 'transforms' && currentCategory && config.transforms) {
+      const transformsArrMatch = trimmed.match(/^([\w.]+)\s*=\s*(\[.*\])$/);
+      if (transformsArrMatch) {
+        const cleanKey = transformsArrMatch[1].trim();
+        const rawArr = transformsArrMatch[2];
+        const set = config.transforms[currentCategory];
+        const dotIdx = cleanKey.indexOf('.');
+        if (dotIdx !== -1) {
+          const hookPart = cleanKey.slice(0, dotIdx) as HookKey;
+          const fieldPart = cleanKey.slice(dotIdx + 1);
+          if (HOOK_KEYS.has(hookPart)) {
+            if (!set[hookPart]) set[hookPart] = {} as TransformHookSlot;
+            const slot = set[hookPart] as TransformHookSlot;
+            if (fieldPart === 'ops') {
+              slot.ops = parseTransformOpsInline(rawArr);
+            } else if (fieldPart === 'builtins') {
+              // simple string array
+              slot.builtins = rawArr
+                .replace(/^\[/, '').replace(/\]$/, '')
+                .split(',').map(s => s.trim().replace(/^"|"$/g, '')).filter(Boolean) as BuiltinName[];
+            }
+          }
+        }
+        continue;
+      }
     }
 
     // Handle arrays: "model-id" = ["alias", "url", "key"]
@@ -2140,6 +2449,13 @@ export function parseSimpleToml(content: string): ProxyConfig {
         if (cleanKey === 'whitelist_add' || cleanKey === 'whitelist_remove') {
           (config.privacy_filter as any)[cleanKey] = elements;
         }
+      } else if (currentSection === 'transform_defaults' && config.transform_defaults) {
+        // transform_defaults: openai-completions = ["set_a", "set_b"]
+        config.transform_defaults[cleanKey] = elements;
+      } else if (currentSection === 'transforms' && currentCategory && config.transforms) {
+        // transforms.<name>: builtins = ["lowercase_tool_schema_types"]
+        const set = config.transforms[currentCategory];
+        parseTransformArrayField(set, cleanKey, elements);
       }
       continue;
     }
@@ -2198,6 +2514,15 @@ export function parseSimpleToml(content: string): ProxyConfig {
   }
   (config as unknown as { _validationErrors?: ConfigValidationError[]; _validationWarnings?: ConfigValidationError[] })._validationErrors = validation.errors;
   (config as unknown as { _validationWarnings?: ConfigValidationError[] })._validationWarnings = validation.warnings;
+
+  // Validate transform sets — fail loud on unknown paths or undefined references
+  const transformErrs = validateAllTransforms(config);
+  for (const err of transformErrs) {
+    console.error(`[ERROR] transforms.${err.set}: ${err.message}`);
+  }
+  if (transformErrs.length > 0) {
+    throw new Error(`Config invalid: ${transformErrs.length} transform error(s). See logs above.`);
+  }
 
   return config;
 }

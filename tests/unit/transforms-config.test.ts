@@ -1,0 +1,418 @@
+/**
+ * Unit tests for transform config types, TOML parsing, and validation.
+ *
+ * Run with:
+ *   npx tsx --test tests/unit/transforms-config.test.ts
+ */
+
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  parseSimpleToml,
+  parseTransformOpsInline,
+  validateTransformSet,
+  validateAllTransforms,
+  getModelRouteConfig,
+  type TransformSet,
+  type ProxyConfig,
+} from '../../src/utils/config-loader.js';
+import { runHook, type HookContext } from '../../src/utils/request-transform.js';
+
+// ---------------------------------------------------------------------------
+// parseTransformOpsInline
+// ---------------------------------------------------------------------------
+
+describe('parseTransformOpsInline', () => {
+  it('parses a rename op', () => {
+    const ops = parseTransformOpsInline('[{op="rename",path="max_tokens",to="max_completion_tokens"}]');
+    assert.equal(ops.length, 1);
+    assert.deepEqual(ops[0], { op: 'rename', path: 'max_tokens', to: 'max_completion_tokens' });
+  });
+
+  it('parses a remove op', () => {
+    const ops = parseTransformOpsInline('[{op="remove",path="output_config"}]');
+    assert.equal(ops.length, 1);
+    assert.deepEqual(ops[0], { op: 'remove', path: 'output_config' });
+  });
+
+  it('parses a map_value op with when_sibling and null target', () => {
+    const ops = parseTransformOpsInline(
+      '[{op="map_value",path="messages[role=assistant].content",when_sibling="tool_calls",from="",to=null}]',
+    );
+    assert.equal(ops.length, 1);
+    const op = ops[0] as { op: string; path: string; from: unknown; to: unknown; when_sibling: string };
+    assert.equal(op.op, 'map_value');
+    assert.equal(op.path, 'messages[role=assistant].content');
+    assert.equal(op.when_sibling, 'tool_calls');
+    assert.equal(op.from, '');
+    assert.equal(op.to, null);
+  });
+
+  it('parses multiple ops', () => {
+    const ops = parseTransformOpsInline(
+      '[{op="rename",path="max_tokens",to="max_completion_tokens"},{op="remove",path="output_config"}]',
+    );
+    assert.equal(ops.length, 2);
+    assert.equal(ops[0].op, 'rename');
+    assert.equal(ops[1].op, 'remove');
+  });
+
+  it('returns empty array for empty input', () => {
+    assert.deepEqual(parseTransformOpsInline('[]'), []);
+  });
+
+  it('skips malformed entries without op or path', () => {
+    const ops = parseTransformOpsInline('[{foo="bar"}]');
+    assert.equal(ops.length, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateTransformSet
+// ---------------------------------------------------------------------------
+
+describe('validateTransformSet', () => {
+  it('passes a valid set', () => {
+    const set: TransformSet = {
+      name: 'test',
+      schema: 'openai-completions',
+      before_upstream: {
+        ops: [{ op: 'rename', path: 'max_tokens', to: 'max_completion_tokens' }],
+        builtins: ['recover_tool_message_name'],
+      },
+    };
+    assert.deepEqual(validateTransformSet('test', set), []);
+  });
+
+  it('fails on unknown path', () => {
+    const set: TransformSet = {
+      name: 'bad',
+      schema: 'openai-completions',
+      before_upstream: { ops: [{ op: 'remove', path: 'nonexistent_field' }] },
+    };
+    const errs = validateTransformSet('bad', set);
+    assert.equal(errs.length, 1);
+    assert.ok(errs[0].message.includes('nonexistent_field'));
+  });
+
+  it('fails on unknown builtin', () => {
+    const set: TransformSet = {
+      name: 'bad',
+      schema: 'openai-completions',
+      before_upstream: { builtins: ['made_up_builtin' as never] },
+    };
+    const errs = validateTransformSet('bad', set);
+    assert.equal(errs.length, 1);
+    assert.ok(errs[0].message.includes('made_up_builtin'));
+  });
+
+  it('fails on unknown schema', () => {
+    const set = { name: 'bad', schema: 'not-a-schema' } as unknown as TransformSet;
+    const errs = validateTransformSet('bad', set);
+    assert.equal(errs.length, 1);
+    assert.ok(errs[0].message.includes('unknown schema'));
+  });
+
+  it('validates paths under anthropic-messages schema', () => {
+    const set: TransformSet = {
+      name: 'claude_set',
+      schema: 'anthropic-messages',
+      before_upstream: { ops: [{ op: 'remove', path: 'system' }] },
+    };
+    assert.deepEqual(validateTransformSet('claude_set', set), []);
+  });
+
+  it('rejects openai-completions-only path under anthropic-messages schema', () => {
+    // frequency_penalty is openai-completions only, not in anthropic-messages
+    const set: TransformSet = {
+      name: 'bad',
+      schema: 'anthropic-messages',
+      before_upstream: { ops: [{ op: 'remove', path: 'frequency_penalty' }] },
+    };
+    const errs = validateTransformSet('bad', set);
+    assert.equal(errs.length, 1);
+    assert.ok(errs[0].message.includes('frequency_penalty'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateAllTransforms
+// ---------------------------------------------------------------------------
+
+describe('validateAllTransforms', () => {
+  it('passes a clean config with no transforms', () => {
+    const config: ProxyConfig = {};
+    assert.deepEqual(validateAllTransforms(config), []);
+  });
+
+  it('fails when transform_defaults references undefined set', () => {
+    const config: ProxyConfig = {
+      transform_defaults: { 'openai-completions': ['nonexistent'] },
+    };
+    const errs = validateAllTransforms(config);
+    assert.equal(errs.length, 1);
+    assert.ok(errs[0].message.includes('nonexistent'));
+  });
+
+  it('passes when transform_defaults references defined set', () => {
+    const config: ProxyConfig = {
+      transforms: {
+        max_tokens_completion: {
+          name: 'max_tokens_completion',
+          schema: 'openai-completions',
+          before_upstream: { ops: [{ op: 'rename', path: 'max_tokens', to: 'max_completion_tokens' }] },
+        },
+      },
+      transform_defaults: { 'openai-completions': ['max_tokens_completion'] },
+    };
+    assert.deepEqual(validateAllTransforms(config), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseSimpleToml — [transforms.*] and [transform_defaults] sections
+// ---------------------------------------------------------------------------
+
+describe('parseSimpleToml — transforms sections', () => {
+  it('parses [transforms.<name>] with schema', () => {
+    const config = parseSimpleToml(`
+[transforms.my_set]
+schema = "openai-completions"
+`);
+    assert.ok(config.transforms?.['my_set']);
+    assert.equal(config.transforms!['my_set'].schema, 'openai-completions');
+  });
+
+  it('parses before_upstream.builtins array', () => {
+    const config = parseSimpleToml(`
+[transforms.deepseek_compat]
+schema = "openai-completions"
+before_upstream.builtins = ["recover_tool_message_name"]
+`);
+    const set = config.transforms?.['deepseek_compat'];
+    assert.ok(set);
+    assert.deepEqual(set.before_upstream?.builtins, ['recover_tool_message_name']);
+  });
+
+  it('parses endpoint_readin.builtins array', () => {
+    const config = parseSimpleToml(`
+[transforms.tool_norm]
+schema = "openai-completions"
+endpoint_readin.builtins = ["lowercase_tool_schema_types"]
+`);
+    const set = config.transforms?.['tool_norm'];
+    assert.deepEqual(set?.endpoint_readin?.builtins, ['lowercase_tool_schema_types']);
+  });
+
+  it('parses before_upstream.ops array of inline tables', () => {
+    const config = parseSimpleToml(`
+[transforms.rename_set]
+schema = "openai-completions"
+before_upstream.ops = [{op="rename",path="max_tokens",to="max_completion_tokens"}]
+`);
+    const set = config.transforms?.['rename_set'];
+    assert.equal(set?.before_upstream?.ops?.length, 1);
+    assert.deepEqual(set!.before_upstream!.ops![0], {
+      op: 'rename', path: 'max_tokens', to: 'max_completion_tokens',
+    });
+  });
+
+  it('parses [transform_defaults]', () => {
+    const config = parseSimpleToml(`
+[transforms.max_tokens_completion]
+schema = "openai-completions"
+before_upstream.ops = [{op="rename",path="max_tokens",to="max_completion_tokens"}]
+
+[transform_defaults]
+openai-completions = ["max_tokens_completion"]
+openai-responses = ["max_tokens_completion"]
+`);
+    assert.deepEqual(config.transform_defaults?.['openai-completions'], ['max_tokens_completion']);
+    assert.deepEqual(config.transform_defaults?.['openai-responses'], ['max_tokens_completion']);
+  });
+
+  it('parses multiple transforms and transform_defaults together', () => {
+    const config = parseSimpleToml(`
+[transforms.deepseek_compat]
+schema = "openai-completions"
+endpoint_readin.builtins = ["lowercase_tool_schema_types"]
+before_upstream.builtins = ["recover_tool_message_name"]
+before_upstream.ops = [{op="map_value",path="messages[role=assistant].content",when_sibling="tool_calls",from="",to=null}]
+
+[transforms.max_tokens_completion]
+schema = "openai-completions"
+before_upstream.ops = [{op="rename",path="max_tokens",to="max_completion_tokens"}]
+
+[transform_defaults]
+openai-completions = ["max_tokens_completion"]
+`);
+    const ds = config.transforms?.['deepseek_compat'];
+    assert.ok(ds);
+    assert.deepEqual(ds.endpoint_readin?.builtins, ['lowercase_tool_schema_types']);
+    assert.deepEqual(ds.before_upstream?.builtins, ['recover_tool_message_name']);
+    assert.equal(ds.before_upstream?.ops?.length, 1);
+
+    const mt = config.transforms?.['max_tokens_completion'];
+    assert.ok(mt);
+    assert.equal(mt.before_upstream?.ops?.length, 1);
+
+    assert.deepEqual(config.transform_defaults?.['openai-completions'], ['max_tokens_completion']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// max_tokens_rename: mode-default wiring + runHook end-to-end
+// ---------------------------------------------------------------------------
+
+const maxTokensToml = `
+[transforms.max_tokens_rename]
+schema = "openai-completions"
+before_upstream.ops = [{op = "rename", path = "max_tokens", to = "max_completion_tokens"}]
+
+[transform_defaults]
+"openai-completions" = ["max_tokens_rename"]
+"openai-responses" = ["max_tokens_rename"]
+
+[models.free]
+upstream_mode = "openai-completions"
+base_url = "https://api.example.com"
+api_key = "k"
+mymodel = {target = "real-model"}
+`;
+
+// ---------------------------------------------------------------------------
+// inline-table transforms field parsing
+// ---------------------------------------------------------------------------
+
+const inlineTransformToml = `
+[models.free]
+upstream_mode = "openai-completions"
+mymodel = {target = "real-model", base_url = "https://api.example.com", api_key = "key123", transforms = "deepseek_compat"}
+
+[transforms.max_tokens_rename]
+schema = "openai-completions"
+before_upstream.ops = [{op = "rename", path = "max_tokens", to = "max_completion_tokens"}]
+
+[transforms.deepseek_compat]
+schema = "openai-completions"
+endpoint_readin.builtins = ["lowercase_tool_schema_types"]
+before_upstream.builtins = ["recover_tool_message_name"]
+before_upstream.ops = [{op = "map_value", path = "messages[role=assistant].content", when_sibling = "tool_calls", from = "", to = null}]
+
+[transform_defaults]
+"openai-completions" = ["max_tokens_rename"]
+`;
+
+describe('inline-table transforms field', () => {
+  const config = parseSimpleToml(inlineTransformToml);
+  const route = getModelRouteConfig('mymodel', config);
+  const logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } as any;
+
+  it('resolves entry-level transforms from inline-table model entry', () => {
+    assert.ok(route, 'route should resolve');
+    // mode-default (max_tokens_rename) + entry-level (deepseek_compat) = 2 sets
+    assert.equal(route!.transforms.length, 2);
+    assert.equal(route!.transforms[0].name, 'max_tokens_rename');
+    assert.equal(route!.transforms[1].name, 'deepseek_compat');
+  });
+
+  it('deepseek_compat: endpoint_readin has lowercase_tool_schema_types builtin', () => {
+    assert.ok(route);
+    const deepseek = route!.transforms.find(s => s.name === 'deepseek_compat');
+    assert.ok(deepseek, 'deepseek_compat set should be present');
+    assert.deepEqual(deepseek!.endpoint_readin?.builtins, ['lowercase_tool_schema_types']);
+  });
+
+  it('deepseek_compat: before_upstream lowercases tool schema types', () => {
+    assert.ok(route);
+    const ctx: HookContext = {
+      hook: 'endpoint_readin',
+      route: route!,
+      upstreamMode: 'openai-completions',
+      clientModel: 'mymodel',
+      requestId: 'r1',
+      streaming: false,
+      logger,
+    };
+    const body = {
+      tools: [{ function: { parameters: { type: 'OBJECT', properties: { x: { type: 'STRING' } } } } }],
+    };
+    const result = runHook('endpoint_readin', { body, headers: {} }, ctx);
+    const fn = (result.body.tools as any[])[0].function;
+    assert.equal(fn.parameters.type, 'object');
+    assert.equal(fn.parameters.properties.x.type, 'string');
+  });
+
+  it('deepseek_compat: before_upstream maps assistant content empty string → null when tool_calls present', () => {
+    assert.ok(route);
+    const ctx: HookContext = {
+      hook: 'before_upstream',
+      route: route!,
+      upstreamMode: 'openai-completions',
+      clientModel: 'mymodel',
+      requestId: 'r2',
+      streaming: false,
+      logger,
+    };
+    const body = {
+      messages: [
+        { role: 'assistant', content: '', tool_calls: [{ id: 'tc1', function: { name: 'fn' } }] },
+        { role: 'assistant', content: 'hello' }, // no tool_calls — should not change
+      ],
+    };
+    const result = runHook('before_upstream', { body, headers: {} }, ctx);
+    const msgs = result.body.messages as any[];
+    assert.equal(msgs[0].content, null, 'content should become null when tool_calls present');
+    assert.equal(msgs[1].content, 'hello', 'content should remain unchanged when no tool_calls');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// max_tokens_rename: mode-default wiring
+// ---------------------------------------------------------------------------
+
+describe('max_tokens_rename: mode-default wiring', () => {
+  const config = parseSimpleToml(maxTokensToml);
+  const route = getModelRouteConfig('mymodel', config);
+  const logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } as any;
+
+  it('resolves max_tokens_rename transform set for openai-completions routes', () => {
+    assert.ok(route, 'route should resolve');
+    assert.ok(route!.transforms.length > 0, 'transforms should be non-empty');
+    assert.equal(route!.transforms[0].name, 'max_tokens_rename');
+    assert.equal(route!.transforms[0].before_upstream?.ops?.length, 1);
+  });
+
+  it('runHook renames max_tokens → max_completion_tokens via mode-default', () => {
+    assert.ok(route);
+    const ctx: HookContext = {
+      hook: 'before_upstream',
+      route: route!,
+      upstreamMode: 'openai-completions',
+      clientModel: 'mymodel',
+      requestId: 'r1',
+      streaming: false,
+      logger,
+    };
+    const result = runHook('before_upstream', { body: { max_tokens: 4096, temperature: 0.7 }, headers: {} }, ctx);
+    assert.equal(result.body['max_completion_tokens'], 4096);
+    assert.equal('max_tokens' in result.body, false);
+    assert.equal(result.body['temperature'], 0.7);
+  });
+
+  it('runHook is a no-op when max_tokens is absent', () => {
+    assert.ok(route);
+    const ctx: HookContext = {
+      hook: 'before_upstream',
+      route: route!,
+      upstreamMode: 'openai-completions',
+      clientModel: 'mymodel',
+      requestId: 'r2',
+      streaming: false,
+      logger,
+    };
+    const result = runHook('before_upstream', { body: { temperature: 0.5 }, headers: {} }, ctx);
+    assert.equal('max_completion_tokens' in result.body, false);
+    assert.equal(result.body['temperature'], 0.5);
+  });
+});

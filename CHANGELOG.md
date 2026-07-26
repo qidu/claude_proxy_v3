@@ -7,6 +7,127 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Feat: Request/response transform hooks (Steps 1–4)
+
+Implements the full two-tier transform system described in
+`docs/design_request_transform_hooks.md`.
+
+**Config layer** (`src/utils/config-loader.ts`):
+- New types: `TransformSchema`, `TransformOp`, `BuiltinName`, `TransformSet`
+- `ProxyConfig` extended with `transforms` and `transform_defaults` sections
+- `ModelRouteConfig` now carries `transforms: TransformSet[]` — merged at load time
+  from mode-defaults → sector-defaults → entry (left-to-right)
+- `parseSimpleToml` parses `[transforms.*]` + `[transform_defaults]` sections,
+  including inline-table op arrays (`before_upstream.ops = [{op="rename",...}]`)
+- `parseTransformOpsInline`, `validateTransformSet`, `validateAllTransforms` — fail-loud
+  validation of unknown paths, unknown builtins, unknown schemas at config load
+- `resolveTransforms()` merges mode-level defaults with per-route transform names
+
+**Transform engine** (`src/utils/request-transform.ts`):
+- Tier-1 generic ops: `rename`, `set`, `default`, `remove`, `map_value`
+  over shallow paths (top-level fields, `messages[role=X].field`)
+- Tier-2 built-ins: `lowercase_tool_schema_types` (recursive schema normalizer),
+  `recover_tool_message_name` (cross-message lookup for missing tool name)
+- `runHook(hook, payload, ctx)` — left-to-right fold across transform sets
+- `buildEventTransformer(hook, ctx)` — null fast path when no transforms active
+
+**Wiring** (`src/index.ts`, `src/handlers/chat-completions.ts`, `src/handlers/messages.ts`,
+`src/handlers/openai.ts`, `src/handlers/responses.ts`, `src/handlers/claude.ts`,
+`src/handlers/gemini.ts`):
+- `endpoint_readin` applied centrally in `runAttempt` before any handler sees the body
+- `endpoint_writeout` (headers) applied centrally in `runAttempt` after the handler
+- `before_upstream` wired in all seven handlers via `route?: ModelRouteConfig` param:
+  - `handleChatCompletionsPassthrough` — OpenAI chat-completions passthrough
+  - `handleMessagesRequest` — both openai-upstream and claude-upstream fetch paths
+  - `handleOpenAIRequest` — main OpenAI fetch path
+  - `handleResponsesRequest` / `handleAsCompletions` — Responses→Completions conversion path
+  - `handleClaudeRequest` — native Anthropic messages upstream
+  - `handleGeminiRequest` / `handleGeminiRequestForMessages` — Gemini Interactions and
+    generateContent fetch paths
+- `RouteAttempt` carries `route?: ModelRouteConfig`; `runAttempt` threads it into every
+  handler call-site
+- Removed inline `normalizeJsonSchemaTypes` + tool-patch loops from `chat-completions.ts`
+  (replaced by `lowercase_tool_schema_types` and `recover_tool_message_name` builtins)
+
+**`mapMaxTokensForUpstream` migration (Step 6 — partial):**
+- Added `[transforms.max_tokens_rename]` to `proxy_config.toml` with
+  `before_upstream.ops = [{op="rename",path="max_tokens",to="max_completion_tokens"}]`
+- Added `[transform_defaults]` binding `openai-completions` and `openai-responses` modes
+  to the `max_tokens_rename` set — so all routes with those modes get the rename for free
+- Removed `mapMaxTokensForUpstream` call from the already-wired `before_upstream` sites
+  in `messages.ts` (both openai and claude upstream paths), `openai.ts` (main fetch),
+  `responses.ts/handleAsCompletions`; the transform engine now handles the rename
+- All active `mapMaxTokensForUpstream` call-sites migrated to transform engine:
+  - `chat-completions.ts/openai-responses` path: wired `before_upstream` on converted body
+  - `openai.ts/forwardCompletionsAsOpenAIResponses`: added `route?` param, wired hook
+  - `responses.ts/handleResponsesInputTokensRequest`: added `route?`, wired both fetch paths
+  - `responses.ts/handleResponsesCompactRequest`: added `route?`, wired both fetch paths
+  - `responses.ts/handleAsPassthrough`: added `route?`, wired hook
+  - `index.ts`: passes `attemptRoute` to `handleResponsesInputTokensRequest` and `handleResponsesCompactRequest`
+- Removed `mapMaxTokensForUpstream` import from `chat-completions.ts`, `openai.ts`, `responses.ts`
+- `shouldUseMaxCompletionTokens` / `mapMaxTokensForUpstream` kept in `routing.ts` (still
+  referenced by `gemini.ts` dead code `handleGeminiToOpenAIMode` and routing unit tests)
+
+**`before_conversion` hook wired (Step 5):**
+- `messages.ts`: wired before `convertClaudeToOpenAIRequest`; result merged back to `claudeRequest` via `Object.assign`
+- `openai.ts`: wired before the Gemini/Claude format-detection branch; `requestBody` changed `const` → `let`
+- `responses.ts/handleAsCompletions`: wired before `convertResponsesToChatCompletions`; `effectiveBody` changed `const` → `let`
+- `gemini.ts/handleGeminiGenerateContentRequest`: wired before `isNativeGeminiRequest` branch; `requestBody` changed `const` → `let`
+- All wired with `upstreamMode` from route context and fast-path guard `if (route)`
+
+**Remaining hooks (`after_upstream`, `endpoint_writeout` body):** deferred — no transforms
+currently declare ops for these hooks; infrastructure will be added when first needed.
+Header transforms for `endpoint_writeout` are already wired centrally in `index.ts`.
+
+**Dead code removal and routing.ts cleanup (Step 7):**
+- Removed `handleGeminiToOpenAIMode`, `handleOpenAIStreamingToClaude`, `handleGeminiToGeminiMode`
+  dead functions from `gemini.ts` (~265 lines)
+- Removed `mapMaxTokensForUpstream` and `shouldUseMaxCompletionTokens` from `routing.ts` —
+  behavior is now fully owned by the transform engine
+- Removed `convertClaudeToOpenAIRequest` import from `gemini.ts` (was only used in dead code)
+- Updated `routing.test.ts` to remove tests for the deleted functions
+
+**`deepseek_compat` and `minimax_compat` transform sets (Step 8):**
+- Added `[transforms.deepseek_compat]` to `proxy_config.toml`:
+  - `endpoint_readin.builtins = ["lowercase_tool_schema_types"]` — normalizes uppercase JSON-Schema
+    types (e.g. `"STRING"` → `"string"`) from antigravity SDK before routing
+  - `before_upstream.builtins = ["recover_tool_message_name"]` — fills missing `name` in `tool`
+    messages from matching prior `assistant.tool_calls[].function.name` by `tool_call_id`
+  - `before_upstream.ops`: `map_value` `messages[role=assistant].content "" → null` when
+    `tool_calls` sibling present
+  - Wired to `deepseek-v4-comp` entry via `transforms = "deepseek_compat"`
+- Added `[transforms.minimax_compat]` to `proxy_config.toml`:
+  - `before_upstream.ops`: same `map_value` null-content patch
+  - Wired to `max-m3-comp` and `minimax-m2.7-high` entries
+- Extended inline-table model entry parser (`config-loader.ts`) to read `transforms` field —
+  stores as `entry[4]` (comma-separated set names), which `resolveModelRouteFromEntry` already
+  reads at index 4
+- Extended `serializeModelEntry` to emit `transforms` field on round-trip (used by
+  `dumpProxyConfigToml`)
+
+**`after_upstream` hook fully wired (Step 9):**
+- Added `applyAfterUpstream(response, ctx)` to `request-transform.ts` — buffers the upstream
+  response body, applies `after_upstream` ops, and returns a new `Response`. Non-JSON bodies
+  (e.g. SSE streams) are passed through unchanged. Fast-path exits immediately when no
+  `after_upstream` transforms are active.
+- Wired in all handler fetch sites (12 total):
+  - `openai.ts`: `forwardCompletionsAsOpenAIResponses` + main `handleOpenAIRequest` fetch
+  - `claude.ts`: `handleClaudeRequest` main fetch
+  - `messages.ts`: all four fetch sites (openai-passthrough → openai-responses,
+    openai-passthrough → openai-completions, claude-upstream → openai-responses,
+    claude-upstream → openai-completions)
+  - `responses.ts`: `handleAsCompletions`, `handleAsPassthrough`,
+    `handleResponsesInputTokensRequest` (both paths), `handleResponsesCompactRequest` (both paths)
+  - `chat-completions.ts`: anthropic-messages path, openai-responses path, direct passthrough
+  - `gemini.ts`: `handleGeminiInteractionsRequest`, `handleGeminiGenerateContentRequest`
+- Removed `fillMissingToolMessageNames` unconditional call from `handleOpenAIRequest` — this
+  function duplicated the `recover_tool_message_name` built-in now applied selectively via
+  `deepseek_compat`. Other routes no longer get the transform applied unnecessarily.
+
+**Tests**: 136 unit tests, all passing (+6 new `applyAfterUpstream` tests in
+`tests/unit/request-transform.test.ts`: fast-path identity, empty-transforms fast-path,
+active remove op, active rename op, status preservation, non-JSON SSE passthrough)
+
 ### Fix: TUI model test — inline-table config resolution, fallback mode, and DeepSeek thinking rejection
 
 Three fixes to the TUI's "test model" feature in `src/tui.ts` that improve coverage
