@@ -38,14 +38,15 @@
  *
  *   // or export API_KEY=a-valid-key for all of them.
  *
- *   CLI selection semantics (three args: model agent task):
- *     - no args                                -> all models x all agents x all tasks
- *     - "0 0 0"                                -> same as no args
- *     - M A T with M,A,T > 0                   -> MODELS[(M-1) % MODELS.length],
+ *   CLI selection semantics:
+ *     - no args                                -> list available models, agents, and tasks; do not run
+ *     - --all / -a / --run / -r               -> run all models x all agents x all tasks
+ *     - M A T (three numeric args)             -> run selected subset; 1-based with wrap
+ *         "0 0 0"                              -> same as --all
+ *         M A T with M,A,T > 0                -> MODELS[(M-1) % MODELS.length],
  *                                                AGENTS[(A-1) % AGENTS.length],
  *                                                USER_TASKS[(T-1) % USER_TASKS.length]
- *                                                (1-based; out-of-range values wrap with %)
- *     - 0 in any position                      -> that dimension runs all entries
+ *         0 in any position                   -> that dimension runs all entries
  *                                                (e.g. "0 1 0" = all models, first agent, all tasks)
  *
  *   Agent order:  1=Codex, 2=Claude, 3=Gemini, 4=Pi, 5=OpenCode
@@ -813,32 +814,41 @@ async function main() {
     console.log("Could not fetch models from proxy; using fallback list.");
   }
 
-  // CLI selection (three args: model agent task):
-  //   no args            -> run all models x all agents x all tasks
-  //   "0 0 0"            -> same as no args
-  //   M A T with all>0   -> pick MODELS[(M-1) % MODELS.length],
-  //                          AGENTS[(A-1) % AGENTS.length],
-  //                          USER_TASKS[(T-1) % USER_TASKS.length]
-  //                          (1-based; values beyond array size wrap with %)
-  //   0 in any position  -> that dimension runs all entries
+  // CLI selection:
+  //   no args                  -> list available models, agents, tasks; do not run
+  //   --all / -a / --run / -r  -> run all models x all agents x all tasks
+  //   M A T (three numbers)    -> run selected subset (1-based, 0 = all in that dimension)
   const argv = process.argv.slice(2);
+  const runFlag = argv.length > 0 && ["--all", "-a", "--run", "-r"].includes(argv[0]);
+  const numericArgs = argv.length >= 3 && argv.slice(0, 3).every(a => /^-?\d+$/.test(a));
+
+  if (argv.length === 0) {
+    // List mode — no execution
+    console.log("Available models:");
+    MODELS.forEach((m, i) => console.log(`  ${i + 1}. ${m}`));
+    console.log("\nAvailable agents:");
+    AGENTS.forEach((ag, i) => console.log(`  ${i + 1}. ${ag.name}`));
+    console.log("\nAvailable tasks:");
+    USER_TASKS.forEach((t, i) => console.log(`  ${i + 1}. ${t.name}`));
+    console.log("\nRun with --all / -a / --run / -r to execute, or pass M A T (three numbers) to select a subset:");
+    console.log("  M = model index (1-based), A = agent index, T = task index; 0 means all in that dimension.");
+    return;
+  }
+
   let modelsToRun: string[] = MODELS;
   let agentsToRun = AGENTS;
   let tasksToRun = USER_TASKS;
-  if (argv.length >= 3) {
+
+  if (numericArgs) {
     const m = parseInt(argv[0], 10);
     const a = parseInt(argv[1], 10);
     const t = parseInt(argv[2], 10);
-    if (Number.isFinite(m) && m > 0) {
-      modelsToRun = [MODELS[(m - 1) % MODELS.length]];
-    }
-    if (Number.isFinite(a) && a > 0) {
-      agentsToRun = [AGENTS[(a - 1) % AGENTS.length]];
-    }
-    if (Number.isFinite(t) && t > 0) {
-      tasksToRun = [USER_TASKS[(t - 1) % USER_TASKS.length]];
-    }
+    if (Number.isFinite(m) && m > 0) modelsToRun = [MODELS[(m - 1) % MODELS.length]];
+    if (Number.isFinite(a) && a > 0) agentsToRun = [AGENTS[(a - 1) % AGENTS.length]];
+    if (Number.isFinite(t) && t > 0) tasksToRun = [USER_TASKS[(t - 1) % USER_TASKS.length]];
   }
+  // runFlag uses all defaults (all models x all agents x all tasks)
+
   console.log(
     `Selection: ${modelsToRun.length} model(s) x ${agentsToRun.length} agent(s) x ${tasksToRun.length} task(s)`,
   );
@@ -852,7 +862,6 @@ async function main() {
         `\n=========== Task: ${task.name} | Model: ${model} ===========`,
       );
       const prompt = task.prompt;
-
       for (const agent of agentsToRun) {
         await agent.run(prompt, model);
       }

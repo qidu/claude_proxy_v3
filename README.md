@@ -768,6 +768,48 @@ environment; on Cloudflare Workers they come from `[vars]` in `wrangler.toml`.
 |---|---|---|
 | `record_url` | `"http://127.0.0.1:8080/model-usage"` | Optional HTTP collector. When set, the proxy POSTs per-request usage records with `request_id`, `endpoint`, raw `user_key`, `model`, and token counters (`input_tokens`, `cached_tokens`, `cache_written_tokens`, `output_tokens`, `total_tokens`). |
 
+**`[transforms.*]` and `[transform_defaults]` config fields**
+
+Per-model/per-upstream request and response rewriting. Each named set is declared as
+`[transforms.<name>]` and referenced from model entries via `transforms = "set_name"` (or a
+comma-separated list). See `proxy_config.toml_example` for full syntax and `docs/design_request_transform_hooks.md` for the design.
+
+**Default transforms** — the proxy ships with `max_tokens_rename` wired as a mode-level
+default for `openai-completions` and `openai-responses` via `[transform_defaults]`. This
+renames `max_tokens` → `max_completion_tokens` automatically for every route on those modes,
+which is required by most modern OpenAI-compatible upstreams (DeepSeek, MiniMax, etc.).
+To opt a specific model entry out, attach `transforms = "no_max_completion_tokens"` to that
+entry (renames `max_completion_tokens` back to `max_tokens`).
+
+| Field | Values | Purpose |
+|---|---|---|
+| `schema` | `openai-completions` \| `anthropic-messages` \| `openai-responses` \| `gemini-generatecontent` | Schema the op paths resolve against. Required per set. |
+| `endpoint_readin.builtins` / `.ops` | see below | Runs after inbound parse, before routing. Client schema. |
+| `before_conversion.builtins` / `.ops` | see below | Runs in-handler after routing, before format conversion. Client schema. |
+| `before_upstream.builtins` / `.ops` / `.headers` | see below | Runs just before the upstream fetch. Upstream schema. **Primary A/B seam.** |
+| `after_upstream.builtins` / `.ops` | see below | Runs after upstream responds, before response conversion. |
+| `endpoint_writeout.builtins` / `.ops` / `.headers` | see below | Runs before the client response is written. Client response schema. |
+
+**Tier-1 ops** (generic field rewrites, declared under a hook's `.ops` array):
+
+| Op | Effect |
+|---|---|
+| `{op="rename", path="max_tokens", to="max_completion_tokens"}` | Rename a field, preserving its value. |
+| `{op="set", path="reasoning_effort", value="medium"}` | Force a field to a fixed value. |
+| `{op="default", path="stream", value=false}` | Set a field only when absent. |
+| `{op="remove", path="output_config"}` | Delete a field. |
+| `{op="map_value", path="messages[role=assistant].content", when_sibling="tool_calls", from="", to=null}` | Replace a specific value (optional `when_sibling` guard). |
+
+Paths: bare field name for top-level (`max_tokens`); `messages[].field` for all messages; `messages[role=X].field` for role-filtered; `$response.field` for response-body fields (writeout/after_upstream hooks).
+
+**Tier-2 builtins** (deep/cross-message logic, declared under a hook's `.builtins` array):
+
+| Builtin | What it does |
+|---|---|
+| `lowercase_tool_schema_types` | Recursively lowercases every `type` value in `tools[].function.parameters` / `tools[].input_schema`. Required for strict upstreams (e.g. DeepSeek) when the client sends uppercase `"STRING"`. |
+| `recover_tool_message_name` | Backfills missing `name` on `role:"tool"` messages by looking up the matching `tool_call_id` in the preceding assistant turn's `tool_calls`. |
+| `inject_missing_tool_results` | Synthesizes placeholder `tool_result` blocks for any `tool_use.id` that has no matching `tool_result` in the next user message. Required by DeepSeek's Anthropic-format endpoint. |
+
 **Core / server**
 
 | Variable | Default | Purpose |
@@ -801,7 +843,7 @@ entry can set `base_url = "sdk://chatjimmy.ai/api"` and keep the appropriate
 | `UPSTREAM_BODY_TIMEOUT_MS` | `600000` | Upstream body timeout (also judge/synth timeout in fusion) |
 | `MODELS_CACHE_TTL` | unset | Seconds to cache the upstream `/v1/models` list |
 | `JSON_STRINGIFY_METHOD` | `json` | Serialization method for outgoing bodies |
-| `DEV_PASS_THROUGH` | `false` | `true` enables `/v1/chat/completions`. The proxy resolves the request model first; `openai-completions` routes forward the Chat Completions body as-is, while `openai-responses` routes convert it to Responses format and forward to `/v1/responses`, and `anthropic-messages` routes convert the body to Claude Messages format and forward to `/v1/messages`. Before forwarding, the proxy applies these normalization steps: (1) JSON Schema `type` strings in tool parameters are lowercased (`"STRING"` → `"string"`) for strict upstreams like DeepSeek; (2) assistant messages with `tool_calls` and `content: ""` are rewritten to `content: null` per the OpenAI spec; (3) missing `name` fields on `role: "tool"` messages are recovered from the preceding assistant turn's `tool_calls` index by `tool_call_id`. **Notice:** the caller's `Authorization` / `x-api-key` / `x-goog-api-key` is forwarded to the upstream as-is — the proxy does **not** perform a local credential check, so the upstream directly authenticates the request. A valid upstream key returns 200; an invalid one returns the upstream's 401. Do not use in production. |
+| `DEV_PASS_THROUGH` | `false` | `true` enables `/v1/chat/completions`. The proxy resolves the request model first; `openai-completions` routes forward the Chat Completions body as-is, while `openai-responses` routes convert it to Responses format and forward to `/v1/responses`, and `anthropic-messages` routes convert the body to Claude Messages format and forward to `/v1/messages`. Before forwarding, the configured transform sets are applied (see `[transforms.*]` below). **Notice:** the caller's `Authorization` / `x-api-key` / `x-goog-api-key` is forwarded to the upstream as-is — the proxy does **not** perform a local credential check, so the upstream directly authenticates the request. A valid upstream key returns 200; an invalid one returns the upstream's 401. Do not use in production. |
 | `CONVERSATION` | unset | `true` enables experimental in-process stateful conversation cache |
 | `IMAGE_BLOCK_DATA_MAX_SIZE` | `10485760` | Max inline image bytes accepted |
 | `ALLOWED_HOSTS` | `127.0.0.1,localhost` | SSRF allowlist for dynamic per-request upstream hosts |
@@ -892,7 +934,7 @@ The [`docs/`](./docs/) folder has deep-dives on specific topics:
 - **Thinking / reasoning** — `docs/claude-extended-thinking.md`, `docs/claude-adaptive-thinking.md`
 - **API formats** — `docs/claude-api-reference.md`, `docs/gemini-api-reference.md`, `docs/openai-api-reference.md`
 - **Fusion & composite design** — `docs/design_fusion_composite_alias.md`
-- **Request/response transform hooks (proposal)** — `docs/design_request_transform_hooks.md` — per-model/per-upstream field & header rewriting via 5 lifecycle hooks
+- **Request/response transform hooks** — `docs/design_request_transform_hooks.md` (design) + `docs/implementation_of_request_transform_hooks.md` (implementation log) — per-model/per-upstream field & header rewriting via 5 lifecycle hooks; `[transforms.*]` / `[transform_defaults]` config
 
 ## 🤝 Contributing
 

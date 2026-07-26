@@ -352,6 +352,71 @@ base_url = "https://openrouter.ai/api"
 # schema = "anthropic-messages"
 # before_upstream.builtins = ["inject_missing_tool_results"]
 
+# ---------------------------------------------------------------------------
+# Real-world transform sets (used in proxy_config.toml for DeepSeek / MiniMax)
+# ---------------------------------------------------------------------------
+
+# DeepSeek openai-completions compat:
+#   - lowercase tool schema types (client sends uppercase "STRING" etc.)
+#   - recover missing `name` on tool-result messages from prior assistant turn
+#   - rewrite assistant content "" → null when tool_calls present
+# [transforms.deepseek_compat]
+# schema = "openai-completions"
+# endpoint_readin.builtins = ["lowercase_tool_schema_types"]
+# before_upstream.builtins = ["recover_tool_message_name"]
+# before_upstream.ops = [
+#   {op = "map_value", path = "messages[role=assistant].content", when_sibling = "tool_calls", from = "", to = null},
+# ]
+
+# DeepSeek anthropic-messages compat:
+#   - synthesize placeholder tool_result blocks for unmatched tool_use ids
+#     (DeepSeek enforces that every tool_use.id has a matching tool_result)
+# [transforms.deepseek_v4_anthropic_compat]
+# schema = "anthropic-messages"
+# before_upstream.builtins = ["inject_missing_tool_results"]
+
+# MiniMax openai-completions compat:
+#   - rewrite assistant content "" → null when tool_calls present
+# [transforms.minimax_compat]
+# schema = "openai-completions"
+# before_upstream.ops = [
+#   {op = "map_value", path = "messages[role=assistant].content", when_sibling = "tool_calls", from = "", to = null},
+# ]
+
+# DEFAULT TRANSFORM — applied automatically to every openai-completions and
+# openai-responses route. Renames max_tokens → max_completion_tokens, which is
+# required by most modern OpenAI-compatible upstreams (DeepSeek, MiniMax, etc.).
+# To opt a specific model entry OUT, attach the no_max_completion_tokens set to
+# that entry's `transforms` field (e.g. for api.qnaigc.com which keeps the old name).
+[transforms.max_tokens_rename]
+schema = "openai-completions"
+before_upstream.ops = [
+  {op = "rename", path = "max_tokens", to = "max_completion_tokens"},
+]
+
+# Opt-out set — restores the original max_tokens name for upstreams that reject
+# max_completion_tokens. Attach via `transforms = "no_max_completion_tokens"` on
+# any model entry that needs it.
+# [transforms.no_max_completion_tokens]
+# schema = "openai-completions"
+# before_upstream.ops = [
+#   {op = "rename", path = "max_completion_tokens", to = "max_tokens"},
+# ]
+
+# DEFAULT — wire max_tokens_rename to every openai-completions and openai-responses
+# route automatically. Resolution order: mode-defaults → per-entry transforms, so a
+# per-entry no_max_completion_tokens set overrides this default for that model.
+[transform_defaults]
+openai-completions = ["max_tokens_rename"]
+openai-responses   = ["max_tokens_rename"]
+
+# Attach multiple transforms to a model entry (applied left-to-right):
+# In [models.free]:
+#   deepseek-v4-comp = {target = "deepseek-v4-flash", base_url = "...", api_key = "...", transforms = "deepseek_compat"}
+#   deepseek-v4-auth = {target = "deepseek-v4-flash", base_url = "...", api_key = "...", mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat"}
+#   max-m3-comp      = {target = "MiniMax-M3", base_url = "...", api_key = "...", transforms = "minimax_compat"}
+#   qnaigc-gpt       = {target = "gpt-x", base_url = "https://api.qnaigc.com", api_key = "...", transforms = "no_max_completion_tokens"}
+
 # Privacy filter — redacts PII and hash-shaped secrets (API keys / tokens) from
 # outgoing LLM request text and restores them on the response. Two modes:
 #

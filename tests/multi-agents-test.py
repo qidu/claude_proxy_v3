@@ -32,21 +32,23 @@ Usage:
     export OPENAI_API_KEY=$API_KEY
     export GEMINI_API_KEY=$API_KEY
 
-    python tests/multi-agents-test.py                 # all models x agents x tasks
+    python tests/multi-agents-test.py                 # list available models, agents, tasks (no run)
+    python tests/multi-agents-test.py --all           # run all models x agents x tasks
+    python tests/multi-agents-test.py -r              # same as --all
     python tests/multi-agents-test.py 1 1 1           # first model, first agent, first task
     python tests/multi-agents-test.py 2 3 1           # 2nd model, 3rd agent, 1st task
     python tests/multi-agents-test.py 0 0 2           # all models, all agents, 2nd task
     python tests/multi-agents-test.py 9 2 0           # MODELS[(9-1) % len], 2nd agent, all tasks
 
-    CLI selection semantics (three args: model agent task):
-      no args                                -> all models x all agents x all tasks
-      "0 0 0"                                -> same as no args
-      M A T with M,A,T > 0                   -> MODELS[(M-1) % MODELS.length],
-                                                AGENTS[(A-1) % AGENTS.length],
-                                                USER_TASKS[(T-1) % USER_TASKS.length]
-                                                (1-based; out-of-range values wrap with %)
-      0 in any position                      -> that dimension runs all entries
-                                                (e.g. "0 1 0" = all models, first agent, all tasks)
+    CLI selection semantics:
+      no args                                -> list available models, agents, and tasks; do not run
+      --all / -a / --run / -r               -> run all models x all agents x all tasks
+      M A T (three numeric args)             -> run selected subset; 1-based with wrap
+        "0 0 0"                              -> same as --all
+        M A T with M,A,T > 0                -> MODELS[(M-1) % len], AGENTS[(A-1) % len],
+                                               USER_TASKS[(T-1) % len]
+        0 in any position                   -> that dimension runs all entries
+                                               (e.g. "0 1 0" = all models, first agent, all tasks)
 
     Agent order:  1=Antigravity, 2=LangGraph, 3=CrewAI
 
@@ -556,15 +558,29 @@ AGENTS: list[dict[str, AgentRunner | AsyncAgentRunner | str]] = [
 # Main
 # ---------------------------------------------------------------------------
 
-def _select(argv: list[str]) -> tuple[list[str], list[dict[str, Any]], list[dict[str, str]]]:
-    """Apply the CLI `model agent task` selection.
+_RUN_FLAGS = {"--all", "-a", "--run", "-r"}
 
-    Mirrors the TS file: 1-based picks with wrap; 0 means "all".
+
+def _select(
+    argv: list[str],
+) -> tuple[bool, list[str], list[dict[str, Any]], list[dict[str, str]]]:
+    """Parse CLI args. Returns (should_run, models, agents, tasks).
+
+    no args        -> should_run=False (list mode)
+    --all/-a/--run/-r -> should_run=True, all dimensions
+    M A T          -> should_run=True, 1-based subset (0 = all in that dimension)
     """
     models_to_run: list[str] = list(MODELS)
     agents_to_run: list[dict[str, Any]] = list(AGENTS)
     tasks_to_run: list[dict[str, str]] = list(USER_TASKS)
-    if len(argv) >= 3:
+
+    if not argv:
+        return False, models_to_run, agents_to_run, tasks_to_run
+
+    if argv[0] in _RUN_FLAGS:
+        return True, models_to_run, agents_to_run, tasks_to_run
+
+    if len(argv) >= 3 and all(x.lstrip("-").isdigit() for x in argv[:3]):
         m, a, t = (int(x, 10) for x in argv[:3])
         if m > 0:
             models_to_run = [MODELS[(m - 1) % len(MODELS)]]
@@ -572,7 +588,12 @@ def _select(argv: list[str]) -> tuple[list[str], list[dict[str, Any]], list[dict
             agents_to_run = [AGENTS[(a - 1) % len(AGENTS)]]
         if t > 0:
             tasks_to_run = [USER_TASKS[(t - 1) % len(USER_TASKS)]]
-    return models_to_run, agents_to_run, tasks_to_run
+        return True, models_to_run, agents_to_run, tasks_to_run
+
+    # Unrecognised args — treat as list mode and warn
+    print(f"Unrecognised arguments: {argv!r}")
+    print("Use --all / -a / --run / -r to run, or M A T (three numbers: model agent task, 1-based, 0=all).")
+    return False, models_to_run, agents_to_run, tasks_to_run
 
 
 async def _run_async(agent: dict[str, Any], prompt: str, model: str) -> None:
@@ -589,7 +610,25 @@ async def _run_async(agent: dict[str, Any], prompt: str, model: str) -> None:
 
 
 async def main() -> None:
-    models_to_run, agents_to_run, tasks_to_run = _select(sys.argv[1:])
+    should_run, models_to_run, agents_to_run, tasks_to_run = _select(sys.argv[1:])
+
+    if not should_run:
+        print("Available models:")
+        for i, m in enumerate(MODELS, 1):
+            print(f"  {i}. {m}")
+        print("\nAvailable agents:")
+        for i, ag in enumerate(AGENTS, 1):
+            print(f"  {i}. {ag['name']}")
+        print("\nAvailable tasks:")
+        for i, t in enumerate(USER_TASKS, 1):
+            print(f"  {i}. {t['name']}")
+        print("\nRun with --all / -a / --run / -r to execute, or pass M A T (three numbers) to select a subset:")
+        print("  M = model index (1-based), A = agent index, T = task index; 0 means all in that dimension.")
+        print("\nVenv setup:")
+        print("  .venv          — Antigravity, LangGraph  (pip install google-antigravity langgraph langchain-openai)")
+        print("  .venv-crewai   — CrewAI                  (pip install crewai)")
+        return
+
     print(
         f"Selection: {len(models_to_run)} model(s) x "
         f"{len(agents_to_run)} agent(s) x {len(tasks_to_run)} task(s)"

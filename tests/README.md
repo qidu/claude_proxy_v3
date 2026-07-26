@@ -1,8 +1,49 @@
 # Tests
 
-## Coverage testcases prerequisite
+## Test order
 
-Coverage test cases live in `../testcases` and must be run from the project root through the custom runner. Use `node run-tests.js --all` for all suites, or `node run-tests.js <index>` for selected suites. Bare `node run-tests.js` prints help only.
+Run tests in this order — each tier catches different classes of bugs:
+
+### 1. Unit tests — `tests/unit/*.test.ts`
+
+Fast, no proxy required. Covers the transform engine, config parsing, routing logic, and converters.
+
+```bash
+npm run test:unit           # runs tsx --test tests/unit/**/*.test.ts
+```
+
+### 2. Integration / coverage testcases — `testcases/` via `run-tests.js`
+
+Scenario-level tests that spin up an isolated proxy process per suite. Run from the project root.
+
+```bash
+node run-tests.js           # show help
+node run-tests.js --list    # list all suites
+node run-tests.js --all     # run every suite
+node run-tests.js 5         # run suite index 5 only
+node run-tests.js 0,3       # run suites 0 and 3
+```
+
+### 3. Multi-agent SDK tests — `tests/multi-agents-test.ts` / `.py`
+
+End-to-end: real agent SDKs talking to a running proxy. Requires the proxy to be started first.
+
+```bash
+# Start proxy (separate terminal)
+PORT=7777 DEV_NO_KEY=true DEV_PASS_THROUGH=true npx tsx src/index.ts
+
+# TypeScript agents (Codex / Claude / Gemini / Pi / OpenCode)
+npx tsx tests/multi-agents-test.ts              # list models, agents, tasks
+npx tsx tests/multi-agents-test.ts --all        # run all
+npx tsx tests/multi-agents-test.ts 0 2 1        # all models, Claude agent, first task
+
+# Python agents (.venv → Antigravity + LangGraph; .venv-crewai → CrewAI)
+.venv/bin/python tests/multi-agents-test.py              # list
+.venv/bin/python tests/multi-agents-test.py --all        # run all
+.venv-crewai/bin/python tests/multi-agents-test.py --all # CrewAI only (Python ≤ 3.13)
+```
+
+---
 
 ## Multi-Agent SDK Test
 
@@ -52,12 +93,15 @@ export API_KEY="sk-a-valid-key"
 # export PI_API_KEY="$API_KEY"
 # export OPENCODE_API_KEY="$API_KEY"
 
-# Run the full sweep
+# No args — list available models, agents, and tasks; do not run
 npx tsx tests/multi-agents-test.ts
 
-# Or pick (M A T): Mth model, Ath agent, Tth task (1-based, wraps with %)
+# Run the full sweep
+npx tsx tests/multi-agents-test.ts --all     # or -a / --run / -r
+
+# Pick a subset: M A T (model, agent, task — 1-based, wraps with %; 0 = all in that dimension)
 npx tsx tests/multi-agents-test.ts 1 1 1     # first model, first agent, first task
-npx tsx tests/multi-agents-test.ts 9 4 0     # last model, Pi agent, all tasks
+npx tsx tests/multi-agents-test.ts 9 4 0     # 9th model (wraps), Pi agent, all tasks
 npx tsx tests/multi-agents-test.ts 0 4 0     # all models, Pi agent, all tasks
 ```
 
@@ -123,7 +167,7 @@ For a sample run (1 model × all agents × all tasks), see `./logs/results/test_
 
 ### `multi-agents-test.py`
 
-Python counterpart of `multi-agents-test.ts`. Runs three Python-native agent SDKs against the same local proxy, exercising the same `MODELS` list and `USER_TASKS` set with the same CLI selection semantics (`M A T`, 1-based with `%` wrap; `0` means "all").
+Python counterpart of `multi-agents-test.ts`. Runs three Python-native agent SDKs against the same local proxy, exercising the same `MODELS` list and `USER_TASKS` set with the same CLI selection semantics.
 
 Agent order (used by the CLI `agent` selector):
 
@@ -154,14 +198,16 @@ pip install crewai pydantic
 To run CrewAI:
 
 ```bash
-.venv-crewai/bin/python tests/multi-agents-test.py 1 3 1   # model 1, agent 3 (CrewAI), task 1
+.venv-crewai/bin/python tests/multi-agents-test.py --all          # all models × tasks
+.venv-crewai/bin/python tests/multi-agents-test.py 1 3 1          # model 1, agent 3 (CrewAI), task 1
 ```
 
 To run Antigravity or LangGraph, use the main venv:
 
 ```bash
-.venv/bin/python tests/multi-agents-test.py 1 1 1         # model 1, agent 1 (Antigravity), task 1
-.venv/bin/python tests/multi-agents-test.py 1 2 1         # model 1, agent 2 (LangGraph),  task 1
+.venv/bin/python tests/multi-agents-test.py --all                 # all models × tasks
+.venv/bin/python tests/multi-agents-test.py 1 1 1                 # model 1, agent 1 (Antigravity), task 1
+.venv/bin/python tests/multi-agents-test.py 1 2 1                 # model 1, agent 2 (LangGraph),  task 1
 ```
 
 If you don't need CrewAI, a single `.venv` (3.13 or 3.14) with `pip install google-antigravity langgraph langchain langchain-openai langchain-core pydantic` is enough.
@@ -204,12 +250,21 @@ python tests/multi-agents-test.py 1 1 1
 The SDK is expected to call `/v1beta/models/max-m3:generateContent` through the proxy. `GEMINI_API_KEY` is preferred over `API_KEY` for this mode.
 
 
-python tests/multi-agents-test.py
+```bash
+# No args — list available models, agents, and tasks; do not run
+# .venv for Antigravity + LangGraph; .venv-crewai for CrewAI
+.venv/bin/python tests/multi-agents-test.py
 
-# Or pick (M A T): Mth model, Ath agent, Tth task (1-based, wraps with %)
-python tests/multi-agents-test.py 1 1 1     # first model, first agent (Antigravity), first task
-python tests/multi-agents-test.py 9 3 0     # last model, CrewAI, all tasks
-python tests/multi-agents-test.py 0 2 0     # all models, LangGraph, all tasks
+# Run the full sweep
+.venv/bin/python tests/multi-agents-test.py --all     # or -a / --run / -r
+
+# Pick a subset: M A T (model, agent, task — 1-based, wraps with %; 0 = all in that dimension)
+.venv/bin/python tests/multi-agents-test.py 1 1 1     # first model, first agent (Antigravity), first task
+.venv/bin/python tests/multi-agents-test.py 9 3 0     # 9th model (wraps), CrewAI, all tasks
+.venv/bin/python tests/multi-agents-test.py 0 2 0     # all models, LangGraph, all tasks
+
+# CrewAI requires its own venv (Python ≤ 3.13)
+.venv-crewai/bin/python tests/multi-agents-test.py 1 3 1   # model 1, CrewAI, task 1
 ```
 
 By default all 3 agents are enabled. To run a subset, comment the entries in the `AGENTS` list at the bottom of the script.
