@@ -413,7 +413,7 @@ openai-responses   = ["max_tokens_rename"]
 # Attach multiple transforms to a model entry (applied left-to-right):
 # In [models.free]:
 #   deepseek-v4-comp = {target = "deepseek-v4-flash", base_url = "...", api_key = "...", transforms = "deepseek_compat"}
-#   deepseek-v4-auth = {target = "deepseek-v4-flash", base_url = "...", api_key = "...", mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat"}
+#   deepseek-v4-anth = {target = "deepseek-v4-flash", base_url = "...", api_key = "...", mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat"}
 #   max-m3-comp      = {target = "MiniMax-M3", base_url = "...", api_key = "...", transforms = "minimax_compat"}
 #   qnaigc-gpt       = {target = "gpt-x", base_url = "https://api.qnaigc.com", api_key = "...", transforms = "no_max_completion_tokens"}
 

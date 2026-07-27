@@ -9,7 +9,7 @@ Newest merged work, reverse-chronological.
 
 ### Fix: thinking/reasoning round-trip for streaming, non-streaming, and Gemini paths
 
-Surfaced by multi-agent live run (`tests/multi-agents-test.ts`, Claude + Gemini agents × `deepseek-v4-comp` / `deepseek-v4-auth`). Three converter bugs caused thinking-mode responses to drop `reasoning_content` on the way back to the client, breaking subsequent multi-turn requests that require the reasoning to be passed back.
+Surfaced by multi-agent live run (`tests/multi-agents-test.ts`, Claude + Gemini agents × `deepseek-v4-comp` / `deepseek-v4-anth`). Three converter bugs caused thinking-mode responses to drop `reasoning_content` on the way back to the client, breaking subsequent multi-turn requests that require the reasoning to be passed back.
 
 **Bug 1 — `src/converters/streaming.ts`: `reasoning_content` gated behind `includeThinking` flag**
 
@@ -79,7 +79,7 @@ argument.
 
 ### Fix: Anthropic tool_use/tool_result pairing injection (Step 15)
 
-Multi-agent live test (`tests/multi-agents-test.ts`, Codex agent × `deepseek-v4-auth`) surfaced:
+Multi-agent live test (`tests/multi-agents-test.ts`, Codex agent × `deepseek-v4-anth`) surfaced:
 
 ```
 messages.10: `tool_use` ids were found without `tool_result` blocks immediately after: ...
@@ -111,7 +111,7 @@ Runs a single forward pass over the `messages` array. Handles three patterns
 3. **Missing tool_result**: after the above, if any `tool_use.id` has no
    matching `tool_result`, we synthesize a placeholder block with `content: ''`.
 
-Bound to `deepseek-v4-auth` via a new `deepseek_v4_anthropic_compat` transform set
+Bound to `deepseek-v4-anth` via a new `deepseek_v4_anthropic_compat` transform set
 (`schema = "anthropic-messages"`). The schema-anchor gates application to
 anthropic-messages routes only.
 
@@ -127,7 +127,7 @@ text-next insertion, string-content insertion, multiple missing ids,
 partial synthesis, all-present no-op, no-tool-use no-op, assistant-not-user no-op,
 merge consecutive pure-tool messages, merge + synthesize, split-assistant reorder.
 
-**Verified** — `tests/multi-agents-test.ts 0 0 2` (Codex × `deepseek-v4-auth`):
+**Verified** — `tests/multi-agents-test.ts 0 0 2` (Codex × `deepseek-v4-anth`):
 `tool_use ids were found without tool_result blocks` error no longer reproduces.
 All 400 errors remaining are unrelated (thinking round-trip — Step 14).
 
@@ -198,7 +198,7 @@ Multi-agent test (`tests/multi-agents-test.ts 0 0 2`): the prior
 the same multi-turn shape that triggered it before the fix. Remaining
 failures in that run are separate, pre-existing issues and are out of scope
 for this entry: Anthropic-format `tool_use`/`tool_result` mismatch on
-`deepseek-v4-auth` (different bug — Claude-format pairing invariant), agent
+`deepseek-v4-anth` (different bug — Claude-format pairing invariant), agent
 SDK package install errors (`@earendil-works/pi-agent-core` not on disk,
 `opencode` binary not on PATH), and Codex-on-`openai-responses` returning
 empty output for reasons unrelated to thinking content.
@@ -516,20 +516,20 @@ and unblock the test for compat-mode `anthropic-messages` upstreams like DeepSee
 
 **Root causes and fixes:**
 
-1. **`deepseek-v4-auth` and other inline-table model entries resolved to section-level defaults**
+1. **`deepseek-v4-anth` and other inline-table model entries resolved to section-level defaults**
    The TUI's `resolveModelTestConfig` recognized the array-form
    (`"model" = ["target", "base_url", "api_key", "mode"]`) and the bare section-default
    fallback, but silently fell through to section-level `upstream_mode`/`base_url`/`api_key`
    for the inline-table form
    (`"model" = {target = "...", base_url = "...", api_key = "...", mode = "..."}`) used
-   throughout `proxy_config.toml` for `deepseek-v4-auth`, `minimax-m2.7-high`,
-   `minimax-m3-anth`, `gemma-4-*`, and similar entries. The model test for `deepseek-v4-auth`
+   throughout `proxy_config.toml` for `deepseek-v4-anth`, `minimax-m2.7-high`,
+   `minimax-m3-anth`, `gemma-4-*`, and similar entries. The model test for `deepseek-v4-anth`
    therefore POSTed to `http://192.168.68.179:3000` (the `[models.free]` default) with
    `openai-completions` mode and no DeepSeek key, instead of the configured
    `https://api.deepseek.com/anthropic` with `anthropic-messages`.
    **Fix:** added an inline-table branch in `resolveModelTestConfig` that reads
    `target`/`base_url`/`api_key`/`mode` per entry with `typeof` guards, then falls back
-   to section/global defaults. `deepseek-v4-auth` now resolves to
+   to section/global defaults. `deepseek-v4-anth` now resolves to
    `upstreamMode="anthropic-messages"`, `targetUrl="https://api.deepseek.com/anthropic"`,
    `apiKey="sk-..."`, `directModel="deepseek-v4-flash"`.
    *Note: empty-string per-field values (e.g. `api_key = ""` in `codelite` and
@@ -591,7 +591,7 @@ All changes affect `anthropic-messages` and `openai-completions` upstream routes
 
 3. **`anthropic-messages` path sent model alias instead of resolved target name**
    In the `anthropic-messages` conversion branch, `modelId` (the original alias, e.g.
-   `deepseek-v4-auth`) was taking priority over `parsedBody.model` (the already-rewritten
+   `deepseek-v4-anth`) was taking priority over `parsedBody.model` (the already-rewritten
    target, e.g. `deepseek-v4-flash`). Claude rejected the alias name.
    **Fix:** priority is now `parsedBody.model || modelId || 'unknown'` — the rewritten
    body model always wins when present.

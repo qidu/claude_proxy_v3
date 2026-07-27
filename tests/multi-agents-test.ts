@@ -68,7 +68,7 @@ const WORK_DIR = "./tests/";
 
 const MODELS = [
   "deepseek-v4-comp",               // deepseek via openai-completions
-  "deepseek-v4-auth",               // deepseek via anthropic-messages
+  "deepseek-v4-anth",               // deepseek via anthropic-messages
   "max-m3-comp",                    // minimax via openai-completions
   "max-m3-anth",                    // minimax via anthropic-messages
 ];

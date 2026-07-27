@@ -299,7 +299,7 @@ For a sample run (1 model × all agents × all tasks), see `./logs/results/test_
 | CLI    | Model              | Upstream mode                                  | Chars  | Status |
 |--------|--------------------|------------------------------------------------|--------|--------|
 | `1 3 1`| `deepseek-v4-comp` | openai-completions → `api.deepseek.com`        | 16,569 | ✅     |
-| `2 3 1`| `deepseek-v4-auth` | anthropic-messages → `api.deepseek.com/anthropic` |  8,022 | ✅     |
+| `2 3 1`| `deepseek-v4-anth` | anthropic-messages → `api.deepseek.com/anthropic` |  8,022 | ✅     |
 | `3 3 1`| `max-m3-comp`      | openai-completions → `api.minimaxi.com`        | 22,985 | ✅     |
 | `4 3 1`| `max-m3-anth`      | anthropic-messages → `api.minimaxi.com/anthropic` | 14,782 | ✅     |
 

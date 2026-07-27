@@ -86,7 +86,7 @@ WORK_DIR = "./tests/"
 
 MODELS = [
     "deepseek-v4-comp",               # local test for endpoint '/v1/chat/completions'
-    "deepseek-v4-auth",               # local test for endpoint '/v1/messages'
+    "deepseek-v4-anth",               # local test for endpoint '/v1/messages'
     "max-m3-comp",                    # local test for endpoint '/v1/chat/completions'
     "max-m3-anth",                    # local test for endpoint '/v1/messages'
 #    "gpt-5.5",                        # gpt

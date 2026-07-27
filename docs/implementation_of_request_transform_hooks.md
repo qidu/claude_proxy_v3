@@ -261,7 +261,7 @@ Multi-agent run (`npx tsx tests/multi-agents-test.ts 0 0 2`) post-fix:
 - Residual failures observed in the same run are **separate, pre-existing
   bugs explicitly out of scope for this entry**:
   - Anthropic-format `tool_use`/`tool_result` pairing invariant on
-    `deepseek-v4-auth` (different bug — Claude-format pairing invariant,
+    `deepseek-v4-anth` (different bug — Claude-format pairing invariant,
     not a thinking-content issue). **Fixed in Step 15 below.**
   - Agent SDK package not on disk: `@earendil-works/pi-agent-core`.
   - CLI not on PATH: `opencode`.
@@ -273,7 +273,7 @@ Multi-agent run (`npx tsx tests/multi-agents-test.ts 0 0 2`) post-fix:
 ## Anthropic tool_use/tool_result pairing injection (Step 15)
 
 Surfaced by the same `tests/multi-agents-test.ts 0 0 2` run: Codex agent
-against `deepseek-v4-auth` failed with:
+against `deepseek-v4-anth` failed with:
 
 ```
 messages.10:`tool_use` ids were found without `tool_result` blocks
@@ -341,7 +341,7 @@ schema = "anthropic-messages"
 before_upstream.builtins = ["inject_missing_tool_results"]
 
 # in [models.free]:
-deepseek-v4-auth = { ..., mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat" }
+deepseek-v4-anth = { ..., mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat" }
 ```
 
 ### Tests
@@ -362,7 +362,7 @@ deepseek-v4-auth = { ..., mode = "anthropic-messages", transforms = "deepseek_v4
 
 ### Live verification
 
-`POST /v1/responses` with model `deepseek-v4-auth` and a 3-item input
+`POST /v1/responses` with model `deepseek-v4-anth` and a 3-item input
 containing a `function_call` item followed by a user message (no
 `function_call_output`) → **HTTP 200**. The proxy inserted a synthetic
 `tool_result` user message before the text user message; DeepSeek accepted
@@ -370,6 +370,6 @@ and returned a valid response.
 
 Multi-agent run `tests/multi-agents-test.ts 0 0 2` post-fix: the
 `tool_use ids were found without tool_result blocks` error no longer
-reproduces for Codex agent against `deepseek-v4-auth`. The fix required
+reproduces for Codex agent against `deepseek-v4-anth`. The fix required
 three iterations to handle all patterns the Codex SDK emits.
 
