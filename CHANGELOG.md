@@ -7,6 +7,70 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: Gemini-endpoint → `anthropic-messages` streaming — empty output, corrupted parallel tool calls, and cross-request buffer bleed
+
+Resolved a cascade of three interrelated bugs that prevented Gemini-endpoint clients
+(e.g. Antigravity `GeminiAPIEndpoint`) from completing multi-turn agentic tasks through
+an `anthropic-messages` upstream such as `deepseek-v4-auth` (DeepSeek's Anthropic-compatible
+endpoint). `max-m3-auth` (MiniMax) was unaffected because it doesn't emit reasoning-only
+turns or the multi-tool-call patterns that triggered these bugs.
+
+**Root causes and fixes:**
+
+1. **`thinking`-only turns produced empty output (`model output must contain either output
+   text or tool calls, these cannot both be empty`)**
+   DeepSeek reasoning models sometimes return a turn containing only a `thinking` block —
+   no `text`, no `tool_use`. `claudeJsonToSyntheticCompletions` (the non-streaming
+   Claude→OpenAI response converter) only read `text` and `tool_use` blocks, silently
+   dropping `thinking`, which produced `content: ""` and an empty Gemini response.
+   **Fix:** `claudeJsonToSyntheticCompletions` now collects `thinking` blocks and emits
+   them as `reasoning_content` on the synthetic completion message
+   (`src/handlers/openai.ts`), which the existing `convertOpenAIToGeminiGenerateContent`
+   converter already turns into a `{thought: true, text}` Gemini part. `claude-to-openai.ts`
+   and `openai-to-claude.ts` were updated symmetrically so `thinking` blocks round-trip
+   through the request side too (DeepSeek requires prior reasoning to be echoed back on
+   the next turn).
+
+2. **Parallel tool calls in one turn corrupted each other's arguments (`invalid_signature`
+   / `invalid_args` on essentially every tool)**
+   In `processAnthropicSSEBuffer`'s `content_block_stop` handler, the synthetic OpenAI-format
+   `tool_calls[0].index` was hardcoded to `0` regardless of the Anthropic content-block's
+   actual index. When DeepSeek returned multiple tool calls in one turn (blocks at index
+   1, 2, ...), all of them collided on index `0` in the downstream `geminiToolCallBuffer`,
+   concatenating different tools' argument JSON into one string and clobbering `name`.
+   **Fix:** use the real Anthropic block index (`parsed.index`) instead of a hardcoded `0`
+   (`src/handlers/openai.ts`). Additionally, Anthropic's `message_delta` (`stop_reason`)
+   event was handled directly and bypassed `processSSEBuffer`'s tool-call flush logic
+   entirely, so buffered tool calls from `content_block_stop` were never emitted at all
+   for `anthropic-messages` routes — `message_delta` now routes through
+   `processSSEBuffer` via a synthetic finish chunk so the flush fires correctly.
+
+3. **Concurrent streaming requests corrupted each other's tool-call/thinking state**
+   `anthropicToolBuffers`, `anthropicThinkingBuffers`, `thinkStreamBuffer`, and
+   `geminiToolCallBuffer` were module-level global `Map`/string variables shared across
+   *all* in-flight requests, incorrectly commented as "safe because JS is single-threaded."
+   Each is mutated inside an `async` SSE-reading loop with `await reader.read()`
+   suspension points, so concurrent streaming requests (e.g. Antigravity's parallel
+   sub-agent tool calls) interleaved on the event loop and corrupted each other's buffered
+   tool-call args, since entries were keyed only by content-block index with no per-request
+   scope.
+   **Fix:** all four buffers are now `Map`s keyed by `requestId`
+   (`thinkStreamBuffers`, `geminiToolCallBuffers`, `anthropicToolBuffers`,
+   `anthropicThinkingBuffers` in `src/handlers/openai.ts`), with `clearAnthropicSSEState()`
+   / `clearGeminiSSEState()` helpers called on normal stream completion
+   (`message_stop`, `[DONE]`) and in `finally` blocks of both streaming handlers
+   (`handleCrossModeStreamingResponse`, `handleOpenAIStreamingResponse`) to avoid leaking
+   entries when a stream errors out before reaching its normal end marker.
+
+**Verification:** direct `curl` testing confirmed both single and parallel tool calls
+round-trip correctly, and 16 concurrent streaming requests with distinguishable tool
+arguments returned zero cross-request contamination. `tests/multi-agents-test.py` against
+both `deepseek-v4-auth` and `max-m3-auth` completed the `duplicate_helpers` task with no
+`invalid tool call` / `invalid_signature` / `invalid_args` errors.
+
+**Files changed:** `src/handlers/openai.ts`, `src/converters/claude-to-openai.ts`,
+`src/converters/openai-to-claude.ts`.
+
 ### Fix: TUI model test — inline-table config resolution, fallback mode, and DeepSeek thinking rejection
 
 Three fixes to the TUI's "test model" feature in `src/tui.ts` that improve coverage

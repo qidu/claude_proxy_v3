@@ -287,6 +287,7 @@ export function convertClaudeTokenCountingToOpenAI(
         } else if (message.role === 'assistant') {
             const textParts: string[] = [];
             const toolCalls: OpenAIToolCall[] = [];
+            const thinkingParts: string[] = [];
 
             if (Array.isArray(message.content)) {
                 message.content.forEach(block => {
@@ -301,6 +302,11 @@ export function convertClaudeTokenCountingToOpenAI(
                                 arguments: stringify(block.input || {})
                             },
                         });
+                    } else if (block.type === 'thinking') {
+                        // Preserve reasoning so thinking-mode upstreams (e.g. DeepSeek)
+                        // don't reject the next turn with "reasoning_content must be
+                        // passed back".
+                        thinkingParts.push(block.thinking ?? '');
                     }
                 });
             }
@@ -313,6 +319,11 @@ export function convertClaudeTokenCountingToOpenAI(
 
             if (toolCalls.length > 0) {
                 assistantMessage.tool_calls = toolCalls;
+            }
+
+            if (thinkingParts.length > 0) {
+                (assistantMessage as unknown as Record<string, unknown>).reasoning_content =
+                    thinkingParts.join('\n');
             }
 
             openaiMessages.push(assistantMessage);
@@ -396,6 +407,7 @@ export function convertClaudeToOpenAIRequest(
         } else if (message.role === 'assistant') {
             const textParts: string[] = [];
             const toolCalls: OpenAIToolCall[] = [];
+            const thinkingParts: string[] = [];
 
             if (Array.isArray(message.content)) {
                 message.content.forEach(block => {
@@ -410,6 +422,11 @@ export function convertClaudeToOpenAIRequest(
                                 arguments: stringify(block.input || {})
                             },
                         });
+                    } else if (block.type === 'thinking') {
+                        // Preserve reasoning so thinking-mode upstreams (e.g. DeepSeek)
+                        // don't reject the next turn with "reasoning_content must be
+                        // passed back".
+                        thinkingParts.push(block.thinking ?? '');
                     }
                 });
             }
@@ -422,6 +439,11 @@ export function convertClaudeToOpenAIRequest(
 
             if (toolCalls.length > 0) {
                 assistantMessage.tool_calls = toolCalls;
+            }
+
+            if (thinkingParts.length > 0) {
+                (assistantMessage as unknown as Record<string, unknown>).reasoning_content =
+                    thinkingParts.join('\n');
             }
 
             openaiMessages.push(assistantMessage);

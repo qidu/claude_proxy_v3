@@ -129,6 +129,15 @@ export async function convertOpenAIToClaudeResponse(
     const content = message.content;
     const contentBlocks: ClaudeContentBlock[] = [];
 
+    // Handle reasoning_content from thinking-mode upstreams (e.g. DeepSeek).
+    // Must be emitted as a thinking block BEFORE the text block so the round-trip
+    // preserves it: convertClaudeToOpenAIRequest reads `block.type === 'thinking'`
+    // and emits `reasoning_content` on the next request, which DeepSeek requires.
+    const inlineReasoning = (message as unknown as Record<string, unknown>).reasoning_content;
+    if (inlineReasoning && typeof inlineReasoning === 'string') {
+        contentBlocks.push({ type: 'thinking', thinking: inlineReasoning } as unknown as ClaudeContentBlock);
+    }
+
     // Handle text content
     if (content) {
         let textContent: string;
