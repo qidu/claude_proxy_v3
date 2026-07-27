@@ -7,6 +7,32 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: `/v1/responses` → `anthropic-messages` — out-of-order `function_call`/text items produced consecutive assistant messages
+
+Codex CLI routed through `max-m3-anth` (MiniMax's `anthropic-messages`-compatible endpoint)
+failed on turn 2+ of a tool-using conversation with `invalid params, 400 (2013)`. Root cause
+identified and confirmed via the new `LOG_LEVEL=trace` pipeline tracing (see previous entry):
+diagnosis and reproduction are documented in
+`docs/investigation_of_routing_generatecontent_and_responses_to_minimax_anthropic_api.md`.
+
+Codex replays a prior turn's `function_call` item *before* the assistant `message` item
+containing the text that preceded it in the original turn. `convertInputItemsToMessages`
+(`src/converters/responses-to-completions.ts`) converted each input item independently and
+in order, so this produced two consecutive `assistant`-role messages (`tool_use` then `text`)
+before the `tool_result`. The Anthropic Messages API requires strict role alternation and a
+`tool_use` block's `tool_result` to immediately follow the single message that emitted it —
+MiniMax rejected the malformed shape with error 2013 (this is the same MiniMax error code
+previously seen for unresolved model aliases, but here the cause is unrelated: the model name
+was already correctly resolved).
+
+**Fix:** `convertInputItemsToMessages` now merges a `function_call` and any adjacent assistant
+`message`/`reasoning` items belonging to the same turn — regardless of their order in the
+`input` array — into a single assistant message carrying both `content` (text) and
+`tool_calls`. This matches the grouping the canonical `completionsToClaudeBody`
+(`src/handlers/openai.ts`) already expects downstream.
+
+**Files changed:** `src/converters/responses-to-completions.ts`.
+
 ### Add: full-pipeline request/response body tracing (`LOG_LEVEL=trace`)
 
 Added a new `trace` log level (below `debug`) that logs the message body at each of the

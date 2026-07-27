@@ -2,7 +2,7 @@
  * Converter: OpenAI Responses API format to Chat Completions format
  */
 
-import { OpenAIRequest, OpenAIMessage } from '../types/openai.js';
+import { OpenAIRequest, OpenAIMessage, OpenAIToolCall } from '../types/openai.js';
 import { stringify } from '../utils/stringify.js';
 
 /**
@@ -145,9 +145,14 @@ export function convertResponsesToChatCompletions(
  * Convert a list of input items to messages, threading reasoning_content from
  * standalone reasoning items through to adjacent assistant/function_call turns.
  *
- * Multiple consecutive function_call items are merged into a single assistant
- * message with multiple tool_calls — the Chat Completions API (and DeepSeek)
- * require all tool_calls from a single turn to appear in one assistant message.
+ * A single assistant turn can be split across several input items — one or more
+ * function_call items plus an assistant `message` item carrying the turn's text,
+ * in either order (some clients replay the call before its own preceding text),
+ * possibly interleaved with a standalone `reasoning` item. All of these are
+ * merged into ONE assistant message here: Anthropic-compatible upstreams (and
+ * Chat Completions/DeepSeek) reject two consecutive assistant messages, and
+ * require a tool_use block's tool_result to immediately follow the single
+ * message that emitted it.
  */
 export function convertInputItemsToMessages(items: Array<Record<string, unknown>>): OpenAIMessage[] {
   const allMessages: OpenAIMessage[] = [];
@@ -157,44 +162,69 @@ export function convertInputItemsToMessages(items: Array<Record<string, unknown>
     const item = items[i];
 
     if (item.type === 'reasoning') {
-      // Extract text from reasoning item content array
-      const content = item.content as Array<Record<string, unknown>> | undefined;
-      if (Array.isArray(content)) {
-        pendingReasoningContent = content
-          .filter(c => c.type === 'reasoning_text')
-          .map(c => c.text as string)
-          .join('');
-      }
+      pendingReasoningContent = extractReasoningText(item) ?? pendingReasoningContent;
       continue; // no message emitted for reasoning items
     }
 
-    if (item.type === 'function_call') {
-      // Collect ALL consecutive function_call items and merge into ONE assistant
-      // message with multiple tool_calls.  This is required by Chat Completions:
-      // a single assistant turn that calls N tools must list all N calls in one
-      // message, followed by N tool-result messages.
-      const toolCallItems: Record<string, unknown>[] = [item];
-      while (i + 1 < items.length && items[i + 1].type === 'function_call') {
-        i++;
-        toolCallItems.push(items[i]);
+    const isAssistantMessage = item.type === 'message' && item.role === 'assistant';
+    if (item.type === 'function_call' || isAssistantMessage) {
+      const toolCalls: OpenAIToolCall[] = [];
+      const textParts: string[] = [];
+      let reasoningText = pendingReasoningContent;
+      pendingReasoningContent = null;
+
+      const consumeTurnItem = (turnItem: Record<string, unknown>): void => {
+        if (turnItem.type === 'function_call') {
+          toolCalls.push({
+            id: (turnItem.call_id as string) || (turnItem.id as string),
+            type: 'function',
+            function: {
+              name: turnItem.name as string,
+              arguments: turnItem.arguments as string,
+            },
+          });
+        } else {
+          const parts = extractAssistantMessageParts(turnItem);
+          if (parts.text) textParts.push(parts.text);
+          if (parts.reasoningText) reasoningText = parts.reasoningText;
+        }
+      };
+      consumeTurnItem(item);
+
+      // Absorb any further function_call / assistant-message items belonging to
+      // the same turn, skipping over (and consuming) interleaved reasoning items.
+      while (i + 1 < items.length) {
+        const next = items[i + 1];
+        if (next.type === 'function_call' || (next.type === 'message' && next.role === 'assistant')) {
+          i++;
+          consumeTurnItem(items[i]);
+          continue;
+        }
+        if (next.type === 'reasoning') {
+          i++;
+          reasoningText = extractReasoningText(items[i]) ?? reasoningText;
+          continue;
+        }
+        break;
+      }
+
+      const combinedText = textParts.join('');
+      if (!combinedText && toolCalls.length === 0 && !reasoningText) {
+        // Nothing meaningful to emit (matches prior behavior of dropping empty
+        // assistant message items).
+        continue;
       }
 
       const assistantMsg: OpenAIMessage = {
         role: 'assistant',
-        content: null as unknown as string,
-        tool_calls: toolCallItems.map(tc => ({
-          id: tc.call_id as string || tc.id as string,
-          type: 'function' as const,
-          function: {
-            name: tc.name as string,
-            arguments: tc.arguments as string,
-          },
-        })),
+        content: (combinedText || (toolCalls.length > 0 ? null : '')) as unknown as string,
       };
-      if (pendingReasoningContent) {
-        (assistantMsg as unknown as Record<string, unknown>).reasoning_content = pendingReasoningContent;
+      if (toolCalls.length > 0) {
+        assistantMsg.tool_calls = toolCalls;
       }
-      pendingReasoningContent = null;
+      if (reasoningText) {
+        (assistantMsg as unknown as Record<string, unknown>).reasoning_content = reasoningText;
+      }
       allMessages.push(assistantMsg);
       continue;
     }
@@ -206,6 +236,41 @@ export function convertInputItemsToMessages(items: Array<Record<string, unknown>
     allMessages.push(...msgs);
   }
   return allMessages;
+}
+
+/**
+ * Extract concatenated reasoning_text from a standalone `reasoning` input item's
+ * content array, or null if none present.
+ */
+function extractReasoningText(item: Record<string, unknown>): string | null {
+  const content = item.content as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(content)) return null;
+  const text = content
+    .filter(c => c.type === 'reasoning_text')
+    .map(c => c.text as string)
+    .join('');
+  return text || null;
+}
+
+/**
+ * Extract the output text and any embedded reasoning_text from an assistant
+ * `message` input item, whether its content is a plain string or a content-part
+ * array (as seen in replayed Responses API output).
+ */
+function extractAssistantMessageParts(item: Record<string, unknown>): { text: string; reasoningText: string | null } {
+  const content = item.content;
+  if (typeof content === 'string') {
+    return { text: content, reasoningText: null };
+  }
+  if (Array.isArray(content)) {
+    const textPart = content.find((c: Record<string, unknown>) => c.type === 'output_text');
+    const reasoningPart = content.find((c: Record<string, unknown>) => c.type === 'reasoning_text');
+    return {
+      text: textPart ? (textPart as Record<string, unknown>).text as string : '',
+      reasoningText: reasoningPart ? (reasoningPart as Record<string, unknown>).text as string : null,
+    };
+  }
+  return { text: '', reasoningText: null };
 }
 
 /**
