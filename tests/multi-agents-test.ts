@@ -9,8 +9,12 @@
  * against every task, producing `len(USER_TASKS) * len(MODELS) * 5` total runs
  * (modulated by the CLI selection below).
  *
+ * Testing Sever:
+ *   start proxy with `DEV_PASS_THROUGH=true` to enable `/v1/chat/completions` endpoint
+ *   start proxy with `DEV_NO_KEY=true` to skip auth headers checking on proxy
+ *   start proxy with `PORT=7777` on testing port, use lsof to check testing port and get right pid of proxy
+ *
  * Usage:
- *   start proxy with `DEV_PASS_THROUGH=true` to enable also `/v1/chat/completions` endpoint for codex.
  *
  *   export API_KEY=a-valid-key
  *   export CODEX_API_KEY=$API_KEY
@@ -25,6 +29,9 @@
  *   npx tsx tests/multi-agents-test.ts 0 0 2        # all models, all agents, 2nd task
  *   npx tsx tests/multi-agents-test.ts 9 4 0        # MODELS[(9-1) % len], AGENTS[(4-1) % 5], all tasks
  *
+ *   # Test a specific agent and task with all models
+ *   for i in 1 2 3 4; do PROXY_BASE=http://localhost:7777 npx tsx tests/multi-agents-test.ts $i 1 2; done
+ *
  *   Set keys for each agent sdk:
  *   // await runCodexAgent(task, model);    // export CODEX_API_KEY=a-valid-key
  *   // await runClaudeAgent(task, model);   // export ANTHROPIC_API_KEY=a-valid-key
@@ -34,14 +41,15 @@
  *
  *   // or export API_KEY=a-valid-key for all of them.
  *
- *   CLI selection semantics (three args: model agent task):
- *     - no args                                -> all models x all agents x all tasks
- *     - "0 0 0"                                -> same as no args
- *     - M A T with M,A,T > 0                   -> MODELS[(M-1) % MODELS.length],
+ *   CLI selection semantics:
+ *     - no args                                -> list available models, agents, and tasks; do not run
+ *     - --all / -a / --run / -r               -> run all models x all agents x all tasks
+ *     - M A T (three numeric args)             -> run selected subset; 1-based with wrap
+ *         "0 0 0"                              -> same as --all
+ *         M A T with M,A,T > 0                -> MODELS[(M-1) % MODELS.length],
  *                                                AGENTS[(A-1) % AGENTS.length],
  *                                                USER_TASKS[(T-1) % USER_TASKS.length]
- *                                                (1-based; out-of-range values wrap with %)
- *     - 0 in any position                      -> that dimension runs all entries
+ *         0 in any position                   -> that dimension runs all entries
  *                                                (e.g. "0 1 0" = all models, first agent, all tasks)
  *
  *   Agent order:  1=Codex, 2=Claude, 3=Gemini, 4=Pi, 5=OpenCode
@@ -62,16 +70,10 @@ const PROXY_BASE = process.env.PROXY_BASE || "http://127.0.0.1:8788";
 const WORK_DIR = "./tests/";
 
 const MODELS = [
-  "MiniMaxAI/MiniMax-M3",           // local test
-  "gpt-5.5",                        // gpt
-  "deepseek/deepseek-v4-flash",     // deepseek
-  "minimax/minimax-m3",             // minimax
-  "google/gemini-3.1-flash-lite",   // gemini
-  "claude-4.5-haiku",               // claude
-  "openai/gpt-5.4-mini",            // gpt
-  "qwen3-max-preview",              // qwen3
-  "moonshotai/kimi-k2.7-code",      // moonshot-kimi
-  "z-ai/glm-5.2",                   // z-ai-glm
+  "deepseek-v4-comp",               // deepseek via openai-completions
+  "deepseek-v4-anth",               // deepseek via anthropic-messages
+  "max-m3-comp",                    // minimax via openai-completions
+  "max-m3-anth",                    // minimax via anthropic-messages
 ];
 
 // Each task targets a different AI-coding / agent capability so model
@@ -331,13 +333,19 @@ async function runGeminiAgent(prompt: string, model: string) {
   let completed = false;
 
   for (let turn = 0; turn < 20; turn++) {
-    const resp = await ai.models.generateContent({
-      model,
-      contents: history,
-      config: {
-        tools: GEMINI_TOOLS,
-      },
-    });
+    let resp;
+    try {
+      resp = await ai.models.generateContent({
+        model,
+        contents: history,
+        config: {
+          tools: GEMINI_TOOLS,
+        },
+      });
+    } catch (e: any) {
+      console.error(`Gemini API error: ${e?.message ?? e}`);
+      return;
+    }
 
     const candidate = resp.candidates?.[0];
     const parts = candidate?.content?.parts ?? [];
@@ -348,6 +356,7 @@ async function runGeminiAgent(prompt: string, model: string) {
     }
 
     const fcParts: any[] = [];
+    const thoughtParts: any[] = [];
     const frParts: any[] = [];
     let sawText = false;
 
@@ -376,6 +385,12 @@ async function runGeminiAgent(prompt: string, model: string) {
             response: { result },
           },
         });
+      } else if (part.thought && part.text !== undefined) {
+        // Thinking/reasoning content from thinking-mode upstreams (e.g. DeepSeek).
+        // Must be included in the model-turn history so the upstream can round-trip
+        // the reasoning on the next request without rejecting with
+        // "reasoning_content must be passed back".
+        thoughtParts.push({ thought: true, text: part.text });
       } else if (part.text) {
         if (!sawText) console.log("Gemini output:");
         console.log(part.text);
@@ -386,7 +401,9 @@ async function runGeminiAgent(prompt: string, model: string) {
     }
 
     if (fcParts.length > 0) {
-      history.push({ role: "model", parts: fcParts });
+      // Include thought parts before function call parts in the model history turn
+      // so thinking-mode upstreams see the full assistant content (thought + tool calls).
+      history.push({ role: "model", parts: [...thoughtParts, ...fcParts] });
       history.push({ role: "user", parts: frParts });
     } else {
       completed = true;
@@ -396,16 +413,22 @@ async function runGeminiAgent(prompt: string, model: string) {
 
   if (!completed) {
     console.log("Gemini: reached 20 tool turns; forcing final output without tools");
-    const finalResp = await ai.models.generateContent({
-      model,
-      contents: [
-        ...history,
-        {
-          role: "user",
-          parts: [{ text: "No more tool calls. Provide the final answer now based on the information gathered." }],
-        },
-      ],
-    });
+    let finalResp;
+    try {
+      finalResp = await ai.models.generateContent({
+        model,
+        contents: [
+          ...history,
+          {
+            role: "user",
+            parts: [{ text: "No more tool calls. Provide the final answer now based on the information gathered." }],
+          },
+        ],
+      });
+    } catch (e: any) {
+      console.error(`Gemini API error: ${e?.message ?? e}`);
+      return;
+    }
     const finalParts = finalResp.candidates?.[0]?.content?.parts ?? [];
     const textParts = finalParts.filter((part) => part.text).map((part) => part.text);
     if (textParts.length > 0) {
@@ -803,34 +826,43 @@ async function main() {
     console.log("Could not fetch models from proxy; using fallback list.");
   }
 
-  // CLI selection (three args: model agent task):
-  //   no args            -> run all models x all agents x all tasks
-  //   "0 0 0"            -> same as no args
-  //   M A T with all>0   -> pick MODELS[(M-1) % MODELS.length],
-  //                          AGENTS[(A-1) % AGENTS.length],
-  //                          USER_TASKS[(T-1) % USER_TASKS.length]
-  //                          (1-based; values beyond array size wrap with %)
-  //   0 in any position  -> that dimension runs all entries
+  // CLI selection:
+  //   no args                  -> list available models, agents, tasks; do not run
+  //   --all / -a / --run / -r  -> run all models x all agents x all tasks
+  //   M A T (three numbers)    -> run selected subset (1-based, 0 = all in that dimension)
   const argv = process.argv.slice(2);
+  const runFlag = argv.length > 0 && ["--all", "-a", "--run", "-r"].includes(argv[0]);
+  const numericArgs = argv.length >= 3 && argv.slice(0, 3).every(a => /^-?\d+$/.test(a));
+
+  if (argv.length === 0) {
+    // List mode — no execution
+    console.log("Available models:");
+    MODELS.forEach((m, i) => console.log(`  ${i + 1}. ${m}`));
+    console.log("\nAvailable agents:");
+    AGENTS.forEach((ag, i) => console.log(`  ${i + 1}. ${ag.name}`));
+    console.log("\nAvailable tasks:");
+    USER_TASKS.forEach((t, i) => console.log(`  ${i + 1}. ${t.name}`));
+    console.log("\nRun with --all / -a / --run / -r to execute, or pass M A T (three numbers) to select a subset:");
+    console.log("  M = model index (1-based), A = agent index, T = task index; 0 means all in that dimension.");
+    return;
+  }
+
   let modelsToRun: string[] = MODELS;
   let agentsToRun = AGENTS;
   let tasksToRun = USER_TASKS;
-  if (argv.length >= 3) {
+
+  if (numericArgs) {
     const m = parseInt(argv[0], 10);
     const a = parseInt(argv[1], 10);
     const t = parseInt(argv[2], 10);
-    if (Number.isFinite(m) && m > 0) {
-      modelsToRun = [MODELS[(m - 1) % MODELS.length]];
-    }
-    if (Number.isFinite(a) && a > 0) {
-      agentsToRun = [AGENTS[(a - 1) % AGENTS.length]];
-    }
-    if (Number.isFinite(t) && t > 0) {
-      tasksToRun = [USER_TASKS[(t - 1) % USER_TASKS.length]];
-    }
+    if (Number.isFinite(m) && m > 0) modelsToRun = [MODELS[(m - 1) % MODELS.length]];
+    if (Number.isFinite(a) && a > 0) agentsToRun = [AGENTS[(a - 1) % AGENTS.length]];
+    if (Number.isFinite(t) && t > 0) tasksToRun = [USER_TASKS[(t - 1) % USER_TASKS.length]];
   }
+  // runFlag uses all defaults (all models x all agents x all tasks)
+
   console.log(
-    `Selection: ${modelsToRun.length} model(s) x ${agentsToRun.length} agent(s) x ${tasksToRun.length} task(s)`,
+    `Selection: ${modelsToRun.length} model(s) x ${agentsToRun.length} agent(s) x ${tasksToRun.length} task(s) on proxy ${PROXY_BASE}`,
   );
   for (const m of modelsToRun) console.log(`  model:  ${m}`);
   for (const ag of agentsToRun) console.log(`  agent:  ${ag.name}`);
@@ -842,7 +874,6 @@ async function main() {
         `\n=========== Task: ${task.name} | Model: ${model} ===========`,
       );
       const prompt = task.prompt;
-
       for (const agent of agentsToRun) {
         await agent.run(prompt, model);
       }
