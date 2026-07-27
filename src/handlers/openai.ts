@@ -2,7 +2,7 @@ import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.j
 import { convertClaudeToOpenAIRequest, ThinkingConversionOptions } from '../converters/claude-to-openai.js';
 import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
 import { convertOpenAIToGeminiGenerateContent, convertOpenAIToGeminiInteractions } from '../converters/openai-to-gemini.js';
-import { createLogger } from '../utils/logger.js';
+import { createLogger, logPipelineStage } from '../utils/logger.js';
 import { isSdkUrl, handleSdkOpenAIRequest } from '../utils/sdk-handler.js';
 import type { Env, Logger } from '../types/shared.js';
 import { addForwardedHeaders, mapMaxTokensForUpstream, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
@@ -440,18 +440,26 @@ async function handleCrossModeStreamingResponse(
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer += new TextDecoder().decode(value);
+        const rawChunk = new TextDecoder().decode(value);
+        buffer += rawChunk;
+        logPipelineStage(logger, requestId, 'upstream-response', response.url || `(upstream SSE, ${source})`, rawChunk);
         const converted = source === 'anthropic-messages'
           ? processAnthropicSSEBuffer(buffer, model, requestId, isInteractionsRequest, isGenerateContentRequest)
           : processResponsesSSEBuffer(buffer, model, requestId, isInteractionsRequest, isGenerateContentRequest);
         buffer = converted.remaining;
-        if (converted.processed) await writer.write(encoder.encode(converted.processed));
+        if (converted.processed) {
+          logPipelineStage(logger, requestId, 'outbound', 'stream', converted.processed);
+          await writer.write(encoder.encode(converted.processed));
+        }
       }
       if (buffer.trim()) {
         const converted = source === 'anthropic-messages'
           ? processAnthropicSSEBuffer(buffer + '\n\n', model, requestId, isInteractionsRequest, isGenerateContentRequest)
           : processResponsesSSEBuffer(buffer + '\n\n', model, requestId, isInteractionsRequest, isGenerateContentRequest);
-        if (converted.processed) await writer.write(encoder.encode(converted.processed));
+        if (converted.processed) {
+          logPipelineStage(logger, requestId, 'outbound', 'stream (final)', converted.processed);
+          await writer.write(encoder.encode(converted.processed));
+        }
       }
       await writer.close();
     } catch (error) {
@@ -652,6 +660,7 @@ async function forwardCompletionsAsAnthropicMessages(
 ): Promise<Response> {
   const claudeBody = completionsToClaudeBody(openaiRequest, model);
   logger.debug(requestId, `Interactions/generateContent -> anthropic-messages body: ${JSON.stringify(claudeBody).substring(0, 500)}`);
+  logPipelineStage(logger, requestId, 'upstream-request', targetUrl, claudeBody);
 
   // anthropic-messages expects x-api-key (or Authorization). Normalize headers.
   const anthropicHeaders: Record<string, string> = { ...authHeaders };
@@ -687,25 +696,30 @@ async function forwardCompletionsAsAnthropicMessages(
     return handleCrossModeStreamingResponse(response, model, requestId, logger, isInteractionsRequest, isGenerateContentRequest, 'anthropic-messages');
   }
 
-  const claudeJson = await response.json() as Record<string, unknown>;
+  const claudeJsonText = await response.text();
+  logPipelineStage(logger, requestId, 'upstream-response', targetUrl, claudeJsonText);
+  const claudeJson = JSON.parse(claudeJsonText) as Record<string, unknown>;
   // Convert Claude Messages response → OpenAI Completions response shape, then
   // let the existing Gemini response converters produce the right endpoint shape.
   const syntheticCompletions = claudeJsonToSyntheticCompletions(claudeJson, model);
 
   if (isGenerateContentRequest) {
     const geminiResponse = convertOpenAIToGeminiGenerateContent(syntheticCompletions, model, requestId);
+    logPipelineStage(logger, requestId, 'outbound', ':generateContent', geminiResponse);
     return new Response(JSON.stringify(geminiResponse), {
       headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
     });
   }
   if (isInteractionsRequest) {
     const interactionResponse = convertOpenAIToGeminiInteractions(syntheticCompletions, model, requestId);
+    logPipelineStage(logger, requestId, 'outbound', '/v1/interactions', interactionResponse);
     return new Response(JSON.stringify(interactionResponse), {
       headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
     });
   }
 
   // Fallback: return Claude Messages response as-is
+  logPipelineStage(logger, requestId, 'outbound', '(fallback claude passthrough)', claudeJson);
   return new Response(JSON.stringify(claudeJson), {
     headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
   });
@@ -785,6 +799,8 @@ async function forwardCompletionsAsOpenAIResponses(
 ): Promise<Response> {
   const responsesBody = completionsToResponsesBody(openaiRequest, model);
   logger.debug(requestId, `Interactions/generateContent -> openai-responses body: ${JSON.stringify(responsesBody).substring(0, 500)}`);
+  const upstreamBody = mapMaxTokensForUpstream(responsesBody, targetUrl);
+  logPipelineStage(logger, requestId, 'upstream-request', targetUrl, upstreamBody);
 
   const response = await fetch(targetUrl, {
     method: 'POST',
@@ -792,7 +808,7 @@ async function forwardCompletionsAsOpenAIResponses(
       'Content-Type': 'application/json',
       ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), originalRequest),
     },
-    body: JSON.stringify(mapMaxTokensForUpstream(responsesBody, targetUrl)),
+    body: JSON.stringify(upstreamBody),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
@@ -809,7 +825,9 @@ async function forwardCompletionsAsOpenAIResponses(
     return handleCrossModeStreamingResponse(response, model, requestId, logger, isInteractionsRequest === true, isGenerateContentRequest === true, 'openai-responses');
   }
 
-  const responsesJson = await response.json() as Record<string, unknown>;
+  const responsesJsonText = await response.text();
+  logPipelineStage(logger, requestId, 'upstream-response', targetUrl, responsesJsonText);
+  const responsesJson = JSON.parse(responsesJsonText) as Record<string, unknown>;
   // Build a synthetic Completions response from the Responses output items so
   // we can reuse the existing Gemini response converters.
   const outputItems = (responsesJson.output as Array<Record<string, unknown>>) ?? [];
@@ -847,18 +865,21 @@ async function forwardCompletionsAsOpenAIResponses(
 
   if (isGenerateContentRequest) {
     const geminiResponse = convertOpenAIToGeminiGenerateContent(syntheticCompletions, model, requestId);
+    logPipelineStage(logger, requestId, 'outbound', ':generateContent', geminiResponse);
     return new Response(JSON.stringify(geminiResponse), {
       headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
     });
   }
   if (isInteractionsRequest) {
     const interactionResponse = convertOpenAIToGeminiInteractions(syntheticCompletions, model, requestId);
+    logPipelineStage(logger, requestId, 'outbound', '/v1/interactions', interactionResponse);
     return new Response(JSON.stringify(interactionResponse), {
       headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
     });
   }
 
   // Fallback: return Responses API response as-is
+  logPipelineStage(logger, requestId, 'outbound', '(fallback responses passthrough)', responsesJson);
   return new Response(JSON.stringify(responsesJson), {
     headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
   });
@@ -916,7 +937,8 @@ export async function handleOpenAIRequest(
 
     // Parse request body
     const requestBody = await request.json() as Record<string, unknown>;
-    
+    logPipelineStage(activeLogger, requestId, 'inbound', url.pathname, requestBody);
+
     // Detect Gemini CLI and force non-streaming to avoid JSON parsing issues
     const userAgent = request.headers.get('user-agent') || '';
     if (userAgent.includes('gemini-cli')) {
@@ -1026,10 +1048,12 @@ export async function handleOpenAIRequest(
             );
         }
 
+        const upstreamBody = mapMaxTokensForUpstream(openaiRequest, targetUrl);
+        logPipelineStage(activeLogger, requestId, 'upstream-request', targetUrl, upstreamBody);
         const response = await fetch(targetUrl, {
             method: 'POST',
             headers: addForwardedHeaders(headers, request),
-            body: JSON.stringify(mapMaxTokensForUpstream(openaiRequest, targetUrl)),
+            body: JSON.stringify(upstreamBody),
             signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
         });
 
@@ -1093,15 +1117,17 @@ async function handleOpenAIStreamingResponse(
                 }
 
                 // Append to buffer
-                buffer += new TextDecoder().decode(value);
+                const rawChunk = new TextDecoder().decode(value);
+                buffer += rawChunk;
                 chunkCount++;
-                
+                logPipelineStage(logger, requestId, 'upstream-response', response.url || '(upstream SSE)', rawChunk);
+
                 // Process complete SSE events
                 const { processed, remaining } = processSSEBuffer(buffer, modelId, requestId, isInteractionsRequest, isGenerateContentRequest);
                 buffer = remaining;
-                
+
                 if (processed) {
-                    logger.debug(requestId, `OpenAI SSE chunk ${chunkCount}: ${processed.substring(0, 200)}...`);
+                    logPipelineStage(logger, requestId, 'outbound', 'stream', processed);
                     await writer.write(encoder.encode(processed));
                 }
             }
@@ -1110,7 +1136,7 @@ async function handleOpenAIStreamingResponse(
             if (buffer.trim()) {
                 const { processed } = processSSEBuffer(buffer + '\n\n', modelId, requestId, isInteractionsRequest, isGenerateContentRequest);
                 if (processed) {
-                    logger.debug(requestId, `Final buffer processed: ${processed.substring(0, 200)}...`);
+                    logPipelineStage(logger, requestId, 'outbound', 'stream (final)', processed);
                     await writer.write(encoder.encode(processed));
                 }
             }
@@ -1146,8 +1172,10 @@ async function handleOpenAINonStreamingResponse(
     isInteractionsRequest: boolean = false,
     isGenerateContentRequest: boolean = false
 ): Promise<Response> {
-    const openaiResponse = await response.json() as Record<string, unknown>;
-    
+    const responseText = await response.text();
+    logPipelineStage(logger, requestId, 'upstream-response', response.url || '(upstream)', responseText);
+    const openaiResponse = JSON.parse(responseText) as Record<string, unknown>;
+
     if (isGenerateContentRequest) {
         // Convert to Gemini generateContent format
         const geminiResponse = convertOpenAIToGeminiGenerateContent(
@@ -1155,7 +1183,8 @@ async function handleOpenAINonStreamingResponse(
             modelId,
             requestId
         );
-        
+        logPipelineStage(logger, requestId, 'outbound', ':generateContent', geminiResponse);
+
         return new Response(JSON.stringify(geminiResponse), {
             headers: {
                 'Content-Type': 'application/json',
@@ -1169,7 +1198,8 @@ async function handleOpenAINonStreamingResponse(
             modelId,
             requestId
         );
-        
+        logPipelineStage(logger, requestId, 'outbound', '/v1/interactions', interactionResponse);
+
         return new Response(JSON.stringify(interactionResponse), {
             headers: {
                 'Content-Type': 'application/json',
@@ -1177,9 +1207,10 @@ async function handleOpenAINonStreamingResponse(
             },
         });
     }
-    
+
     // Convert to Claude format
     const claudeResponse = convertOpenAIToClaudeResponse(openaiResponse as any, modelId, requestId);
+    logPipelineStage(logger, requestId, 'outbound', '/v1/messages', claudeResponse);
 
     return new Response(JSON.stringify(claudeResponse), {
         headers: {

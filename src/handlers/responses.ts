@@ -6,7 +6,7 @@
  */
 
 import { Env } from '../types/shared.js';
-import { Logger, createLogger } from '../utils/logger.js';
+import { Logger, createLogger, logPipelineStage } from '../utils/logger.js';
 import { OpenAIRequest, OpenAIResponse } from '../types/openai.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { addForwardedHeaders, mapMaxTokensForUpstream, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
@@ -68,6 +68,7 @@ export async function handleResponsesRequest(
   const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
 
   const requestBody = await request.json() as Record<string, unknown>;
+  logPipelineStage(activeLogger, requestId, 'inbound', '/v1/responses', requestBody);
   const isStreaming = requestBody.stream === true;
   // Alias (modelId) takes precedence over the body's model field, matching the pattern
   // used by the messages handler: `const targetModelId = modelId || claudeRequest.model`
@@ -228,7 +229,10 @@ function streamClaudeAsResponses(
   let sequenceNumber = 0;
   const nextSeq = () => sequenceNumber++;
 
+  const activeLogger = logger ?? createLogger({});
+
   function sseEvent(event: string, data: unknown): string {
+    logPipelineStage(activeLogger, requestId, 'outbound', '/v1/responses (SSE)', data);
     return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   }
 
@@ -261,7 +265,9 @@ function streamClaudeAsResponses(
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        const rawChunk = decoder.decode(value, { stream: true });
+        logPipelineStage(activeLogger, requestId, 'upstream-response', upstreamResponse.url || '(upstream SSE)', rawChunk);
+        buffer += rawChunk;
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
 
@@ -450,6 +456,7 @@ async function handleAsAnthropicMessages(
   const claudeBody = completionsBodyToClaudeBody(completionsRequest, model);
 
   logger.debug(requestId, `Responses->anthropic-messages: ${JSON.stringify(claudeBody).substring(0, 500)}`);
+  logPipelineStage(logger, requestId, 'upstream-request', targetUrl, claudeBody);
 
   const response = await fetch(targetUrl, {
     method: 'POST',
@@ -474,9 +481,12 @@ async function handleAsAnthropicMessages(
     return streamClaudeAsResponses(response, model, requestId, logger);
   }
 
-  const claudeJson = await response.json() as Record<string, unknown>;
-  logger.debug(requestId, `Upstream claude response: ${JSON.stringify(claudeJson).substring(0, 500)}`);
+  const claudeJsonText = await response.text();
+  logger.debug(requestId, `Upstream claude response: ${claudeJsonText.substring(0, 500)}`);
+  logPipelineStage(logger, requestId, 'upstream-response', targetUrl, claudeJsonText);
+  const claudeJson = JSON.parse(claudeJsonText) as Record<string, unknown>;
   const responsesResponse = claudeResponseToResponses(claudeJson, model);
+  logPipelineStage(logger, requestId, 'outbound', '/v1/responses', responsesResponse);
 
   return new Response(JSON.stringify(responsesResponse), {
     status: 200,
@@ -533,6 +543,7 @@ async function handleAsGemini(
   const claudeJson = await claudeResponse.json() as Record<string, unknown>;
   logger.debug(requestId, `Upstream gemini claude response: ${JSON.stringify(claudeJson).substring(0, 500)}`);
   const responsesResponse = claudeResponseToResponses(claudeJson, model);
+  logPipelineStage(logger, requestId, 'outbound', '/v1/responses', responsesResponse);
 
   return new Response(JSON.stringify(responsesResponse), {
     status: 200,
@@ -604,6 +615,8 @@ async function handleAsCompletions(
   }
 
   logger.debug(requestId, `Converted to completions format: ${JSON.stringify(completionsRequest)}`);
+  const upstreamBody = mapMaxTokensForUpstream(completionsRequest, targetUrl, 'openai-completions');
+  logPipelineStage(logger, requestId, 'upstream-request', targetUrl, upstreamBody);
 
   const response = await fetch(targetUrl, {
     method: 'POST',
@@ -611,7 +624,7 @@ async function handleAsCompletions(
       'Content-Type': 'application/json',
       ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
     },
-    body: JSON.stringify(mapMaxTokensForUpstream(completionsRequest, targetUrl, 'openai-completions')),
+    body: JSON.stringify(upstreamBody),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
@@ -639,8 +652,10 @@ async function handleAsCompletions(
   // Convert Chat Completions response back to Responses API format
   const responseText = await response.text();
   logger.debug(requestId, `Upstream completions response: ${responseText.substring(0, 1000)}`);
+  logPipelineStage(logger, requestId, 'upstream-response', targetUrl, responseText);
   const completionsResponse = JSON.parse(responseText) as OpenAIResponse;
   const responsesResponse = convertCompletionsToResponses(completionsResponse, model);
+  logPipelineStage(logger, requestId, 'outbound', '/v1/responses', responsesResponse);
 
   // Save conversation entry for next turn
   if (conversationEnabled) {
@@ -686,7 +701,10 @@ function streamCompletionsAsResponses(
   let sequenceNumber = 0;
   const nextSeq = () => sequenceNumber++;
 
+  const activeLogger = logger ?? createLogger({});
+
   function sseEvent(event: string, data: unknown): string {
+    logPipelineStage(activeLogger, requestId, 'outbound', '/v1/responses (SSE)', data);
     return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   }
 
@@ -735,6 +753,7 @@ function streamCompletionsAsResponses(
 
         const chunk = decoder.decode(value, { stream: true });
         rawUpstreamBody += chunk;
+        logPipelineStage(activeLogger, requestId, 'upstream-response', upstreamResponse.url || '(upstream SSE)', chunk);
         buffer += chunk;
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
@@ -895,7 +914,7 @@ function streamCompletionsAsResponses(
         }
       }
 
-      logger?.debug(requestId, `[stream] upstream raw body (${rawUpstreamBody.length} bytes):\n${rawUpstreamBody}`);
+      activeLogger.debug(requestId, `[stream] upstream raw body (${rawUpstreamBody.length} bytes):\n${rawUpstreamBody}`);
 
       // Flush any buffered partial tag as plain text (tag never closed by upstream)
       if (thinkBuffer) {
@@ -1258,13 +1277,16 @@ async function handleAsPassthrough(
   isStreaming: boolean,
   env?: Env
 ): Promise<Response> {
+  // Pure passthrough: no format conversion, so upstream-request == inbound body.
+  const upstreamBody = mapMaxTokensForUpstream(requestBody, targetUrl, 'openai-responses');
+  logPipelineStage(logger, requestId, 'upstream-request', targetUrl, upstreamBody);
   const response = await fetch(targetUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
     },
-    body: JSON.stringify(mapMaxTokensForUpstream(requestBody, targetUrl, 'openai-responses')),
+    body: JSON.stringify(upstreamBody),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
 
@@ -1279,7 +1301,23 @@ async function handleAsPassthrough(
   }
 
   if (isStreaming) {
-    return new Response(response.body, {
+    // Pure passthrough: outbound SSE == upstream-response SSE. Tee to log without
+    // disturbing the stream returned to the client.
+    const [clientStream, logStream] = response.body!.tee();
+    (async () => {
+      try {
+        const reader = logStream.getReader();
+        const decoder = new TextDecoder();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          logPipelineStage(logger, requestId, 'upstream-response', response.url || targetUrl, decoder.decode(value, { stream: true }));
+        }
+      } catch {
+        // best-effort debug logging only
+      }
+    })();
+    return new Response(clientStream, {
       status: 200,
       headers: {
         'Content-Type': 'text/event-stream',
@@ -1290,7 +1328,10 @@ async function handleAsPassthrough(
     });
   }
 
-  return new Response(response.body, {
+  const responseText = await response.text();
+  logPipelineStage(logger, requestId, 'upstream-response', response.url || targetUrl, responseText);
+  // Pure passthrough: outbound body == upstream-response body.
+  return new Response(responseText, {
     status: 200,
     headers: {
       'Content-Type': 'application/json',

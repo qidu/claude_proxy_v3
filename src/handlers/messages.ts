@@ -5,7 +5,7 @@
  */
 
 import { Env } from '../types/shared.js';
-import { Logger, createLogger } from '../utils/logger.js';
+import { Logger, createLogger, logPipelineStage } from '../utils/logger.js';
 import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.js';
 import { OpenAIRequest, OpenAIResponse } from '../types/openai.js';
 import { convertClaudeToOpenAIRequest, ThinkingConversionOptions, budgetToReasoningEffort } from '../converters/claude-to-openai.js';
@@ -165,6 +165,7 @@ export async function handleMessagesRequest(
   // Clone request before parsing body to preserve body for SDK handler
   // Parse request body from cloned request
   const requestBody = isSdkUrl(targetUrl) ? await request.clone().json() as Record<string, unknown> : await request.json() as Record<string, unknown>;
+  logPipelineStage(activeLogger, requestId, 'inbound', '/v1/messages', requestBody);
 
   // Normalize OpenAI-style thinking ({ enabled, budget_tokens }) to Claude
   // format ({ type, budget_tokens }) up-front so downstream code (format
@@ -293,6 +294,7 @@ export async function handleMessagesRequest(
       if (openaiRequestBody.tools !== undefined) responsesBody.tools = completionsToolsToResponsesTools(openaiRequestBody.tools as unknown[]);
       if (openaiRequestBody.tool_choice !== undefined) responsesBody.tool_choice = completionsToolChoiceToResponsesToolChoice(openaiRequestBody.tool_choice);
 
+      logPipelineStage(activeLogger, requestId, 'upstream-request', targetUrl, responsesBody);
       const responsesResponse = await fetch(targetUrl, {
         method: 'POST',
         headers: {
@@ -316,7 +318,9 @@ export async function handleMessagesRequest(
       if (isStreaming) {
         return handleResponsesStreamAsClaude(responsesResponse, model, requestId, activeLogger, requestBody);
       }
-      const responsesJson = await responsesResponse.json() as OpenAIResponsesResponse;
+      const responsesJsonText = await responsesResponse.text();
+      logPipelineStage(activeLogger, requestId, 'upstream-response', targetUrl, responsesJsonText);
+      const responsesJson = JSON.parse(responsesJsonText) as OpenAIResponsesResponse;
       const outputItem = responsesJson.output?.find(o => o.type === 'message');
       const textPart = outputItem?.content?.find(c => c.type === 'output_text');
       const toolCallItems = responsesJson.output?.filter(o => o.type === 'function_call') ?? [];
@@ -349,14 +353,15 @@ export async function handleMessagesRequest(
         } : undefined,
       };
       const claudeResponse = await convertOpenAIToClaudeResponse(syntheticCompletions, model, requestId, requestBody, tokenCountingConfig);
+      logPipelineStage(activeLogger, requestId, 'outbound', '/v1/messages', claudeResponse);
       return new Response(JSON.stringify(claudeResponse), {
         status: 200,
         headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
       });
     }
 
-      const response = await fetch(targetUrl, {
-
+    logPipelineStage(activeLogger, requestId, 'upstream-request', targetUrl, mapMaxTokensForUpstream(openaiRequestBody, targetUrl, upstreamMode));
+    const response = await fetch(targetUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -512,6 +517,7 @@ export async function handleMessagesRequest(
     if (openaiRequest.tools !== undefined) responsesBody.tools = completionsToolsToResponsesTools(openaiRequest.tools);
     if (openaiRequest.tool_choice !== undefined) responsesBody.tool_choice = completionsToolChoiceToResponsesToolChoice(openaiRequest.tool_choice);
 
+    logPipelineStage(activeLogger, requestId, 'upstream-request', targetUrl, responsesBody);
     const responsesResponse = await fetch(targetUrl, {
       method: 'POST',
       headers: {
@@ -540,7 +546,9 @@ export async function handleMessagesRequest(
     }
 
     // Non-streaming: parse Responses response and convert to Claude format.
-    const responsesJson = await responsesResponse.json() as OpenAIResponsesResponse;
+    const responsesJsonText = await responsesResponse.text();
+    logPipelineStage(activeLogger, requestId, 'upstream-response', targetUrl, responsesJsonText);
+    const responsesJson = JSON.parse(responsesJsonText) as OpenAIResponsesResponse;
 
     // Synthesise an OpenAI Completions-style response so we can reuse the existing converter.
     const outputItem = responsesJson.output?.find(o => o.type === 'message');
@@ -576,6 +584,7 @@ export async function handleMessagesRequest(
     };
 
     const claudeResponse = await convertOpenAIToClaudeResponse(syntheticCompletions, targetModelId, requestId, requestBody, tokenCountingConfig);
+    logPipelineStage(activeLogger, requestId, 'outbound', '/v1/messages', claudeResponse);
     return new Response(JSON.stringify(claudeResponse), {
       status: 200,
       headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
@@ -584,6 +593,7 @@ export async function handleMessagesRequest(
 
   const upstreamRequest = JSON.stringify(openaiRequest);
   activeLogger.debug(requestId, `Converted request (claude->openai): ${upstreamRequest.substring(0, 250)} ... ${upstreamRequest.substring(upstreamRequest.length - 250)}`);
+  logPipelineStage(activeLogger, requestId, 'upstream-request', targetUrl, mapMaxTokensForUpstream(openaiRequest, targetUrl, upstreamMode));
 
   // Log the actual auth headers being sent upstream (for openai-completions)
   const finalHeaders = addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request);
@@ -666,6 +676,7 @@ async function handleNonStreamingResponse(
   try {
     // Parse target API response
     const responseText = await response.text();
+    logPipelineStage(logger, requestId, 'upstream-response', response.url || '(upstream)', responseText);
 
     const openaiResponse: OpenAIResponse = JSON.parse(responseText);
 
@@ -677,6 +688,7 @@ async function handleNonStreamingResponse(
       requestBody,
       tokenCountingConfig
     );
+    logPipelineStage(logger, requestId, 'outbound', '/v1/messages', claudeResponse);
 
     // Return response with Claude headers
     return new Response(JSON.stringify(claudeResponse), {
@@ -734,7 +746,7 @@ async function handleStreamingResponse(
               if (line.startsWith('data: ')) {
                 const data = line.substring(6);
                 if (data.trim() !== '[DONE]') {
-                  logger.debug(requestId, `Upstream SSE chunk: ${data}`);
+                  logPipelineStage(logger, requestId, 'upstream-response', response.url || '(upstream SSE)', data);
                 }
               }
             }
@@ -749,9 +761,38 @@ async function handleStreamingResponse(
     // Start logging in background
     logRawChunks();
 
-    // Create transformed stream from stream1
-    const transformedStream = stream1
-      .pipeThrough(new TransformStream(transformer));
+    // Create transformed stream from stream1; tee again so the outbound
+    // (Claude SSE) events sent to the client are also logged at debug level.
+    const [outStream1, outStream2] = stream1
+      .pipeThrough(new TransformStream(transformer))
+      .tee();
+    (async () => {
+      try {
+        const outReader = outStream2.getReader();
+        const outDecoder = new TextDecoder();
+        let outBuffer = '';
+        while (true) {
+          const { done, value } = await outReader.read();
+          if (done) break;
+          outBuffer += outDecoder.decode(value, { stream: true });
+          const lines = outBuffer.split('\n');
+          if (lines.length > 1) {
+            for (const line of lines.slice(0, -1)) {
+              if (line.startsWith('data: ')) {
+                const data = line.substring(6);
+                if (data.trim() !== '[DONE]') {
+                  logPipelineStage(logger, requestId, 'outbound', '/v1/messages (SSE)', data);
+                }
+              }
+            }
+            outBuffer = lines[lines.length - 1] || '';
+          }
+        }
+      } catch {
+        // best-effort debug logging only
+      }
+    })();
+    const transformedStream = outStream1;
 
     // Return streaming response with proper headers
     return new Response(transformedStream, {
