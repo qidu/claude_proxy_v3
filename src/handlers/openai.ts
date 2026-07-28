@@ -243,17 +243,30 @@ function openAIChunk(text: string, model: string): Record<string, unknown> {
   };
 }
 
-// Module-level buffers for Anthropic SSE → Gemini conversion.
-// Single-flight (same pattern as thinkStreamBuffer): safe because JS is single-threaded.
+// Per-request buffers for Anthropic SSE → Gemini conversion, keyed by requestId.
+// Concurrent streaming requests (e.g. parallel sub-agent tool calls) interleave
+// on the event loop across `await reader.read()` suspension points, so a single
+// shared buffer would corrupt unrelated requests' tool-call args. Entries are
+// removed on message_stop / stream completion (see cleanup call sites below).
 interface AnthropicToolBuffer { id: string; name: string; args: string; }
-let anthropicToolBuffers: Map<number, AnthropicToolBuffer> = new Map();
-// Keyed by block index; value is accumulated thinking text.
-let anthropicThinkingBuffers: Map<number, string> = new Map();
+let anthropicToolBuffers: Map<string, Map<number, AnthropicToolBuffer>> = new Map();
+// Keyed by requestId -> block index -> accumulated thinking text.
+let anthropicThinkingBuffers: Map<string, Map<number, string>> = new Map();
+
+/** Remove all per-request SSE conversion state for a finished/aborted request. */
+function clearAnthropicSSEState(requestId: string): void {
+  anthropicToolBuffers.delete(requestId);
+  anthropicThinkingBuffers.delete(requestId);
+  clearGeminiSSEState(requestId);
+}
 
 function processAnthropicSSEBuffer(buffer: string, model: string, requestId: string, isInteractionsRequest: boolean, isGenerateContentRequest: boolean): { processed: string; remaining: string } {
   let result = '';
   const events = buffer.split('\n\n');
   const remaining = events.pop() || '';
+
+  let toolBuffers = anthropicToolBuffers.get(requestId);
+  let thinkingBuffers = anthropicThinkingBuffers.get(requestId);
 
   for (const event of events) {
     if (!event.trim()) continue;
@@ -269,13 +282,15 @@ function processAnthropicSSEBuffer(buffer: string, model: string, requestId: str
           // Some compatible APIs (e.g. MiniMax) send args fully populated in input already.
           const input = block.input as Record<string, unknown> | undefined;
           const initialArgs = (input && Object.keys(input).length > 0) ? JSON.stringify(input) : '';
-          anthropicToolBuffers.set(parsed.index as number, {
+          if (!toolBuffers) { toolBuffers = new Map(); anthropicToolBuffers.set(requestId, toolBuffers); }
+          toolBuffers.set(parsed.index as number, {
             id: (block.id as string) || '',
             name: (block.name as string) || '',
             args: initialArgs,
           });
         } else if (block?.type === 'thinking') {
-          anthropicThinkingBuffers.set(parsed.index as number, '');
+          if (!thinkingBuffers) { thinkingBuffers = new Map(); anthropicThinkingBuffers.set(requestId, thinkingBuffers); }
+          thinkingBuffers.set(parsed.index as number, '');
         }
       } else if (parsed.type === 'content_block_delta') {
         const delta = parsed.delta as Record<string, unknown> | undefined;
@@ -284,19 +299,24 @@ function processAnthropicSSEBuffer(buffer: string, model: string, requestId: str
           const { processed } = processSSEBuffer(`data: ${JSON.stringify(chunk)}\n\n`, model, requestId, isInteractionsRequest, isGenerateContentRequest);
           result += processed;
         } else if (delta?.type === 'thinking_delta') {
-          const existing = anthropicThinkingBuffers.get(parsed.index as number);
-          if (existing !== undefined) {
-            anthropicThinkingBuffers.set(parsed.index as number, existing + ((delta.thinking as string) || ''));
+          const existing = thinkingBuffers?.get(parsed.index as number);
+          if (thinkingBuffers && existing !== undefined) {
+            thinkingBuffers.set(parsed.index as number, existing + ((delta.thinking as string) || ''));
           }
         } else if (delta?.type === 'input_json_delta') {
-          const tool = anthropicToolBuffers.get(parsed.index as number);
+          const tool = toolBuffers?.get(parsed.index as number);
           if (tool) tool.args += (delta.partial_json as string) || '';
         }
       } else if (parsed.type === 'content_block_stop') {
-        const tool = anthropicToolBuffers.get(parsed.index as number);
+        const blockIndex = parsed.index as number;
+        const tool = toolBuffers?.get(blockIndex);
         if (tool) {
-          anthropicToolBuffers.delete(parsed.index as number);
+          toolBuffers!.delete(blockIndex);
           // Emit a complete OpenAI-format tool_calls chunk, then convert to the target format.
+          // Use the Anthropic content-block index (not a hardcoded 0) so multiple
+          // parallel tool calls in one turn don't collide in geminiToolCallBuffer —
+          // colliding indices concatenate different tools' argument JSON into one
+          // string, producing invalid_args errors for the merged/clobbered call.
           const chunk = {
             id: `chatcmpl_${Date.now()}`,
             object: 'chat.completion.chunk',
@@ -305,18 +325,18 @@ function processAnthropicSSEBuffer(buffer: string, model: string, requestId: str
             choices: [{
               index: 0,
               delta: {
-                tool_calls: [{ index: 0, id: tool.id, type: 'function', function: { name: tool.name, arguments: tool.args } }],
+                tool_calls: [{ index: blockIndex, id: tool.id, type: 'function', function: { name: tool.name, arguments: tool.args } }],
               },
               finish_reason: null,
             }],
           };
           const { processed } = processSSEBuffer(`data: ${JSON.stringify(chunk)}\n\n`, model, requestId, isInteractionsRequest, isGenerateContentRequest);
           result += processed;
-        } else if (anthropicThinkingBuffers.has(parsed.index as number)) {
+        } else if (thinkingBuffers?.has(parsed.index as number)) {
           // Emit the completed thinking block as a <think>…</think>-wrapped text so
           // processSSEBuffer's existing logic strips it into reasoning/cleanText.
-          const thinking = anthropicThinkingBuffers.get(parsed.index as number) || '';
-          anthropicThinkingBuffers.delete(parsed.index as number);
+          const thinking = thinkingBuffers.get(parsed.index as number) || '';
+          thinkingBuffers.delete(parsed.index as number);
           if (thinking) {
             const chunk = openAIChunk(`<think>${thinking}</think>`, model);
             const { processed } = processSSEBuffer(`data: ${JSON.stringify(chunk)}\n\n`, model, requestId, isInteractionsRequest, isGenerateContentRequest);
@@ -324,18 +344,23 @@ function processAnthropicSSEBuffer(buffer: string, model: string, requestId: str
           }
         }
       } else if (parsed.type === 'message_delta') {
-        // processSSEBuffer filters out empty-parts candidates, so emit finishReason directly.
         const delta = parsed.delta as Record<string, unknown> | undefined;
         const stopReason = delta?.stop_reason as string | undefined;
         const finishReason = stopReason === 'tool_use' ? 'tool_calls'
           : stopReason === 'max_tokens' ? 'length' : 'stop';
-        if (isGenerateContentRequest) {
-          result += `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [] }, finishReason, index: 0 }], model })}\n\n`;
-        }
-        // Interactions format: stream just ends; no explicit finish event needed.
+        // Route through processSSEBuffer so its geminiToolCallBuffer flush logic fires.
+        // Without this, tool calls buffered during content_block_stop are never emitted.
+        const syntheticFinish = {
+          id: `chatcmpl_${Date.now()}`,
+          object: 'chat.completion.chunk',
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
+        };
+        const { processed } = processSSEBuffer(`data: ${JSON.stringify(syntheticFinish)}\n\n`, model, requestId, isInteractionsRequest, isGenerateContentRequest);
+        result += processed;
       } else if (parsed.type === 'message_stop') {
-        anthropicToolBuffers.clear();
-        anthropicThinkingBuffers.clear();
+        clearAnthropicSSEState(requestId);
         // Gemini generateContent/interactions streams end naturally; no sentinel needed.
       }
     } catch {
@@ -411,6 +436,10 @@ async function handleCrossModeStreamingResponse(
     } catch (error) {
       logger.error(requestId, `Cross-mode streaming error: ${(error as Error).message}`);
       await writer.abort();
+    } finally {
+      // Prevent leaking per-request buffer entries if the stream errors out
+      // before message_stop/[DONE] triggers the normal cleanup.
+      if (source === 'anthropic-messages') clearAnthropicSSEState(requestId);
     }
   })();
 
@@ -1123,6 +1152,10 @@ async function handleOpenAIStreamingResponse(
         } catch (error) {
             logger.error(requestId, `OpenAI streaming error: ${(error as Error).message}`);
             await writer.abort();
+        } finally {
+            // Prevent leaking per-request buffer entries if the stream errors out
+            // before [DONE] triggers the normal cleanup.
+            clearGeminiSSEState(requestId);
         }
     })();
 
@@ -1191,21 +1224,28 @@ async function handleOpenAINonStreamingResponse(
 /**
  * Convert OpenAI streaming chunk to Claude format
  */
-// Cross-chunk buffer for <think>/<thinking> tags that may straddle SSE events.
-// Single-flight per process because Node.js JS is single-threaded; safe for one
-// concurrent stream at a time. Resetting at [DONE] is the responsibility of the
-// chunk processor below when it observes that sentinel.
-let thinkStreamBuffer = '';
+// Per-request buffer for <think>/<thinking> tags that may straddle SSE events,
+// keyed by requestId. Concurrent streams interleave on the event loop across
+// `await reader.read()` suspension points, so a single shared string would
+// corrupt unrelated requests' text. Cleared on [DONE] / stream completion.
+let thinkStreamBuffers: Map<string, string> = new Map();
 
-// Cross-chunk accumulation of streaming OpenAI tool_calls for the Gemini output
-// paths. Upstreams like DeepSeek fragment a single tool call across chunks: the
-// first chunk carries id+name+partial-args, continuation chunks carry only more
-// argument text at the same index. Emitting a Gemini functionCall per fragment
-// produces name-less "call_undefined" calls, so we buffer by index and flush one
-// complete functionCall when finish_reason arrives. Single-flight (same rationale
-// as thinkStreamBuffer). Keyed by the tool_call index.
+// Per-request accumulation of streaming OpenAI tool_calls for the Gemini output
+// paths, keyed by requestId -> tool_call index. Upstreams like DeepSeek fragment
+// a single tool call across chunks: the first chunk carries id+name+partial-args,
+// continuation chunks carry only more argument text at the same index. Emitting
+// a Gemini functionCall per fragment produces name-less "call_undefined" calls,
+// so we buffer by index and flush one complete functionCall when finish_reason
+// arrives. Keyed by requestId (not just index) for the same reason as
+// thinkStreamBuffers above — concurrent requests must not share state.
 interface GeminiToolCallAccum { id: string; name: string; args: string; }
-let geminiToolCallBuffer: Map<number, GeminiToolCallAccum> = new Map();
+let geminiToolCallBuffers: Map<string, Map<number, GeminiToolCallAccum>> = new Map();
+
+/** Remove all per-request SSE conversion state for a finished/aborted request. */
+function clearGeminiSSEState(requestId: string): void {
+    thinkStreamBuffers.delete(requestId);
+    geminiToolCallBuffers.delete(requestId);
+}
 
 /**
  * Process SSE buffer and extract complete events
@@ -1219,17 +1259,19 @@ function processSSEBuffer(buffer: string, modelId: string, requestId: string, is
     
     // Last element might be incomplete, keep it in buffer
     remaining = events.pop() || '';
-    
+
+    let toolCallBuffer = geminiToolCallBuffers.get(requestId);
+
     for (const event of events) {
         if (!event.trim()) continue;
-        
+
         const lines = event.split('\n');
         for (const line of lines) {
             if (line.startsWith('data: ')) {
                 const data = line.slice(6).trim();
                 if (data === '[DONE]') {
-                    thinkStreamBuffer = '';
-                    geminiToolCallBuffer.clear();
+                    clearGeminiSSEState(requestId);
+                    toolCallBuffer = undefined;
                     if (isGenerateContentRequest) {
                         // Gemini generateContent doesn't need explicit end marker
                         continue;
@@ -1241,9 +1283,10 @@ function processSSEBuffer(buffer: string, modelId: string, requestId: string, is
                         const parsed = JSON.parse(data);
 
                         // Stitch cross-chunk think tags: prepend any partial thinkStreamBuffer to current content
-                        if (thinkStreamBuffer && parsed?.choices?.[0]?.delta?.content) {
-                            parsed.choices[0].delta.content = thinkStreamBuffer + parsed.choices[0].delta.content;
-                            thinkStreamBuffer = '';
+                        const thinkBuffered = thinkStreamBuffers.get(requestId);
+                        if (thinkBuffered && parsed?.choices?.[0]?.delta?.content) {
+                            parsed.choices[0].delta.content = thinkBuffered + parsed.choices[0].delta.content;
+                            thinkStreamBuffers.delete(requestId);
                         }
 
                         // For the Gemini output paths, accumulate fragmented streaming
@@ -1253,12 +1296,13 @@ function processSSEBuffer(buffer: string, modelId: string, requestId: string, is
                         if (isGenerateContentRequest || isInteractionsRequest) {
                             const deltaToolCalls = parsed?.choices?.[0]?.delta?.tool_calls;
                             if (Array.isArray(deltaToolCalls)) {
+                                if (!toolCallBuffer) { toolCallBuffer = new Map(); geminiToolCallBuffers.set(requestId, toolCallBuffer); }
                                 for (const tc of deltaToolCalls) {
                                     const idx = typeof tc.index === 'number' ? tc.index : 0;
-                                    let acc = geminiToolCallBuffer.get(idx);
+                                    let acc = toolCallBuffer.get(idx);
                                     if (!acc) {
                                         acc = { id: '', name: '', args: '' };
-                                        geminiToolCallBuffer.set(idx, acc);
+                                        toolCallBuffer.set(idx, acc);
                                     }
                                     if (tc.id) acc.id = tc.id;
                                     if (tc.function?.name) acc.name = tc.function.name;
@@ -1285,9 +1329,10 @@ function processSSEBuffer(buffer: string, modelId: string, requestId: string, is
                         // Flush accumulated tool calls when the turn finishes, injecting
                         // them as complete functionCall parts into the converted chunk.
                         const finishReason = parsed?.choices?.[0]?.finish_reason;
-                        if ((isGenerateContentRequest || isInteractionsRequest) && finishReason && geminiToolCallBuffer.size > 0) {
-                            const accumulated = Array.from(geminiToolCallBuffer.values()).filter(a => a.name);
-                            geminiToolCallBuffer.clear();
+                        if ((isGenerateContentRequest || isInteractionsRequest) && finishReason && toolCallBuffer && toolCallBuffer.size > 0) {
+                            const accumulated = Array.from(toolCallBuffer.values()).filter(a => a.name);
+                            toolCallBuffer.clear();
+                            geminiToolCallBuffers.delete(requestId);
                             const synthetic = {
                                 choices: [{
                                     index: 0,
@@ -1313,7 +1358,7 @@ function processSSEBuffer(buffer: string, modelId: string, requestId: string, is
                         if (emittedContent) {
                             const partialOpen = emittedContent.lastIndexOf('<');
                             if (partialOpen !== -1 && !emittedContent.slice(partialOpen).includes('>')) {
-                                thinkStreamBuffer = emittedContent.slice(partialOpen);
+                                thinkStreamBuffers.set(requestId, emittedContent.slice(partialOpen));
                             }
                         }
                         

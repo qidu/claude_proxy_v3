@@ -810,6 +810,59 @@ Paths: bare field name for top-level (`max_tokens`); `messages[].field` for all 
 | `recover_tool_message_name` | Backfills missing `name` on `role:"tool"` messages by looking up the matching `tool_call_id` in the preceding assistant turn's `tool_calls`. |
 | `inject_missing_tool_results` | Synthesizes placeholder `tool_result` blocks for any `tool_use.id` that has no matching `tool_result` in the next user message. Required by DeepSeek's Anthropic-format endpoint. |
 
+**Worked example — DeepSeek's Anthropic endpoint rejecting uppercase tool-schema types**
+
+Antigravity/Gemini agents send tool schemas with proto-style uppercase types
+(`"STRING"`), including nested inside `anyOf`. DeepSeek's `anthropic-messages` endpoint
+rejects them:
+
+```
+HTTP 400: Invalid schema for function 'glob_tool':
+"STRING" is not valid under any of the schemas listed in the 'anyOf' keyword
+```
+
+Fix by wiring `lowercase_tool_schema_types` at `endpoint_readin` and attaching the set to
+the model entry:
+
+```toml
+[transforms.deepseek_v4_anthropic_compat]
+schema = "anthropic-messages"
+endpoint_readin.builtins = ["lowercase_tool_schema_types"]
+before_upstream.builtins  = ["inject_missing_tool_results"]
+
+[models.free]
+upstream_mode = "openai-completions"
+# attach the set via the entry's `transforms` field, or it resolves to nothing:
+deepseek-v4-anth = {target = "deepseek-v4-flash", base_url = "https://api.deepseek.com/anthropic", api_key = "sk-...", mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat"}
+```
+
+An inbound tool schema like this (uppercase, with `anyOf`):
+
+```json
+{"tools": [{"name": "glob_tool", "input_schema": {
+  "type": "OBJECT",
+  "properties": {
+    "pattern": {"type": "STRING"},
+    "path": {"anyOf": [{"type": "STRING"}, {"type": "NULL"}]}
+  }
+}}]}
+```
+
+is rewritten to lowercase (top-level, `properties`, `items`, **and `anyOf`/`oneOf`/`allOf`
+branches**) before reaching the upstream:
+
+```json
+{"type": "object", "properties": {
+  "pattern": {"type": "string"},
+  "path": {"anyOf": [{"type": "string"}, {"type": "null"}]}
+}}
+```
+
+The same set applies across all three entry paths — `/v1/messages`,
+`/v1beta/models/{model}:generateContent`, and `/v1/chat/completions` passthrough
+(`DEV_PASS_THROUGH`) — so Antigravity's `GeminiAPIEndpoint` and `LocalOpenAIAgentConfig`
+transports are both covered.
+
 **Core / server**
 
 | Variable | Default | Purpose |

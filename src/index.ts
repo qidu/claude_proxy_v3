@@ -1012,6 +1012,10 @@ export default {
       let modelId: string | undefined;
       let upstreamMode: string | undefined;
       let forceStreaming: boolean = false;
+      // Route resolved in the passthrough/fixed path, threaded into the final
+      // runAttempt so its endpoint_readin/writeout transforms fire (this path
+      // bypasses compositeAttempts/buildRouteAttempt which set route otherwise).
+      let outerRoute: ModelRouteConfig | undefined;
       let isGeminiBypass = false;
       const userAgentPrefix = extractUserAgentPrefix(request.headers.get('user-agent'));
       // Structured agent identity — filled in once the request body is parsed
@@ -1165,6 +1169,7 @@ export default {
               // Prefer per-model route (e.g. gpt-5.5 in [models.free]) over the global default,
               // so the correct base_url, api_key, and upstream_mode are used.
               const modelRoute = modelName ? getModelRouteConfig(modelName, proxyConfig) : undefined;
+              outerRoute = modelRoute;
               const fixedRoute = parseFixedRoute(path, proxyConfig, env);
 
               if (modelRoute && modelRoute.targetUrl) {
@@ -2008,14 +2013,15 @@ export default {
             logger,
           };
           const transformed = runHook('endpoint_readin', { body: parsedBody, headers: attemptAuthHeaders }, hookCtx);
-          if (transformed.body !== parsedBody || transformed.headers !== attemptAuthHeaders) {
-            attemptRequest = new Request(attemptRequest.url, {
-              method: attemptRequest.method,
-              headers: attemptRequest.headers,
-              body: JSON.stringify(transformed.body),
-            });
-            attemptAuthHeaders = transformed.headers;
-          }
+          // Builtins/ops mutate `body` in place, so `transformed.body` keeps the
+          // same reference as `parsedBody` — an identity check can't detect the
+          // change. Always rebuild the request from the (possibly mutated) body.
+          attemptRequest = new Request(attemptRequest.url, {
+            method: attemptRequest.method,
+            headers: attemptRequest.headers,
+            body: JSON.stringify(transformed.body),
+          });
+          attemptAuthHeaders = transformed.headers;
         }
 
         // Debug log routing info for test model requests (LOG_LEVEL=debug)
@@ -2297,6 +2303,7 @@ export default {
         forceStreaming,
         authHeaders: modelAuthHeaders,
         agent,
+        route: outerRoute,
       });
 
       // Apply CORS headers

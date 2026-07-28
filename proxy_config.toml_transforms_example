@@ -1,3 +1,5 @@
+deepseek-v4-anth = {target = "deepseek-v4-flash", base_url = "https://api.deepseek.com/anthropic", api_key = "sk-***", mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat"}
+
 [transforms.deepseek_compat]
 schema = "openai-completions"
 endpoint_readin.builtins = ["lowercase_tool_schema_types"]
@@ -8,6 +10,7 @@ before_upstream.ops = [
 
 [transforms.deepseek_v4_anthropic_compat]
 schema = "anthropic-messages"
+endpoint_readin.builtins = ["lowercase_tool_schema_types"]
 before_upstream.builtins = ["inject_missing_tool_results"]
 
 [transforms.minimax_compat]

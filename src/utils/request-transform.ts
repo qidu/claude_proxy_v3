@@ -70,6 +70,14 @@ function lowercaseSchemaTypes(schema: Record<string, unknown>): void {
   } else if (schema.items && typeof schema.items === 'object') {
     lowercaseSchemaTypes(schema.items as Record<string, unknown>);
   }
+  for (const key of ['anyOf', 'oneOf', 'allOf']) {
+    const branches = schema[key];
+    if (Array.isArray(branches)) {
+      for (const branch of branches) {
+        if (branch && typeof branch === 'object') lowercaseSchemaTypes(branch as Record<string, unknown>);
+      }
+    }
+  }
 }
 
 function applyBuiltin(name: BuiltinName, body: Record<string, unknown>): void {

@@ -7,6 +7,90 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: transforms — `endpoint_readin` mutations discarded, and passthrough/generateContent paths never ran transforms
+
+Antigravity agents routed to `deepseek-v4-anth` (DeepSeek's `anthropic-messages`-compatible
+endpoint) failed on tool-using turns with
+`Invalid schema for function 'glob_tool': "STRING" is not valid under any of the schemas
+listed in the 'anyOf' keyword`. DeepSeek requires lowercase JSON-schema types
+(`"string"`), but Gemini/proto-style tool schemas arrive with uppercase (`"STRING"`).
+Three root causes:
+
+1. **`endpoint_readin` change-detection was always false** (`src/index.ts`). Builtins/ops
+   mutate the body object *in place*, so `runHook` returns the same reference. The guard
+   `if (transformed.body !== parsedBody)` never fired, so the mutated (lowercased) body was
+   discarded and the original forwarded upstream. Now always rebuilds the request from the
+   transformed body. **This affected every `endpoint_readin` transform on every route**, not
+   just this one — they silently no-op'd.
+
+2. **Passthrough and generateContent paths bypassed transforms** (`src/index.ts`). The
+   `/v1/chat/completions` passthrough (LocalOpenAIAgentConfig transport) and
+   `:generateContent` (GeminiAPIEndpoint transport) paths dispatch through the final
+   `runAttempt` with no `route`, so the hook never fired. The resolved route is now hoisted
+   (`outerRoute`) and threaded into that `runAttempt`.
+
+3. **`lowercase_tool_schema_types` skipped composition keywords**
+   (`src/utils/request-transform.ts`). It only recursed into `properties`/`items`, so a
+   `{type:"STRING"}` nested inside `anyOf`/`oneOf`/`allOf` (as in `glob_tool`) survived
+   uppercase — exactly what the error named. Now recurses into all three.
+
+**Config wiring** (`proxy_config.toml`): attached `deepseek_v4_anthropic_compat` to the
+`deepseek-v4-anth` entry (it was defined but orphaned — resolving zero transforms) and added
+`lowercase_tool_schema_types` to its `endpoint_readin.builtins`.
+
+**Files changed:** `src/index.ts`, `src/utils/request-transform.ts`, `proxy_config.toml`.
+
+### Fix: Antigravity/Gemini + local OpenAI agents — parallel tool calls corrupted through `anthropic-messages` streaming
+
+Antigravity agents (`transport=GeminiAPIEndpoint` and `transport=LocalOpenAIAgentConfig`)
+routed to `max-m3-anth` (MiniMax `anthropic-messages`, targeting `MiniMax-M3`) failed on
+tool-using turns. Two root causes in `src/handlers/openai.ts`:
+
+1. **Tool-call index collision.** When converting Anthropic SSE → Gemini, each completed
+   `tool_use` block was emitted with a hardcoded `tool_calls[].index = 0`. Multiple parallel
+   tool calls in one turn therefore collided in `geminiToolCallBuffer`, concatenating
+   different tools' argument JSON into one string → `invalid_args`. Now uses the Anthropic
+   content-block index.
+
+2. **`message_delta` never flushed buffered tool calls.** The Anthropic `message_delta`
+   finish event emitted a Gemini `finishReason` directly instead of routing through
+   `processSSEBuffer`, so tool calls buffered at `content_block_stop` were never emitted.
+   Now routes a synthetic finish chunk through `processSSEBuffer` to trigger its flush logic.
+
+Additionally, the module-level single-flight SSE buffers (`anthropicToolBuffers`,
+`anthropicThinkingBuffers`, `thinkStreamBuffer`, `geminiToolCallBuffer`) were made
+per-request (keyed by `requestId`). Concurrent streams (parallel sub-agent tool calls)
+interleave on the event loop across `await reader.read()`, so shared buffers corrupted
+unrelated requests. Added `clearAnthropicSSEState`/`clearGeminiSSEState` cleanup on
+`message_stop`/`[DONE]` and in stream-handler `finally` blocks to prevent leaks on error.
+
+**Files changed:** `src/handlers/openai.ts`.
+
+(Ported from `feature/fusion` commit `3182231`. The thinking/`reasoning_content`
+round-trip parts of that commit — in `claude-to-openai.ts`, `openai-to-claude.ts`, and
+`claudeJsonToSyntheticCompletions` — were already present on this branch.)
+
+### Fix: `/v1/responses` → `anthropic-messages` — out-of-order `function_call`/text items produced consecutive assistant messages
+
+Codex CLI routed through `max-m3-anth` (MiniMax's `anthropic-messages`-compatible endpoint,
+targeting `MiniMax-M3`) failed on turn 2+ of a tool-using conversation with
+`invalid params, 400 (2013)`.
+
+Codex replays a prior turn's `function_call` item *before* the assistant `message` item
+containing the text that preceded it in the original turn. `convertInputItemsToMessages`
+(`src/converters/responses-to-completions.ts`) converted each input item independently and
+in order, so this produced two consecutive `assistant`-role messages (`tool_use` then `text`)
+before the `tool_result`. The Anthropic Messages API requires strict role alternation and a
+`tool_use` block's `tool_result` to immediately follow the single message that emitted it —
+MiniMax rejected the malformed shape with error 2013.
+
+**Fix:** `convertInputItemsToMessages` now merges a `function_call` and any adjacent assistant
+`message`/`reasoning` items belonging to the same turn — regardless of their order in the
+`input` array — into a single assistant message carrying both `content` (text) and
+`tool_calls`.
+
+**Files changed:** `src/converters/responses-to-completions.ts`.
+
 ### Fix: thinking/reasoning round-trip for streaming, non-streaming, and Gemini paths
 
 Surfaced by multi-agent live run (`tests/multi-agents-test.ts`, Claude + Gemini agents × `deepseek-v4-comp` / `deepseek-v4-anth`). Three converter bugs caused thinking-mode responses to drop `reasoning_content` on the way back to the client, breaking subsequent multi-turn requests that require the reasoning to be passed back.
