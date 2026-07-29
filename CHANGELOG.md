@@ -7,7 +7,6 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
-<<<<<<< Updated upstream
 ### Fix: transforms — `endpoint_readin` mutations discarded, and passthrough/generateContent paths never ran transforms
 
 Antigravity agents routed to `deepseek-v4-anth` (DeepSeek's `anthropic-messages`-compatible
@@ -70,7 +69,7 @@ unrelated requests. Added `clearAnthropicSSEState`/`clearGeminiSSEState` cleanup
 (Ported from `feature/fusion` commit `3182231`. The thinking/`reasoning_content`
 round-trip parts of that commit — in `claude-to-openai.ts`, `openai-to-claude.ts`, and
 `claudeJsonToSyntheticCompletions` — were already present on this branch.)
-=======
+
 ### Feat: `coordinator` composite mode (prewalk pattern)
 
 New composite alias strategy that routes a conversation through **two models in
@@ -110,8 +109,7 @@ aliases, or other `[composite]` aliases of any mode (resolved through the full
   parse/serialize/sanitize updated.
 - `src/utils/coordinator.ts` — new file: `detectCoordinatorStage(messages, triggerTools)`.
 - `src/index.ts` — coordinator dispatch block inserted before fusion routing.
-- `tests/unit/coordinator.test.ts` — 23 new unit tests (all passing).
->>>>>>> Stashed changes
+- `tests/unit/coordinator.test.ts` — 27 unit tests (all passing; 23 originally landed with the feature, plus 4 config-round-trip cases added during finalization).
 
 ### Fix: `/v1/responses` → `anthropic-messages` — out-of-order `function_call`/text items produced consecutive assistant messages
 
