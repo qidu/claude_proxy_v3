@@ -7,6 +7,7 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+<<<<<<< Updated upstream
 ### Fix: transforms — `endpoint_readin` mutations discarded, and passthrough/generateContent paths never ran transforms
 
 Antigravity agents routed to `deepseek-v4-anth` (DeepSeek's `anthropic-messages`-compatible
@@ -69,6 +70,48 @@ unrelated requests. Added `clearAnthropicSSEState`/`clearGeminiSSEState` cleanup
 (Ported from `feature/fusion` commit `3182231`. The thinking/`reasoning_content`
 round-trip parts of that commit — in `claude-to-openai.ts`, `openai-to-claude.ts`, and
 `claudeJsonToSyntheticCompletions` — were already present on this branch.)
+=======
+### Feat: `coordinator` composite mode (prewalk pattern)
+
+New composite alias strategy that routes a conversation through **two models in
+sequence**: a capable `planner` model handles requests during the planning stage,
+then the proxy switches to a faster/cheaper `executor` model once the first
+trigger tool call appears in the accumulated message history — reusing the full
+context without re-reading anything. Mirrors the prewalk pattern from oh-my-pi.
+
+**Config shape** (`[composite]`):
+
+```toml
+"smart-coder" = {
+  "deepseek-v4-pro"   = {coord = 1, role = "planner"},
+  "deepseek-v4-flash" = {coord = 1, role = "executor"},
+  toolset = ["ExitPlanMode", "Edit", "Write"]
+}
+```
+
+Each coordinator participant carries `coord = 1` and `role = "planner"` or
+`"executor"`. The top-level `toolset` key lists trigger tool names:
+
+| `toolset` value | Behaviour |
+|---|---|
+| absent | Use default set: `ExitPlanMode`, `Edit`, `Write`, `Bash`, `NotebookEdit` |
+| `["Edit", "Write"]` | Only those tool names trigger hand-off |
+| `[]` (empty) | Any tool call triggers hand-off |
+
+Role targets may be direct model names, `[models.*]` aliases, `[schedule]`
+aliases, or other `[composite]` aliases of any mode (resolved through the full
+`getModelRouteConfig` chain; cycle detection applies).
+
+**Files changed:**
+- `src/utils/config-loader.ts` — `FusionRole` extended with `'planner'|'executor'`;
+  `CompositeTargetConfig.coord`, `CompositeModelConfig.toolset`, `CoordinatorPlan`,
+  `COORDINATOR_DEFAULT_TRIGGER_TOOLS`, `resolveCoordinatorPlan` added;
+  `getCompositeAliasMode` now returns `'coordinator'` (highest precedence);
+  parse/serialize/sanitize updated.
+- `src/utils/coordinator.ts` — new file: `detectCoordinatorStage(messages, triggerTools)`.
+- `src/index.ts` — coordinator dispatch block inserted before fusion routing.
+- `tests/unit/coordinator.test.ts` — 23 new unit tests (all passing).
+>>>>>>> Stashed changes
 
 ### Fix: `/v1/responses` → `anthropic-messages` — out-of-order `function_call`/text items produced consecutive assistant messages
 

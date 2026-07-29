@@ -319,7 +319,7 @@ export interface TokenLimitConfig {
   duration: TokenLimitDuration;
 }
 
-export type FusionRole = 'panel' | 'judge' | 'synth';
+export type FusionRole = 'panel' | 'judge' | 'synth' | 'planner' | 'executor';
 
 export interface FusionOptions {
   min_panel?: number;        // min successful panel responses to proceed (default 1)
@@ -334,14 +334,35 @@ export interface CompositeTargetConfig {
   primary?: boolean;
   fallback?: number;
   fusion?: number;           // > 0 marks target as panel member (weight reserved for future use)
-  role?: FusionRole;         // explicit stage: 'panel' | 'judge' | 'synth'
+  coord?: number;            // > 0 marks target as coordinator participant (planner or executor)
+  role?: FusionRole;         // explicit stage: 'panel' | 'judge' | 'synth' | 'planner' | 'executor'
 }
 
 export interface CompositeModelConfig {
   token_limit?: TokenLimitConfig;
   fusion_options?: FusionOptions;
-  [modelName: string]: CompositeTargetConfig | TokenLimitConfig | FusionOptions | undefined;
+  toolset?: string[];        // coordinator trigger tool names; absent = default set; [] = any tool
+  [modelName: string]: CompositeTargetConfig | TokenLimitConfig | FusionOptions | string[] | undefined;
 }
+
+export interface CoordinatorPlan {
+  alias: string;
+  plannerName: string;
+  plannerRoute: ModelRouteConfig;
+  executorName: string;
+  executorRoute: ModelRouteConfig;
+  /** null = any tool_use triggers hand-off; Set<string> = only listed tool names */
+  triggerTools: Set<string> | null;
+}
+
+/** Applied when `toolset` key is absent — curated default for Claude Code plan-mode sessions. */
+export const COORDINATOR_DEFAULT_TRIGGER_TOOLS = new Set([
+  'ExitPlanMode',   // explicit Claude Code plan-mode exit
+  'Edit',           // file mutation
+  'Write',          // file creation
+  'Bash',           // shell execution
+  'NotebookEdit',   // notebook mutation
+]);
 
 export interface FusionPlan {
   alias: string;
@@ -365,7 +386,7 @@ export interface ScheduleWindow {
 // (always eligible, used when no other target's windows match "now").
 export type ScheduleConfig = Record<string, ScheduleWindow[]>;
 
-const COMPOSITE_META_KEYS = new Set(['token_limit', 'fusion_options']);
+const COMPOSITE_META_KEYS = new Set(['token_limit', 'fusion_options', 'toolset']);
 
 function getCompositeTargetEntries(config: CompositeModelConfig | undefined): Array<[string, CompositeTargetConfig]> {
   return Object.entries(config || {}).filter(([key]) => !COMPOSITE_META_KEYS.has(key)) as Array<[string, CompositeTargetConfig]>;
@@ -695,14 +716,21 @@ export function getCompositeRouteCandidates(
   }));
 }
 
+export type CompositeAliasMode = 'coordinator' | 'fusion' | 'fallback' | 'share';
+
 export function getCompositeAliasMode(
   modelName: string,
   proxyConfig: ProxyConfig
-): 'fusion' | 'fallback' | 'share' | undefined {
+): CompositeAliasMode | undefined {
   const compositeConfig = proxyConfig.composite?.[modelName];
   if (!compositeConfig) return undefined;
 
   const entries = getCompositeTargetEntries(compositeConfig);
+
+  // Coordinator takes precedence — detected first
+  const isCoordinator = entries.some(([, cfg]) => typeof cfg.coord === 'number' && cfg.coord > 0);
+  if (isCoordinator) return 'coordinator';
+
   const isFusion = entries.some(([, cfg]) =>
     cfg.role === 'panel' || cfg.role === 'judge' || cfg.role === 'synth' ||
     (typeof cfg.fusion === 'number' && cfg.fusion > 0)
@@ -771,6 +799,67 @@ export function resolveFusionPlan(
   };
 
   return { alias: modelName, panel, judge, synth, options };
+}
+
+export function resolveCoordinatorPlan(
+  modelName: string,
+  proxyConfig: ProxyConfig,
+  visited: Set<string> = new Set(),
+): CoordinatorPlan | undefined {
+  const compositeConfig = proxyConfig.composite?.[modelName];
+  if (!compositeConfig) return undefined;
+
+  const entries = getCompositeTargetEntries(compositeConfig);
+  const coordEntries = entries.filter(([, cfg]) => typeof cfg.coord === 'number' && cfg.coord > 0);
+  if (coordEntries.length === 0) return undefined;
+
+  const plannerEntries = coordEntries.filter(([, cfg]) => cfg.role === 'planner');
+  const executorEntries = coordEntries.filter(([, cfg]) => cfg.role === 'executor');
+
+  if (plannerEntries.length === 0) throw new Error(`Coordinator alias "${modelName}" is missing a target with role = "planner"`);
+  if (executorEntries.length === 0) throw new Error(`Coordinator alias "${modelName}" is missing a target with role = "executor"`);
+  if (plannerEntries.length > 1) throw new Error(`Coordinator alias "${modelName}" has multiple planner targets; only one is allowed`);
+  if (executorEntries.length > 1) throw new Error(`Coordinator alias "${modelName}" has multiple executor targets; only one is allowed`);
+
+  // Check for coord+fusion conflict
+  const hasFusion = entries.some(([, cfg]) =>
+    cfg.role === 'panel' || cfg.role === 'judge' || cfg.role === 'synth' ||
+    (typeof cfg.fusion === 'number' && cfg.fusion > 0)
+  );
+  if (hasFusion) throw new Error(`Coordinator alias "${modelName}" mixes coord and fusion entries; these modes are incompatible`);
+
+  const nextVisited = new Set(visited);
+  nextVisited.add(modelName);
+
+  const [plannerName] = plannerEntries[0];
+  const [executorName] = executorEntries[0];
+
+  const plannerRoute = getModelRouteConfig(plannerName, proxyConfig, nextVisited);
+  const executorRoute = getModelRouteConfig(executorName, proxyConfig, nextVisited);
+
+  // Warn if planner and executor resolve to the same upstream (coordinator is a no-op)
+  if (
+    plannerRoute.targetUrl === executorRoute.targetUrl &&
+    (plannerRoute.modelAlias || plannerName) === (executorRoute.modelAlias || executorName)
+  ) {
+    console.warn(`[coordinator] alias="${modelName}" planner and executor resolve to the same model; hand-off will be a no-op`);
+  }
+
+  // Resolve triggerTools: absent → default; [] → null (any tool); list → Set
+  const rawToolset = compositeConfig.toolset;
+  const triggerTools: Set<string> | null =
+    rawToolset === undefined ? new Set(COORDINATOR_DEFAULT_TRIGGER_TOOLS) :
+    rawToolset.length === 0  ? null :
+    new Set(rawToolset);
+
+  return {
+    alias: modelName,
+    plannerName,
+    plannerRoute: { ...plannerRoute, modelAlias: plannerRoute.modelAlias || plannerName },
+    executorName,
+    executorRoute: { ...executorRoute, modelAlias: executorRoute.modelAlias || executorName },
+    triggerTools,
+  };
 }
 
 export function isScheduleAlias(modelName: string, proxyConfig: ProxyConfig): boolean {
@@ -1111,9 +1200,19 @@ function parseCompositeTargetConfig(value: string): CompositeTargetConfig {
       continue;
     }
 
+    if (key === 'coord') {
+      const numeric = Number(rawValue);
+      if (!Number.isNaN(numeric) && numeric >= 0) {
+        (config as any).coord = numeric;
+      } else if (rawValue !== '') {
+        (config as any)._invalidCoord = true;
+      }
+      continue;
+    }
+
     if (key === 'role') {
       const v = rawValue.replace(/^"|"$/g, '');
-      if (v === 'panel' || v === 'judge' || v === 'synth') {
+      if (v === 'panel' || v === 'judge' || v === 'synth' || v === 'planner' || v === 'executor') {
         (config as any).role = v;
       } else {
         (config as any)._invalidRole = true;
@@ -1326,6 +1425,19 @@ function parseCompositeModelConfig(rawValue: string): CompositeModelConfig {
       } else {
         config[match[1].trim()] = parseCompositeTargetConfig(match[2]);
       }
+      continue;
+    }
+
+    // Parse toolset = ["Tool1", "Tool2"] (coordinator trigger tools)
+    const toolsetMatch = entry.match(/^"?toolset"?\s*[=:]\s*(\[.*\])$/);
+    if (toolsetMatch) {
+      const arr = toolsetMatch[1].trim();
+      // Extract quoted strings from the array
+      const items: string[] = [];
+      for (const m of arr.matchAll(/"([^"]+)"/g)) {
+        items.push(m[1]);
+      }
+      config.toolset = items;
       continue;
     }
 
@@ -1549,6 +1661,9 @@ function serializeCompositeTargetConfig(config: CompositeTargetConfig): string {
   if (config.fusion !== undefined) {
     fields.push(`fusion = ${config.fusion}`);
   }
+  if (config.coord !== undefined) {
+    fields.push(`coord = ${config.coord}`);
+  }
   if (config.role !== undefined) {
     fields.push(`role = "${config.role}"`);
   }
@@ -1572,6 +1687,9 @@ function serializeCompositeModelConfig(config: CompositeModelConfig): string {
   }
   if (config.fusion_options && typeof config.fusion_options === 'object') {
     entries.push(`fusion_options = ${serializeFusionOptions(config.fusion_options as FusionOptions)}`);
+  }
+  if (Array.isArray(config.toolset)) {
+    entries.push(`toolset = [${config.toolset.map(t => JSON.stringify(t)).join(', ')}]`);
   }
   for (const [modelName, targetConfig] of getCompositeTargetEntries(config)) {
     const serializedTarget = serializeCompositeTargetConfig((targetConfig || {}) as CompositeTargetConfig);
@@ -2756,6 +2874,12 @@ function sanitizeCompositeConfig(composite: ProxyConfig['composite']): Record<st
       safeTargets.token_limit = aliasLimit;
     }
 
+    // Preserve toolset (coordinator trigger tools)
+    const rawToolset = (targets as CompositeModelConfig).toolset;
+    if (Array.isArray(rawToolset)) {
+      safeTargets.toolset = rawToolset.filter((t): t is string => typeof t === 'string');
+    }
+
     // Preserve fusion_options
     const rawFusionOpts = (targets as CompositeModelConfig).fusion_options;
     if (rawFusionOpts && typeof rawFusionOpts === 'object' && !Array.isArray(rawFusionOpts)) {
@@ -2804,7 +2928,13 @@ function sanitizeCompositeConfig(composite: ProxyConfig['composite']): Record<st
       if (typeof targetCfg.fusion === 'number' && Number.isFinite(targetCfg.fusion)) {
         safeTarget.fusion = targetCfg.fusion;
       }
-      if (targetCfg.role === 'panel' || targetCfg.role === 'judge' || targetCfg.role === 'synth') {
+      if (typeof targetCfg.coord === 'number' && Number.isFinite(targetCfg.coord)) {
+        safeTarget.coord = targetCfg.coord;
+      }
+      if (
+        targetCfg.role === 'panel' || targetCfg.role === 'judge' || targetCfg.role === 'synth' ||
+        targetCfg.role === 'planner' || targetCfg.role === 'executor'
+      ) {
         safeTarget.role = targetCfg.role as FusionRole;
       }
       safeTargets[targetModel] = safeTarget;

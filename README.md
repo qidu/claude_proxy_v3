@@ -543,6 +543,75 @@ If no synth is configured, the judge is used as synth; if no judge exists, the f
 For the full set of composite/fusion options and the TUI editor workflow, see
 [`docs/design_fusion_composite_alias.md`](./docs/design_fusion_composite_alias.md).
 
+**Coordinator** routes a single conversation through two models in sequence — a
+`planner` (capable/expensive) during the planning stage, then an `executor`
+(fast/cheap) once the planning stage is over — reusing the full accumulated
+context without re-reading anything. This mirrors the *prewalk* pattern: the
+expensive model reads and thinks, the cheap model edits and executes.
+
+```toml
+[composite]
+# Planner → executor hand-off at ExitPlanMode / Edit / Write (default toolset)
+"smart-coder" = {
+  "deepseek-v4-pro"   = {coord = 1, role = "planner"},
+  "deepseek-v4-flash" = {coord = 1, role = "executor"}
+}
+
+# Custom toolset — only explicit plan-mode exit triggers hand-off
+"smart-coder-strict" = {
+  "deepseek-v4-pro"   = {coord = 1, role = "planner"},
+  "deepseek-v4-flash" = {coord = 1, role = "executor"},
+  toolset = ["ExitPlanMode"]
+}
+
+# Role targets can be other composite aliases (resolved recursively)
+"smart-claw" = {
+  "code-strong" = {coord = 1, role = "planner"},
+  "code-small"  = {coord = 1, role = "executor"},
+  toolset = ["ExitPlanMode", "Edit", "Write"]
+}
+```
+
+- Each participant carries `coord = 1` and `role = "planner"` or `"executor"`. Exactly one of each is required.
+- The optional top-level `toolset` key lists the tool names the proxy scans for in the accumulated `messages[]` history to detect the stage boundary.
+- The switch is **one-way and stateless**: once a trigger tool appears in the message history it stays there, so every subsequent request for the same conversation routes to the executor.
+- Role targets resolve through the full routing chain — direct model names, `[models.*]` aliases, `[schedule]` aliases, or other `[composite]` aliases of any mode.
+
+#### What tools should be configured in the coordinator's `toolset`?
+
+`toolset` should only contain tools whose **first call unambiguously signals the end of planning and the start of execution** (file mutations, explicit plan-mode exits). Tools the planner legitimately calls during the planning stage must never be in `toolset` — they would trigger a premature hand-off to the executor while the planner is still thinking.
+
+| Tool | Suitable for `toolset`? | Reason |
+|---|---|---|
+| `ExitPlanMode` | ✅ Yes (in default) | Explicit end of Claude Code plan mode |
+| `Edit` | ✅ Yes (in default) | First file mutation |
+| `Write` | ✅ Yes (in default) | First file creation |
+| `NotebookEdit` | ✅ Yes (in default) | First notebook mutation |
+| `Bash` | ✅ Yes (in default) | Shell execution (can be removed if planner shells out for reads) |
+| `EnterPlanMode` | ❌ Never | Called *during* planning — would hand off immediately |
+| `AskUserQuestion` | ❌ Never | Planner may ask for clarification — a planning-stage call |
+| `TaskCreate` / `TaskList` | ❌ Never | Planner uses these to record the plan — planning-stage calls |
+| `WebFetch` / `WebSearch` | ❌ Never | Planner researches context — planning-stage calls |
+| `EnterWorktree` | ⚠️ Operator choice | Only useful if your workflow always enters a worktree at the start of execution, never during planning |
+| `ExitWorktree` | ❌ Not useful | Signals completion, not start of execution — too late |
+
+**Practical `toolset` recipes:**
+
+```toml
+# Default (absent key) — best for Claude Code plan-mode workflows:
+# triggers on ExitPlanMode, Edit, Write, Bash, NotebookEdit
+"smart-coder" = {"opus" = {coord=1, role="planner"}, "flash" = {coord=1, role="executor"}}
+
+# Strictest — only explicit plan-mode exit triggers; planner can freely shell out / grep
+toolset = ["ExitPlanMode"]
+
+# Mutation-only — file changes trigger but Bash is allowed during planning
+toolset = ["ExitPlanMode", "Edit", "Write", "NotebookEdit"]
+
+# Any tool triggers — planner does zero tool calls (pure prose planning only)
+toolset = []
+```
+
 > **Cycles are not allowed.** A composite alias may target another composite alias, but the
 > chain must terminate at a real `[models.*]` entry — `A → B → C → A` is rejected at load time
 > with a `[FATAL]` log, marked with a red `x` in the TUI / dashboard, and the cyclic target is
@@ -623,8 +692,8 @@ level below* gets to serve this request:
    Level 3 (top)        │  [schedule]                   │  ← timetable (hour-of-day, day-of-week)
                         │  "what should serve *now*?"   │
                         ├────────────────────────────────┤
-   Level 2 (middle)     │  [composite]                  │  ← share / primary+fallback / fusion fan-out
-                        │  "split across N targets?"    │
+   Level 2 (middle)     │  [composite]                  │  ← share / primary+fallback / fusion fan-out / coordinator
+                        │  "split or sequence across N?" │
                         ├────────────────────────────────┤
    Level 1 (base)       │  [models.*]                   │  ← exact name / prefix-* wildcard / * catch-all
                         │  "which upstream?"             │
@@ -646,9 +715,9 @@ chain (per-entry → section → `[default_upstream]` defaults). Custom/target m
 *only* level that actually talks to an upstream — Levels 2 and 3 must always
 resolve down to a Level-1 entry before a single byte is sent.
 
-### Level 2 — `[composite]` aliases (share or fan-out)
+### Level 2 — `[composite]` aliases (share, fan-out, or coordinator)
 
-Logical grouping of two or more Level-1 entries under one name. Two strategies:
+Logical grouping of two or more Level-1 entries under one name. Three strategies:
 
 - **`share`-weighted distribution** — `{"max-m2.7-high" = {share = 100}, "max-m3" = {share = 100}}`
   splits each request randomly across targets by weight. One or more may be marked
@@ -659,6 +728,9 @@ Logical grouping of two or more Level-1 entries under one name. Two strategies:
   `role = "synth"` merges them into one final response. Without synth, fusion uses the judge, then the first panel. `fusion_options` configures
   `min_panel`, `panel_timeout_ms`, `judge_required`, `expose_metadata`, `max_concurrent`.
   This is one request → many targets → one response.
+- **`coordinator` (prewalk)** — routes to the `planner` target until a trigger tool call
+  appears in the conversation history, then permanently switches to the `executor` target.
+  This is one request → one target (which target depends on conversation stage).
 
 A composite alias **does not route directly**. Each target it names is resolved
 through its own `[models.*]` section, so per-target `base_url`, `api_key`, and
@@ -678,6 +750,7 @@ overriding *how*.
 | 3 | `[schedule]` | Timetable windows | 1 → 1 (one target picked per request) | Level 2 or 1 |
 | 2 | `[composite]` (share / primary+fallback) | Weighted random or fallback order | 1 → 1 | Level 1 |
 | 2 | `[composite]` (fusion) | Role + `fusion_options` | 1 → N → 1 (panel×N + judge + synth) | Level 1 |
+| 2 | `[composite]` (coordinator) | Stage detection via `toolset` in messages history | 1 → 1 (planner → executor, one-way) | Level 1 |
 | 1 | `[models.*]` | Exact / `prefix-*` / `*` catch-all | 1 → 1 (one upstream) | — (sends) |
 
 Three concrete examples of the same caller request resolving differently per layer:
@@ -687,6 +760,10 @@ Three concrete examples of the same caller request resolving differently per lay
 - **Level 2 (share)** — `model: "maxplan"` → `[composite].maxplan` picks
   `max-m2.7-high` or `max-m3` by weight → that target resolved in `[models.*]`
   → sent to its upstream.
+- **Level 2 (coordinator)** — `model: "smart-coder"` → `[composite].smart-coder`
+  detects stage from the messages history (no trigger yet → planner; trigger present →
+  executor) → that target resolved in `[models.*]` → sent. Once an `Edit`/`Write`/`ExitPlanMode`
+  appears, every subsequent request for the same conversation routes to the executor.
 - **Level 2 (fusion)** — `model: "smarter"` → `[composite].smarter` fans out to
   three panel targets in parallel, judges them, and a `synth` target merges the
   result → each leg resolved in its own `[models.*]`.

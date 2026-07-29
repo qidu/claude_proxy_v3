@@ -34,7 +34,8 @@ import {
   handleDashboardToolBlocklist,
   handleDashboardUpsertScheduleTarget,
 } from './handlers/dashboard.js';
-import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, getCompositeAliasMode, resolveFusionPlan, FusionPlan, ModelRouteConfig, ProxyConfig, CompositeRouteCandidate, CompositeTargetConfig, parseHumanTokenLimit, getAllowedHostsFromConfig, resolveScheduleTarget } from './utils/config-loader.js';
+import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, getCompositeAliasMode, resolveFusionPlan, resolveCoordinatorPlan, FusionPlan, ModelRouteConfig, ProxyConfig, CompositeRouteCandidate, CompositeTargetConfig, parseHumanTokenLimit, getAllowedHostsFromConfig, resolveScheduleTarget } from './utils/config-loader.js';
+import { detectCoordinatorStage } from './utils/coordinator.js';
 import {
   extractToolNamesFromBody,
   extractToolRequestCharLengthsFromBody,
@@ -1212,8 +1213,22 @@ export default {
             }
             // passthrough disabled: don't set routing vars — falls through to outer fixed-routing block
           } else if (modelName && proxyConfig.models) {
+            // ---- Coordinator mode: route to planner or executor based on stage ----
+            if (getCompositeAliasMode(modelName, proxyConfig) === 'coordinator') {
+              const coordPlan = resolveCoordinatorPlan(modelName, proxyConfig);
+              if (coordPlan) {
+                const messages = Array.isArray(body?.messages) ? body.messages as unknown[] : [];
+                const stage = detectCoordinatorStage(messages, coordPlan.triggerTools);
+                const chosenRoute = stage === 'executing' ? coordPlan.executorRoute : coordPlan.plannerRoute;
+                const chosenName = stage === 'executing' ? coordPlan.executorName : coordPlan.plannerName;
+                logger.info(requestId, `[coordinator] alias=${modelName} stage=${stage} model=${chosenRoute.modelAlias || chosenName}`);
+                // Inject a single resolved candidate; the standard compositeAttempts machinery below will build the full attempt.
+                (request as any)._coordCandidate = { modelName: chosenName, route: chosenRoute, targetConfig: {} } as CompositeRouteCandidate;
+              }
+            }
+
             // ---- Fusion mode: parallel fan-out → judge → synthesis ----
-            if (getCompositeAliasMode(modelName, proxyConfig) === 'fusion') {
+            if (!((request as any)._fusionPlan) && getCompositeAliasMode(modelName, proxyConfig) === 'fusion') {
               const fusionPlan = resolveFusionPlan(modelName, proxyConfig);
               if (fusionPlan) {
                 // token_limit check (covers all panel+judge+synth targets under the alias)
@@ -1244,7 +1259,7 @@ export default {
 
             if (!((request as any)._fusionPlan)) {
             const compositeCandidates = getCompositeRouteCandidates(modelName, proxyConfig);
-            compositeAliasName = compositeCandidates.length > 0 ? modelName : undefined;
+            compositeAliasName = (compositeCandidates.length > 0 || (request as any)._coordCandidate) ? modelName : undefined;
 
             // Token-limit enforcement: check tokens in the current duration window against the alias-level limit.
             if (compositeCandidates.length > 0 && proxyConfig.composite?.[modelName]?.token_limit !== undefined) {
@@ -1260,9 +1275,13 @@ export default {
               }
             }
 
-            const routeCandidates: CompositeRouteCandidate[] = compositeCandidates.length > 0
-              ? orderCompositeCandidatesForRuntimeShare(modelName, compositeCandidates)
-              : [{ modelName, route: getModelRouteConfig(modelName, proxyConfig), targetConfig: {} }];
+            // Coordinator pre-selects a single candidate; bypass share/fallback ordering.
+            const coordCandidate = (request as any)._coordCandidate as CompositeRouteCandidate | undefined;
+            const routeCandidates: CompositeRouteCandidate[] = coordCandidate
+              ? [coordCandidate]
+              : compositeCandidates.length > 0
+                ? orderCompositeCandidatesForRuntimeShare(modelName, compositeCandidates)
+                : [{ modelName, route: getModelRouteConfig(modelName, proxyConfig), targetConfig: {} }];
 
             // Get client connection info from headers (added by Node.js server adapter)
             const clientAddress = request.headers.get('x-client-address') || 'unknown';

@@ -216,7 +216,7 @@ base_url = "https://openrouter.ai/api"
 # which still control its `upstream_mode`, `base_url`, `api_key`, and
 # auth-key priority.
 #
-# Two composition strategies are supported:
+# Three composition strategies are supported:
 #   - `composite` model: traffic is distributed across target models by the
 #     `share` ratio. Each target may also carry `primary: true` (only one
 #     allowed per alias, the default target) and a `fallback` flag, with
@@ -230,6 +230,14 @@ base_url = "https://openrouter.ai/api"
 #     candidate, `synth` merges panel outputs into the final response, and
 #     `judge` scores/selects among them. Targets participating in the
 #     fusion run are marked with `fusion: 1`.
+#   - `coordinator` model: routes the conversation to a `planner` model
+#     during the planning stage and switches to an `executor` model once a
+#     trigger tool call appears in the message history (mirrors the prewalk
+#     pattern from oh-my-pi). Each participant carries `coord = 1` and a
+#     `role` of `"planner"` or `"executor"`. The optional top-level `toolset`
+#     key lists the tool names that trigger the switch; when absent the proxy
+#     uses a curated default set (ExitPlanMode, Edit, Write, Bash,
+#     NotebookEdit); when set to `[]` any tool call triggers the switch.
 "gpt-all" = {"nvidia/nemotron-3-super-120b-a12b-free" = {share = 40}}
 # Single-target alias. `llama` is a rename for `llama3`; the request is
 # forwarded via the routing rules for `llama3` in the other `[models.*]`
@@ -254,6 +262,16 @@ base_url = "https://openrouter.ai/api"
 # `fusion = 1` to indicate participation. The actual upstream call for each
 # role is routed via the target's own `[models.*]` section.
 "smarter" = {fusion_options = {min_panel = 2, panel_timeout_ms = 300000, judge_required = true, expose_metadata = true, max_concurrent = 2}, "deepseek-v4-flash" = {fusion = 1, role = "panel"}, "max-m2.7-high" = {fusion = 1, role = "panel"}, "max-m3" = {role = "synth"}, "deepseek-v4-pro" = {fusion = 1, role = "judge"}}
+# Coordinator composite. The planner (strong/expensive) model handles requests
+# until a trigger tool appears in history, then the executor (fast/cheap) model
+# takes over — reusing the full accumulated context (prewalk pattern).
+# `toolset` overrides the default trigger set; omit it to use the default
+# (ExitPlanMode, Edit, Write, Bash, NotebookEdit). Use `toolset = []` to hand
+# off at the first tool call of any kind.
+"smart-coder" = {"deepseek-v4-pro" = {coord = 1, role = "planner"}, "deepseek-v4-flash" = {coord = 1, role = "executor"}, toolset = ["ExitPlanMode", "Edit", "Write"]}
+# Coordinator where each role is itself a composite alias (resolved recursively).
+# `code-strong` and `code-small` are share/fallback composites defined above.
+"smart-claw" = {"code-strong" = {coord = 1, role = "planner"}, "code-small" = {coord = 1, role = "executor"}, toolset = ["ExitPlanMode", "Edit", "Write"]}
 # Schedule is higher level definition than composite (fusion) and custom models.
 # It defines how to plan or arrange several aliases or models in a timetable.
 # for example, a `saver` plan could be: 
