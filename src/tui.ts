@@ -18,6 +18,7 @@ import {
   addCompositeAliasFromDashboard,
   addScheduleAliasFromDashboard,
   getDashboardSnapshot,
+  removeCompositeAliasFromDashboard,
   removeCompositeTargetFromDashboard,
   removeScheduleAliasFromDashboard,
   removeScheduleTargetFromDashboard,
@@ -27,7 +28,7 @@ import {
   upsertGlobalTokenLimitFromDashboard,
   upsertScheduleTargetFromDashboard,
 } from './handlers/dashboard.js';
-import { getConfiguredModelIds, type ScheduleWindow, type ScheduleDaysSpec } from './utils/config-loader.js';
+import { getConfiguredModelIds, getCompositeAliasMode, type ScheduleWindow, type ScheduleDaysSpec } from './utils/config-loader.js';
 import { buildHeatmap, renderHeatmapPanel } from './heatmap.js';
 import { dumpTodayTokens, TOKEN_LOG_FILE, getActiveRequestCount, getTokensInWindow, getLiveTokens, blockTool, unblockTool, isToolBlocked } from './utils/dashboard-stats.js';
 import type { Env } from './types/shared.js';
@@ -88,7 +89,7 @@ function formatTestResultDetail(responseBody: unknown): string {
   return lines.length > 0 ? lines.join(' | ') : filterAndStringify(responseBody);
 }
 
-type CompositeTargetConfig = { share?: number; primary?: boolean; fallback?: number; fusion?: number; role?: FusionRole };
+type CompositeTargetConfig = { share?: number; primary?: boolean; fallback?: number; fusion?: number; coord?: number; role?: FusionRole };
 
 function sortCompositeTargets([aKey, aCfg]: [string, unknown], [bKey, bCfg]: [string, unknown]): number {
   const a = (aCfg ?? {}) as CompositeTargetConfig;
@@ -131,18 +132,20 @@ function orderCompositeTargetsForDisplay<T extends { model: string }>(
 }
 
 
-// Parse "panel|judge|synth [weight]" input for fusion targets.
+// Parse "[p]anel|[j]udge|[s]ynth [weight]" input for fusion targets.
+// Accepts short forms: p/j/s for panel/judge/synth.
 // Returns an error string on failure, or a patch object on success.
 function parseFusionTargetInput(value: string): { role?: FusionRole; fusion?: number } | string {
   const parts = value.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return 'Enter: panel|judge|synth [weight]';
+  if (parts.length === 0) return 'Enter: [p]anel / [j]udge / [s]ynth  [weight]';
   const patch: { role?: FusionRole; fusion?: number } = {};
 
-  const roleVal = parts[0];
-  if (roleVal !== 'panel' && roleVal !== 'judge' && roleVal !== 'synth') {
-    return 'Role must be: panel, judge, or synth';
+  const rawRole = parts[0];
+  const roleNorm = rawRole === 'p' ? 'panel' : rawRole === 'j' ? 'judge' : rawRole === 's' ? 'synth' : rawRole;
+  if (roleNorm !== 'panel' && roleNorm !== 'judge' && roleNorm !== 'synth') {
+    return 'Role must be: panel/judge/synth (or p/j/s)';
   }
-  patch.role = roleVal as FusionRole;
+  patch.role = roleNorm as FusionRole;
 
   if (parts.length >= 2) {
     const n = Number(parts[1]);
@@ -628,6 +631,10 @@ class CompositeAliasesOverlay implements Component, Focusable {
       this.app.openDeleteConfirm(selected.alias, selected.target);
       return;
     }
+    if (matchesKey(data, 'd') && selected?.kind === 'alias') {
+      this.app.openDeleteAliasConfirm(selected.alias);
+      return;
+    }
     if (matchesKey(data, 'enter') || matchesKey(data, 'return')) {
       this.setMessage(selected ? `${selected.kind} selected` : '');
       this.app.requestRender();
@@ -675,7 +682,8 @@ class CompositeAliasesOverlay implements Component, Focusable {
       const aliasSummary = aliasLimit !== undefined && aliasLimit.num > 0
         ? ` ${dim(fmt(windowUsed))} ${dim('/')} ${dim('L')} ${dim(fmt(aliasLimit.num) + '/' + windowDuration)}`
         : '';
-      const aliasTag = typedTargets?.fusion_options ? dim(' [F]') : dim(' [C]');
+      const aliasMode = snap.config ? getCompositeAliasMode(alias, snap.config) : undefined;
+      const aliasTag = aliasMode === 'fusion' ? dim(' [F]') : aliasMode === 'coordinator' ? dim(' [O]') : dim(' [C]');
       const hasError = compositeErrors.some((e) => e.path === `composite.${alias}`);
       const errorMark = hasError ? red(' x') : '';
       // Record this alias's line index for selections array
@@ -694,8 +702,11 @@ class CompositeAliasesOverlay implements Component, Focusable {
         const selectedTarget = selected?.kind === 'target' && selected.alias === alias && selected.target === target;
         const mark = selectedTarget ? green('▶') : dim('·');
         const typedCfg = cfg as CompositeTargetConfig | undefined;
-        const isFusionTarget = typedCfg?.fusion !== undefined || typedCfg?.role !== undefined;
-        const summary = isFusionTarget
+        const isCoordTarget = typedCfg?.coord !== undefined;
+        const isFusionTarget = !isCoordTarget && (typedCfg?.fusion !== undefined || typedCfg?.role !== undefined);
+        const summary = isCoordTarget
+          ? `coord:${typedCfg?.coord ?? 1}${typedCfg?.role ? ` ${typedCfg.role}` : ''}`
+          : isFusionTarget
           ? `${typedCfg?.role ?? 'panel'}${typedCfg?.fusion !== undefined ? `:${typedCfg.fusion}` : ''}`
           : `${typedCfg?.share ?? '-'}${typedCfg?.primary ? ' P' : ''}${typedCfg?.fallback === 0 ? ' non-FB' : typedCfg?.fallback !== undefined ? ` FB${typedCfg.fallback}` : ''}`;
         const timingKey = targetRouteModel.get(target) ?? target;
@@ -1124,7 +1135,7 @@ class DashboardView implements Component {
       const shownModels = customModels.slice(0, maxCustomModelRows);
       const hiddenCount = customModels.length - shownModels.length;
       for (const row of shownModels) {
-        const tag = row.category === 'fusion' ? '[F]' : row.category === 'composite' ? '[C]' : dim(titleCase(row.category));
+        const tag = row.category === 'fusion' ? '[F]' : row.category === 'coordinator' ? '[O]' : row.category === 'composite' ? '[C]' : dim(titleCase(row.category));
         const extra = row.description ? ` ${dim(row.description)}` : '';
         const timing = modelTimingMap.get(row.routeModel ?? row.modelId);
         const timingStr = timing ? ` ${dim('[')}${dim(fmtSeconds(timing.min_time_ms))}${dim('/')}${dim(fmtSeconds(timing.avg_time_ms))}${dim('/')}${dim(fmtSeconds(timing.max_time_ms))}${dim('s]')}` : '';
@@ -1188,19 +1199,21 @@ class DashboardView implements Component {
       for (const alias of snap.compositeResolved) {
         if (seen.has(alias.alias)) continue; // model with same name already added
         seen.add(alias.alias);
-        const isFusion = !!(snap.config.composite?.[alias.alias] as { fusion_options?: unknown } | undefined)?.fusion_options;
+        const aliasMode = snap.config ? getCompositeAliasMode(alias.alias, snap.config) : undefined;
+        const isFusion = aliasMode === 'fusion';
         const aliasConfig = snap.config.composite?.[alias.alias] as Record<string, unknown> | undefined;
         const orderedTargets = orderCompositeTargetsForDisplay(alias.targets, aliasConfig, isFusion);
         const targets = orderedTargets.map((t) => t.model || t.routeModel || '?').join(' · ');
-        models.push({ category: isFusion ? 'fusion' : 'composite', modelId: alias.alias, description: `(${targets})`, empty: alias.targets.length === 0 });
+        const category = aliasMode === 'coordinator' ? 'coordinator' : isFusion ? 'fusion' : 'composite';
+        models.push({ category, modelId: alias.alias, description: `(${targets})`, empty: alias.targets.length === 0 });
       }
     }
 
     // Sort: non-empty composite/fusion first; empty composite/fusion and other
     // (specific or wildcard) models sink to the bottom, both groups alphabetical.
     return models.sort((a, b) => {
-      const aTop = (a.category === 'fusion' || a.category === 'composite') && !a.empty;
-      const bTop = (b.category === 'fusion' || b.category === 'composite') && !b.empty;
+      const aTop = (a.category === 'fusion' || a.category === 'composite' || a.category === 'coordinator') && !a.empty;
+      const bTop = (b.category === 'fusion' || b.category === 'composite' || b.category === 'coordinator') && !b.empty;
       if (aTop && !bTop) return -1;
       if (!aTop && bTop) return 1;
       return a.modelId.localeCompare(b.modelId);
@@ -1364,8 +1377,49 @@ class DashboardApp {
       addCompositeAliasFromDashboard(this.source.env, trimmed);
       await this.refresh(true);
       this.compositeOverlay?.focusAlias(trimmed);
-      this.openTargetPicker(trimmed);
+      this.openModePicker(trimmed, (mode) => {
+        if (mode === null) return;
+        if (mode === 'fusion') {
+          // Fusion: open the per-target picker with the fusion branch, then
+          // prompt for fusion_options once at least one target exists (or
+          // immediately — both work, the per-target picker seeds the first
+          // role/fusion fields).
+          this.openTargetPicker(trimmed, 'fusion');
+          this.view.setMessage(`alias ${trimmed} created — choose fusion_options next (press F)`);
+          this.requestRender();
+          return;
+        }
+        this.openTargetPicker(trimmed, mode);
+      });
     });
+  }
+
+  openModePicker(alias: string, onPicked: (mode: 'composite' | 'fusion' | 'coordinator' | null) => void): void {
+    const choices: SelectItem[] = [
+      { value: 'composite', label: 'composite  [C]', description: 'share / primary / fallback routing' },
+      { value: 'fusion', label: 'fusion  [F]', description: 'panel / judge / synth with fusion_options' },
+      { value: 'coordinator', label: 'coordinator  [O]', description: 'planner / executor stages with coord weight' },
+    ];
+    this.hideOverlay();
+    const overlay = new ListOverlay(
+      `Mode for ${bold(alias)}`,
+      `↑/↓ ${dim('move')}  Enter ${dim('select')}  Esc ${dim('cancel')}`,
+      choices,
+      (item) => {
+        this.hideOverlay();
+        const mode = item.value === 'fusion' || item.value === 'coordinator' ? item.value : 'composite';
+        onPicked(mode);
+        this.compositeOverlay?.focusAlias(alias);
+      },
+      () => {
+        this.hideOverlay();
+        this.view.setMessage('mode pick cancelled');
+        this.compositeOverlay?.focusAlias(alias);
+        this.requestRender();
+      },
+    );
+    this.overlay = this.tui.showOverlay(overlay, { width: '60%', maxHeight: '40%', anchor: 'center' });
+    this.overlay.focus();
   }
 
   openCompositeAliasesOverlay(): void {
@@ -1728,7 +1782,21 @@ class DashboardApp {
     });
   }
 
-  openTargetPicker(alias: string): void {
+  openTargetPicker(alias: string, forceMode?: 'composite' | 'fusion' | 'coordinator'): void {
+    const snap = this.viewSnapshot();
+    const aliasCfg = snap?.config.composite?.[alias] as { token_limit?: unknown; fusion_options?: unknown } | undefined;
+    // An alias is "empty" when it has zero target entries — getCompositeAliasMode
+    // would otherwise report 'share' for any existing alias even with no targets,
+    // so we can't rely on a detectedMode === undefined check alone.
+    const isEmptyAlias = Object.keys(aliasCfg || {}).filter((k) => k !== 'token_limit' && k !== 'fusion_options').length === 0;
+    if (!forceMode && isEmptyAlias) {
+      this.openModePicker(alias, (mode) => {
+        if (mode === null) return;
+        this.openTargetPicker(alias, mode);
+      });
+      return;
+    }
+
     const choices = this.modelChoices();
     if (choices.length === 0) {
       this.view.setMessage('No custom models available');
@@ -1743,10 +1811,53 @@ class DashboardApp {
       choices,
       (item) => {
         this.hideOverlay();
-        const aliasConfig = this.viewSnapshot()?.config.composite?.[alias] as { fusion_options?: FusionOptions } | undefined;
-        const aliasFusion = !!aliasConfig?.fusion_options;
+        const aliasMode = forceMode ?? (snap?.config ? getCompositeAliasMode(alias, snap.config) : undefined);
+        const aliasIsCoordinator = aliasMode === 'coordinator';
+        const aliasFusion = aliasMode === 'fusion';
+        if (aliasIsCoordinator) {
+          this.openPrompt(`Add ${item.value} to ${alias} (coordinator)`, '[p]lanner / [e]xecutor  [coord]', 'p 1', async (value) => {
+            const parts = value.trim().split(/\s+/).filter(Boolean);
+            if (parts.length < 1 || parts.length > 2) {
+              this.view.setMessage('Use: p|planner / e|executor  [coord]');
+              await this.refresh();
+              this.compositeOverlay?.focusAlias(alias);
+              this.requestRender();
+              return;
+            }
+            const [roleText, coordText] = parts;
+            const roleNorm = roleText === 'p' ? 'planner' : roleText === 'e' ? 'executor' : roleText;
+            if (roleNorm !== 'planner' && roleNorm !== 'executor') {
+              this.view.setMessage('Role must be planner, executor, p, or e');
+              await this.refresh();
+              this.compositeOverlay?.focusAlias(alias);
+              this.requestRender();
+              return;
+            }
+            const coord = coordText !== undefined ? Number(coordText) : 1;
+            if (Number.isNaN(coord) || coord <= 0) {
+              this.view.setMessage('Coord must be a positive number');
+              await this.refresh();
+              this.compositeOverlay?.focusAlias(alias);
+              this.requestRender();
+              return;
+            }
+            try {
+              upsertCompositeTargetFromDashboard(this.source.env, alias, item.value, { coord, role: roleNorm as 'planner' | 'executor', share: null, fallback: null, primary: false });
+              await this.refresh(true);
+              this.compositeOverlay?.focusAlias(alias);
+              this.view.setMessage(`added ${item.value} to ${alias}`);
+              this.requestRender();
+            } catch (err) {
+              this.view.setMessage((err as Error).message);
+              await this.refresh();
+              this.compositeOverlay?.focusAlias(alias);
+              this.requestRender();
+            }
+          });
+          return;
+        }
         if (aliasFusion) {
-          this.openPrompt(`Add ${item.value} to ${alias} (fusion)`, 'panel|judge|synth [weight]', 'panel 1', async (value) => {
+          this.openPrompt(`Add ${item.value} to ${alias} (fusion)`, '[p]anel / [j]udge / [s]ynth  [weight]', 'p 1', async (value) => {
             const patch = parseFusionTargetInput(value);
             if (typeof patch === 'string') {
               this.view.setMessage(patch);
@@ -2123,15 +2234,66 @@ class DashboardApp {
   }
 
   openEditTargetPrompt(alias: string, target: string): void {
-    const aliasConfig = this.viewSnapshot()?.config.composite?.[alias] as { fusion_options?: FusionOptions } | undefined;
-    const isFusion = !!aliasConfig?.fusion_options;
+    const snapshot = this.viewSnapshot();
+    const aliasMode = snapshot?.config ? getCompositeAliasMode(alias, snapshot.config) : undefined;
+    const aliasConfig = snapshot?.config.composite?.[alias] as { fusion_options?: FusionOptions } | undefined;
+    const isCoordinator = aliasMode === 'coordinator';
+    if (isCoordinator) {
+      const current = snapshot?.config.composite?.[alias]?.[target] as CompositeTargetConfig | undefined;
+      const defaultRole = current?.role === 'executor' ? 'e' : 'p';
+      const defaultValue = [
+        defaultRole,
+        current?.coord !== undefined ? String(current.coord) : '1',
+      ].join(' ');
+      this.openPrompt(`Edit ${alias}.${bold(target)} (coordinator)`, '[p]lanner / [e]xecutor  [coord]', defaultValue, async (value) => {
+        const parts = value.trim().split(/\s+/).filter(Boolean);
+        if (parts.length < 1 || parts.length > 2) {
+          this.view.setMessage('Use: p|planner / e|executor  [coord]');
+          await this.refresh();
+          this.compositeOverlay?.focusAlias(alias);
+          this.requestRender();
+          return;
+        }
+        const [roleText, coordText] = parts;
+        const roleNorm = roleText === 'p' ? 'planner' : roleText === 'e' ? 'executor' : roleText;
+        if (roleNorm !== 'planner' && roleNorm !== 'executor') {
+          this.view.setMessage('Role must be planner, executor, p, or e');
+          await this.refresh();
+          this.compositeOverlay?.focusAlias(alias);
+          this.requestRender();
+          return;
+        }
+        const coord = coordText !== undefined ? Number(coordText) : 1;
+        if (Number.isNaN(coord) || coord <= 0) {
+          this.view.setMessage('Coord must be a positive number');
+          await this.refresh();
+          this.compositeOverlay?.focusAlias(alias);
+          this.requestRender();
+          return;
+        }
+        try {
+          upsertCompositeTargetFromDashboard(this.source.env, alias, target, { coord, role: roleNorm as 'planner' | 'executor', share: null, fallback: null, primary: false });
+          this.view.setMessage(`updated ${alias}.${target}`);
+          await this.refresh(true);
+          this.compositeOverlay?.focusAlias(alias);
+        } catch (err) {
+          this.view.setMessage((err as Error).message);
+          await this.refresh();
+          this.compositeOverlay?.focusAlias(alias);
+          this.requestRender();
+        }
+      });
+      return;
+    }
+    const isFusion = aliasMode === 'fusion';
     if (isFusion) {
       const current = this.viewSnapshot()?.config.composite?.[alias]?.[target] as CompositeTargetConfig | undefined;
+      const defaultRole = current?.role === 'judge' ? 'j' : current?.role === 'synth' ? 's' : 'p';
       const defaultValue = [
-        current?.role ?? 'panel',
+        defaultRole,
         current?.fusion !== undefined ? String(current.fusion) : '',
       ].filter(Boolean).join(' ');
-      this.openPrompt(`Edit ${alias}.${bold(target)} (fusion)`, 'panel|judge|synth [weight]', defaultValue, async (value) => {
+      this.openPrompt(`Edit ${alias}.${bold(target)} (fusion)`, '[p]anel / [j]udge / [s]ynth  [weight]', defaultValue, async (value) => {
         const patch = parseFusionTargetInput(value);
         if (typeof patch === 'string') {
           this.view.setMessage(patch);
@@ -2245,6 +2407,45 @@ class DashboardApp {
       2,
     );
     this.overlay = this.tui.showOverlay(overlay, { width: '50%', maxHeight: '30%', anchor: 'center' });
+    this.overlay.focus();
+  }
+
+  openDeleteAliasConfirm(alias: string): void {
+    const compositeToRestore = this.compositeOverlay;
+    this.closeOverlay();
+    const overlay = new ListOverlay(
+      `Delete composite alias ${alias}?`,
+      'Enter confirm  Esc cancel',
+      [
+        { value: 'yes', label: 'Yes', description: 'Delete alias and all targets' },
+        { value: 'no', label: 'No', description: 'Cancel' },
+      ],
+      (item) => {
+        this.closeOverlay();
+        if (item.value === 'yes') {
+          try {
+            removeCompositeAliasFromDashboard(this.source.env, alias);
+            this.view.setMessage(`deleted composite alias ${alias}`);
+            void this.refresh(true);
+          } catch (err) {
+            this.view.setMessage((err as Error).message);
+            void this.refresh();
+          }
+        } else {
+          this.view.setMessage('delete cancelled');
+          void this.refresh();
+        }
+        if (compositeToRestore) this.showCompositeOverlayInstance(compositeToRestore);
+      },
+      () => {
+        this.closeOverlay();
+        this.view.setMessage('delete cancelled');
+        if (compositeToRestore) this.showCompositeOverlayInstance(compositeToRestore);
+        this.requestRender();
+      },
+      2,
+    );
+    this.overlay = this.tui.showOverlay(overlay, { width: '55%', maxHeight: '30%', anchor: 'center' });
     this.overlay.focus();
   }
 
@@ -2743,8 +2944,11 @@ class DashboardApp {
     if (snapshot.compositeResolved) {
       for (const alias of snapshot.compositeResolved) {
         if (alias.targets.length === 0) continue;
-        const isFusion = !!(snapshot.config.composite?.[alias.alias] as { fusion_options?: unknown } | undefined)?.fusion_options;
-        const modeTag = isFusion ? '[F]' : '[C]';
+        const aliasMode = snapshot.config ? getCompositeAliasMode(alias.alias, snapshot.config) : undefined;
+        const isFusion = aliasMode === 'fusion';
+        const isCoordinator = aliasMode === 'coordinator';
+        const modeTag = isFusion ? '[F]' : isCoordinator ? '[O]' : '[C]';
+        const category = isCoordinator ? 'coordinator' : isFusion ? 'fusion' : 'composite';
         const isDuplicate = seenNames.has(alias.alias);
         const aliasConfig = snapshot.config.composite?.[alias.alias] as Record<string, unknown> | undefined;
         const orderedTargets = orderCompositeTargetsForDisplay(alias.targets, aliasConfig, isFusion);
@@ -2763,7 +2967,7 @@ class DashboardApp {
         if (isDuplicate) {
           // Same name already added as a model — add composite with [C] suffix to make value unique
           choices.push({
-            category: isFusion ? 'fusion' : 'composite',
+            category,
             modelId: alias.alias,
             value: `${alias.alias} [C]`,
             label: `${alias.alias} ${modeTag}`,
@@ -2772,7 +2976,7 @@ class DashboardApp {
         } else {
           seenNames.add(alias.alias);
           choices.push({
-            category: isFusion ? 'fusion' : 'composite',
+            category,
             modelId: alias.alias,
             value: alias.alias,
             label: `${alias.alias} ${modeTag}`,
@@ -2784,8 +2988,8 @@ class DashboardApp {
 
     // Sort: composite/fusion first, then by value (which is now unique)
     return choices.sort((a, b) => {
-      const aComposite = a.category === 'fusion' || a.category === 'composite';
-      const bComposite = b.category === 'fusion' || b.category === 'composite';
+      const aComposite = a.category === 'fusion' || a.category === 'composite' || a.category === 'coordinator';
+      const bComposite = b.category === 'fusion' || b.category === 'composite' || b.category === 'coordinator';
       if (aComposite && !bComposite) return -1;
       if (!aComposite && bComposite) return 1;
       const cmp = a.value.localeCompare(b.value);

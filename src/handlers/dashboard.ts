@@ -613,6 +613,26 @@ export function handleDashboardPage(env: Env): Response {
         } catch {}
       }
 
+      // Prompts the user to pick a composite-alias mode. Returns one of
+      // 'composite' | 'fusion' | 'coordinator', or null on cancel / invalid input.
+      // Reused by add-composite-alias and add-composite-target (empty alias).
+      function promptAliasMode() {
+        // Note: \\n in this source so the outer HTML template literal doesn't
+        // collapse it into a real newline (which would break the inner JS
+        // single-quoted string, since JS string literals can't span lines).
+        const raw = window.prompt(
+          'Mode for new alias:\\n  1) composite  [C]  — share / primary / fallback\\n  2) fusion  [F]  — panel / judge / synth\\n  3) coordinator  [O]  — planner / executor stages\\n\\nEnter 1, 2, or 3:',
+          '1'
+        );
+        if (raw === null) return null;
+        const trimmed = raw.trim();
+        if (trimmed === '1') return 'composite';
+        if (trimmed === '2') return 'fusion';
+        if (trimmed === '3') return 'coordinator';
+        window.alert('Invalid mode — choose 1, 2, or 3.');
+        return null;
+      }
+
       let dashboardApiKeyPrompt = null;
 
       function promptDashboardApiKey() {
@@ -768,12 +788,17 @@ export function handleDashboardPage(env: Env): Response {
         ).join('');
         const displayNum = typeof limitNum === 'number' && limitNum > 0 ? formatTokenLimitNum(limitNum) : '';
 
-        // Detect fusion alias: has fusion_options or any target with fusion/role field
+        // Detect coordinator alias: any target has coord > 0
+        const isCoordinator = keys.some((k) => {
+          const c = targets[k] || {};
+          return typeof c.coord === 'number' && c.coord > 0;
+        });
+        // Detect fusion alias: has fusion_options or any target with fusion/role (but not coord)
         const fusionOpts = targets.fusion_options || {};
-        const isFusion = !!targets.fusion_options || keys.some((k) => {
+        const isFusion = !isCoordinator && (!!targets.fusion_options || keys.some((k) => {
           const c = targets[k] || {};
           return c.fusion !== undefined || c.role !== undefined;
-        });
+        }));
 
         const rows = [
           '<div class="config-row" style="flex-wrap:wrap;gap:6px;align-items:center;">'
@@ -817,12 +842,31 @@ export function handleDashboardPage(env: Env): Response {
         }
         return rows.concat(keys.map((targetName) => {
           const cfg = targets[targetName] || {};
+          if (isCoordinator) {
+            // Coordinator target: show coord weight + [p]lanner / [e]xecutor role
+            const coordWeight = cfg.coord ?? 1;
+            const roleOptions = [['planner', '[p]lanner'], ['executor', '[e]xecutor']];
+            const roleHtml = roleOptions.map(([v, lbl]) =>
+              '<option value="' + v + '"' + (cfg.role === v || (v === 'planner' && cfg.role === undefined) ? ' selected' : '') + '>' + lbl + '</option>'
+            ).join('');
+            return '<div class="config-row">'
+              + '<label>' + escapeHtml(targetName) + '</label>'
+              + '<span style="font-size:12px;color:#666;margin-right:4px;">coord</span>'
+              + '<input type="number" data-kind="comp-coord" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(coordWeight) + '" placeholder="1" style="width:60px;"' + disabledAttr + ' />'
+              + '<span style="font-size:12px;color:#666;margin-left:8px;margin-right:4px;">role</span>'
+              + '<select data-kind="comp-coord-role" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + disabledAttr + '>' + roleHtml + '</select>'
+              + '<div class="row-actions">'
+                + '<button type="button" class="test-btn mini-btn" data-action="test-model" data-model="' + escapeHtml(targetName) + '">t</button>'
+                + '<button type="button" class="mini-btn danger" data-action="remove-composite-target" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
+              + '</div>'
+              + '</div>';
+          }
           if (isFusion) {
             // Fusion target: show fusion weight + role instead of share/primary/fallback
             const fusionWeight = cfg.fusion ?? '';
-            const roleOptions = ['', 'panel', 'judge', 'synth'];
-            const roleHtml = roleOptions.map((r) =>
-              '<option value="' + r + '"' + (cfg.role === r || (r === '' && cfg.role === undefined) ? ' selected' : '') + '>' + (r || '(default)') + '</option>'
+            const roleOptions = [['', '(default)'], ['panel', '[p]anel'], ['judge', '[j]udge'], ['synth', '[s]ynth']];
+            const roleHtml = roleOptions.map(([v, lbl]) =>
+              '<option value="' + v + '"' + (cfg.role === v || (v === '' && cfg.role === undefined) ? ' selected' : '') + '>' + lbl + '</option>'
             ).join('');
             return '<div class="config-row">'
               + '<label>' + escapeHtml(targetName) + '</label>'
@@ -924,7 +968,11 @@ export function handleDashboardPage(env: Env): Response {
             + ' <button type="button" class="mini-btn danger" data-action="remove-composite-alias" data-alias="' + escapeHtml(aliasName) + '"' + (isReadOnly ? ' disabled' : '') + '>Remove alias</button></div>';
           const hasError = configErrorsList.some((e) => e.path === 'composite.' + aliasName);
           const errorMark = hasError ? ' <span style="color:#c62828;font-weight:bold;" title="Config error — see status bar">x</span>' : '';
-          return '<div class="config-block"><h3>composite.' + escapeHtml(aliasName) + errorMark + '</h3>' + rows + '</div>';
+          const aliasKeys = Object.keys(targets || {}).filter((k) => k !== 'token_limit' && k !== 'fusion_options');
+          const isCoordHead = aliasKeys.some((k) => { const c = (targets || {})[k] || {}; return typeof c.coord === 'number' && c.coord > 0; });
+          const isFusionHead = !isCoordHead && !!targets.fusion_options;
+          const aliasTypeTag = isCoordHead ? ' <span style="font-size:11px;color:#555;">[O]</span>' : isFusionHead ? ' <span style="font-size:11px;color:#555;">[F]</span>' : ' <span style="font-size:11px;color:#555;">[C]</span>';
+          return '<div class="config-block"><h3>composite.' + escapeHtml(aliasName) + aliasTypeTag + errorMark + '</h3>' + rows + '</div>';
         }).join('');
 
         const compositeGlobalActions = '<div class="section-actions"><button type="button" class="mini-btn" data-action="add-composite-alias"' + (isReadOnly ? ' disabled' : '') + '>Add composite alias</button></div>';
@@ -1017,6 +1065,16 @@ export function handleDashboardPage(env: Env): Response {
 
           Object.keys(targets || {}).forEach((targetName) => {
             if (targetName === 'token_limit' || targetName === 'fusion_options') return;
+            // Coordinator target fields
+            const coordEl = document.querySelector('[data-kind="comp-coord"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
+            if (coordEl !== null) {
+              const entry = {};
+              entry.coord = coordEl.value !== '' ? Number(coordEl.value) : 1;
+              const coordRoleEl = document.querySelector('[data-kind="comp-coord-role"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
+              if (coordRoleEl && coordRoleEl.value !== '') entry.role = coordRoleEl.value;
+              payload.composite[aliasName][targetName] = entry;
+              return;
+            }
             // Fusion target fields
             const fusionEl = document.querySelector('[data-kind="comp-fusion"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
             if (fusionEl !== null) {
@@ -1232,9 +1290,38 @@ export function handleDashboardPage(env: Env): Response {
             configDirty = false;
             return;
           }
+          const mode = promptAliasMode();
+          if (mode === null) {
+            configDirty = false;
+            return;
+          }
           currentConfig.composite[alias] = {};
+          // For coordinator, the proxy requires at least a planner target to
+          // resolve the alias; seed one so the alias is immediately usable.
+          if (mode === 'coordinator') {
+            const plannerName = window.prompt('Planner target model for composite.' + alias + ' (required):');
+            if (!plannerName) {
+              delete currentConfig.composite[alias];
+              configDirty = false;
+              renderConfigForm(currentConfig);
+              return;
+            }
+            if (currentConfig.composite[alias][plannerName]) {
+              window.alert('Target already exists');
+              delete currentConfig.composite[alias];
+              configDirty = false;
+              renderConfigForm(currentConfig);
+              return;
+            }
+            currentConfig.composite[alias][plannerName] = { coord: 1, role: 'planner' };
+          }
           renderConfigForm(currentConfig);
           saveConfig();
+          if (mode === 'coordinator') {
+            window.alert('Coordinator alias created with planner target. Add an executor target via "Add target" to complete it.');
+          } else if (mode === 'fusion') {
+            window.alert('Fusion alias created. Configure fusion_options via the alias\'s "F" action, then add targets.');
+          }
           return;
         }
 
@@ -1254,13 +1341,56 @@ export function handleDashboardPage(env: Env): Response {
           // Mark dirty before the prompt so stats auto-reload is paused
           // while the user is still typing the target model name.
           configDirty = true;
+          if (!currentConfig.composite[alias]) {
+            currentConfig.composite[alias] = {};
+          }
+          const existingTargetKeys = Object.keys(currentConfig.composite[alias] || {}).filter((k) => k !== 'token_limit' && k !== 'fusion_options');
+          if (existingTargetKeys.length === 0) {
+            // Empty alias — pick a mode first so the new target seeds the right fields.
+            const mode = promptAliasMode();
+            if (mode === null) {
+              configDirty = false;
+              return;
+            }
+            const targetModel = window.prompt('New target model for composite.' + alias + ' (first target, sets mode):');
+            if (!targetModel) {
+              configDirty = false;
+              return;
+            }
+            if (currentConfig.composite[alias][targetModel]) {
+              window.alert('Composite target already exists');
+              configDirty = false;
+              return;
+            }
+            if (mode === 'coordinator') {
+              // Note: \\n so the outer HTML template literal doesn't collapse the escape
+              // into a real newline (which would break this single-quoted string).
+              const role = window.prompt('Role for ' + targetModel + ':\\n  1) [p]lanner\\n  2) [e]xecutor\\nEnter 1, 2, p, or e:', '1');
+              if (role === null) {
+                configDirty = false;
+                return;
+              }
+              const trimmed = role.trim().toLowerCase();
+              const roleNorm = trimmed === '1' || trimmed === 'p' ? 'planner' : trimmed === '2' || trimmed === 'e' ? 'executor' : null;
+              if (roleNorm === null) {
+                window.alert('Invalid role — choose 1, 2, p, or e.');
+                configDirty = false;
+                return;
+              }
+              currentConfig.composite[alias][targetModel] = { coord: 1, role: roleNorm };
+            } else if (mode === 'fusion') {
+              currentConfig.composite[alias][targetModel] = { fusion: 1, role: 'panel' };
+            } else {
+              currentConfig.composite[alias][targetModel] = {};
+            }
+            renderConfigForm(currentConfig);
+            saveConfig();
+            return;
+          }
           const targetModel = window.prompt('New target model for composite.' + alias + ':');
           if (!targetModel) {
             configDirty = false;
             return;
-          }
-          if (!currentConfig.composite[alias]) {
-            currentConfig.composite[alias] = {};
           }
           if (currentConfig.composite[alias][targetModel]) {
             window.alert('Composite target already exists');

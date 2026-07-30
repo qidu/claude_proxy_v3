@@ -3358,6 +3358,7 @@ export interface CompositeTargetPatch {
   fallback?: number | null;
   primary?: boolean;
   fusion?: number | null;
+  coord?: number | null;
   role?: FusionRole | null;
 }
 
@@ -3623,11 +3624,21 @@ export function upsertCompositeTarget(
     }
   }
 
+  if (patch.coord !== undefined) {
+    if (patch.coord === null || patch.coord === 0) {
+      delete nextTarget.coord;
+    } else if (!Number.isFinite(patch.coord) || patch.coord < 0) {
+      throw new Error(`Invalid coord for ${aliasName}.${targetName}`);
+    } else {
+      nextTarget.coord = patch.coord;
+    }
+  }
+
   if (patch.role !== undefined) {
     if (patch.role === null) {
       delete nextTarget.role;
-    } else if (!(['panel', 'judge', 'synth'] as string[]).includes(patch.role)) {
-      throw new Error(`Invalid role for ${aliasName}.${targetName} — must be panel, judge, or synth`);
+    } else if (!(['panel', 'judge', 'synth', 'planner', 'executor'] as string[]).includes(patch.role)) {
+      throw new Error(`Invalid role for ${aliasName}.${targetName} — must be panel, judge, synth, planner, or executor`);
     } else {
       nextTarget.role = patch.role;
     }

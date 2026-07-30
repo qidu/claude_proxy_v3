@@ -7,6 +7,81 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Feat: TUI/dashboard support for `coordinator` composite aliases
+
+Builds on the `coordinator` composite mode (see entry below). The proxy itself
+already routed `planner`/`executor` targets — this round wires the editor UX
+so users can see, edit, create, and delete coordinator aliases from the TUI and
+the web dashboard without hand-editing `proxy_config.toml`.
+
+**What you see:**
+- Composite aliases in the main TUI views and the `Edit Composite Aliases Config`
+  overlay now render an `[O]` tag for coordinator aliases (alongside the
+  existing `[F]` for fusion and `[C]` for plain share/primary/fallback).
+- The Test-custom-model picker shows `[O]` / `[F]` / `[C]` per alias and groups
+  all three at the top of the list.
+- In `proxy_config.toml`, each coordinator target now renders as
+  `coord:1 planner` (or `executor`) on its row in the editor overlay.
+
+**Editing:**
+- The TUI edit prompt for a coordinator target now shows `[p]lanner / [e]xecutor
+  [coord]`; defaults to `p` or `e` based on the existing role. Both `p`/`e`
+  short forms and the full `planner`/`executor` words are accepted.
+- The dashboard's coordinator `<select>` renders `[p]lanner` / `[e]xecutor`
+  (canonical `planner`/`executor` values are persisted to TOML).
+- TUI/dashboard fusion editing mirrors the same convention:
+  `[p]anel / [j]udge / [s]ynth [weight]`, default `p 1`, accept `p`/`j`/`s`.
+
+**Creating / converting empty aliases:**
+- TUI `A` (add alias) and `M` (add target on an empty alias like `xxx`/`yyy`)
+  now route through a new `Mode for <alias>` picker — choose `composite`,
+  `fusion`, or `coordinator` first, then proceed to the model picker. The
+  chosen mode seeds the first target's fields so `getCompositeAliasMode`
+  picks up the right mode on subsequent edits.
+- Dashboard `Add composite alias` and `Add target` (on an empty alias) use
+  the same numbered-choice prompt. For coordinator, the dashboard also asks
+  for a planner target at creation time so the alias is immediately usable.
+- The TUI previously fell through to plain composite for empty aliases (since
+  `getCompositeAliasMode` returns `'share'` rather than `undefined` for them).
+  Now the mode picker fires before the model picker.
+
+**Deleting an alias:**
+- TUI `D` on an alias line (not just on a target row) now opens a
+  "Delete composite alias `<alias>`?" confirmation and removes the alias via
+  `removeCompositeAliasFromDashboard`. The toolbar hint `D del` already
+  covered both cases.
+
+**Backend plumbing:**
+- `src/utils/config-loader.ts` — `CompositeTargetPatch.coord` added;
+  `upsertCompositeTarget` now writes `coord` (mirrors the existing `fusion`
+  handling: `null`/`0` deletes, must be a finite non-negative number); role
+  validation now also accepts `'planner'`/`'executor'`.
+
+**Bug fix in passing:**
+- Newly-added `window.prompt(...)` strings in `handleDashboardPage` had to use
+  `\\n` (not `\n`) so the outer HTML template literal doesn't collapse the
+  escape into a real newline — which would break the inner JS single-quoted
+  string literal at parse time (`SyntaxError: Invalid or unexpected token`).
+  Fixed at `promptAliasMode()` and the coordinator role prompt in
+  `add-composite-target`.
+
+**Files changed:**
+- `src/utils/config-loader.ts` — `CompositeTargetPatch.coord`,
+  `upsertCompositeTarget` coord handling, role validation list.
+- `src/tui.ts` — `getCompositeAliasMode` import; `[O]` tag in alias summary,
+  custom-models list, model-test picker; coordinator target summary;
+  `openModePicker`; `openAddAliasPrompt` mode-routing; `openTargetPicker`
+  empty-alias detection (now uses the alias's own keys, not `getCompositeAliasMode`)
+  + `forceMode` argument; coordinator add/edit prompts with `p`/`e` short
+  forms; fusion prompts with `p`/`j`/`s` short forms; `openDeleteAliasConfirm`
+  and `D`-on-alias handler; `removeCompositeAliasFromDashboard` import.
+- `src/handlers/dashboard.ts` — `promptAliasMode()` helper;
+  `add-composite-alias` mode pick + planner seed for coordinator;
+  `add-composite-target` empty-alias mode pick + role pick (with
+  `1`/`2`/`p`/`e`); coordinator `<select>` labels; fusion `<select>` labels.
+
+---
+
 ### Feat: transforms — hook aliases, reference doc, debug log
 
 Three usability improvements from the transforms/hooks review:
