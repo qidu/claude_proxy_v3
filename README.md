@@ -848,8 +848,26 @@ environment; on Cloudflare Workers they come from `[vars]` in `wrangler.toml`.
 **`[transforms.*]` and `[transform_defaults]` config fields**
 
 Per-model/per-upstream request and response rewriting. Each named set is declared as
-`[transforms.<name>]` and referenced from model entries via `transforms = "set_name"` (or a
-comma-separated list). See `proxy_config.toml_example` for full syntax and `docs/design_request_transform_hooks.md` for the design.
+`[transforms.<name>]` and referenced from model entries via `transforms = "set_name"` (CSV
+string for multiple sets: `transforms = "set_a,set_b"`). **List form (`transforms = ["a","b"]`)
+is not supported** — use a comma-separated string. See `docs/transforms-reference.md` for the
+quick-reference cheat sheet and `docs/design_request_transform_hooks.md` for the design.
+
+**Attaching a transform set to a model entry** — model entries accept two forms:
+
+```toml
+# Inline-table form (recommended for readability):
+"deepseek-v4-anth" = {target = "deepseek-v4-flash", base_url = "https://...", api_key = "sk-...", mode = "anthropic-messages", transforms = "my_set"}
+
+# Positional-array form (legacy):
+"deepseek-v4-anth" = ["deepseek-v4-flash", "https://...", "sk-...", "anthropic-messages", "my_set"]
+#                      [0] target           [1] base_url   [2] api_key [3] upstream_mode   [4] transforms CSV
+```
+
+In the positional form, every element is optional from the right — a 3-element array
+`[target, base_url, api_key]` inherits `upstream_mode` from the section and attaches no
+transforms. An empty element (`""`) falls back to the section/default value for that slot.
+The `transforms` field (index 4) is always a comma-separated string of named set names.
 
 **Default transforms** — the proxy ships with `max_tokens_rename` wired as a mode-level
 default for `openai-completions` and `openai-responses` via `[transform_defaults]`. This

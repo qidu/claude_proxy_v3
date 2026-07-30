@@ -382,6 +382,34 @@ function applyTransformSet(
 // ---------------------------------------------------------------------------
 
 /**
+ * Build a single DEBUG line summarising the resolved transforms for a route.
+ * Format: `transforms: <hook>=[<set>:b=N,ops=N] …`
+ * Only hooks that have at least one builtin or op in at least one set are listed.
+ * Returns an empty string when there are no transforms (caller should skip logging).
+ */
+export function formatTransformsDebug(transforms: TransformSet[]): string {
+  if (!transforms || transforms.length === 0) return '';
+  const HOOKS: HookPoint[] = ['endpoint_readin', 'before_conversion', 'before_upstream', 'after_upstream', 'endpoint_writeout'];
+  const parts: string[] = [];
+  for (const hook of HOOKS) {
+    const activeSets = transforms.filter(s => s[hook] !== undefined);
+    if (activeSets.length === 0) continue;
+    const setDescs = activeSets.map(s => {
+      const slot = s[hook]!;
+      const tokens: string[] = [];
+      const b = slot.builtins?.length ?? 0;
+      const ops = slot.ops?.length ?? 0;
+      if (b > 0) tokens.push(`b=${b}`);
+      if (ops > 0) tokens.push(`ops=${ops}`);
+      return `${s.name}:${tokens.join(',')}`;
+    });
+    parts.push(`${hook}=[${setDescs.join(' ')}]`);
+  }
+  if (parts.length === 0) return '';
+  return `transforms: ${parts.join(' ')}`;
+}
+
+/**
  * Run all transforms declared for `hook` across the resolved transform list.
  * Folds left-to-right: each set sees the output of the previous.
  */

@@ -149,3 +149,65 @@ Most-impactful fixes per effort:
 2. **Rename `endpoint_readin/writeout`** to plain names + aliases (medium effort, big clarity win).
 3. **Add `--show-effective-transforms`** introspection (medium effort, removes a class of "why isn't my rule firing?" support).
 4. **Tighten `map_value` ergonomics** with optional sugar syntax or `when = "role=assistant & has=tool_calls"` form.
+
+---
+
+## Conclusion — what holds up, what does not, after reading the code
+
+### Advice that is accurate and worth acting on
+
+**Pain points 1–4 and recommendations around naming/discoverability are entirely correct.** The code confirms:
+- `HookPoint` is a literal string union of the five names (`endpoint_readin`, `before_conversion`, `before_upstream`, `after_upstream`, `endpoint_writeout`) with no aliases — `request-transform.ts:19-24`. The names are hard-wired in the type and in `validateAllTransforms`'s iteration list (`config-loader.ts:199`). Any rename needs both changed in sync.
+- The `$response.` prefix is real and its shallow-only restriction is enforced by `isPathWalkable` (`config-loader.ts:175-189`), which explicitly blocks anything with a dot or bracket after `$response.`. The comment in `parsePath` (`request-transform.ts:266-269`) even notes that bracket suffixes like `choices[].message.role` will fall back to literal-key assignment — a real footgun.
+- Three built-in names are the entire universe (`config-loader.ts:98, 150`). They are not documented anywhere the user could find without reading the source.
+
+**Pain point 7 (no introspection) and the `--show-effective-transforms` recommendation are well-founded.** The resolved transform list is assembled by `resolveTransforms` in `config-loader.ts:438-451`, stored in `ModelRouteConfig.transforms`, and never surfaced anywhere after that. Given that three sources can contribute (mode default → sector default → entry — `config-loader.ts:448-450`), the gap is real.
+
+**Pain point 8 (two meanings of `transforms`) is accurate, and the TL;DR undersells it.** The top-level `transforms` key is `Record<string, TransformSet>` (the named-set registry). A per-model entry's transforms field is parsed from the fifth positional element of a string array (`entry[4]`, `config-loader.ts:491`) as a comma-separated string. The list form (`transforms = ["a","b"]`) is **not implemented** — the code only ever calls `.split(',')` on a string. The TL;DR's claim that this is "already partly true" is wrong; it is not at all true.
+
+**Pain point 10 (`headers.set` naming conflict) is a real but minor ambiguity.** The `before_upstream` and `endpoint_writeout` hook slots carry `headers?: { set?: ...; remove?: ... }` (`config-loader.ts:107-109`), so `set` is a TOML table key that visually collides with the transform op name `set`. The review is right that this is subtle.
+
+**The fast-path gates are correctly identified as good design** — `hasHookOps`, `applyAfterUpstream`'s `activeSets.filter`, and `buildEventTransformer`'s early-null return (`request-transform.ts:423-426, 468-470, 488-491`) are all present and correct.
+
+**The validation error message critique (Recommendations → Validation feedback) is accurate.** The current error for a non-walkable path (`config-loader.ts:209-215`) says to use a named builtin or shallow path but does not name *which builtin* covers the specific case. The recommendation to add a pointer is valid.
+
+---
+
+### Advice that is imprecise or should be revised
+
+**Pain point 5 (Tier 1 / Tier 2 invisible in config) — the recommendation to rename `ops`/`builtins` to `tier1`/`tier2` is bad.** `ops` and `builtins` describe *what the list contains*. `tier1`/`tier2` are internal design-doc labels that mean nothing to a first-time reader. The real fix is a one-liner in reference docs explaining order and purpose — renaming the keys would make them worse, not better.
+
+**Pain point 6 (default-resolution order is implicit) — the recommendation "replace implicit resolution with explicit list" is too aggressive.** The chain (mode → sector → entry, left-to-right concatenation, `config-loader.ts:448-450`) is a clean convention. Forcing every model entry to repeat the full list would be verbose and error-prone. The right fix is to document the resolution order and emit a single DEBUG log line per request — the review's own Visibility section already covers this better.
+
+**The `preset` alias recommendation adds complexity for zero gain.** Named transform sets are already presets — `deepseek_compat` is exactly what a preset would be. A separate `preset = "..."` key would duplicate the concept. The right doc note is: "a named set whose only content is `builtins = [...]` *is* a preset — give it a descriptive name and reuse it".
+
+**Pain point 9 ("no built-in registry") is correct but the proposed registry TOML table is wrong.** An inert TOML table the engine ignores solves nothing. A reference doc page listing the three builtins with their schema requirements costs nothing and solves the problem.
+
+**The `map_value` sugar syntax proposal** (`path = "messages[role=assistant,has=tool_calls].content"`) conflates path (where) with guard (when). The current `when_sibling` explicit op field is more readable once you know it exists. The better fix is to document `when_sibling` prominently in the reference cheat sheet with a worked example.
+
+---
+
+### What the review misses (corrections after reading the code)
+
+1. **`applyWriteoutBody` has dead code, but the description is slightly wrong.** At `request-transform.ts:530-538`, `hookCtx` is created with `{ ...ctx, status: response.status }` and then immediately voided with `void hookCtx` — the status is never used. The review claims "for `after_upstream` the same pattern is used correctly (`hookCtx` is passed as `ctx` into the filter)" — but `hookCtx` is not passed into `applyTransformSet` there either; it is only used for `hookCtx.status` when constructing the returned `Response` at line 451. So both functions capture status; `applyWriteoutBody` throws it away at line 542 (uses `response.status` directly instead). This is a latent inconsistency worth a one-line note, not a refactor.
+
+2. **Header transforms on `after_upstream` cannot be declared in the first place.** The review says "a user who puts a `headers.set` under `after_upstream` will see no error and no effect". In fact, the `TransformSet` type definition does not include a `headers` field on `after_upstream` (`config-loader.ts:108`): only `before_upstream` and `endpoint_writeout` slots carry `headers?`. TypeScript will reject that TOML field before it reaches the runtime. The `void headers` at `request-transform.ts:447` is therefore a belt-and-suspenders guard for the case where the engine processes a set at runtime whose type already excludes headers — not a silent-discard trap for config authors. The validator note is moot; the type system covers it. **This entire "miss" in the review is inaccurate.**
+
+3. **`pipeEventTransformer` hard-codes `endpoint_writeout`, but the claim about a misleading signature is wrong.** The review says "the function signature takes a `hook` parameter conceptually". It does not — the signature at `request-transform.ts:557-561` only takes `responseBody` and `ctx`. The hard-coding is real (a caller can't request a different hook), but there is no deceptive parameter to misread. The observation is worth a `// always endpoint_writeout` comment in the implementation, nothing more.
+
+4. **The transforms CSV format for per-model entries (`entry[4]`) is not documented in the review.** This positional array encoding (`[target, base_url, api_key, mode, transforms_csv]`) is the actual config wire format (`config-loader.ts:491`) and is highly non-obvious. A new user hand-editing `proxy_config.toml` would have no idea the fifth element is the transforms field. This is the most important omission — it affects anyone trying to write a new model entry from scratch.
+
+---
+
+### Priority reordering after code review
+
+| Priority | Action | Why |
+|---|---|---|
+| 1 | ~~Write `docs/transforms-reference.md` — hooks table, ops table, builtins table~~ | Zero code, maximum clarity gain |
+| ~~2~~ | ~~Document the 5-element model array format (`[target, base_url, api_key, mode, transforms_csv]`)~~ | Done — README `[transforms.*]` section |
+| 3 | Add one DEBUG log line per request showing resolved transform sets | Closes the introspection gap cheaply |
+| ~~4~~ | ~~Clarify in docs that `transforms = [...]` list form is not supported — CSV string only~~ | Done — README `[transforms.*]` section |
+| 5 | ~~Rename `endpoint_readin`/`endpoint_writeout` with backward-compatible aliases~~ | Medium effort, good clarity payoff |
+| 6 | ~~Fix validator to reject `headers.*` under `after_upstream`~~ | Non-issue — TypeScript type already prevents it |
+| 7 | ~~Rename `ops`/`builtins` to `tier1`/`tier2`~~ | Do not do this — docs are enough |
+| 8 | ~~Add `preset` key~~ | Named sets already serve this purpose |

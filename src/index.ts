@@ -81,7 +81,7 @@ import {
 import { getKompressConfig, shouldCompressPath, compressBody } from './utils/kompress.js';
 import { eraseBlockedTools } from './utils/tool-blocklist.js';
 import { buildModelUsageRecordPayload, recordModelUsageToRemote } from './utils/model-usage-recorder.js';
-import { runHook, applyWriteoutBody, pipeEventTransformer, type HookContext } from './utils/request-transform.js';
+import { runHook, applyWriteoutBody, pipeEventTransformer, formatTransformsDebug, type HookContext } from './utils/request-transform.js';
 
 let hasLoggedUpstreamConfig = false;
 
@@ -2041,6 +2041,12 @@ export default {
             body: JSON.stringify(transformed.body),
           });
           attemptAuthHeaders = transformed.headers;
+        }
+
+        // Debug: one line per request showing the resolved transform sets and per-hook op counts.
+        if (attemptRoute && attemptRoute.transforms.length > 0) {
+          const transformsLine = formatTransformsDebug(attemptRoute.transforms);
+          if (transformsLine) logger.debug(requestId, transformsLine);
         }
 
         // Debug log routing info for test model requests (LOG_LEVEL=debug)

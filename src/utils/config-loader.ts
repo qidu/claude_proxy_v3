@@ -149,6 +149,23 @@ const SCHEMA_PATHS: Record<TransformSchema, Set<string>> = {
 
 const BUILTIN_NAMES: Set<BuiltinName> = new Set(['lowercase_tool_schema_types', 'recover_tool_message_name', 'inject_missing_tool_results']);
 
+/**
+ * Backward-compatible hook name aliases.
+ * `request_ingress` is an alias for `endpoint_readin`.
+ * `response_egress`  is an alias for `endpoint_writeout`.
+ * Aliases are normalized to canonical names at parse time; the runtime engine
+ * always sees canonical names only.
+ */
+const HOOK_ALIASES: Record<string, 'endpoint_readin' | 'endpoint_writeout'> = {
+  request_ingress: 'endpoint_readin',
+  response_egress: 'endpoint_writeout',
+};
+
+/** Normalize an alias to its canonical HookPoint name; returns input unchanged if not an alias. */
+export function normalizeHookAlias(key: string): string {
+  return HOOK_ALIASES[key] ?? key;
+}
+
 export interface TransformValidationError {
   set: string;
   message: string;
@@ -1230,7 +1247,8 @@ function parseCompositeTargetConfig(value: string): CompositeTargetConfig {
 
 type TransformHookSlot = NonNullable<TransformSet['before_upstream']>;
 type HookKey = 'endpoint_readin' | 'before_conversion' | 'before_upstream' | 'after_upstream' | 'endpoint_writeout';
-const HOOK_KEYS = new Set<string>(['endpoint_readin', 'before_conversion', 'before_upstream', 'after_upstream', 'endpoint_writeout']);
+// HOOK_KEYS includes aliases so the TOML parser accepts them; normalizeHookAlias() maps them to canonical keys before use.
+const HOOK_KEYS = new Set<string>(['endpoint_readin', 'before_conversion', 'before_upstream', 'after_upstream', 'endpoint_writeout', 'request_ingress', 'response_egress']);
 
 /**
  * Parse a TOML array of quoted strings into a string[].
@@ -1245,9 +1263,10 @@ function parseTransformArrayField(set: TransformSet, cleanKey: string, elements:
     // only "schema" is valid at top level (handled in string branch). Ignore unknowns.
     return;
   }
-  const hookPart = cleanKey.slice(0, dotIdx) as HookKey;
+  const rawHook = cleanKey.slice(0, dotIdx);
   const fieldPart = cleanKey.slice(dotIdx + 1);
-  if (!HOOK_KEYS.has(hookPart)) return;
+  if (!HOOK_KEYS.has(rawHook)) return;
+  const hookPart = normalizeHookAlias(rawHook) as HookKey;
 
   if (!set[hookPart]) set[hookPart] = {} as TransformHookSlot;
   const slot = set[hookPart] as TransformHookSlot;
@@ -2595,9 +2614,10 @@ export function parseSimpleToml(content: string): ProxyConfig {
         const set = config.transforms[currentCategory];
         const dotIdx = cleanKey.indexOf('.');
         if (dotIdx !== -1) {
-          const hookPart = cleanKey.slice(0, dotIdx) as HookKey;
+          const rawHook = cleanKey.slice(0, dotIdx);
           const fieldPart = cleanKey.slice(dotIdx + 1);
-          if (HOOK_KEYS.has(hookPart)) {
+          if (HOOK_KEYS.has(rawHook)) {
+            const hookPart = normalizeHookAlias(rawHook) as HookKey;
             if (!set[hookPart]) set[hookPart] = {} as TransformHookSlot;
             const slot = set[hookPart] as TransformHookSlot;
             if (fieldPart === 'ops') {

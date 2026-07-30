@@ -7,6 +7,34 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Feat: transforms — hook aliases, reference doc, debug log
+
+Three usability improvements from the transforms/hooks review:
+
+1. **Backward-compatible hook name aliases** (`src/utils/config-loader.ts`).
+   `request_ingress` is now accepted as an alias for `endpoint_readin`, and
+   `response_egress` as an alias for `endpoint_writeout` in `proxy_config.toml`.
+   Both are normalized to the canonical name at config load time; the runtime
+   engine and TypeScript types are unchanged. Old names continue to work as-is.
+
+2. **`docs/transforms-reference.md`** — a single-page cheat sheet with three
+   tables: hooks (name, alias, when, schema, side), Tier-1 ops (op, fields,
+   effect, example), and Tier-2 built-ins (name, schema, what it does).
+   Also documents the 5-element model array wire format and default-resolution
+   order. Supersedes having to read the design doc for day-to-day authoring.
+
+3. **DEBUG log line per request** (`src/index.ts`, `src/utils/request-transform.ts`).
+   When `LOG_LEVEL=debug`, one line is emitted per request for any route that has
+   transforms configured, showing the resolved set names and per-hook op/builtin
+   counts:
+   ```
+   [req_…] [DEBUG] transforms: endpoint_readin=[deepseek_compat:b=1] before_upstream=[deepseek_compat:b=1,ops=1]
+   ```
+   `b=N` = N built-ins, `ops=N` = N Tier-1 ops. Only hooks with active ops are listed.
+   Zero runtime cost when `LOG_LEVEL` is `info` or higher.
+
+---
+
 ### Fix: transforms — `endpoint_readin` mutations discarded, and passthrough/generateContent paths never ran transforms
 
 Antigravity agents routed to `deepseek-v4-anth` (DeepSeek's `anthropic-messages`-compatible
