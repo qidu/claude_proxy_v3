@@ -894,7 +894,10 @@ export default {
 
       // Require at least one of: Authorization, x-api-key, x-goog-api-key
       // for model API requests. Health/dashboard/admin paths above are exempt.
-      // DEV_NO_KEY disables only this presence check; auth_url still applies.
+      // /v1/models is also exempt: model listing/discovery must work without a
+      // credential so SDKs can enumerate. DEV_NO_KEY disables only this
+      // presence check; auth_url still applies for non-exempt paths.
+      const isModelsListPath = path === '/v1/models' || path.startsWith('/v1/models?');
       const authHeader = request.headers.get('authorization');
       const xApiKey = request.headers.get('x-api-key');
       const xGoogApiKey = request.headers.get('x-goog-api-key');
@@ -902,7 +905,7 @@ export default {
                       (xApiKey && xApiKey.trim() !== '') ||
                       (xGoogApiKey && xGoogApiKey.trim() !== '');
       const devNoKey = env.DEV_NO_KEY === 'true' || env.DEV_NO_KEY === '1';
-      if (!hasAuth && !devNoKey) {
+      if (!hasAuth && !devNoKey && !isModelsListPath) {
         logger.warn(requestId, `Missing auth headers (need Authorization, x-api-key, or x-goog-api-key) for ${path}`);
         return createErrorResponse(
           new Error('Missing authentication: provide Authorization, x-api-key, or x-goog-api-key header.'),
@@ -914,7 +917,8 @@ export default {
       // If auth_url is configured, validate the client's auth headers against it.
       // When auth_with_model is true, defer the auth call until after body parsing
       // so the requested model id can be forwarded as x-resource-for.
-      const authUrl = proxyConfig.general?.auth_url?.trim();
+      // Skipped for /v1/models (exempt from auth entirely).
+      const authUrl = isModelsListPath ? '' : (proxyConfig.general?.auth_url?.trim() ?? '');
       const authWithModel = proxyConfig.general?.auth_with_model === true;
       let modelUsageAccessToken: string | undefined;
       const doAuthRequest = async (modelNameForAuth?: string): Promise<Response | null> => {

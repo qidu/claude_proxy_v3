@@ -304,7 +304,7 @@ On startup, the proxy avoids double-counting persisted stats as follows:
 | `POST /v1beta/models/{model}:generateContent` | Gemini content (also `:streamGenerateContent`, `:countTokens`) |
 | `POST /v1/interactions` | Gemini Interactions API |
 | `POST /v1/embeddings` | Embeddings (proxied to an OpenAI-compatible upstream) |
-| `GET /v1/models` | List available models |
+| `GET /v1/models` | List available models (no auth required) |
 | `GET /dashboard` | Web dashboard for config + stats |
 
 A Gemini `/v1/models/{model}:...` variant exists for each `/v1beta/models/{model}:...`
@@ -833,7 +833,7 @@ environment; on Cloudflare Workers they come from `[vars]` in `wrangler.toml`.
 
 | Field | Example | Purpose |
 |---|---|---|
-| `auth_url` | `"https://auth.example.com/validate"` | If set, every inbound request's proxy auth headers (`Authorization`, `x-api-key`, `x-goog-api-key`) plus `User-Agent` are validated by a `GET` to this URL before routing. HTTP 200 = pass; 4xx/5xx = 401 to client; network error = 503. |
+| `auth_url` | `"https://auth.example.com/validate"` | If set, every inbound request's proxy auth headers (`Authorization`, `x-api-key`, `x-goog-api-key`) plus `User-Agent` are validated by a `GET` to this URL before routing. HTTP 200 = pass; 4xx/5xx = 401 to client; network error = 503. **Exempt paths:** `/health`, `/`, `/dashboard`, and `/v1/models` (model listing is unauthenticated so SDKs can enumerate without a credential). |
 | `auth_with_model` | `false` | When `true`, the `auth_url` call is deferred until after the request body is parsed so the requested model id can be forwarded as `x-resource-for` header. Allows the auth server to make per-model decisions. Default: `false` (auth runs before body parsing). |
 | `auth_passthrough_with` | `"user_key"` | Standalone upstream-auth setting, separate from `auth_url` / `auth_with_model`. Controls which key is passed to the upstream provider: `"user_key"` (default) forwards the caller's key; `"config_key"` uses the configured `api_key`. |
 | `global_token_limit` | `"1B 1d"` | Rolling-window token cap across all models. Format: `"<num><K/M/B> <duration>"` where duration is `1h`/`1d`/`1w`/`1m`. Returns HTTP 429 when exceeded. |

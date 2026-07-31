@@ -7,6 +7,33 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Change: `/v1/models` is now exempt from auth
+
+`GET /v1/models` (and `/v1/models?...`) no longer requires an auth header and
+no longer triggers the `auth_url` sidecar. Previously every model-API path
+went through the same auth gate (presence check on `Authorization` /
+`x-api-key` / `x-goog-api-key`, then the optional `auth_url` validation),
+which blocked SDK discovery / model-listing calls that legitimately have no
+credential.
+
+The exemption mirrors the existing treatment of `/health`, `/`, and
+`/dashboard`: model listing is treated as public metadata.
+
+Behavior change in `src/index.ts`:
+
+- A new `isModelsListPath` flag (`path === '/v1/models' || path.startsWith('/v1/models?')`)
+  is added to the auth gate.
+- The presence-check failure (`!hasAuth && !devNoKey`) now also skips when
+  `isModelsListPath` is true.
+- `authUrl` is forced to `''` for the models-list path, so the sidecar call
+  is skipped entirely — not just the presence check.
+
+`/dashboard/api/*` writes are unaffected: they are still gated by
+`[dashboard].api_key` via `validateDashboardApiAuth`, which runs in a
+separate branch and is independent of this gate. All other model-API paths
+(`/v1/messages`, `/v1/responses`, `/v1/chat/completions`, `/v1/embeddings`,
+`/v1beta/models/*`) keep requiring auth as before.
+
 ### Fix: `inject_missing_tool_results` now handles a trailing `tool_use`
 
 The `inject_missing_tool_results` builtin (`src/utils/request-transform.ts`)
