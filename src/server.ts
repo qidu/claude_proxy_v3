@@ -133,7 +133,7 @@ const server = createServer(async (req, res) => {
     }
 
     const responseBody = await response.clone().text();
-    res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
+    res.writeHead(response.status, nodeResponseHeaders(response));
     res.end(responseBody);
     release();
   } catch (error) {
