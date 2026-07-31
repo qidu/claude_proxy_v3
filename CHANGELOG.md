@@ -7,6 +7,23 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: dashboard UI tightening — narrower inputs and TUI label cleanup
+
+**Dashboard:**
+- `share` input box: narrowed to 60px in both the wizard modal and composite target rows.
+- `upstream_mode` select: narrowed to 180px (previously used `class="wide"` spanning 2 grid columns).
+- `token_limit` duration select: narrowed to 100px.
+- `Add window` button: indented 16px to align with the "days" select in schedule window rows.
+- Added `.sched-window-row` CSS for consistent window row layout (previously only inline).
+- `.danger` button: slightly lighter red tint for better contrast.
+
+**TUI:**
+- Composite target row: changed `non-FB` label to `Fallback` when `fallback: 0`.
+
+**Files changed:**
+- `src/handlers/dashboard.ts` — input/select widths, Add window alignment, CSS additions.
+- `src/tui.ts` — `non-FB` → `Fallback`.
+
 ### Feat: TUI/dashboard support for `coordinator` composite aliases
 
 Builds on the `coordinator` composite mode (see entry below). The proxy itself

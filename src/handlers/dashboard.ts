@@ -389,6 +389,12 @@ export function handleDashboardPage(env: Env): Response {
         box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.15);
       }
       .config-row .wide { grid-column: 2 / span 2; }
+      .sched-window-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 4px 0 4px 16px; }
+      .sched-window-row .sched-window-label { width: 70px; font-weight: 600; font-size: 13px; }
+      .sched-window-row .sched-window-time { display: flex; align-items: center; gap: 6px; }
+      .sched-window-row .sched-window-days { display: flex; align-items: center; gap: 6px; }
+      .sched-window-row input[type=number] { width: 70px; }
+      .sched-window-row select { width: auto; min-width: 110px; }
       .row-actions { display: flex; gap: 8px; align-items: center; }
       .mini-btn { padding: 4px 8px; font-size: 12px; justify-self: start; width: auto; }
       .test-btn { padding: 4px 8px; font-size: 12px; background: #e8f5e9; border: 1px solid #a5d6a7; color: #2e7d32; }
@@ -396,7 +402,7 @@ export function handleDashboardPage(env: Env): Response {
       .test-btn.testing { background: #fff9c4; border-color: #fff176; color: #f57f17; }
       .test-btn.error-result { background: #ffebee; border-color: #ef9a9a; color: #c62828; }
       .test-btn.success-result { background: #e8f5e9; border-color: #a5d6a7; color: #2e7d32; }
-      .danger { background: #fff1f1; border: 1px solid #ffcccc; }
+      .danger { background: #fff9c454; border: 1px solid #ffebee; }
       .section-actions { margin-top: 8px; }
       /* Tool blocklist */
       tr.tool-row.blocked { background: #fff1f1; }
@@ -460,10 +466,92 @@ export function handleDashboardPage(env: Env): Response {
       .result-usage { font-size: 12px; opacity: 0.8; }
       .result-clear { float: right; background: none; border: none; cursor: pointer; font-size: 13px; padding: 0; color: inherit; opacity: 0.7; }
       .result-clear:hover { opacity: 1; }
+      .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-start; justify-content: center; z-index: 2000; padding-top: 6vh; }
+      .modal-overlay[hidden] { display: none; }
+      .modal { position: relative; background: white; border-radius: 8px; padding: 20px; max-width: 560px; width: 90%; box-shadow: 0 4px 16px rgba(0,0,0,0.18); }
+      .modal-close-x { position: absolute; top: 8px; right: 12px; background: none; border: none; font-size: 22px; line-height: 1; cursor: pointer; color: #666; padding: 4px 8px; }
+      .modal-close-x:hover { color: #c62828; }
+      .modal h3 { margin-top: 0; }
+      .modal-status { font-size: 13px; padding: 6px 0; min-height: 20px; }
+      .modal-status.error { color: #c62828; }
+      .modal-status.ok { color: #2e7d32; }
+      .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+      .modal label { display: block; font-size: 12px; font-weight: 600; margin-top: 8px; }
+      .modal input[type=text], .modal select { width: 100%; padding: 6px 8px; font-size: 13px; border: 1px solid #bdbdbd; border-radius: 4px; box-sizing: border-box; }
+      .modal input[type=number] { width: 100%; padding: 6px 8px; font-size: 13px; border: 1px solid #bdbdbd; border-radius: 4px; box-sizing: border-box; }
+      .wizard-steps { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+      .modal .mode-options { display: flex; gap: 8px; margin-top: 6px; }
+      .modal .mode-option { flex: 1; padding: 8px; border: 1px solid #bdbdbd; border-radius: 4px; cursor: pointer; text-align: center; font-size: 13px; }
+      .modal .mode-option.selected { background: #e3f2fd; border-color: #1976d2; }
+      .modal .field-row { display: none; }
+      .modal .field-row.visible { display: block; }
+      .modal .helper-text { font-size: 11px; color: #666; margin-top: 2px; }
     </style>
   </head>
   <body>
     <h1>Proxy Dashboard <span style="color:#9e9e9e;font-size:14px;font-weight:normal;">${env.VERSION || 'dev'}</span></h1>
+
+    <div id="compositeAliasWizard" class="modal-overlay" hidden>
+      <div class="modal" role="dialog" aria-labelledby="wizTitle" aria-modal="true">
+        <button type="button" class="modal-close-x" id="wiz-close-x" aria-label="Close wizard" title="Close (Esc)">×</button>
+        <div class="wizard-steps" id="wizSteps">Step 1 of 3</div>
+        <h3 id="wizTitle">New composite alias — Step 1: Name &amp; mode</h3>
+        <div id="wizBody">
+          <label for="wiz-alias-name">Alias name</label>
+          <input type="text" id="wiz-alias-name" placeholder="e.g. gpt-all" autocomplete="off" />
+          <label>Mode</label>
+          <div class="mode-options" id="wiz-mode-options">
+            <div class="mode-option selected" data-mode="composite" id="wiz-mode-composite">[C] composite<br /><span style="font-size:11px;color:#666;">share / primary / fallback</span></div>
+            <div class="mode-option" data-mode="fusion" id="wiz-mode-fusion">[F] fusion<br /><span style="font-size:11px;color:#666;">panel / judge / synth</span></div>
+            <div class="mode-option" data-mode="coordinator" id="wiz-mode-coordinator">[O] coordinator<br /><span style="font-size:11px;color:#666;">planner / executor stages</span></div>
+          </div>
+        </div>
+        <div class="modal-status" id="wiz-status"></div>
+        <div class="modal-actions">
+          <button type="button" class="mini-btn" id="wiz-cancel">Cancel</button>
+          <button type="button" class="mini-btn" id="wiz-back" hidden>Back</button>
+          <button type="button" class="mini-btn" id="wiz-submit">Next</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="scheduleWizard" class="modal-overlay" hidden>
+      <div class="modal" role="dialog" aria-labelledby="schedWizTitle" aria-modal="true">
+        <button type="button" class="modal-close-x" id="sched-wiz-close-x" aria-label="Close wizard" title="Close (Esc)">×</button>
+        <div class="wizard-steps" id="schedWizSteps">Step 1 of 2</div>
+        <h3 id="schedWizTitle">New schedule alias</h3>
+        <div id="schedWizBody">
+          <label for="sched-wiz-alias-name">Alias name</label>
+          <input type="text" id="sched-wiz-alias-name" placeholder="e.g. day-shift" autocomplete="off" />
+          <div class="helper-text">Schedule aliases route by hour-of-day. Add at least one target after creating.</div>
+        </div>
+        <div class="modal-status" id="sched-wiz-status"></div>
+        <div class="modal-actions">
+          <button type="button" class="mini-btn" id="sched-wiz-cancel">Cancel</button>
+          <button type="button" class="mini-btn" id="sched-wiz-back" hidden>Back</button>
+          <button type="button" class="mini-btn" id="sched-wiz-submit">Next</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="scheduleTargetWizard" class="modal-overlay" hidden>
+      <div class="modal" role="dialog" aria-labelledby="schedTgtTitle" aria-modal="true">
+        <button type="button" class="modal-close-x" id="sched-tgt-close-x" aria-label="Close wizard" title="Close (Esc)">×</button>
+        <h3 id="schedTgtTitle">Add schedule target</h3>
+        <div id="schedTgtBody">
+          <label for="sched-tgt-alias">Schedule alias</label>
+          <input type="text" id="sched-tgt-alias" readonly />
+          <label for="sched-tgt-model">Target model id</label>
+          <input type="text" id="sched-tgt-model" placeholder="e.g. minimax-m3" autocomplete="off" />
+          <div class="helper-text">Must match an existing model id defined under [models.*].</div>
+        </div>
+        <div class="modal-status" id="sched-tgt-status"></div>
+        <div class="modal-actions">
+          <button type="button" class="mini-btn" id="sched-tgt-cancel">Cancel</button>
+          <button type="button" class="mini-btn" id="sched-tgt-submit">Create target</button>
+        </div>
+      </div>
+    </div>
 
     <div class="side-nav" id="sideNav">
       <a href="#section-config">Config</a>
@@ -633,6 +721,547 @@ export function handleDashboardPage(env: Env): Response {
         return null;
       }
 
+      // In-page wizard for adding a new composite alias. Single-target only:
+      // user picks alias name + mode, then ONE target model + per-mode fields,
+      // then submits. Uses inline inputs/selects + a status span — no
+      // window.alert / window.prompt / window.confirm.
+      function openAddAliasWizard() {
+        const overlay = document.getElementById('compositeAliasWizard');
+        if (!overlay) return;
+
+        const stepsEl = document.getElementById('wizSteps');
+        const titleEl = document.getElementById('wizTitle');
+        const bodyEl = document.getElementById('wizBody');
+        const statusEl = document.getElementById('wiz-status');
+        const cancelBtn = document.getElementById('wiz-cancel');
+        const backBtn = document.getElementById('wiz-back');
+        const submitBtn = document.getElementById('wiz-submit');
+        const closeXBtn = document.getElementById('wiz-close-x');
+        if (!stepsEl || !titleEl || !bodyEl || !statusEl || !cancelBtn || !backBtn || !submitBtn || !closeXBtn) return;
+
+        const state = { step: 1, mode: 'composite', alias: '', target: '' };
+        const buildEnvLabel = ${JSON.stringify(env.VERSION || 'dev')};
+
+        function setStatus(msg, kind) {
+          statusEl.textContent = msg || '';
+          statusEl.className = 'modal-status' + (kind ? ' ' + kind : '');
+        }
+
+        function setMode(mode) {
+          state.mode = mode;
+          document.querySelectorAll('#wiz-mode-options .mode-option').forEach(function (el) {
+            el.classList.toggle('selected', el.getAttribute('data-mode') === mode);
+          });
+        }
+
+        function renderStep1() {
+          state.step = 1;
+          stepsEl.textContent = 'Step 1 of 3';
+          titleEl.textContent = 'New composite alias — Step 1: Name & mode';
+          bodyEl.innerHTML =
+            '<label for="wiz-alias-name">Alias name</label>' +
+            '<input type="text" id="wiz-alias-name" placeholder="e.g. gpt-all" autocomplete="off" />' +
+            '<label>Mode</label>' +
+            '<div class="mode-options" id="wiz-mode-options">' +
+              '<div class="mode-option" data-mode="composite">[C] composite<br /><span style="font-size:11px;color:#666;">share / primary / fallback</span></div>' +
+              '<div class="mode-option" data-mode="fusion">[F] fusion<br /><span style="font-size:11px;color:#666;">panel / judge / synth</span></div>' +
+              '<div class="mode-option" data-mode="coordinator">[O] coordinator<br /><span style="font-size:11px;color:#666;">planner / executor stages</span></div>' +
+            '</div>';
+          bodyEl.querySelectorAll('#wiz-mode-options .mode-option').forEach(function (el) {
+            el.addEventListener('click', function () {
+              setMode(el.getAttribute('data-mode'));
+              setStatus('');
+            });
+          });
+          const aliasInput = document.getElementById('wiz-alias-name');
+          if (aliasInput) {
+            aliasInput.value = state.alias;
+            aliasInput.focus();
+          }
+          setMode(state.mode);
+          backBtn.hidden = true;
+          submitBtn.textContent = 'Next';
+        }
+
+        function renderStep2() {
+          state.step = 2;
+          stepsEl.textContent = 'Step 2 of 3';
+          titleEl.textContent = 'New composite alias — Step 2: Target model';
+          bodyEl.innerHTML =
+            '<label for="wiz-target-name">Target model id</label>' +
+            '<input type="text" id="wiz-target-name" placeholder="e.g. minimax-m3" autocomplete="off" />' +
+            '<div class="helper-text">Free text — type an existing model id defined under [models.*].</div>';
+          const tgtInput = document.getElementById('wiz-target-name');
+          if (tgtInput) {
+            tgtInput.value = state.target;
+            tgtInput.focus();
+          }
+          backBtn.hidden = false;
+          submitBtn.textContent = 'Next';
+        }
+
+        function renderStep3() {
+          state.step = 3;
+          stepsEl.textContent = 'Step 3 of 3';
+          titleEl.textContent = 'New composite alias — Step 3: Target properties';
+          var fields = '';
+          if (state.mode === 'composite') {
+            fields =
+              '<label for="wiz-share">share</label>' +
+              '<input type="number" id="wiz-share" min="0" step="1" value="0" style="width:70px;" />' +
+              '<label for="wiz-routing">routing type</label>' +
+              '<select id="wiz-routing">' +
+                '<option value="fallback" selected>fallback</option>' +
+                '<option value="primary">primary</option>' +
+              '</select>' +
+              '<label for="wiz-fallback">fallback priority</label>' +
+              '<input type="number" id="wiz-fallback" min="0" step="1" placeholder="blank = no priority" />' +
+              '<div class="helper-text">fallback: used after primary is at capacity. primary: preferred target.</div>';
+          } else if (state.mode === 'fusion') {
+            fields =
+              '<label for="wiz-fusion-weight">fusion weight</label>' +
+              '<input type="number" id="wiz-fusion-weight" min="0" step="1" value="1" />' +
+              '<label for="wiz-fusion-role">role</label>' +
+              '<select id="wiz-fusion-role">' +
+                '<option value="panel">[p]anel → panel</option>' +
+                '<option value="judge">[j]udge → judge</option>' +
+                '<option value="synth">[s]ynth → synth</option>' +
+              '</select>';
+          } else {
+            fields =
+              '<label for="wiz-coord">coord</label>' +
+              '<input type="number" id="wiz-coord" min="0" step="1" value="1" />' +
+              '<label for="wiz-coord-role">role</label>' +
+              '<select id="wiz-coord-role">' +
+                '<option value="planner">[p]lanner</option>' +
+                '<option value="executor">[e]xecutor</option>' +
+              '</select>';
+          }
+          bodyEl.innerHTML = fields;
+          if (state.mode === 'composite') {
+            var routingSelEl = document.getElementById('wiz-routing');
+            if (routingSelEl) {
+              routingSelEl.addEventListener('change', function() {
+                var fbInput = document.getElementById('wiz-fallback');
+                if (fbInput) fbInput.hidden = routingSelEl.value === 'primary';
+              });
+            }
+          }
+          backBtn.hidden = false;
+          var envLabel = buildEnvLabel || 'dev';
+          submitBtn.textContent = 'Create alias ' + state.alias + ' (' + envLabel + ')';
+        }
+
+        function validateStep1() {
+          const aliasInput = document.getElementById('wiz-alias-name');
+          if (!aliasInput) return null;
+          const alias = (aliasInput.value || '').trim();
+          if (!alias) {
+            setStatus('Alias name is required.', 'error');
+            aliasInput.focus();
+            return null;
+          }
+          if (currentConfig.composite[alias]) {
+            setStatus('Composite alias already exists.', 'error');
+            aliasInput.focus();
+            return null;
+          }
+          // Mirror addCompositeAlias's model-id collision check so the user
+          // sees the same conflict message inline instead of as a fatal at
+          // save time. Reserved keys per getModelNamesInConfig.
+          const reserved = { upstream_mode: 1, base_url: 1, api_key: 1 };
+          if (currentConfig.models) {
+            for (const [category, catCfg] of Object.entries(currentConfig.models)) {
+              if (category === 'list' || Array.isArray(catCfg)) continue;
+              if (!catCfg || typeof catCfg !== 'object') continue;
+              for (const key of Object.keys(catCfg)) {
+                if (reserved[key]) continue;
+                if (key.startsWith('_')) continue;
+                if (key === alias) {
+                  setStatus(
+                    'Composite alias name "' + alias + '" conflicts with a model defined under [models.*] — alias and model names must be unique',
+                    'error',
+                  );
+                  aliasInput.focus();
+                  return null;
+                }
+              }
+            }
+          }
+          return alias;
+        }
+
+        function validateStep2() {
+          const tgtInput = document.getElementById('wiz-target-name');
+          if (!tgtInput) return null;
+          const target = (tgtInput.value || '').trim();
+          if (!target) {
+            setStatus('Target model id is required.', 'error');
+            tgtInput.focus();
+            return null;
+          }
+          return target;
+        }
+
+        function parseNum(v) {
+          if (v === '' || v === null || v === undefined) return null;
+          const n = Number(v);
+          if (!Number.isFinite(n) || n < 0) return NaN;
+          return n;
+        }
+
+        function buildTargetCfg() {
+          if (state.mode === 'composite') {
+            const shareEl = document.getElementById('wiz-share');
+            const routingEl = document.getElementById('wiz-routing');
+            const fallbackEl = document.getElementById('wiz-fallback');
+            const share = parseNum(shareEl ? shareEl.value : 0);
+            const fallback = parseNum(fallbackEl ? fallbackEl.value : '');
+            if (share === null) share = 0;
+            if (Number.isNaN(share)) { setStatus('share must be a non-negative number.', 'error'); return null; }
+            if (Number.isNaN(fallback)) { setStatus('fallback priority must be a non-negative number or blank.', 'error'); return null; }
+            const cfg = { share: share };
+            const isPrimary = routingEl && routingEl.value === 'primary';
+            if (isPrimary) cfg.primary = true;
+            if (!isPrimary && fallback !== null) cfg.fallback = fallback;
+            return cfg;
+          }
+          if (state.mode === 'fusion') {
+            const wEl = document.getElementById('wiz-fusion-weight');
+            const roleEl = document.getElementById('wiz-fusion-role');
+            const w = parseNum(wEl ? wEl.value : 1);
+            if (w === null) w = 1;
+            if (Number.isNaN(w)) { setStatus('fusion weight must be a non-negative number.', 'error'); return null; }
+            return { fusion: w, role: roleEl ? roleEl.value : 'panel' };
+          }
+          // coordinator
+          const cEl = document.getElementById('wiz-coord');
+          const roleEl = document.getElementById('wiz-coord-role');
+          const c = parseNum(cEl ? cEl.value : 1);
+          if (c === null) c = 1;
+          if (Number.isNaN(c)) { setStatus('coord must be a non-negative number.', 'error'); return null; }
+          return { coord: c, role: roleEl ? roleEl.value : 'planner' };
+        }
+
+        function close() {
+          if (overlay._wizKeydown) {
+            document.removeEventListener('keydown', overlay._wizKeydown);
+            overlay._wizKeydown = null;
+          }
+          overlay.hidden = true;
+          setStatus('');
+          // Resume auto-reload timers (both stats and config) that were
+          // paused by configDirty while the wizard was open.
+          configDirty = false;
+        }
+
+        function onSubmit() {
+          setStatus('');
+          if (state.step === 1) {
+            const alias = validateStep1();
+            if (!alias) return;
+            state.alias = alias;
+            renderStep2();
+            return;
+          }
+          if (state.step === 2) {
+            const target = validateStep2();
+            if (!target) return;
+            state.target = target;
+            renderStep3();
+            return;
+          }
+          // step 3: finalize
+          const cfg = buildTargetCfg();
+          if (!cfg) return;
+          currentConfig.composite[state.alias] = {};
+          currentConfig.composite[state.alias][state.target] = cfg;
+          renderConfigForm(currentConfig);
+          saveConfig().then(function () {
+            close();
+          }).catch(function (err) {
+            delete currentConfig.composite[state.alias];
+            renderConfigForm(currentConfig);
+            setStatus('Save failed: ' + (err && err.message ? err.message : err), 'error');
+          });
+        }
+
+        function onBack() {
+          setStatus('');
+          if (state.step === 2) { renderStep1(); return; }
+          if (state.step === 3) { renderStep2(); return; }
+        }
+
+        // Wire up persistent handlers for this wizard session. We replace them
+        // (clone) on open to drop any listeners from a prior session.
+        cancelBtn.onclick = function () { close(); };
+        backBtn.onclick = function () { onBack(); };
+        submitBtn.onclick = function () { onSubmit(); };
+        closeXBtn.onclick = function () { close(); };
+
+        // Escape closes the wizard at any step. Stored on overlay so we
+        // can remove it when the wizard is dismissed.
+        overlay._wizKeydown = function (ev) {
+          if (ev.key === 'Escape' || ev.key === 'x' || ev.key === 'X') {
+            ev.preventDefault();
+            close();
+          }
+        };
+        document.addEventListener('keydown', overlay._wizKeydown);
+
+        overlay.hidden = false;
+        renderStep1();
+      }
+
+      // In-page wizard for adding a new schedule alias. Steps:
+      //   1) Alias name (with model-id collision check)
+      //   2) Optional first target model id (blank = no target yet)
+      // Uses inline inputs + status span — no window.alert / window.prompt /
+      // window.confirm.
+      function openAddScheduleAliasWizard() {
+        const overlay = document.getElementById('scheduleWizard');
+        if (!overlay) return;
+        const stepsEl = document.getElementById('schedWizSteps');
+        const titleEl = document.getElementById('schedWizTitle');
+        const bodyEl = document.getElementById('schedWizBody');
+        const statusEl = document.getElementById('sched-wiz-status');
+        const cancelBtn = document.getElementById('sched-wiz-cancel');
+        const backBtn = document.getElementById('sched-wiz-back');
+        const submitBtn = document.getElementById('sched-wiz-submit');
+        const closeXBtn = document.getElementById('sched-wiz-close-x');
+        if (!stepsEl || !titleEl || !bodyEl || !statusEl || !cancelBtn || !backBtn || !submitBtn || !closeXBtn) return;
+
+        const state = { step: 1, alias: '', target: '' };
+        const buildEnvLabel = ${JSON.stringify(env.VERSION || 'dev')};
+
+        function setStatus(msg, kind) {
+          statusEl.textContent = msg || '';
+          statusEl.className = 'modal-status' + (kind ? ' ' + kind : '');
+        }
+
+        function modelNameConflicts(alias) {
+          const reserved = { upstream_mode: 1, base_url: 1, api_key: 1 };
+          if (!currentConfig.models) return false;
+          for (const [category, catCfg] of Object.entries(currentConfig.models)) {
+            if (category === 'list' || Array.isArray(catCfg)) continue;
+            if (!catCfg || typeof catCfg !== 'object') continue;
+            for (const key of Object.keys(catCfg)) {
+              if (reserved[key]) continue;
+              if (key.startsWith('_')) continue;
+              if (key === alias) return true;
+            }
+          }
+          return false;
+        }
+
+        function renderStep1() {
+          state.step = 1;
+          stepsEl.textContent = 'Step 1 of 2';
+          titleEl.textContent = 'New schedule alias — Step 1: Name';
+          bodyEl.innerHTML =
+            '<label for="sched-wiz-alias-name">Alias name</label>' +
+            '<input type="text" id="sched-wiz-alias-name" placeholder="e.g. day-shift" autocomplete="off" />' +
+            '<div class="helper-text">Schedule aliases route by hour-of-day. Add at least one target after creating.</div>';
+          const aliasInput = document.getElementById('sched-wiz-alias-name');
+          if (aliasInput) {
+            aliasInput.value = state.alias;
+            aliasInput.focus();
+          }
+          backBtn.hidden = true;
+          submitBtn.textContent = 'Next';
+        }
+
+        function renderStep2() {
+          state.step = 2;
+          stepsEl.textContent = 'Step 2 of 2';
+          titleEl.textContent = 'New schedule alias — Step 2: First target (optional)';
+          bodyEl.innerHTML =
+            '<label for="sched-wiz-target-name">First target model id (optional)</label>' +
+            '<input type="text" id="sched-wiz-target-name" placeholder="e.g. minimax-m3 — blank to add targets later" autocomplete="off" />' +
+            '<div class="helper-text">Free text — must match a model id defined under [models.*].</div>';
+          const tgtInput = document.getElementById('sched-wiz-target-name');
+          if (tgtInput) {
+            tgtInput.value = state.target;
+            tgtInput.focus();
+          }
+          backBtn.hidden = false;
+          var envLabel = buildEnvLabel || 'dev';
+          submitBtn.textContent = 'Create alias ' + state.alias + ' (' + envLabel + ')';
+        }
+
+        function validateStep1() {
+          const aliasInput = document.getElementById('sched-wiz-alias-name');
+          if (!aliasInput) return null;
+          const alias = (aliasInput.value || '').trim();
+          if (!alias) {
+            setStatus('Alias name is required.', 'error');
+            aliasInput.focus();
+            return null;
+          }
+          if (currentConfig.schedule[alias]) {
+            setStatus('Schedule alias already exists.', 'error');
+            aliasInput.focus();
+            return null;
+          }
+          if (modelNameConflicts(alias)) {
+            setStatus(
+              'Schedule alias name "' + alias + '" conflicts with a model defined under [models.*] — alias and model names must be unique',
+              'error',
+            );
+            aliasInput.focus();
+            return null;
+          }
+          return alias;
+        }
+
+        function validateStep2() {
+          const tgtInput = document.getElementById('sched-wiz-target-name');
+          if (!tgtInput) return '';
+          return (tgtInput.value || '').trim();
+        }
+
+        function close() {
+          if (overlay._schedWizKeydown) {
+            document.removeEventListener('keydown', overlay._schedWizKeydown);
+            overlay._schedWizKeydown = null;
+          }
+          overlay.hidden = true;
+          setStatus('');
+          configDirty = false;
+        }
+
+        function onSubmit() {
+          setStatus('');
+          if (state.step === 1) {
+            const alias = validateStep1();
+            if (!alias) return;
+            state.alias = alias;
+            renderStep2();
+            return;
+          }
+          // step 2: finalize
+          const target = validateStep2();
+          currentConfig.schedule[state.alias] = {};
+          if (target) {
+            currentConfig.schedule[state.alias][target] = [];
+          }
+          renderConfigForm(currentConfig);
+          saveConfig().then(function () {
+            close();
+          }).catch(function (err) {
+            delete currentConfig.schedule[state.alias];
+            renderConfigForm(currentConfig);
+            setStatus('Save failed: ' + (err && err.message ? err.message : err), 'error');
+          });
+        }
+
+        function onBack() {
+          setStatus('');
+          if (state.step === 2) renderStep1();
+        }
+
+        cancelBtn.onclick = function () { close(); };
+        backBtn.onclick = function () { onBack(); };
+        submitBtn.onclick = function () { onSubmit(); };
+        closeXBtn.onclick = function () { close(); };
+
+        overlay._schedWizKeydown = function (ev) {
+          if (ev.key === 'Escape' || ev.key === 'x' || ev.key === 'X') {
+            ev.preventDefault();
+            close();
+          }
+        };
+        document.addEventListener('keydown', overlay._schedWizKeydown);
+
+        overlay.hidden = false;
+        renderStep1();
+      }
+
+      // Single-step modal for adding a target model to an existing schedule
+      // alias. Replaces the window.prompt/window.alert chain.
+      function openAddScheduleTargetWizard(alias) {
+        const overlay = document.getElementById('scheduleTargetWizard');
+        if (!overlay) return;
+        const titleEl = document.getElementById('schedTgtTitle');
+        const bodyEl = document.getElementById('schedTgtBody');
+        const statusEl = document.getElementById('sched-tgt-status');
+        const cancelBtn = document.getElementById('sched-tgt-cancel');
+        const submitBtn = document.getElementById('sched-tgt-submit');
+        const closeXBtn = document.getElementById('sched-tgt-close-x');
+        if (!titleEl || !bodyEl || !statusEl || !cancelBtn || !submitBtn || !closeXBtn) return;
+
+        titleEl.textContent = 'Add schedule target — schedule.' + alias;
+        bodyEl.innerHTML =
+          '<label for="sched-tgt-alias">Schedule alias</label>' +
+          '<input type="text" id="sched-tgt-alias" value="' + escapeHtml(alias) + '" readonly />' +
+          '<label for="sched-tgt-model">Target model id</label>' +
+          '<input type="text" id="sched-tgt-model" placeholder="e.g. minimax-m3" autocomplete="off" />' +
+          '<div class="helper-text">Must match an existing model id defined under [models.*].</div>';
+
+        function setStatus(msg, kind) {
+          statusEl.textContent = msg || '';
+          statusEl.className = 'modal-status' + (kind ? ' ' + kind : '');
+        }
+
+        function close() {
+          if (overlay._schedTgtKeydown) {
+            document.removeEventListener('keydown', overlay._schedTgtKeydown);
+            overlay._schedTgtKeydown = null;
+          }
+          overlay.hidden = true;
+          setStatus('');
+          configDirty = false;
+        }
+
+        function onSubmit() {
+          setStatus('');
+          const modelInput = document.getElementById('sched-tgt-model');
+          if (!modelInput) return;
+          const targetModel = (modelInput.value || '').trim();
+          if (!targetModel) {
+            setStatus('Target model id is required.', 'error');
+            modelInput.focus();
+            return;
+          }
+          if (currentConfig.schedule[alias] && currentConfig.schedule[alias][targetModel]) {
+            setStatus('Schedule target already exists.', 'error');
+            modelInput.focus();
+            return;
+          }
+          if (!currentConfig.schedule[alias]) currentConfig.schedule[alias] = {};
+          currentConfig.schedule[alias][targetModel] = [];
+          renderConfigForm(currentConfig);
+          saveConfig().then(function () {
+            close();
+          }).catch(function (err) {
+            delete currentConfig.schedule[alias][targetModel];
+            if (Object.keys(currentConfig.schedule[alias]).length === 0) {
+              delete currentConfig.schedule[alias];
+            }
+            renderConfigForm(currentConfig);
+            setStatus('Save failed: ' + (err && err.message ? err.message : err), 'error');
+          });
+        }
+
+        cancelBtn.onclick = function () { close(); };
+        submitBtn.onclick = function () { onSubmit(); };
+        closeXBtn.onclick = function () { close(); };
+
+        overlay._schedTgtKeydown = function (ev) {
+          if (ev.key === 'Escape' || ev.key === 'x' || ev.key === 'X') {
+            ev.preventDefault();
+            close();
+          }
+        };
+        document.addEventListener('keydown', overlay._schedTgtKeydown);
+
+        overlay.hidden = false;
+        setTimeout(function () {
+          const mi = document.getElementById('sched-tgt-model');
+          if (mi) mi.focus();
+        }, 0);
+      }
+
       let dashboardApiKeyPrompt = null;
 
       function promptDashboardApiKey() {
@@ -738,7 +1367,7 @@ export function handleDashboardPage(env: Env): Response {
           return '<option value="' + escapeHtml(mode) + '"' + selected + '>' + escapeHtml(mode) + '</option>';
         }).join('');
 
-        return '<select class="wide" data-kind="cat-upstream" data-category="' + escapeHtml(categoryName) + '"' + disabledAttr + '>'
+        return '<select data-kind="cat-upstream" data-category="' + escapeHtml(categoryName) + '" style="width:180px;"' + disabledAttr + '>'
           + optionHtml
           + '</select>';
       }
@@ -804,7 +1433,7 @@ export function handleDashboardPage(env: Env): Response {
           '<div class="config-row" style="flex-wrap:wrap;gap:6px;align-items:center;">'
             + '<label style="min-width:120px;">' + escapeHtml(aliasName + '.token_limit') + '</label>'
             + '<input type="text" data-kind="comp-limit-num" data-alias="' + escapeHtml(aliasName) + '" value="' + escapeHtml(displayNum) + '" placeholder="e.g. 50K, 1.5M, 100000" style="width:140px;"' + disabledAttr + ' />'
-            + '<select data-kind="comp-limit-duration" data-alias="' + escapeHtml(aliasName) + '"' + disabledAttr + '>' + durationOptionsHtml + '</select>'
+            + '<select data-kind="comp-limit-duration" data-alias="' + escapeHtml(aliasName) + '" style="width:100px;"' + disabledAttr + '>' + durationOptionsHtml + '</select>'
             + usageLabel
             + '</div>'
         ];
@@ -864,7 +1493,7 @@ export function handleDashboardPage(env: Env): Response {
           if (isFusion) {
             // Fusion target: show fusion weight + role instead of share/primary/fallback
             const fusionWeight = cfg.fusion ?? '';
-            const roleOptions = [['', '(default)'], ['panel', '[p]anel'], ['judge', '[j]udge'], ['synth', '[s]ynth']];
+            const roleOptions = [['', '(default)'], ['panel', '[p]anel → panel'], ['judge', '[j]udge → judge'], ['synth', '[s]ynth → synth']];
             const roleHtml = roleOptions.map(([v, lbl]) =>
               '<option value="' + v + '"' + (cfg.role === v || (v === '' && cfg.role === undefined) ? ' selected' : '') + '>' + lbl + '</option>'
             ).join('');
@@ -882,14 +1511,17 @@ export function handleDashboardPage(env: Env): Response {
           }
           const share = cfg.share ?? '';
           const fallback = cfg.fallback === 0 ? '' : cfg.fallback ?? '';
-          const primary = cfg.primary === true ? 'checked' : '';
+          const routingVal = cfg.primary === true ? 'primary' : 'fallback';
+          const routingOptions = ['fallback', 'primary'].map((v) =>
+            '<option value="' + v + '"' + (routingVal === v ? ' selected' : '') + '>' + v + '</option>'
+          ).join('');
           return '<div class="config-row">'
             + '<label>' + escapeHtml(targetName) + '</label>'
-            + '<input type="number" data-kind="comp-share" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(share) + '" placeholder="share"' + disabledAttr + ' />'
+            + '<input type="number" data-kind="comp-share" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(share) + '" placeholder="share" style="width:70px;"' + disabledAttr + ' />'
             + '<div class="row-actions">'
             + '<button type="button" class="test-btn mini-btn" data-action="test-model" data-model="' + escapeHtml(targetName) + '">t</button>'
-              + '<label class="primary-label"><input type="checkbox" data-kind="comp-primary" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" ' + primary + disabledAttr + ' /> primary</label>'
-              + '<input type="number" data-kind="comp-fallback" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(fallback) + '" placeholder="' + (cfg.fallback === 0 ? 'no FB' : 'fallback') + '" style="width: 120px;"' + disabledAttr + ' />'
+              + '<select data-kind="comp-routing" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" style="font-size:12px;"' + disabledAttr + '>' + routingOptions + '</select>'
+              + '<input type="number" data-kind="comp-fallback" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" value="' + escapeHtml(fallback) + '" placeholder="priority"' + (cfg.primary === true ? ' hidden' : '') + ' style="width: 120px;"' + disabledAttr + ' />'
               + '<button type="button" class="mini-btn danger" data-action="remove-composite-target" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
             + '</div>'
             + '</div>';
@@ -921,14 +1553,18 @@ export function handleDashboardPage(env: Env): Response {
             const daysOptionsHtml = daysOptions.map((o) =>
               '<option value="' + o.value + '"' + (daysVal === o.value ? ' selected' : '') + '>' + o.label + '</option>'
             ).join('');
-            return '<div class="config-row nested">'
-              + '<label>window ' + (idx + 1) + '</label>'
-              + '<span style="font-size:12px;color:#666;margin-right:4px;">from</span>'
-              + '<input type="number" min="0" max="24" step="0.25" data-kind="sched-window-from" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" data-index="' + idx + '" value="' + escapeHtml(fromVal) + '" placeholder="0" style="width:60px;"' + disabledAttr + ' />'
-              + '<span style="font-size:12px;color:#666;margin-left:8px;margin-right:4px;">to</span>'
-              + '<input type="number" min="0" max="24" step="0.25" data-kind="sched-window-to" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" data-index="' + idx + '" value="' + escapeHtml(toVal) + '" placeholder="24" style="width:60px;"' + disabledAttr + ' />'
-              + '<span style="font-size:12px;color:#666;margin-left:8px;margin-right:4px;">days</span>'
-              + '<select data-kind="sched-window-days" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" data-index="' + idx + '"' + disabledAttr + '>' + daysOptionsHtml + '</select>'
+            return '<div class="sched-window-row">'
+              + '<span class="sched-window-label">window ' + (idx + 1) + '</span>'
+              + '<span class="sched-window-time">'
+              +   '<span style="font-size:12px;color:#666;">from</span>'
+              +   '<input type="number" min="0" max="24" step="0.25" data-kind="sched-window-from" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" data-index="' + idx + '" value="' + escapeHtml(fromVal) + '" placeholder="0"' + disabledAttr + ' />'
+              +   '<span style="font-size:12px;color:#666;">to</span>'
+              +   '<input type="number" min="0" max="24" step="0.25" data-kind="sched-window-to" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" data-index="' + idx + '" value="' + escapeHtml(toVal) + '" placeholder="24"' + disabledAttr + ' />'
+              + '</span>'
+              + '<span class="sched-window-days">'
+              +   '<span style="font-size:12px;color:#666;">days</span>'
+              +   '<select data-kind="sched-window-days" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" data-index="' + idx + '"' + disabledAttr + '>' + daysOptionsHtml + '</select>'
+              + '</span>'
               + '<button type="button" class="mini-btn danger" data-action="remove-schedule-window" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '" data-index="' + idx + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
               + '</div>';
           }).join('');
@@ -936,7 +1572,7 @@ export function handleDashboardPage(env: Env): Response {
           return '<div class="config-row">'
             + '<label>' + escapeHtml(targetName) + ' ' + fallbackBadge + '</label>'
             + '<div class="row-actions">'
-            + '<button type="button" class="mini-btn" data-action="add-schedule-window" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + (isReadOnly ? ' disabled' : '') + '>Add window</button>'
+            + '<button type="button" class="mini-btn" data-action="add-schedule-window" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + (isReadOnly ? ' disabled' : '') + ' style="margin-left:66px;">Add window</button>'
             + '<button type="button" class="mini-btn danger" data-action="remove-schedule-target" data-alias="' + escapeHtml(aliasName) + '" data-target="' + escapeHtml(targetName) + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
             + '</div>'
             + '</div>'
@@ -1023,13 +1659,6 @@ export function handleDashboardPage(env: Env): Response {
           payload.models[category][key] = base ? [alias, base, ''] : [alias];
         });
 
-        const selectedPrimaryByAlias = {};
-        document.querySelectorAll('[data-kind="comp-primary"]').forEach((el) => {
-          if (el.checked) {
-            selectedPrimaryByAlias[el.dataset.alias] = el.dataset.target;
-          }
-        });
-
         Object.entries(currentConfig.composite || {}).forEach(([aliasName, targets]) => {
           payload.composite[aliasName] = {};
           const limitNumEl = document.querySelector('[data-kind="comp-limit-num"][data-alias="' + aliasName + '"]');
@@ -1087,16 +1716,17 @@ export function handleDashboardPage(env: Env): Response {
             }
             // Normal composite target fields
             const shareEl = document.querySelector('[data-kind="comp-share"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
+            const routingEl = document.querySelector('[data-kind="comp-routing"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
             const fallbackEl = document.querySelector('[data-kind="comp-fallback"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
             const entry = {};
             if (shareEl && shareEl.value !== '') entry.share = Number(shareEl.value);
-            if (fallbackEl && fallbackEl.value !== '') {
+            const isPrimary = routingEl && routingEl.value === 'primary';
+            if (isPrimary) {
+              entry.primary = true;
+            } else if (fallbackEl && fallbackEl.value !== '') {
               const fallbackValue = Number(fallbackEl.value);
               if (fallbackValue !== 0) entry.fallback = fallbackValue;
             }
-            const primaryEl = document.querySelector('[data-kind="comp-primary"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
-            if (primaryEl && primaryEl.checked) entry.primary = true;
-            if (selectedPrimaryByAlias[aliasName] === targetName) entry.primary = true;
             payload.composite[aliasName][targetName] = entry;
           });
         });
@@ -1140,10 +1770,10 @@ export function handleDashboardPage(env: Env): Response {
         }
       }
 
-      function ensureSinglePrimary(aliasName, targetName) {
-        document.querySelectorAll('[data-kind="comp-primary"][data-alias="' + aliasName + '"]').forEach((el) => {
-          el.checked = el.dataset.target === targetName;
-        });
+      function onRoutingChange(aliasName, targetName, isPrimary) {
+        // Show/hide fallback priority input based on routing type selection
+        const fbEl = document.querySelector('[data-kind="comp-fallback"][data-alias="' + aliasName + '"][data-target="' + targetName + '"]');
+        if (fbEl) fbEl.hidden = isPrimary;
       }
 
       let testResultClearTimer = null;
@@ -1239,8 +1869,8 @@ export function handleDashboardPage(env: Env): Response {
           return;
         }
 
-        if (target.dataset.kind === 'comp-primary' && target.checked) {
-          ensureSinglePrimary(target.dataset.alias, target.dataset.target);
+        if (target.dataset.kind === 'comp-routing') {
+          onRoutingChange(target.dataset.alias, target.dataset.target, target.value === 'primary');
           return;
         }
 
@@ -1277,51 +1907,10 @@ export function handleDashboardPage(env: Env): Response {
         }
 
         if (action === 'add-composite-alias') {
-          // Mark dirty before the prompt so stats auto-reload is paused
-          // while the user is still typing the alias name.
+          // Mark dirty before opening the wizard so stats auto-reload is
+          // paused while the user is filling in the modal.
           configDirty = true;
-          const alias = window.prompt('New composite alias (e.g. gpt-all):');
-          if (!alias) {
-            configDirty = false;
-            return;
-          }
-          if (currentConfig.composite[alias]) {
-            window.alert('Composite alias already exists');
-            configDirty = false;
-            return;
-          }
-          const mode = promptAliasMode();
-          if (mode === null) {
-            configDirty = false;
-            return;
-          }
-          currentConfig.composite[alias] = {};
-          // For coordinator, the proxy requires at least a planner target to
-          // resolve the alias; seed one so the alias is immediately usable.
-          if (mode === 'coordinator') {
-            const plannerName = window.prompt('Planner target model for composite.' + alias + ' (required):');
-            if (!plannerName) {
-              delete currentConfig.composite[alias];
-              configDirty = false;
-              renderConfigForm(currentConfig);
-              return;
-            }
-            if (currentConfig.composite[alias][plannerName]) {
-              window.alert('Target already exists');
-              delete currentConfig.composite[alias];
-              configDirty = false;
-              renderConfigForm(currentConfig);
-              return;
-            }
-            currentConfig.composite[alias][plannerName] = { coord: 1, role: 'planner' };
-          }
-          renderConfigForm(currentConfig);
-          saveConfig();
-          if (mode === 'coordinator') {
-            window.alert('Coordinator alias created with planner target. Add an executor target via "Add target" to complete it.');
-          } else if (mode === 'fusion') {
-            window.alert('Fusion alias created. Configure fusion_options via the alias\'s "F" action, then add targets.');
-          }
+          openAddAliasWizard();
           return;
         }
 
@@ -1440,22 +2029,10 @@ export function handleDashboardPage(env: Env): Response {
         }
 
         if (action === 'add-schedule-alias') {
-          // Mark dirty before the prompt so stats auto-reload is paused
-          // while the user is still typing the alias name.
+          // Mark dirty before opening the wizard so the config auto-reload
+          // timer is paused while the user fills the modal.
           configDirty = true;
-          const alias = window.prompt('New schedule alias (e.g. day-shift):');
-          if (!alias) {
-            configDirty = false;
-            return;
-          }
-          if (currentConfig.schedule[alias]) {
-            window.alert('Schedule alias already exists');
-            configDirty = false;
-            return;
-          }
-          currentConfig.schedule[alias] = {};
-          renderConfigForm(currentConfig);
-          saveConfig();
+          openAddScheduleAliasWizard();
           return;
         }
 
@@ -1472,25 +2049,8 @@ export function handleDashboardPage(env: Env): Response {
         if (action === 'add-schedule-target') {
           const alias = target.dataset.alias;
           if (!alias) return;
-          // Mark dirty before the prompt so stats auto-reload is paused
-          // while the user is still typing the target model name.
           configDirty = true;
-          const targetModel = window.prompt('New target model for schedule.' + alias + ' (must match an existing model id):');
-          if (!targetModel) {
-            configDirty = false;
-            return;
-          }
-          if (!currentConfig.schedule[alias]) {
-            currentConfig.schedule[alias] = {};
-          }
-          if (currentConfig.schedule[alias][targetModel]) {
-            window.alert('Schedule target already exists');
-            configDirty = false;
-            return;
-          }
-          currentConfig.schedule[alias][targetModel] = [];
-          renderConfigForm(currentConfig);
-          saveConfig();
+          openAddScheduleTargetWizard(alias);
           return;
         }
 
@@ -1825,6 +2385,10 @@ export function handleDashboardPage(env: Env): Response {
       }, 10000);
 
       setInterval(() => {
+        // Skip config auto-reload while a config mutation is in progress
+        // (dirty flag is set when a wizard / prompt is open) so the wizard
+        // DOM is not torn down by a concurrent re-render.
+        if (configDirty) return;
         loadConfig();
       }, 30000);
 

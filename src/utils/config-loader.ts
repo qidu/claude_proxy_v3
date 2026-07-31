@@ -3143,8 +3143,8 @@ function validateAndNormalizeComposite(payload: unknown): Record<string, Composi
         entry.fusion = rawValue.fusion;
       }
       if ('role' in rawValue) {
-        if (rawValue.role !== 'panel' && rawValue.role !== 'judge' && rawValue.role !== 'synth') {
-          throw new Error(`Invalid role for: ${alias}.${key} — must be 'panel', 'judge', or 'synth'`);
+        if (!(['panel', 'judge', 'synth', 'planner', 'executor'] as string[]).includes(rawValue.role as string)) {
+          throw new Error(`Invalid role for: ${alias}.${key} — must be 'panel', 'judge', 'synth', 'planner', or 'executor'`);
         }
         entry.role = rawValue.role as FusionRole;
       }

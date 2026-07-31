@@ -708,7 +708,9 @@ class CompositeAliasesOverlay implements Component, Focusable {
           ? `coord:${typedCfg?.coord ?? 1}${typedCfg?.role ? ` ${typedCfg.role}` : ''}`
           : isFusionTarget
           ? `${typedCfg?.role ?? 'panel'}${typedCfg?.fusion !== undefined ? `:${typedCfg.fusion}` : ''}`
-          : `${typedCfg?.share ?? '-'}${typedCfg?.primary ? ' P' : ''}${typedCfg?.fallback === 0 ? ' non-FB' : typedCfg?.fallback !== undefined ? ` FB${typedCfg.fallback}` : ''}`;
+          : typedCfg?.primary
+          ? `${typedCfg?.share ?? '-'} Primary`
+          : `${typedCfg?.share ?? '-'}${typedCfg?.fallback === 0 ? ' Fallback' : typedCfg?.fallback !== undefined ? ` FB${typedCfg.fallback}` : ''}`;
         const timingKey = targetRouteModel.get(target) ?? target;
         const timing = modelTimingMap.get(timingKey);
         const timingStr = timing ? ` ${dim('[')}${dim(fmtSeconds(timing.min_time_ms))}${dim('/')}${dim(fmtSeconds(timing.avg_time_ms))}${dim('/')}${dim(fmtSeconds(timing.max_time_ms))}${dim('s]')}` : '';
@@ -1881,61 +1883,7 @@ class DashboardApp {
           });
           return;
         }
-        this.openPrompt(`Add ${item.value} to ${alias}`, 'input <share> <primary> <fallback>', '', async (value) => {
-          const parts = value.trim().split(/\s+/).filter(Boolean);
-          if (parts.length < 1 || parts.length > 3) {
-            this.view.setMessage('Use: share [primary] [fallback]');
-            await this.refresh();
-            this.compositeOverlay?.focusAlias(alias);
-            this.requestRender();
-            return;
-          }
-
-          const [shareText, primaryText, fallbackText] = parts;
-          const share = Number(shareText);
-          if (Number.isNaN(share)) {
-            this.view.setMessage('Share must be a number');
-            await this.refresh();
-            this.compositeOverlay?.focusAlias(alias);
-            this.requestRender();
-            return;
-          }
-
-          const parsedPrimary = primaryText === undefined ? undefined : primaryText === 'true' || primaryText === '1' ? true : primaryText === 'false' || primaryText === '0' ? false : null;
-          if (parsedPrimary === null) {
-            this.view.setMessage('Primary must be true, 1, false, or 0');
-            await this.refresh();
-            this.compositeOverlay?.focusAlias(alias);
-            this.requestRender();
-            return;
-          }
-
-          const fallback = fallbackText === undefined ? undefined : Number(fallbackText);
-          if (fallbackText !== undefined && Number.isNaN(fallback)) {
-            this.view.setMessage('Fallback must be a number');
-            await this.refresh();
-            this.compositeOverlay?.focusAlias(alias);
-            this.requestRender();
-            return;
-          }
-
-          try {
-            upsertCompositeTargetFromDashboard(this.source.env, alias, item.value, {
-              share,
-              primary: parsedPrimary === undefined ? undefined : parsedPrimary,
-              fallback,
-            });
-            await this.refresh(true);
-            this.compositeOverlay?.focusAlias(alias);
-            this.view.setMessage(`added ${item.value} to ${alias}`);
-            this.requestRender();
-          } catch (err) {
-            this.view.setMessage((err as Error).message);
-            await this.refresh();
-            this.compositeOverlay?.focusAlias(alias);
-            this.requestRender();
-          }
-        });
+        this.openCompositeRoutingPicker(alias, item.value, undefined);
       },
       () => {
         this.hideOverlay();
@@ -2312,65 +2260,90 @@ class DashboardApp {
       return;
     }
     const currentCfg = this.viewSnapshot()?.config.composite?.[alias]?.[target] as CompositeTargetConfig | undefined;
-    const defaultValue = [
-      currentCfg?.share !== undefined ? String(currentCfg.share) : '1',
-      currentCfg?.primary ? 'true' : currentCfg?.primary === false ? 'false' : '',
-      currentCfg?.fallback !== undefined ? String(currentCfg.fallback) : '',
-    ].join(' ').trimEnd();
-    this.openPrompt(`Edit ${alias}.${bold(target)}`, 'share [primary] [fallback]', defaultValue, async (value) => {
-      const parts = value.trim().split(/\s+/).filter(Boolean);
-      if (parts.length < 1 || parts.length > 3) {
-        this.view.setMessage('Use: share [primary] [fallback]');
-        await this.refresh();
-        this.compositeOverlay?.focusAlias(alias);
-        this.requestRender();
-        return;
-      }
+    this.openCompositeRoutingPicker(alias, target, currentCfg);
+  }
 
-      const [shareText, primaryText, fallbackText] = parts;
-      const share = Number(shareText);
-      if (Number.isNaN(share)) {
-        this.view.setMessage('Share must be a number');
-        await this.refresh();
+  // Step 1: pick routing type (fallback default, primary); Step 2: prompt for share [fallback_n].
+  // Used by both openTargetPicker (add) and openEditTargetPrompt (edit).
+  // Pass `currentCfg` when editing an existing target; undefined when adding new.
+  openCompositeRoutingPicker(alias: string, target: string, currentCfg: CompositeTargetConfig | undefined): void {
+    const isEdit = currentCfg !== undefined;
+    const defaultRouting = currentCfg?.primary ? 'primary' : 'fallback';
+    const choices: SelectItem[] = [
+      { value: 'fallback', label: 'fallback', description: 'non-primary target, used when primary is at capacity' },
+      { value: 'primary', label: 'primary', description: 'preferred target, receives traffic first' },
+    ];
+    // Put the current/default choice first
+    if (defaultRouting === 'primary') choices.reverse();
+    this.hideOverlay();
+    const routingOverlay = new ListOverlay(
+      `${isEdit ? 'Edit' : 'Add'} ${alias}.${bold(target)} — routing type`,
+      `↑/↓ ${dim('move')}  Enter ${dim('select')}  Esc ${dim('cancel')}`,
+      choices,
+      (item) => {
+        this.hideOverlay();
+        const isPrimary = item.value === 'primary';
+        const currentShare = currentCfg?.share !== undefined ? String(currentCfg.share) : '1';
+        const currentFallback = !isPrimary && currentCfg?.fallback !== undefined ? String(currentCfg.fallback) : '';
+        const promptHint = isPrimary ? 'share' : 'share [fallback_n]';
+        const defaultVal = isPrimary ? currentShare : [currentShare, currentFallback].join(' ').trimEnd();
+        this.openPrompt(
+          `${isEdit ? 'Edit' : 'Add'} ${alias}.${bold(target)} (${item.value})`,
+          promptHint,
+          defaultVal,
+          async (value) => {
+            const parts = value.trim().split(/\s+/).filter(Boolean);
+            if (parts.length < 1 || parts.length > (isPrimary ? 1 : 2)) {
+              this.view.setMessage(isPrimary ? 'Use: share' : 'Use: share [fallback_n]');
+              await this.refresh();
+              this.compositeOverlay?.focusAlias(alias);
+              this.requestRender();
+              return;
+            }
+            const share = Number(parts[0]);
+            if (Number.isNaN(share)) {
+              this.view.setMessage('Share must be a number');
+              await this.refresh();
+              this.compositeOverlay?.focusAlias(alias);
+              this.requestRender();
+              return;
+            }
+            const fallbackN = parts[1] !== undefined ? Number(parts[1]) : undefined;
+            if (parts[1] !== undefined && Number.isNaN(fallbackN)) {
+              this.view.setMessage('Fallback must be a number');
+              await this.refresh();
+              this.compositeOverlay?.focusAlias(alias);
+              this.requestRender();
+              return;
+            }
+            try {
+              upsertCompositeTargetFromDashboard(this.source.env, alias, target, {
+                share,
+                primary: isPrimary ? true : false,
+                fallback: isPrimary ? undefined : fallbackN,
+              });
+              this.view.setMessage(`${isEdit ? 'updated' : 'added'} ${alias}.${target}`);
+              await this.refresh(true);
+              this.compositeOverlay?.focusAlias(alias);
+              this.requestRender();
+            } catch (err) {
+              this.view.setMessage((err as Error).message);
+              await this.refresh();
+              this.compositeOverlay?.focusAlias(alias);
+              this.requestRender();
+            }
+          },
+        );
+      },
+      () => {
+        this.hideOverlay();
+        this.view.setMessage(`${isEdit ? 'edit' : 'add'} target cancelled`);
         this.compositeOverlay?.focusAlias(alias);
         this.requestRender();
-        return;
-      }
-
-      const parsedPrimary = primaryText === undefined ? undefined : primaryText === 'true' || primaryText === '1' ? true : primaryText === 'false' || primaryText === '0' ? false : null;
-      if (parsedPrimary === null) {
-        this.view.setMessage('Primary must be true, 1, false, or 0');
-        await this.refresh();
-        this.compositeOverlay?.focusAlias(alias);
-        this.requestRender();
-        return;
-      }
-
-      const fallback = fallbackText === undefined ? undefined : Number(fallbackText);
-      if (fallbackText !== undefined && Number.isNaN(fallback)) {
-        this.view.setMessage('Fallback must be a number');
-        await this.refresh();
-        this.compositeOverlay?.focusAlias(alias);
-        this.requestRender();
-        return;
-      }
-
-      try {
-        upsertCompositeTargetFromDashboard(this.source.env, alias, target, {
-          share,
-          primary: parsedPrimary === undefined ? undefined : parsedPrimary,
-          fallback,
-        });
-        this.view.setMessage(`updated ${alias}.${target}`);
-        await this.refresh(true);
-        this.compositeOverlay?.focusAlias(alias);
-      } catch (err) {
-        this.view.setMessage((err as Error).message);
-        await this.refresh();
-        this.compositeOverlay?.focusAlias(alias);
-        this.requestRender();
-      }
-    });
+      },
+    );
+    this.overlay = this.tui.showOverlay(routingOverlay, { width: '60%', maxHeight: '30%', anchor: 'center' });
+    this.overlay.focus();
   }
 
   openDeleteConfirm(alias: string, target: string): void {
