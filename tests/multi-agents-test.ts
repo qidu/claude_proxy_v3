@@ -63,7 +63,7 @@ import * as os from "os";
 // Configuration
 // ---------------------------------------------------------------------------
 
-const PROXY_BASE = process.env.PROXY_BASE || "http://127.0.0.1:8788";
+const PROXY_BASE = process.env.PROXY_BASE || "http://127.0.0.1:7777";
 const WORK_DIR = "./tests/";
 
 const MODELS = [
@@ -859,7 +859,7 @@ async function main() {
   // runFlag uses all defaults (all models x all agents x all tasks)
 
   console.log(
-    `Selection: ${modelsToRun.length} model(s) x ${agentsToRun.length} agent(s) x ${tasksToRun.length} task(s)`,
+    `Selection: ${modelsToRun.length} model(s) x ${agentsToRun.length} agent(s) x ${tasksToRun.length} task(s) at ${PROXY_BASE}`,
   );
   for (const m of modelsToRun) console.log(`  model:  ${m}`);
   for (const ag of agentsToRun) console.log(`  agent:  ${ag.name}`);

@@ -49,7 +49,7 @@ npx tsx tests/multi-agents-test.ts 0 2 1        # all models, Claude agent, firs
 
 ### `multi-agents-test.ts`
 
-Runs five agent SDKs against the local proxy (`127.0.0.1:8788` by default, override with `PROXY_BASE`).
+Runs five agent SDKs against the local proxy (`127.0.0.1:7777` by default, override with `PROXY_BASE`).
 
 Agent order (used by the CLI `agent` selector):
 
@@ -75,14 +75,14 @@ The full run is `len(USER_TASKS) * len(MODELS) * 5` = 8 × 9 × 5 = 360 invocati
 | `GEMINI_API_KEY`     | Gemini        | Passed to `GoogleGenAI({ apiKey })`. |
 | `PI_API_KEY`         | Pi            | First preference for `envApiKeyAuth`; if unset, `ANTHROPIC_API_KEY` / `API_KEY` are tried in order. |
 | `OPENCODE_API_KEY`   | OpenCode      | Injected into `OPENCODE_CONFIG_CONTENT` and read by the spawned `opencode serve`. |
-| `PROXY_BASE`         | all           | Override the proxy origin (default `http://127.0.0.1:8788`). |
+| `PROXY_BASE`         | all           | Override the proxy origin (default `http://127.0.0.1:7777`). |
 
 If you only want to exercise one agent, set just its key. Other agents will be skipped because their SDK constructors will fail.
 
 #### Usage
 
 ```bash
-# Start the proxy first (it must listen on PROXY_BASE; default 127.0.0.1:8788)
+# Start the proxy first (it must listen on PROXY_BASE; default 127.0.0.1:7777)
 npm run dev
 
 # Set at least one key (or API_KEY for all agents)
@@ -139,7 +139,7 @@ A reference `~/.config/opencode/opencode.jsonc` for this proxy looks like:
       "npm": "@ai-sdk/openai-compatible",
       "name": "proxyv3",
       "options": {
-        "baseURL": "http://localhost:8788/v1",
+        "baseURL": "http://localhost:7777/v1",
         "apiKey": "{env:API_KEY}",
         "headers": {
           "Authorization": "Bearer {env:API_KEY}"
@@ -221,7 +221,7 @@ If you don't need CrewAI, a single `.venv` (3.13 or 3.14) with `pip install goog
 | `API_KEY`         | all                     | Fallback if a per-agent key is not set.                                         |
 | `OPENAI_API_KEY`  | LangGraph, CrewAI       | Explicit API key for clients that can send authorization headers.               |
 | `ANTIGRAVITY_USE_GEMINI_API` | Antigravity           | Set to `true` or `1` to use `LocalAgentConfig` plus `GeminiAPIEndpoint`; otherwise the runner uses `LocalOpenAIAgentConfig`. |
-| `PROXY_BASE`      | all                     | Override the proxy origin (default `http://127.0.0.1:8788`).                   |
+| `PROXY_BASE`      | all                     | Override the proxy origin (default `http://127.0.0.1:7777`).                   |
 
 For Antigravity, start the proxy with both development-only switches:
 
@@ -242,7 +242,7 @@ For the Gemini transport, run the focused `max-m3` test with:
 
 ```bash
 ANTIGRAVITY_USE_GEMINI_API=true \
-PROXY_BASE=http://127.0.0.1:8788 \
+PROXY_BASE=http://127.0.0.1:7777 \
 API_KEY=xxx \
 python tests/multi-agents-test.py 1 1 1
 ```
@@ -294,7 +294,7 @@ By default all 3 agents are enabled. To run a subset, comment the entries in the
 
 For a sample run (1 model × all agents × all tasks), see `./logs/results/test_result_of_deepseek_v4_flash_all_agents_all_tasks.md` (TS runner). The Python runner writes its output to stdout in the same shape (`--- <Agent> Agent | model=<id> ---` header + `<Agent> done. tool_calls=N, chars=M` summary); redirect with `python tests/multi-agents-test.py 1 2 1 > out.log` to capture.
 
-**CrewAI × 4-model smoke test (2026-07-25, task=`codebase_layout`).** All four `MODELS` entries (with `auth_passthrough_with = "config_key"`) routed cleanly through CrewAI's `openai/{model}` path against the proxy at `127.0.0.1:8788`:
+**CrewAI × 4-model smoke test (2026-07-25, task=`codebase_layout`).** All four `MODELS` entries (with `auth_passthrough_with = "config_key"`) routed cleanly through CrewAI's `openai/{model}` path against the proxy at `127.0.0.1:7777`:
 
 | CLI    | Model              | Upstream mode                                  | Chars  | Status |
 |--------|--------------------|------------------------------------------------|--------|--------|

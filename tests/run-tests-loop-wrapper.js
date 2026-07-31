@@ -93,7 +93,7 @@ let suiteResults = [];
 let passed = 0, failed = 0;
 let casesPassed = 0, casesFailed = 0;
 
-const PROXY_URL = process.env.PROXY_URL || 'http://localhost:8788';
+const PROXY_URL = process.env.PROXY_URL || 'http://localhost:7777';
 const API_KEY = process.env.API_KEY || 'sk-test-key';
 const TEST_TIMEOUT = process.env.TEST_TIMEOUT || '30000';
 

@@ -2,7 +2,7 @@
 Multi-agent, multi-model test (Python).
 
 Runs three Python agent SDKs (google-antigravity, langgraph, crewai) against
-ten models with diverse prefixes through the local proxy (127.0.0.1:8788).
+ten models with diverse prefixes through the local proxy (127.0.0.1:7777).
 
 Each agent receives every task in `USER_TASKS`, and every model is exercised
 against every task, producing `len(USER_TASKS) * len(MODELS) * 3` total runs
@@ -81,7 +81,7 @@ from typing import Any, Awaitable, Callable
 # Configuration
 # ---------------------------------------------------------------------------
 
-PROXY_BASE = os.environ.get("PROXY_BASE", "http://127.0.0.1:8788")
+PROXY_BASE = os.environ.get("PROXY_BASE", "http://127.0.0.1:7777")
 WORK_DIR = "./tests/"
 
 MODELS = [

@@ -5,7 +5,7 @@ import os from 'os';
 
 const TEST_DIR = './testcases';
 const suite = process.argv[2] || '09_composite/composite.test.js';
-const PROXY_URL = process.env.PROXY_URL || 'http://localhost:8788';
+const PROXY_URL = process.env.PROXY_URL || 'http://localhost:7777';
 const API_KEY = process.env.API_KEY || 'sk-test-key';
 const TEST_TIMEOUT = process.env.TEST_TIMEOUT || '30000';
 
