@@ -7,6 +7,37 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: `inject_missing_tool_results` now handles a trailing `tool_use`
+
+The `inject_missing_tool_results` builtin (`src/utils/request-transform.ts`)
+had a loop bound of `i < msgs.length - 1` that skipped the final message in
+the array. When an assistant message containing `tool_use` blocks was the
+**last** message (no following user/`tool_result` message), the builtin did
+nothing — forwarding a malformed conversation to DeepSeek's
+anthropic-messages endpoint, which rejected it with
+`tool_use ids were found without tool_result blocks immediately after`.
+
+This is exactly the Codex flow: Codex replays the model's prior
+`function_call` as the final input item, and the proxy's
+`completionsBodyToClaudeBody` converter emits a trailing
+`assistant(tool_use)` with no following user message.
+
+The loop now visits every index. When a tool_use assistant has no following
+user message, a consolidated `user` message with one placeholder
+`tool_result` per unmatched id is appended. The same reordering logic
+already used for the non-trailing case (constraint A: text-only assistants
+move after the tool_result message) applies.
+
+Also wired the builtin to `deepseek-v4-anth` in `proxy_config.toml` via a
+new `deepseek_v4_anthropic_compat` transform set — previously the config
+declared no `[transforms.*]` sections, so the builtin was inactive even
+though it existed.
+
+One existing unit test ("does not synthesize when the assistant is followed
+by another assistant") codified the old, broken behavior. It is replaced by
+a test asserting the corrected behavior: synthesis happens and the
+text-only assistant is reordered after the synthesized `tool_result`.
+
 ### Fix: strip stale `content-encoding` from pass-through responses
 
 Node's `fetch` (undici) auto-decompresses gzip/deflate/br upstream bodies but

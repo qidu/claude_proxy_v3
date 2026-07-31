@@ -442,7 +442,13 @@ describe('Tier-2 builtin: inject_missing_tool_results', () => {
     assert.equal(userContent[0].type, 'text');
   });
 
-  it('does not synthesize when the assistant is followed by another assistant', () => {
+  it('synthesizes a tool_result and reorders when tool_use assistant is followed by a text-only assistant', () => {
+    // DeepSeek rejects an assistant tool_use that is not immediately followed
+    // by a user tool_result. When the conversation has
+    //   [tool_use_assistant, text_only_assistant]
+    // the text-only assistant is treated as a "tail" that must move AFTER the
+    // synthesized tool_result user message:
+    //   [tool_use_assistant, user(tool_result), text_only_assistant]
     const body = {
       messages: [
         {
@@ -456,9 +462,50 @@ describe('Tier-2 builtin: inject_missing_tool_results', () => {
       ],
     };
     const result = runHook('before_upstream', payload(body), makeAnthropicCtx());
-    const secondAsst = (result.body.messages as any[])[1];
-    assert.equal(secondAsst.content.length, 1, 'must not inject into a non-user message');
-    assert.equal(secondAsst.content[0].type, 'text');
+    const msgs = result.body.messages as any[];
+    assert.equal(msgs.length, 3, 'a tool_result user message must be inserted between the two assistants');
+    assert.equal(msgs[0].role, 'assistant');
+    assert.equal(msgs[1].role, 'user');
+    const inserted = msgs[1].content as Array<Record<string, unknown>>;
+    assert.equal(inserted.length, 1);
+    assert.equal(inserted[0].type, 'tool_result');
+    assert.equal(inserted[0].tool_use_id, 'call_a');
+    assert.equal(msgs[2].role, 'assistant');
+    assert.equal((msgs[2].content as Array<Record<string, unknown>>)[0].type, 'text');
+  });
+
+  it('appends a tool_result user message when tool_use is the last message', () => {
+    // Reproduces the Codex × deepseek-v4-anth failure: an assistant tool_use as
+    // the FINAL message with no following user message at all. DeepSeek's
+    // anthropic-messages endpoint rejects this with
+    //   "tool_use ids were found without tool_result blocks immediately after".
+    // The built-in must append a synthesized user message with one placeholder
+    // tool_result per tool_use id.
+    const body = {
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'do the thing' }] },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'call_01_xyz', name: 'Glob', input: { pattern: 'x' } },
+            { type: 'tool_use', id: 'call_01_abc', name: 'Read', input: { path: 'y' } },
+          ],
+        },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), makeAnthropicCtx());
+    const msgs = result.body.messages as any[];
+    assert.equal(msgs.length, 3, 'a tool_result user message must have been appended');
+    assert.equal(msgs[2].role, 'user');
+    const inserted = msgs[2].content as Array<Record<string, unknown>>;
+    assert.equal(inserted.length, 2, 'one placeholder per tool_use id');
+    const ids = new Set(inserted.map((b) => b.tool_use_id));
+    assert.ok(ids.has('call_01_xyz'));
+    assert.ok(ids.has('call_01_abc'));
+    for (const b of inserted) {
+      assert.equal(b.type, 'tool_result');
+      assert.equal(b.content, '');
+    }
   });
 
   it('merges consecutive pure-tool user messages into one and synthesizes missing ids', () => {

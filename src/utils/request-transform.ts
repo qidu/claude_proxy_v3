@@ -165,7 +165,7 @@ function applyBuiltin(name: BuiltinName, body: Record<string, unknown>): void {
         (c as Array<Record<string, unknown>>).some(b => b.type === 'tool_use');
     };
 
-    for (let i = 0; i < msgs.length - 1; i++) {
+    for (let i = 0; i < msgs.length; i++) {
       if (!hasToolUseBlocks(msgs[i])) continue;
 
       // Collect tool_use ids from this assistant message.
@@ -190,26 +190,28 @@ function applyBuiltin(name: BuiltinName, body: Record<string, unknown>): void {
 
       // j now points to the first non-assistant message after the tail.
       // This should be the user message with tool_results (or end of array).
-      if (j >= msgs.length || msgs[j].role !== 'user') {
-        // No user message follows — nothing we can do. Skip.
-        continue;
-      }
+      const noFollowingUser = j >= msgs.length || msgs[j].role !== 'user';
 
       // CONSTRAINT B: collect all consecutive pure-tool user messages starting at j,
-      // merging their blocks into a single list.
+      // merging their blocks into a single list. When no following user message
+      // exists (trailing tool_use), the block list starts empty and constraint C
+      // below synthesizes a placeholder for every tool_use id.
       const toolResultBlocks: Array<Record<string, unknown>> = [];
       const presentIds = new Set<string>();
       let k = j;
-      while (k < msgs.length && isPureToolMessage(msgs[k])) {
-        for (const block of msgs[k].content as Array<Record<string, unknown>>) {
-          toolResultBlocks.push(block);
-          if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
-            presentIds.add(block.tool_use_id);
+      if (!noFollowingUser) {
+        while (k < msgs.length && isPureToolMessage(msgs[k])) {
+          for (const block of msgs[k].content as Array<Record<string, unknown>>) {
+            toolResultBlocks.push(block);
+            if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+              presentIds.add(block.tool_use_id);
+            }
           }
+          k++;
         }
-        k++;
       }
-      // k is now the index just past the last pure-tool message.
+      // k is now the index just past the last pure-tool message (== j when
+      // noFollowingUser, since the inner loop is skipped).
 
       // CONSTRAINT C: synthesize any missing tool_result blocks.
       for (const toolUseId of toolUseIds) {
@@ -218,7 +220,10 @@ function applyBuiltin(name: BuiltinName, body: Record<string, unknown>): void {
         }
       }
 
-      if (tailAssistants.length === 0 && k - j === 1 && toolResultBlocks.length === (msgs[j].content as Array<unknown>).length) {
+      // If nothing is missing and structure is already correct, skip the rewrite.
+      // noFollowingUser always needs a rewrite when toolResultBlocks is non-empty
+      // (we must append a new user message), so exclude it from the happy path.
+      if (!noFollowingUser && tailAssistants.length === 0 && k - j === 1 && toolResultBlocks.length === (msgs[j].content as Array<unknown>).length) {
         // Happy path: already [tool_use_assistant, single_pure_tool_user, ...].
         // No structural changes needed — all tool_results are present and already
         // in a single user message immediately after the assistant.

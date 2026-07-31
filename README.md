@@ -913,7 +913,7 @@ Paths: bare field name for top-level (`max_tokens`); `messages[].field` for all 
 |---|---|
 | `lowercase_tool_schema_types` | Recursively lowercases every `type` value in `tools[].function.parameters` / `tools[].input_schema`. Required for strict upstreams (e.g. DeepSeek) when the client sends uppercase `"STRING"`. |
 | `recover_tool_message_name` | Backfills missing `name` on `role:"tool"` messages by looking up the matching `tool_call_id` in the preceding assistant turn's `tool_calls`. |
-| `inject_missing_tool_results` | Synthesizes placeholder `tool_result` blocks for any `tool_use.id` that has no matching `tool_result` in the next user message. Required by DeepSeek's Anthropic-format endpoint. |
+| `inject_missing_tool_results` | Synthesizes placeholder `tool_result` blocks for any `tool_use.id` that has no matching `tool_result` in the next user message, and appends a consolidated `user(tool_result)` message when an assistant `tool_use` is the **last** message in the array (e.g. when Codex replays the model's prior `function_call` as its final input item). Also merges consecutive per-call `tool` messages into one user message and reorders text-only assistant turns after the `tool_result`. Required by DeepSeek's Anthropic-format endpoint, which rejects trailing or unmatched `tool_use` with `tool_use ids were found without tool_result blocks immediately after`. |
 
 **Worked example — DeepSeek's Anthropic endpoint rejecting uppercase tool-schema types**
 
@@ -967,6 +967,63 @@ The same set applies across all three entry paths — `/v1/messages`,
 `/v1beta/models/{model}:generateContent`, and `/v1/chat/completions` passthrough
 (`DEV_PASS_THROUGH`) — so Antigravity's `GeminiAPIEndpoint` and `LocalOpenAIAgentConfig`
 transports are both covered.
+
+**Worked example — DeepSeek rejecting a trailing or unmatched `tool_use`**
+
+DeepSeek's `anthropic-messages` endpoint enforces the Anthropic invariant that every
+`tool_use.id` in an assistant message must be matched by a `tool_result.tool_use_id` in
+the **immediately following** user message. Three shapes violate this and all surface as
+the same upstream error:
+
+```
+HTTP 400: tool_use ids were found without tool_result blocks immediately after: call_01_xxx.
+Each tool_use block must have a corresponding tool_result block in the next message
+```
+
+1. **Trailing `tool_use`** — the assistant `tool_use` is the *last* message in the array
+   (no following user message at all). This is the Codex flow: the SDK replays the model's
+   prior `function_call` as its final input item, and the proxy's
+   `completionsBodyToClaudeBody` converter (`src/handlers/responses.ts`) emits a trailing
+   `assistant(tool_use)` with no following user message.
+2. **Split tool_results** — multiple `role:"tool"` messages (one per call) become separate
+   `user(tool_result)` messages after conversion; DeepSeek requires all of them in ONE
+   consolidated user message.
+3. **Mixed-content assistant** — when an assistant turn has both text and `tool_use`, the
+   text-only assistant that follows must be reordered *after* the `tool_result` user
+   message.
+
+The `inject_missing_tool_results` builtin (declared at `before_upstream`) fixes all three
+by appending a consolidated `user(tool_result)` message for any unmatched id, merging
+consecutive per-call tool messages, and reordering text-only assistant turns. Wire it as:
+
+```toml
+[transforms.deepseek_v4_anthropic_compat]
+schema = "anthropic-messages"
+before_upstream.builtins = ["inject_missing_tool_results"]
+
+[models.free]
+upstream_mode = "openai-completions"
+deepseek-v4-anth = {target = "deepseek-v4-flash", base_url = "https://api.deepseek.com/anthropic", api_key = "sk-...", mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat"}
+```
+
+With this set attached, an inbound Anthropic body ending in an assistant `tool_use` like:
+
+```json
+{"messages": [
+  {"role": "user", "content": "list the ts files"},
+  {"role": "assistant", "content": [{"type": "tool_use", "id": "call_01_xyz", "name": "Glob", "input": {"pattern": "tests/**/*.ts"}}]}
+]}
+```
+
+is rewritten before the upstream fetch to append a placeholder `tool_result`:
+
+```json
+{"messages": [
+  {"role": "user", "content": "list the ts files"},
+  {"role": "assistant", "content": [{"type": "tool_use", "id": "call_01_xyz", "name": "Glob", "input": {"pattern": "tests/**/*.ts"}}]},
+  {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_01_xyz", "content": ""}]}
+]}
+```
 
 **Core / server**
 
