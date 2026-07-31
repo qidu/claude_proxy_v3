@@ -7,7 +7,7 @@ import { Env, Logger } from '../types/shared.js';
 import { createLogger } from '../utils/logger.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { isSdkUrl, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
-import { addForwardedHeaders } from '../utils/routing.js';
+import { addForwardedHeaders, sanitizeUpstreamResponseHeaders } from '../utils/routing.js';
 import { runHook, applyAfterUpstream, type HookContext } from '../utils/request-transform.js';
 import type { ModelRouteConfig } from '../utils/config-loader.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
@@ -188,7 +188,7 @@ export async function handleClaudeRequest(
 
         return new Response(clientStream, {
             status: response.status,
-            headers: response.headers,
+            headers: sanitizeUpstreamResponseHeaders(response),
         });
     }
 
@@ -219,6 +219,6 @@ export async function handleClaudeRequest(
     // Return response as-is (pass-through)
     return new Response(response.body, {
         status: response.status,
-        headers: response.headers,
+        headers: sanitizeUpstreamResponseHeaders(response),
     });
 }

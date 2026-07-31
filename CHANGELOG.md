@@ -7,6 +7,64 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: strip stale `content-encoding` from pass-through responses
+
+Node's `fetch` (undici) auto-decompresses gzip/deflate/br upstream bodies but
+leaves the original `content-encoding` and `content-length` headers on the
+`Response`. Any handler that re-wrapped the (already-decompressed) body with
+the copied upstream headers produced a Response whose headers claimed gzip
+while the bytes were plain text. Clients using strict gzip decoding (e.g. the
+TUI's own `fetch` call in `runModelTest`) then crashed with
+`TypeError: terminated` / `Z_DATA_ERROR: incorrect header check`. The most
+visible symptom: testing `glm-5.2-a` (mode = `anthropic-messages`,
+`open.bigmodel.cn/api/anthropic` returns gzip) from the TUI always showed
+`test failed glm-5.2-a (?) terminated`, while `curl` (lenient) succeeded.
+
+**Two-layer fix:**
+
+1. **Boundary strip in the Node adapter** (commit `f629c67`):
+   `src/server.ts` — the non-streaming response path at line 136 was using
+   `Object.fromEntries(response.headers.entries())`, which forwarded the
+   stale `content-encoding: gzip` to the Node `http` response while
+   `response.clone().text()` had already decompressed the body. Changed to
+   use the existing `nodeResponseHeaders()` helper (which the streaming path
+   at line 110 already used), stripping `content-encoding` + `content-length`
+   consistently at the process boundary. This alone resolved the
+   user-visible symptom for every code path.
+
+2. **Defense-in-depth across internal handlers**: even with the boundary
+   fixed, internal `Response` objects still had headers that disagreed with
+   their bodies — a landmine for any future internal consumer (dev
+   passthrough, transform hooks, response re-wrapping). Added
+   `sanitizeUpstreamResponseHeaders(response)` to `src/utils/routing.ts`
+   (strips `content-encoding` + `content-length`, returns a fresh `Headers`)
+   and applied it at the 11 sites that build a new `Response` from a
+   decompressed body with copied upstream headers:
+   - `src/handlers/claude.ts` — streaming pass-through (L189) and
+     non-streaming pass-through (L220) in `handleClaudeRequest`.
+   - `src/utils/request-transform.ts` — `applyAfterUpstream` non-JSON
+     fallback (L463) and JSON path (L478); `applyWriteoutBody` non-JSON
+     fallback (L550) and JSON path (L568).
+   - `src/index.ts` — `restorePrivacyResponse` streaming (L186) and JSON
+     (L192); `endpoint_writeout` SSE rewrite (L2254); `endpoint_writeout`
+     header-ops seed (L2270, also sanitizes the headers *before* feeding
+     them into transform hooks); `applyCorsHeaders` (L280).
+
+**Scope of the original bug:** any model with `mode = "anthropic-messages"`
+whose upstream returns gzip and that went through `handleClaudeRequest`
+non-streaming was affected. From the shipped config that was `glm-5.2-a`
+(`open.bigmodel.cn/api/anthropic`). `openai-completions` models
+(`minimax-*`, `deepseek-*`, etc.) were unaffected because their handlers
+build a fresh `Response` with explicit clean headers after parsing the body.
+
+**Files changed:**
+- `src/server.ts` — non-streaming path now uses `nodeResponseHeaders()`
+  (commit `f629c67`).
+- `src/utils/routing.ts` — new exported
+  `sanitizeUpstreamResponseHeaders(response)` helper.
+- `src/handlers/claude.ts`, `src/utils/request-transform.ts`,
+  `src/index.ts` — apply the helper at the latent re-wrap sites.
+
 ### Feat: make `wrangler` an optional peer dependency
 
 Wrangler is only needed for Cloudflare Workers deployment (`npm run dev` /

@@ -11,6 +11,7 @@
 import type { TransformSet, TransformOp, BuiltinName } from './config-loader.js';
 import type { ModelRouteConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
+import { sanitizeUpstreamResponseHeaders } from './routing.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -463,7 +464,7 @@ export async function applyAfterUpstream(
     return new Response(text, {
       status: response.status,
       statusText: response.statusText,
-      headers: response.headers,
+      headers: sanitizeUpstreamResponseHeaders(response),
     });
   }
 
@@ -475,11 +476,10 @@ export async function applyAfterUpstream(
     void headers; // header ops not supported on after_upstream (response headers come from fetch)
   }
 
-  const responseHeaders = new Headers(response.headers);
   return new Response(JSON.stringify(body), {
     status: hookCtx.status,
     statusText: response.statusText,
-    headers: responseHeaders,
+    headers: sanitizeUpstreamResponseHeaders(response),
   });
 }
 
@@ -550,7 +550,7 @@ export async function applyWriteoutBody(
     return new Response(text, {
       status: response.status,
       statusText: response.statusText,
-      headers: response.headers,
+      headers: sanitizeUpstreamResponseHeaders(response),
     });
   }
 
@@ -565,11 +565,10 @@ export async function applyWriteoutBody(
   }
   void hookCtx;
 
-  const responseHeaders = new Headers(response.headers);
   return new Response(JSON.stringify(body), {
     status: response.status,
     statusText: response.statusText,
-    headers: responseHeaders,
+    headers: sanitizeUpstreamResponseHeaders(response),
   });
 }
 

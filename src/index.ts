@@ -6,7 +6,7 @@
  */
 
 import { Env } from './types/shared.js';
-import { extractAuthHeaders, transformAuthHeadersForUpstream, formatApiKeyForUpstream, parseDynamicRoute, isHostAllowed, getHandlerType, buildTargetUrl, buildUpstreamUrl } from './utils/routing.js';
+import { extractAuthHeaders, transformAuthHeadersForUpstream, formatApiKeyForUpstream, parseDynamicRoute, isHostAllowed, getHandlerType, buildTargetUrl, buildUpstreamUrl, sanitizeUpstreamResponseHeaders } from './utils/routing.js';
 import { createErrorResponse, OverLimitError, ClaudeProxyError } from './utils/errors.js';
 import { createLogger } from './utils/logger.js';
 import { handleModelsRequest, getModelCount } from './handlers/models.js';
@@ -183,18 +183,23 @@ async function restorePrivacyResponse(response: Response, mapping: PiiMapping): 
   const contentType = response.headers.get('content-type') || '';
 
   if (contentType.includes('text/event-stream') && response.body) {
-    return new Response(response.body.pipeThrough(createRestoreTransformStream(mapping)), response);
+    return new Response(response.body.pipeThrough(createRestoreTransformStream(mapping)), {
+      status: response.status,
+      statusText: response.statusText,
+      headers: sanitizeUpstreamResponseHeaders(response),
+    });
   }
 
   if (contentType.includes('application/json')) {
     const text = await response.text();
     const restored = restoreText(text, mapping);
-    const headers = new Headers(response.headers);
-    headers.delete('content-length'); // restored text length differs from redacted
+    // restored text length differs from the redacted body; and the upstream
+    // body has already been decompressed by .text(), so content-encoding no
+    // longer matches. Strip both via sanitizeUpstreamResponseHeaders.
     return new Response(restored, {
       status: response.status,
       statusText: response.statusText,
-      headers,
+      headers: sanitizeUpstreamResponseHeaders(response),
     });
   }
 
@@ -272,7 +277,7 @@ function getCorsHeaders(request: Request, env: Env): Record<string, string> {
  * Apply CORS headers to response
  */
 function applyCorsHeaders(response: Response, request: Request, env: Env): Response {
-  const newHeaders = new Headers(response.headers);
+  const newHeaders = sanitizeUpstreamResponseHeaders(response);
   const corsHeaders = getCorsHeaders(request, env);
 
   for (const [key, value] of Object.entries(corsHeaders)) {
@@ -2251,19 +2256,19 @@ export default {
           if (response.body && responseContentType.includes('text/event-stream')) {
             const evtStream = pipeEventTransformer(response.body, writeoutCtx);
             if (evtStream) {
-              const newHeaders = new Headers(response.headers);
               response = new Response(evtStream, {
                 status: response.status,
                 statusText: response.statusText,
-                headers: newHeaders,
+                headers: sanitizeUpstreamResponseHeaders(response),
               });
             }
           }
 
           // Header ops: also wired centrally here (run before body so headers
-          // shape the new Response).
+          // shape the new Response). Seed with sanitized headers so transforms
+          // never observe a stale content-encoding from a decompressed body.
           const responseHeaders: Record<string, string> = {};
-          response.headers.forEach((v, k) => { responseHeaders[k] = v; });
+          sanitizeUpstreamResponseHeaders(response).forEach((v, k) => { responseHeaders[k] = v; });
           const { headers: transformedHeaders } = runHook('endpoint_writeout', { body: {}, headers: responseHeaders }, writeoutCtx);
           if (transformedHeaders !== responseHeaders) {
             const newHeaders = new Headers(transformedHeaders);

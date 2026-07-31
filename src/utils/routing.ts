@@ -566,4 +566,22 @@ export function addForwardedHeaders(authHeaders: Record<string, string>, request
   return { ...authHeaders };
 }
 
+/**
+ * Strip transfer-encoding headers that no longer match the body.
+ *
+ * Node's fetch (undici) auto-decompresses gzip/deflate/br bodies but leaves
+ * the original `content-encoding` and `content-length` headers on the
+ * Response. Any handler that re-wraps the (already-decompressed) body with
+ * the upstream headers would otherwise advertise an encoding the bytes no
+ * longer match, causing clients to crash with Z_DATA_ERROR (surfaced as
+ * "TypeError: terminated"). Apply at every site that builds a new Response
+ * from a decompressed body + copied upstream headers.
+ */
+export function sanitizeUpstreamResponseHeaders(response: Response): Headers {
+  const headers = new Headers(response.headers);
+  headers.delete('content-encoding');
+  headers.delete('content-length');
+  return headers;
+}
+
 
