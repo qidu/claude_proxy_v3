@@ -1,0 +1,7 @@
+{
+  "_comment": "Valid auth keys for the model proxy. The Lua auth module (auth.lua) loads this file into ngx.shared.DICT 'proxy_auth_keys' and treats every entry in 'keys' as a globally accepted credential on all auth-bearing endpoints. Reload via the admin endpoint or by sending HUP to nginx (the loader re-reads this file when the dict is empty or after a flush).",
+  "keys": [
+    "sk-proxy-REPLACE_ME_KEY_1",
+    "sk-proxy-REPLACE_ME_KEY_2"
+  ]
+}
