@@ -529,6 +529,16 @@ Group multiple models under one name in a `[composite]` section:
     can be overtaken by fallback-2.
   - Decay is runtime-only — `proxy_config.toml` is never modified and state resets when
     the proxy process restarts.
+- `primary` and `fallback` are **independent and both optional** — the table below
+  covers every valid shape for a composite alias's targets. The detected mode is
+  derived from the targets, not set explicitly:
+
+  | Targets with `primary` | Targets with `fallback > 0` | Detected mode | Selection behavior |
+  |:---:|:---:|:---|:---|
+  | 0 | 0 | `share` | Weighted random across targets by `share` |
+  | ≥1 | 0 | `fallback` | The first `primary` target in config order wins; other targets are unused at the routing step (they still participate in weighted pick after a primary decay). |
+  | 0 | ≥1 | `fallback` | Lowest `fallback` number wins; ties broken by config order. |
+  | ≥1 | ≥1 | `fallback` | The `primary` target always wins — `fallback` numbers on other targets are ignored at the routing step. |
 - `token_limit` — `{num, duration}` rolling-window cap (`1h`/`1d`/`1w`/`1m`); returns HTTP 429 when exceeded.
 
 **Fusion** fans a request out to multiple "panel" models in parallel and routes through an
