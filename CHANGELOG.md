@@ -7,6 +7,35 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Feat: make `wrangler` an optional peer dependency
+
+Wrangler is only needed for Cloudflare Workers deployment (`npm run dev` /
+`npm run deploy`). The Node server path (`npm run server`, Docker image,
+`dist/server.js`) does not use it. Previously it was listed in
+`devDependencies` and got auto-installed for everyone.
+
+**What changed:**
+- Moved `wrangler` from `devDependencies` to `peerDependencies` with
+  `peerDependenciesMeta: { optional: true }` in `package.json`.
+- Removed the three `sed` lines in `Dockerfile` that stripped `wrangler` from
+  `package.json` before `npm install` — no longer needed since optional
+  peerDeps are not auto-installed.
+- `@cloudflare/workers-types` stays as a `devDependency` (still needed at
+  build time by `tsconfig.server.json` to type the shared fetch handler in
+  `src/index.ts`).
+
+**Impact:**
+- Node-only / Docker users no longer pull wrangler on `npm install`.
+- Cloudflare Workers users must run `npm install wrangler` before
+  `npm run dev` / `npm run deploy`. Without it, npm exits with
+  `command not found: wrangler`.
+
+**Files changed:**
+- `package.json` — added `peerDependencies` + `peerDependenciesMeta`; removed
+  `wrangler` from `devDependencies`.
+- `Dockerfile` — removed the `RUN sed -i ...` block.
+- `README.md` — reduced wrangler mentions from 2 to 1.
+
 ### Fix: dashboard UI tightening — narrower inputs and TUI label cleanup
 
 **Dashboard:**

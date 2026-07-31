@@ -1062,8 +1062,7 @@ The `hash_min_len` and `entropy_threshold` knobs are also accepted by the Python
 | `KOMPRESS_MIN_CHARS` | `200` | Skip fragments shorter than this |
 
 The full list (including the Consul-backed config and hardcoded upstream-mode defaults)
-is documented in the comments at the top of [`wrangler.toml`](./wrangler.toml) and in
-[`docs/README_DETAILS.md`](./docs/README_DETAILS.md).
+is documented in [`docs/README_DETAILS.md`](./docs/README_DETAILS.md).
 
 ## Testing
 

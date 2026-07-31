@@ -12,11 +12,6 @@ RUN apk add --no-cache make g++
 # Copy package files first for better caching
 COPY package*.json ./
 
-# Modify package.json in a single RUN to reduce layers
-RUN sed -i 's/"dev": "wrangler dev",\r$//' package.json && \
-    sed -i 's/"dev": "wrangler deploy",\r$//' package.json && \
-    sed -i 's/"wrangler": "^4.60.0"\r$//' package.json
-
 # Install dependencies
 # RUN npm ci --no-audit --no-fund
 RUN npm install
