@@ -7,6 +7,79 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: transport errors sanitized and mapped to 502 / 504
+
+When an upstream `fetch()` rejects at the transport layer (DNS failure,
+connection refused, TLS error, abort/timeout, malformed URL), the outer
+request catch in `src/index.ts` previously returned **HTTP 500** with the
+raw `error.message` echoed verbatim to the client. That message routinely
+contains internal hostnames, ports, and filesystem paths from the underlying
+socket error (e.g. `getaddrinfo ENOTFOUND internal-host.local:443`),
+leaking infrastructure details.
+
+Two new behaviors in `src/utils/errors.ts`:
+
+- **`classifyTransportError(error)`** inspects the thrown error's `code`,
+  `cause.code`, and `name` to distinguish failure modes. Node's `fetch`
+  wraps every rejection as `TypeError: fetch failed`, so the real signal
+  lives on `error.cause.code` (`ENOTFOUND`, `ECONNREFUSED`,
+  `ECONNRESET`, `ERR_INVALID_URL`, …) or on `error.name`
+  (`AbortError` / `TimeoutError`).
+- **`createErrorResponse`** now calls the classifier when handed a plain
+  `Error` with no explicit `customStatus`. The result:
+  - DNS / connection / TLS / URL failures → **502** `upstream_unreachable`,
+    message `"Upstream service unreachable"` (or `"Upstream URL is invalid"`
+    for `ERR_INVALID_URL`).
+  - abort / timeout → **504** `upstream_timeout`, message
+    `"Upstream request timed out"`.
+  - Anything that doesn't match the transport signatures falls through to
+    the previous 500 behavior.
+
+Sanitization is gated on `customStatus === undefined`, so the many call
+sites that pass an explicit status with a hand-crafted message
+(`createErrorResponse(new Error('Authentication failed.'), rid, 401)`,
+the 413 body-too-large path, etc.) keep their crafted client-facing message.
+`ClaudeProxyError` (which already carries a sanitized message via
+`handleTargetApiError`) is also untouched. The original raw error message
+remains in the server log via the existing `logger.error` line in the outer
+catch.
+
+### Change: `base_url` values validated once at config-load time
+
+`validateProxyConfig` (`src/utils/config-loader.ts`) now runs a dedicated
+`validateBaseUrls` pass over every `base_url` that will end up in a `targetUrl`
+passed to `fetch()`. Previously an invalid `base_url` (e.g. an out-of-range
+port like `http://localhost:123456`, or a non-http/https scheme) only failed
+when a request actually hit the upstream — surfacing as an opaque 500 from
+`new URL()` / `fetch()` throwing synchronously inside the handler.
+
+Sources validated, mirroring `getAllowedHostsFromConfig`:
+
+- `[default_upstream].default_base_url`
+- `[models.*].base_url` (category level)
+- per-model `base_url` overrides at array index 1 (entries of length 3, 4, 5)
+
+Each invalid value is reported with its config path, so it surfaces through the
+same channels as other validation errors: console at startup, dashboard status
+bar via `config_errors`, TUI message line via `_validationErrors`, and the
+`PUT /dashboard/api/config` 400 response that rejects saves. Empty/whitespace
+values are skipped here (they fall back to the category-level URL, which is
+validated separately).
+
+### Fix: `/v1/models` falls back to local models when upstream URL is invalid
+
+`handleModelsRequest` (`src/handlers/models.ts`) constructed the upstream URL
+via `new URL(targetUrl)` *before* the try/catch wrapping the fetch. When
+`targetUrl` was malformed (e.g. an out-of-range port like `123456` from a
+misconfigured `[models.default] base_url`), `new URL` threw `Invalid URL`,
+which escaped the catch and surfaced as a request error instead of returning
+the locally configured model list.
+
+The URL construction and the query-param population (`after`/`before`/`limit`)
+are now moved inside the try block, so any malformed-upstream-URL failure falls
+through to the existing warn-and-continue path and the response is built solely
+from `extraModelIds` via `mergeClaudeModelsResponse`.
+
 ### Change: `/v1/models` is now exempt from auth
 
 `GET /v1/models` (and `/v1/models?...`) no longer requires an auth header and

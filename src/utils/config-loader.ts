@@ -2143,7 +2143,60 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
     }
   }
 
+  // Validate every base_url that will be used to build an upstream fetch URL.
+  // An invalid URL (e.g. out-of-range port like "http://localhost:123456")
+  // throws TypeError synchronously inside fetch() / new URL() at request time,
+  // which previously surfaced as an opaque 500. Catch it here at load time so
+  // the misconfiguration is visible in the dashboard status bar / TUI.
+  validateBaseUrls(config, errors);
+
   return { errors, warnings, valid: errors.length === 0 };
+}
+
+/**
+ * Validate every `base_url` value that ends up in a `targetUrl` passed to
+ * `fetch()`. Mirrors the sources covered by `getAllowedHostsFromConfig`:
+ *   - `[default_upstream].default_base_url`
+ *   - `[models.*].base_url` (category level)
+ *   - per-model `base_url` overrides (array element at index 1)
+ *
+ * Empty / whitespace-only values are skipped here — they fall back to the
+ * category-level URL at request time, which is validated separately.
+ */
+function validateBaseUrls(config: ProxyConfig, errors: ConfigValidationError[]): void {
+  const check = (url: string, path: string): void => {
+    const trimmed = url.trim();
+    if (trimmed === '') return;
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        errors.push({ path, message: `base_url must use http or https protocol, got: ${parsed.protocol}` });
+      }
+    } catch {
+      errors.push({ path, message: `base_url is not a valid URL: ${trimmed}` });
+    }
+  };
+
+  if (config.default_upstream?.default_base_url) {
+    check(config.default_upstream.default_base_url, 'default_upstream.default_base_url');
+  }
+
+  if (config.models) {
+    for (const [categoryName, categoryConfig] of Object.entries(config.models)) {
+      if (categoryName === 'list' || Array.isArray(categoryConfig)) continue;
+      const typedCategory = categoryConfig as Record<string, unknown>;
+      if (typeof typedCategory.base_url === 'string') {
+        check(typedCategory.base_url, `models.${categoryName}.base_url`);
+      }
+      for (const [key, value] of Object.entries(typedCategory)) {
+        if (['upstream_mode', 'base_url', 'api_key'].includes(key)) continue;
+        if (!Array.isArray(value) || value.length < 2) continue;
+        if (typeof value[1] === 'string') {
+          check(value[1], `models.${categoryName}.${key}.base_url`);
+        }
+      }
+    }
+  }
 }
 
 export function serializeProxyConfigToml(config: ProxyConfig): string {

@@ -74,6 +74,74 @@ export class OverLimitError extends ClaudeProxyError {
 }
 
 /**
+ * Classification of transport-layer errors thrown by `fetch()`.
+ *
+ * `fetch()` rejects with a plain `Error` (typically `TypeError: fetch failed`)
+ * whose `cause` carries the real signal: `ENOTFOUND` (DNS), `ECONNREFUSED`
+ * (port closed), `ERR_INVALID_URL` (bad config), etc. Timeouts surface as
+ * `AbortError` / `TimeoutError`. None of these are `ClaudeProxyError`, so
+ * without classification they fall through to a generic 500 and — worse —
+ * `error.message` (which may contain internal hostnames / ports) is echoed
+ * verbatim to the client.
+ *
+ * `classifyTransportError` maps them to a `ClaudeProxyError` with a sanitized
+ * generic message and an appropriate status:
+ *   - DNS / connection / TLS / URL failure → 502 `upstream_unreachable`
+ *   - abort / timeout                       → 504 `upstream_timeout`
+ * Returns `null` when the error doesn't look like a transport failure, so the
+ * caller can fall back to its previous handling.
+ */
+const DNS_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'EAI_NODATA', 'EAI_NONAME']);
+const CONNECTION_CODES = new Set([
+  'ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ERR_CONNECTION_REFUSED',
+  'ERR_TLS_CERT_ALTNAME_INVALID', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'CERT_HAS_EXPIRED', 'EPROTO', 'EHOSTUNREACH', 'ENETUNREACH',
+]);
+const URL_CODES = new Set(['ERR_INVALID_URL']);
+
+export function classifyTransportError(error: unknown): ClaudeProxyError | null {
+  if (error instanceof ClaudeProxyError) return null;
+
+  const err = error as Error & { code?: string; cause?: { code?: string; name?: string } };
+  const causeCode = err.cause?.code;
+  const code = err.code;
+  const name = err.name;
+
+  // Timeout / abort. AbortSignal.timeout() rejects with name 'TimeoutError';
+  // a manual AbortController gives 'AbortError'; undici uses 'UND_ERR_ABORTED'.
+  const isAbort =
+    name === 'AbortError' ||
+    name === 'TimeoutError' ||
+    code === 'UND_ERR_ABORTED' ||
+    code === '23' ||
+    err.cause?.name === 'TimeoutError' ||
+    err.cause?.name === 'AbortError' ||
+    (typeof err.message === 'string' && /abort/i.test(err.message));
+  if (isAbort) {
+    return new ClaudeProxyError('Upstream request timed out', 504, 'upstream_timeout');
+  }
+
+  // Malformed URL — config bug, not a network condition, but still upstream-side.
+  if (URL_CODES.has(code ?? '') || URL_CODES.has(causeCode ?? '')) {
+    return new ClaudeProxyError('Upstream URL is invalid', 502, 'upstream_unreachable');
+  }
+
+  const allCodes = [code, causeCode].filter(Boolean) as string[];
+  if (allCodes.some(c => DNS_CODES.has(c) || CONNECTION_CODES.has(c))) {
+    return new ClaudeProxyError('Upstream service unreachable', 502, 'upstream_unreachable');
+  }
+
+  // Node's fetch wraps any rejection as `TypeError: fetch failed`. If we see
+  // that signature with no further classification, treat it as unreachable
+  // rather than letting it fall through to a 500 with a raw message leak.
+  if (name === 'TypeError' && typeof err.message === 'string' && /fetch failed/i.test(err.message)) {
+    return new ClaudeProxyError('Upstream service unreachable', 502, 'upstream_unreachable');
+  }
+
+  return null;
+}
+
+/**
  * Create a Claude API error response
  */
 export function createErrorResponse(
@@ -88,6 +156,19 @@ export function createErrorResponse(
   if (error instanceof ClaudeProxyError) {
     responseStatus = error.status;
     type = error.type;
+  } else if (customStatus === undefined) {
+    // No explicit status and not a ClaudeProxyError — this is the outer-catch
+    // path where transport errors (DNS / refused / TLS / abort) surface as
+    // plain Error objects. Classify them so the client gets a meaningful 502 /
+    // 504 and the raw internal message (which may contain hostnames, ports, or
+    // filesystem paths from the underlying socket error) is never echoed back.
+    // The original message remains in the server log via the outer catch.
+    const classified = classifyTransportError(error);
+    if (classified) {
+      responseStatus = classified.status;
+      type = classified.type;
+      message = classified.message;
+    }
   }
 
   const errorResponse: ClaudeErrorResponse = {

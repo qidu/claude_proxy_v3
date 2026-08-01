@@ -177,19 +177,19 @@ export async function handleModelsRequest(
 
   logger.debug(requestId, `Cache miss or invalid, fetching from upstream: ${targetUrl}`);
 
-  // Build target API URL with query parameters
-  const targetApiUrl = new URL(targetUrl);
-  if (afterId) targetApiUrl.searchParams.set('after', afterId);
-  if (beforeId) targetApiUrl.searchParams.set('before', beforeId);
-  if (limit) targetApiUrl.searchParams.set('limit', limit.toString());
-
-  // Log upstream request headers (without auth keys for security)
-  logger.debug(requestId, `Upstream request URL: ${targetApiUrl.toString()}`);
-  logger.debug(requestId, `Has auth headers: ${!!authHeaders['Authorization'] || !!authHeaders['x-api-key']}`);
-
   let upstreamModels: ClaudeModelsResponse = { data: [], first_id: null, has_more: false, last_id: null };
 
   try {
+    // Build target API URL with query parameters
+    const targetApiUrl = new URL(targetUrl);
+    if (afterId) targetApiUrl.searchParams.set('after', afterId);
+    if (beforeId) targetApiUrl.searchParams.set('before', beforeId);
+    if (limit) targetApiUrl.searchParams.set('limit', limit.toString());
+
+    // Log upstream request headers (without auth keys for security)
+    logger.debug(requestId, `Upstream request URL: ${targetApiUrl.toString()}`);
+    logger.debug(requestId, `Has auth headers: ${!!authHeaders['Authorization'] || !!authHeaders['x-api-key']}`);
+
     // Make request to target API
     const response = await fetch(targetApiUrl.toString(), {
       method: 'GET',
