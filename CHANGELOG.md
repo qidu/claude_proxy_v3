@@ -44,6 +44,17 @@ the 413 body-too-large path, etc.) keep their crafted client-facing message.
 remains in the server log via the existing `logger.error` line in the outer
 catch.
 
+The same classifier is also applied at the top of the composite / schedule
+retry loop in `src/index.ts` (`runAttempt` catch). Previously the
+share-decay branch was gated on `error instanceof ClaudeProxyError`, so a
+target that failed at the transport layer (DNS / refused / TLS / abort)
+skipped the penalty — composite routing would keep sending traffic to a
+dead target instead of decaying its share toward the floor. Transport
+errors are now classified in the catch, so `primary` and `fallback`
+targets get their share decayed on 502/504 just as they already did for
+upstream-returned 5xx. The retry-warn log line still uses the raw error
+message so operators see the real socket error (e.g. `ENOTFOUND`) in logs.
+
 ### Change: `base_url` values validated once at config-load time
 
 `validateProxyConfig` (`src/utils/config-loader.ts`) now runs a dedicated

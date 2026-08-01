@@ -7,7 +7,7 @@
 
 import { Env } from './types/shared.js';
 import { extractAuthHeaders, transformAuthHeadersForUpstream, formatApiKeyForUpstream, parseDynamicRoute, isHostAllowed, getHandlerType, buildTargetUrl, buildUpstreamUrl, sanitizeUpstreamResponseHeaders } from './utils/routing.js';
-import { createErrorResponse, OverLimitError, ClaudeProxyError } from './utils/errors.js';
+import { createErrorResponse, OverLimitError, ClaudeProxyError, classifyTransportError } from './utils/errors.js';
 import { createLogger } from './utils/logger.js';
 import { handleModelsRequest, getModelCount } from './handlers/models.js';
 import { handleTokenCountingRequest } from './handlers/token-counting.js';
@@ -2303,12 +2303,21 @@ export default {
             return applyCorsHeaders(await restorePrivacyResponse(response, piiMapping), attempt.request, env);
           } catch (error) {
             lastError = error;
+            // Transport errors (DNS / refused / TLS / abort) arrive as plain
+            // Error and would skip the share-decay branch below (which only
+            // matches ClaudeProxyError). Classify up-front so a dead target
+            // still gets penalized, and so the decay log line has a real
+            // status (502/504) instead of '-'. The raw error is preserved on
+            // lastError so the outer catch still sees the original message.
+            const classifiedError = error instanceof ClaudeProxyError
+              ? error
+              : (classifyTransportError(error) ?? error);
             if (attempt.modelId) {
               failedModelId = attempt.modelId;
               recordModelFailedRequest(attempt.modelId);
               modelFailureRecorded = true;
             }
-            if (error instanceof ClaudeProxyError && compositeAliasName && attempt.compositeTargetName && attempt.compositeTargetConfig) {
+            if (classifiedError instanceof ClaudeProxyError && compositeAliasName && attempt.compositeTargetName && attempt.compositeTargetConfig) {
               const isPrimary = attempt.compositeTargetConfig.primary === true;
               const fallbackNum = attempt.compositeTargetConfig.fallback;
               const isFallback = typeof fallbackNum === 'number' && fallbackNum > 0;
@@ -2316,7 +2325,7 @@ export default {
                 const configuredShare = getConfiguredCompositeShare(attempt.compositeTargetConfig);
                 const { previous, next, floor } = decayEffectiveCompositeShare(compositeAliasName, attempt.compositeTargetName, configuredShare);
                 const role = isPrimary ? 'primary' : `fallback(${fallbackNum})`;
-                logger.warn(requestId, `Composite ${role} ${compositeAliasName}.${attempt.compositeTargetName} returned ${error.status}; effective share ${previous} -> ${next} (floor ${floor})`);
+                logger.warn(requestId, `Composite ${role} ${compositeAliasName}.${attempt.compositeTargetName} returned ${classifiedError.status}; effective share ${previous} -> ${next} (floor ${floor})`);
               }
             }
             if (i < compositeAttempts.length - 1) {
