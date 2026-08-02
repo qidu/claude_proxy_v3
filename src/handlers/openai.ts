@@ -1,7 +1,7 @@
 import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.js';
 import { convertClaudeToOpenAIRequest, ThinkingConversionOptions } from '../converters/claude-to-openai.js';
 import { convertOpenAIToClaudeResponse } from '../converters/openai-to-claude.js';
-import { convertOpenAIToGeminiGenerateContent, convertOpenAIToGeminiInteractions } from '../converters/openai-to-gemini.js';
+import { convertOpenAIToGeminiGenerateContent, convertOpenAIToGeminiInteractions, registerGeminiToolSchemas, clearGeminiToolSchemas } from '../converters/openai-to-gemini.js';
 import { createLogger } from '../utils/logger.js';
 import { isSdkUrl, handleSdkOpenAIRequest } from '../utils/sdk-handler.js';
 import type { Env, Logger } from '../types/shared.js';
@@ -968,6 +968,22 @@ export async function handleOpenAIRequest(
       // Check if it's generateContent format (has contents array)
       if (Array.isArray(requestBody.contents)) {
         activeLogger.debug(requestId, 'Detected generateContent format with contents array');
+        // Register the inbound tool-parameter schemas so the egress converter can
+        // coerce the model's tool-call args into the declared JSON types.
+        if (Array.isArray(requestBody.tools)) {
+          const schemasByName = new Map<string, Record<string, unknown>>();
+          for (const tool of requestBody.tools as Array<Record<string, unknown>>) {
+            const fds = tool.functionDeclarations as Array<Record<string, unknown>> | undefined;
+            if (Array.isArray(fds)) {
+              for (const fd of fds) {
+                if (typeof fd.name === 'string' && fd.parameters && typeof fd.parameters === 'object') {
+                  schemasByName.set(fd.name, fd.parameters as Record<string, unknown>);
+                }
+              }
+            }
+          }
+          if (schemasByName.size > 0) registerGeminiToolSchemas(requestId, schemasByName);
+        }
         openaiRequest = convertGeminiGenerateContentToOpenAI(requestBody);
       } else {
         activeLogger.debug(requestId, 'Detected Interactions format with input field');
@@ -1209,7 +1225,9 @@ async function handleOpenAINonStreamingResponse(
             modelId,
             requestId
         );
-        
+        // Non-streaming path has no [DONE]/finally cleanup; release the schema map.
+        clearGeminiToolSchemas(requestId);
+
         return new Response(JSON.stringify(geminiResponse), {
             headers: {
                 'Content-Type': 'application/json',
@@ -1266,6 +1284,7 @@ let geminiToolCallBuffers: Map<string, Map<number, GeminiToolCallAccum>> = new M
 function clearGeminiSSEState(requestId: string): void {
     thinkStreamBuffers.delete(requestId);
     geminiToolCallBuffers.delete(requestId);
+    clearGeminiToolSchemas(requestId);
 }
 
 /**

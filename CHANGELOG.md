@@ -7,6 +7,38 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Feature: schema-aware tool-arg coercion on the `:generateContent` egress path
+
+Antigravity's Gemini endpoint validates the model's tool calls against each
+tool's Go argument struct. Weak-model tool calling on `deepseek-v4-*` produced
+JSON type mismatches — most commonly a scalar where an array is declared —
+which Antigravity rejected as `invalid tool call error (invalid_signature)
+… cannot unmarshal string into … of type []string`. See
+[docs/review_of_antigravity_gemini_with_ds_tools.md](./docs/review_of_antigravity_gemini_with_ds_tools.md)
+(§ "Optional fix — schema-aware egress type-coercion pass").
+
+The proxy now coerces tool-call args against the inbound tool schema at the
+single egress converter, following the existing per-request-state convention:
+
+- `src/converters/openai-to-gemini.ts` — new `geminiToolSchemas`
+  `Map<requestId, Map<name, schema>>` (mirrors `geminiToolCallBuffers`), with
+  `registerGeminiToolSchemas` / `clearGeminiToolSchemas`. `coerceArgsToSchema`
+  is **coercion-only**: scalar→array wrap (recursing into `items`),
+  scalar↔string, numeric-string→number/integer, `"true"`/`"false"`→boolean.
+  It never fabricates missing required args and never drops unknown keys —
+  uncoercible values pass through so the upstream can still reject honestly.
+- `src/handlers/openai.ts` — registers `{name → parameters}` from
+  `requestBody.tools[].functionDeclarations` at inbound, clears in
+  `clearGeminiSSEState` (streaming + `finally` leak-guard) and on the
+  non-streaming `generateContent` path.
+
+Scope is deliberately narrow: it fixes the `[]string`-style unmarshal
+rejections but leaves the omitted-required-arg errors (`Query is required`,
+`TargetFile not found`, …) untouched, since fabricating those would violate
+fail-loud (CLAUDE.md rule #8). Verified: the previously-failing
+`multi-agents-test.py 2 1 3` run (`deepseek-v4-anth`, task `stale_or_dead_tests`)
+now completes successfully.
+
 ### Fix: DeepSeek thinking-mode round-trip on the Gemini endpoint path
 
 Requests entering via `/v1beta/models/<alias>:streamGenerateContent` and

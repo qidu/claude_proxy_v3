@@ -31,6 +31,82 @@ function parseToolArguments(value: unknown): Record<string, unknown> {
     }
 }
 
+// Per-request tool-parameter schemas, keyed by requestId -> functionName ->
+// JSON schema (the inbound `functionDeclarations[].parameters`). Populated by
+// the handler at inbound and consulted by the egress converter to coerce the
+// model's tool-call args into the declared JSON types. Keyed by requestId for
+// the same reason as the streaming buffers in openai.ts — concurrent requests
+// must not share state. Cleared via clearGeminiToolSchemas on stream end.
+const geminiToolSchemas: Map<string, Map<string, Record<string, unknown>>> = new Map();
+
+/** Register the inbound tool-parameter schemas for a request. */
+export function registerGeminiToolSchemas(requestId: string, schemasByName: Map<string, Record<string, unknown>>): void {
+    geminiToolSchemas.set(requestId, schemasByName);
+}
+
+/** Remove a request's tool-parameter schemas (called from clearGeminiSSEState). */
+export function clearGeminiToolSchemas(requestId: string): void {
+    geminiToolSchemas.delete(requestId);
+}
+
+/**
+ * Coercion-only repair of a single argument value against its declared JSON
+ * schema type. Fixes the common weak-model type mismatches:
+ *  - scalar where an array is declared  -> wrap in a single-element array
+ *  - non-string where a string is declared -> String(value)
+ *  - numeric string where a number is declared -> Number(value)
+ *  - "true"/"false" where a boolean is declared -> boolean
+ * Never fabricates missing required args and never drops unknown keys — a value
+ * that cannot be safely coerced is returned unchanged so the upstream can
+ * reject it honestly.
+ */
+function coerceValueToSchemaType(value: unknown, propSchema: Record<string, unknown> | undefined): unknown {
+    if (!propSchema || typeof propSchema !== 'object') return value;
+    const declared = typeof propSchema.type === 'string' ? (propSchema.type as string).toLowerCase() : undefined;
+    if (!declared) return value;
+
+    if (declared === 'array') {
+        if (Array.isArray(value)) return value;
+        // Wrap a lone scalar/object into a single-element array, coercing the
+        // element against `items` when that schema is present.
+        const items = propSchema.items as Record<string, unknown> | undefined;
+        return [coerceValueToSchemaType(value, items)];
+    }
+    if (declared === 'string') {
+        if (typeof value === 'string') return value;
+        if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+        return value;
+    }
+    if (declared === 'number' || declared === 'integer') {
+        if (typeof value === 'number') return value;
+        if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Number(value))) return Number(value);
+        return value;
+    }
+    if (declared === 'boolean') {
+        if (typeof value === 'boolean') return value;
+        if (value === 'true') return true;
+        if (value === 'false') return false;
+        return value;
+    }
+    return value;
+}
+
+/**
+ * Coerce a tool call's args object against its declared parameter schema.
+ * Only keys present in `properties` are coerced; unknown keys are left intact
+ * (coercion-only, no drop-unknown).
+ */
+function coerceArgsToSchema(args: Record<string, unknown>, paramSchema: Record<string, unknown> | undefined): Record<string, unknown> {
+    if (!paramSchema || typeof paramSchema !== 'object') return args;
+    const properties = paramSchema.properties as Record<string, Record<string, unknown>> | undefined;
+    if (!properties || typeof properties !== 'object') return args;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(args)) {
+        out[key] = key in properties ? coerceValueToSchemaType(args[key], properties[key]) : args[key];
+    }
+    return out;
+}
+
 export function convertOpenAIToGeminiGenerateContent(
     openaiResponse: any,
     modelId: string,
@@ -70,12 +146,15 @@ export function convertOpenAIToGeminiGenerateContent(
                 parts.push({ text: cleanText });
             }
         }
+        const schemasByName = geminiToolSchemas.get(requestId);
         for (const toolCall of toolCalls) {
             const fn = toolCall.function || {};
+            const name = fn.name || '';
+            const args = parseToolArguments(fn.arguments);
             parts.push({
                 functionCall: {
-                    name: fn.name || '',
-                    args: parseToolArguments(fn.arguments),
+                    name,
+                    args: coerceArgsToSchema(args, schemasByName?.get(name)),
                 }
             });
         }
