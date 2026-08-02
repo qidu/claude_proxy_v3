@@ -675,3 +675,243 @@ Every conversion site in the chain leaves tool property names untouched:
 **Bottom line:** the proxy is faithful here. To reduce the retry noise, the
 lever is model choice (a stronger tool-calling model) or Antigravity's retry
 tolerance — not the proxy.
+
+---
+
+## Egress rewrite for `:generateContent` tool bodies — what it can and cannot fix (2026-08-02)
+
+Follow-up question: *how should the proxy rewrite the tool message body at the
+`/v1/models/<model>:generateContent` egress stage for `deepseek-v4-anth` so
+Antigravity accepts it?* The errors under investigation:
+
+```
+--- Antigravity Agent | model=deepseek-v4-anth | transport=GeminiAPIEndpoint ---
+WARNING: invalid tool call error (invalid_signature) SearchDirectory is required
+WARNING: invalid tool call error (invalid_signature) AbsolutePath is a required parameter. Follow the function call schema exactly.
+WARNING: invalid tool call error (invalid_signature) Query is required
+```
+
+### `invalid_signature` is a Go-unmarshal error, not a missing Gemini signature
+
+The decisive log line (`tests/logs/loop_for_agent_testing.log:801`) shows what
+Antigravity means by "signature":
+
+```
+invalid tool call error (invalid_signature) trying to unmarshal args to
+  {SearchPath: Query: MatchPerLine:false Includes:[] CaseInsensitive:false IsRegex:false}:
+  json: cannot unmarshal string into Go struct field grepSearchArgs.Includes of type []string
+```
+
+"Signature" = the tool's **Go function-argument struct signature**. Antigravity
+unmarshals the `functionCall.args` the proxy emits into a typed Go struct and
+rejects anything that doesn't conform. This is NOT the Gemini `thoughtSignature`
+concept. The failures fall into two classes:
+
+| Error text | Real cause | Fixable at egress? |
+|---|---|---|
+| `cannot unmarshal string into …Includes of type []string` | Model emitted a **scalar where the schema wants an array** | **Yes** — coercible |
+| `Query is required` / `SearchDirectory is required` / `AbsolutePath is a required parameter` | Model **omitted a required arg** | **No** — cannot fabricate |
+| `(invalid_args) argument Overwrite not found` / `TargetFile not found` | Model **omitted a required arg** (invalid_args class) | **No** — cannot fabricate |
+
+### Where the proxy emits these (the single egress site)
+
+The only place `functionCall` parts are built for the `:generateContent`
+response is `convertOpenAIToGeminiGenerateContent`
+(`src/converters/openai-to-gemini.ts:73-81`):
+
+```ts
+for (const toolCall of toolCalls) {
+    const fn = toolCall.function || {};
+    parts.push({
+        functionCall: {
+            name: fn.name || '',
+            args: parseToolArguments(fn.arguments),   // JSON.parse, verbatim
+        }
+    });
+}
+```
+
+`parseToolArguments` (`:23-32`) just `JSON.parse`s the model's raw argument
+string. The args are relayed **verbatim** through the whole chain
+(`processAnthropicSSEBuffer` accumulates `input_json_delta` →
+`geminiToolCallBuffer` re-accumulates at `openai.ts:1318-1334` → this
+converter). Nothing corrupts them; the model itself produces the
+non-conforming args.
+
+### What an egress rewrite could fix — and its hard limit
+
+The proxy DOES hold the authoritative tool schema: it arrives inbound at
+`geminiRequest.tools[].functionDeclarations[].parameters` (the same schema
+`normalizeGeminiSchema` processes at `openai.ts:181-195`). So at egress a
+`{toolName → parameterSchema}` map could repair each `functionCall.args`:
+
+1. **Type coercion (fixes the `Includes` class):** when the declared type is
+   `array` but the model gave a scalar, wrap it (`"*.ts"` → `["*.ts"]`);
+   stringify scalars where `string` is wanted; parse numeric strings for
+   `number`. Directly eliminates the `cannot unmarshal string into []string`
+   failures.
+2. **Drop-unknown:** delete args whose key isn't in `properties`.
+
+**Hard limit:** the *dominant* failures (`Query` / `SearchDirectory` /
+`AbsolutePath` / `Overwrite` / `TargetFile` "required" / "not found") are the
+model **omitting required arguments**. No egress rewrite can fix these without
+**inventing values** — fabricating a `Query` or a `TargetFile` path would
+violate fail-loud (CLAUDE.md rule #8) and produce silently wrong tool calls
+(grep for the wrong string, write to the wrong file). That is strictly worse
+than the current honest rejection.
+
+### Recommendation
+
+- **Worth doing:** a schema-aware **type-coercion** pass in
+  `convertOpenAIToGeminiGenerateContent`, keyed off the inbound
+  `functionDeclarations`. Bounded fix for the `[]string`-style unmarshal
+  errors, using data the proxy already has. Scope: the one converter + threading
+  the tool schema through the buffered flush (`openai.ts:1353-1374`).
+- **Won't help, don't attempt:** the "X is required" / "argument not found"
+  errors — `deepseek-v4-flash` failing to emit required args, correctly caught
+  by Antigravity's validator. Lever is a stronger model, not the proxy.
+
+### Partial-success evidence — the task completes despite the rejections
+
+Even with the un-coercible required-arg rejections, `deepseek-v4-anth` on the
+Gemini endpoint recovers and completes the task. Run:
+
+```
+ANTIGRAVITY_USE_GEMINI_API=true API_KEY=hi PROXY_BASE=http://localhost:8788 \
+  python3 tests/multi-agents-test.py 2 1 3
+```
+
+Output (abridged):
+
+```
+Selection: 1 model(s) x 1 agent(s) x 1 task(s)
+  model:  deepseek-v4-anth
+  agent:  Antigravity
+  task:   stale_or_dead_tests
+
+=========== Task: stale_or_dead_tests | Model: deepseek-v4-anth ===========
+
+--- Antigravity Agent | model=deepseek-v4-anth | transport=GeminiAPIEndpoint ---
+ ... Antigravity output:
+I'll start by exploring the structure of the tests directory.error executing cascade step: CORTEX_STEP_TYPE_LIST_DIRECTORY: uri: "": unknown uri schemeDenied by policy 'confirm_run_command'. ("denied by pre-tool hook: Denied by policy 'confirm_run_command'.")error executing cascade step: CORTEX_STEP_TYPE_LIST_DIRECTORY: uri: "": unknown uri schemeI'll audit the test suite systematically. Let me read the test files, starting with the API tests.The `responses.sh` file already looks suspicious (two scripts concatenated). Let me check the remaining test files systematically.Cannot search directory file:///home/bot/claude_proxy_v3 which does not exist.Denied by policy 'confirm_run_command'. ("denied by pre-tool hook: Denied by policy 'confirm_run_command'.")I've completed a full audit of `./tests/` (all ~100 files read or grepped, cross-checked against the current proxy_config.toml and `src/` handlers). Findings below, grouped by defect type.
+
+## A. Hard-coded paths to a repo that no longer exists
+
+These scripts `cd /home/bot/claude_proxy_v3` (old repo name — the workspace is now `model_proxy_v3`), so they die on line 3.
+
+| File | Evidence | Recommendation |
+|---|---|---|
+| all-models.sh | `cd claude_proxy_v3` L3; obsolete `[upstream] default_url` schema; real API keys L20-24, L33-37 | delete (superseded by `testcases/04_models`) |
+| failed.sh | `cd claude_proxy_v3` L3; old `[defaults] mode` schema; real keys | delete |
+| oversea.sh | `cd claude_proxy_v3` L3; `cp proxy_config.toml_oversea proxy_config.toml` (file doesn't exist) L22-24; real keys L27 | delete |
+| five-models.sh | 3 concatenated scripts; part 2 copies missing `proxy_config…` | … |
+```
+
+Two things this proves:
+
+1. **The task succeeds** — a complete, structured audit ("## A. Hard-coded
+   paths…") is produced. The `invalid_signature` / required-arg rejections are
+   non-fatal: the model retries with corrected args and proceeds.
+2. **The non-proxy errors are visible in-band** — the
+   `CORTEX_STEP_TYPE_LIST_DIRECTORY: uri: "": unknown uri scheme` and
+   `Denied by policy 'confirm_run_command'` lines are Antigravity's own
+   cascade-step / policy-hook failures, unrelated to the proxy's body rewriting.
+   They further confirm the residual noise is client- and model-side, not a
+   proxy conversion defect.
+
+**Net:** an egress type-coercion pass would remove the array/scalar unmarshal
+subset, but the observed run already reaches a successful result without it,
+because the client tolerates the rejected-and-retried calls. The required-arg
+omissions remain a model-quality ceiling that no egress rewrite can lift.
+
+### Success fingerprints — each rejected tool call has a matching artifact in the audit
+
+The rejected calls name specific tool arguments. The saved audit output is the
+*result* of those same tools, so wherever the audit contains the tool's output,
+that call ultimately **succeeded on retry** — the rejection was non-fatal.
+
+Evidence file:
+`/home/bot/.gemini/antigravity/brain/c291fe2a67f21404f610077234990659/duplicate-helpers-audit.md`
+
+| Rejected error (from the run) | Antigravity tool (required arg) | Success fingerprint in `duplicate-helpers-audit.md` |
+|---|---|---|
+| `(invalid_signature) Query is required` | `grep_search` (`Query`) | Line 16: *"a grep for `retry\|RETRY` returned zero hits"* — a completed grep with a real `Query`. Line 66: *"greps for `event:\|data:`"* |
+| `cannot unmarshal string into …Includes of type []string` | `grep_search` (`Includes` = `[]string` glob filter) | Same grep results reported — a well-formed `grepSearchArgs` was accepted on retry |
+| `(invalid_signature) SearchPath is required` | `grep_search` / `find` (`SearchPath`) | Per-file line tables (§1 lines 46–56, §2 lines 82–89): exact paths + line numbers, only producible by a search over `tests/**` |
+| `(invalid_signature) SearchDirectory is required` | directory listing / `find_by_name` (`SearchDirectory`) | Line 3 / line 241: *"all ~100 files read or grepped"*, *"every file in §1"* — a directory enumeration of `tests/` completed |
+| `(invalid_signature) AbsolutePath is a required parameter` | `view_file` (`AbsolutePath`) | Line 3: *"read in full and confirmed"*; §1 canonical body (lines 24–41) is a **verbatim** file excerpt — a `view_file` with a valid `AbsolutePath` succeeded |
+| `(invalid_args) TargetFile / Overwrite not found` | `write_file` / `replace_file_content` (`TargetFile`, `Overwrite`) | **None** — the audit is a deduplication *plan* (§ "Deduplication plan", lines 168+), never applied. No write was on the success path, matching the "cannot fabricate a required arg" ceiling. |
+
+What the table establishes:
+
+1. **The read/grep/find family recovered.** Every `invalid_signature` on
+   `Query` / `SearchPath` / `SearchDirectory` / `AbsolutePath` has a concrete
+   downstream artifact (verbatim file bodies, exact line tables, the
+   "grep returned zero hits" claim, the "~100 files read or grepped" tally).
+   Rejected once, retried, succeeded.
+2. **The write family never needed to succeed.** `TargetFile` / `Overwrite`
+   belong to file-mutation tools; the audit only *plans* edits, so those calls
+   were never on the success path — their lack of a fingerprint is expected, not
+   a proxy failure.
+3. **The completed 251-line report is itself the top-level receipt.** A
+   structured audit with byte-identical-body verification cannot be produced
+   unless the read/search tools worked — directly contradicting any "the proxy
+   broke tool calling" hypothesis.
+
+### Optional fix — schema-aware egress type-coercion pass
+
+This is an **optional** mitigation, not a required fix. The runs above already
+complete successfully; this pass only removes the *type-mismatch* subset of the
+retry noise. It is scoped narrowly and must not attempt anything beyond it.
+
+**What it fixes (and only this):** the JSON-type mismatches where the model
+emits a scalar but the tool schema declares an array (or vice-versa). Repaired
+at the single egress converter `convertOpenAIToGeminiGenerateContent`
+(`src/converters/openai-to-gemini.ts:73-81`) against the tool's declared JSON
+schema:
+
+| Model emitted | Schema declares | Coercion |
+|---|---|---|
+| scalar `"*.ts"` | `array` (`type:"array"`) | wrap → `["*.ts"]` (the `Includes []string` failure) |
+| `123` / `true` | `string` | stringify → `"123"` |
+| `"123"` / `"true"` | `number` / `boolean` | parse → `123` / `true` |
+| arg key not in `properties` | — | drop (optional strictness; **off by default** — never discard data the model produced) |
+
+**What it deliberately does NOT touch:** `Query is required`,
+`SearchDirectory is required`, `AbsolutePath is a required parameter`,
+`Overwrite` / `TargetFile not found`. These are **omitted required args** —
+fabricating a value would violate fail-loud (CLAUDE.md rule #8) and produce
+silently wrong tool calls (a grep for the wrong string, a write to the wrong
+file). They must keep rejecting honestly.
+
+**The one design decision — threading the schema to the converter.** The
+authoritative schema lives on the *inbound* body
+(`requestBody.tools[].functionDeclarations[].parameters`, `openai.ts:971`), but
+the egress converter runs deep inside streaming
+(`processSSEBuffer` → `openai.ts:1341`, `:1373`), stateless and far from the
+inbound handler. So the schema must be carried via a per-request map, exactly
+like the existing `geminiToolCallBuffers` / `anthropicThinkingBuffers`
+(`openai.ts:255-257`, `:1263`):
+
+1. At inbound (`openai.ts:971`), build `{ functionName → parametersSchema }`
+   from `requestBody.tools` and store it in a new
+   `Map<requestId, Map<name, schema>>`.
+2. In `convertOpenAIToGeminiGenerateContent`, look up the schema by
+   `requestId` + `fn.name` and coerce `args` before pushing the `functionCall`
+   part.
+3. Clear it in `clearGeminiSSEState` (`openai.ts:1266`) alongside the other
+   per-request buffers.
+
+This reuses the codebase's established per-request-state convention rather than
+inventing a new one.
+
+**Scope:** one new coercion helper (`coerceArgsToSchema`) + the per-request
+schema map + three touch-points (store at `:971`, consult in the converter,
+clear at `:1266`). Default to **coercion-only** (no drop-unknown), so no
+model-produced data is ever discarded.
+
+**Net tradeoff:** this pass eliminates the array/scalar unmarshal rejections
+using data the proxy already holds, but the required-arg omissions remain a
+model-quality ceiling no egress rewrite can lift. Since the observed runs
+already succeed without it, implement only if the retry noise is worth the
+added per-request state.
