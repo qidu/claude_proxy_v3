@@ -7,6 +7,44 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: DeepSeek thinking-mode round-trip on the Gemini endpoint path
+
+Requests entering via `/v1beta/models/<alias>:streamGenerateContent` and
+forwarded to a DeepSeek upstream failed with HTTP 400 on any turn that replayed
+a prior assistant tool call:
+
+- `deepseek-v4-comp` (openai-completions): `The reasoning_content in the
+  thinking mode must be passed back to the API.`
+- `deepseek-v4-anth` (anthropic-messages): `The content[].thinking in the
+  thinking mode must be passed back to the API.`
+
+DeepSeek requires the reasoning/thinking block to be **present** (an empty
+placeholder is accepted; no signature exists on its API) on assistant turns
+that carried tool calls — the earlier "strip it" hypothesis was exactly
+backwards. Antigravity's Gemini SDK replays thoughts without `thoughtSignature`,
+so the real block can't be replayed, but an unsigned/empty one satisfies the
+upstream. See
+[docs/review_of_antigravity_gemini_with_ds_tools.md](./docs/review_of_antigravity_gemini_with_ds_tools.md).
+
+Two `src` fixes:
+
+- `src/handlers/openai.ts` — `forwardCompletionsAsAnthropicMessages` now
+  ensures a leading `{type:'thinking', thinking:''}` block on every assistant
+  message that has `tool_use` but no thinking block. The comp path is handled
+  by a `default` transform op that sets `reasoning_content = ""`.
+- `src/utils/config-loader.ts` — the custom `parseSimpleToml` gained
+  bracket-counting multiline-array accumulation, so transform `*.ops = [ … ]`
+  arrays spanning multiple physical lines are parsed (previously silently
+  dropped, which also disabled `max_tokens_rename` and friends).
+  `messages[role=assistant].reasoning_content` was added to
+  `SCHEMA_PATHS['openai-completions']` so the op validates at load time.
+
+Separately documented (no code change): the `invalid_signature` /
+`invalid_args` tool-call errors seen in the same runs are Antigravity's
+client-side validation of the model's own malformed tool calls, not a proxy
+defect — the proxy preserves tool schemas and arg names intact through the
+conversion chain.
+
 ### Fix: transport errors sanitized and mapped to 502 / 504
 
 When an upstream `fetch()` rejects at the transport layer (DNS failure,

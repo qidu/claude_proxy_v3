@@ -128,6 +128,9 @@ function convertGeminiGenerateContentToOpenAI(geminiRequest: Record<string, unkn
       const funcRespParts = parts.filter((p: any) => p.functionResponse);
       // Separate thinking (thought:true) from regular text so they can be
       // reconstructed as proper Claude thinking blocks by completionsToClaudeBody.
+      // DeepSeek requires `reasoning_content` to be round-tripped on any
+      // assistant turn that performed a tool call — see
+      // docs/review_of_antigravity_gemini_with_ds_tools.md.
       const thinkingContent = parts.filter((p: any) => p.thought && p.text).map((p: any) => p.text as string).join('');
       const textContent = parts.filter((p: any) => p.text && !p.thought).map((p: any) => p.text as string).join('');
 
@@ -630,6 +633,24 @@ async function forwardCompletionsAsAnthropicMessages(
   env?: Env,
 ): Promise<Response> {
   const claudeBody = completionsToClaudeBody(openaiRequest, model);
+
+  // DeepSeek's anthropic-compatible endpoint REQUIRES a `content[].thinking`
+  // block on any assistant turn that carried tool_use in thinking mode — a turn
+  // with only tool_use blocks is rejected with "content[].thinking ... must be
+  // passed back". Gemini strips thoughtSignature so the real thinking cannot be
+  // replayed, but an unsigned (even empty) thinking block is accepted. Ensure a
+  // leading thinking block on every assistant tool_use turn that lacks one.
+  // Verified against the live upstream (2026-08-02).
+  for (const m of (claudeBody.messages as Array<Record<string, unknown>>)) {
+    if (m.role === 'assistant' && Array.isArray(m.content)) {
+      const blocks = m.content as Array<Record<string, unknown>>;
+      const hasToolUse = blocks.some(b => b.type === 'tool_use');
+      const hasThinking = blocks.some(b => b.type === 'thinking');
+      if (hasToolUse && !hasThinking) {
+        blocks.unshift({ type: 'thinking', thinking: '' });
+      }
+    }
+  }
   logger.debug(requestId, `Interactions/generateContent -> anthropic-messages body: ${JSON.stringify(claudeBody).substring(0, 500)}`);
 
   // anthropic-messages expects x-api-key (or Authorization). Normalize headers.

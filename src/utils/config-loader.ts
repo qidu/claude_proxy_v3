@@ -122,6 +122,7 @@ const SCHEMA_PATHS: Record<TransformSchema, Set<string>> = {
     // role-filtered
     'messages[role=system].content', 'messages[role=user].content',
     'messages[role=assistant].content', 'messages[role=assistant].tool_calls',
+    'messages[role=assistant].reasoning_content',
     'messages[role=tool].content', 'messages[role=tool].name', 'messages[role=tool].tool_call_id',
     // response-side ($response prefix)
     '$response.id', '$response.model', '$response.choices[].message.content',
@@ -2472,11 +2473,28 @@ export function parseSimpleToml(content: string): ProxyConfig {
   const seenKeys = new Set<string>();
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
+    let line = lines[i];
+    let trimmed = line.trim();
 
     // Skip comments and empty lines
     if (!trimmed || trimmed.startsWith('#')) continue;
+
+    // Multiline array accumulation: a `key = [` whose bracket is not closed on
+    // this physical line (e.g. transform ops spanning several lines) is folded
+    // into one logical line so the single-line array/ops regexes below can match.
+    // Bracket counting is safe here because in-value strings like
+    // "messages[role=assistant].content" carry balanced [] on their own line.
+    if (/=\s*\[/.test(trimmed)) {
+      let depth = (trimmed.match(/\[/g) || []).length - (trimmed.match(/\]/g) || []).length;
+      while (depth > 0 && i + 1 < lines.length) {
+        i++;
+        const next = lines[i];
+        line += '\n' + next;
+        depth += (next.match(/\[/g) || []).length - (next.match(/\]/g) || []).length;
+      }
+      // Collapse to a single logical line for downstream single-line matchers.
+      trimmed = line.split('\n').map(s => s.trim()).filter(Boolean).join(' ');
+    }
 
     // Section headers: [upstream], [models.gemini], [defaults]
     if (trimmed.startsWith('[') && trimmed.endsWith(']')) {

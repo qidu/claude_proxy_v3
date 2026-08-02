@@ -1,11 +1,11 @@
+deepseek-v4-comp = {target = "deepseek-v4-flash", base_url = "https://api.deepseek.com", api_key = "sk-***", transforms = "deepseek_v4_comp_compat"}
 deepseek-v4-anth = {target = "deepseek-v4-flash", base_url = "https://api.deepseek.com/anthropic", api_key = "sk-***", mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat"}
 
-[transforms.deepseek_compat]
+
+[transforms.deepseek_v4_comp_compat]
 schema = "openai-completions"
-endpoint_readin.builtins = ["lowercase_tool_schema_types"]
-before_upstream.builtins = ["recover_tool_message_name"]
 before_upstream.ops = [
-  {op = "map_value", path = "messages[role=assistant].content", when_sibling = "tool_calls", from = "", to = null},
+  {op = "default", path = "messages[role=assistant].reasoning_content", value = ""},
 ]
 
 [transforms.deepseek_v4_anthropic_compat]
@@ -13,6 +13,7 @@ schema = "anthropic-messages"
 endpoint_readin.builtins = ["lowercase_tool_schema_types"]
 before_upstream.builtins = ["inject_missing_tool_results"]
 
+# tranforms.* is unused if which is un-referenced in any model or section
 [transforms.minimax_compat]
 schema = "openai-completions"
 before_upstream.ops = [
