@@ -20,6 +20,42 @@ One-page cheat sheet. For design rationale see `design_request_transform_hooks.m
 
 **Header transforms** are supported only on `before_upstream` and `response_egress`. A `headers` block under any other hook is a TypeScript type error.
 
+### Two independent axes
+
+Transforms operate on **two orthogonal axes**. Conflating them is the most common source of confusion:
+
+- **Axis 1 — Lifecycle (when a hook fires, what it can observe)** — see the table below.
+- **Axis 2 — Declaration scope (which sets attach to a route)** — see [Named sets and defaults](#named-sets-and-defaults).
+
+A hook's lifecycle stage does **not** restrict which scopes its enclosing set can be attached at. Every attached set's declared hooks all fire at their stage, regardless of whether the set was attached per-upstream-mode, per-section, or per-model entry.
+
+#### Axis 1 — lifecycle context per hook
+
+What each hook can observe and branch on at its point in the pipeline:
+
+| Hook | `route` | `upstreamMode` | Body schema | Can branch on target? |
+|------|:---:|:---:|:---:|:---:|
+| `request_ingress` | — | — | client | **no** (target-agnostic) |
+| `before_conversion` | yes | yes | client | yes |
+| `before_upstream` | yes | yes | upstream | yes |
+| `after_upstream` | yes | yes | upstream response | yes |
+| `response_egress` | yes | yes | client response | yes |
+
+`request_ingress` is the only hook that runs **before** routing — it cannot read `route.targetUrl`, `route.upstreamMode`, or any resolved target field, and the same transformed body propagates to whichever handler is dispatched. The other four run inside (or after) the chosen handler and carry the resolved `route` in `HookContext`, so ops/built-ins can branch on `upstreamMode`, `section`, or other route fields.
+
+This is the only sense in which hooks differ by "scope": `request_ingress` is target-agnostic (pre-routing); the rest can observe the resolved target.
+
+### `before_conversion` vs `before_upstream` — when to use which
+
+Both are request-side hooks, but the **format converter runs between them**, so they see different body shapes:
+
+- **`before_conversion`** — sees the body in the **client's protocol** (e.g. the raw Anthropic or Gemini request the client sent). `route` and `upstreamMode` are already resolved, so rules can branch on the target. Use it for client-schema tweaks that the converter would otherwise mangle or drop — e.g. renaming a field that only exists in the client's wire format, or fixing a client-specific quirk before translation.
+- **`before_upstream`** — sees the body in the **upstream's protocol** (the post-conversion shape that will be sent to `fetch()`). Use it for anything that must match what the upstream actually receives — e.g. `max_tokens → max_completion_tokens` (an upstream-schema field), header injection, or built-ins like `inject_missing_tool_results` that operate on the converted shape.
+
+**Rule of thumb**: if the field exists on the client's request as-sent, use `before_conversion`; if it only exists after format conversion (or is an upstream-only field), use `before_upstream`. When in doubt, use `before_upstream` — it's the primary seam and the body most rules target.
+
+A field can exist at both seams with different names (e.g. Anthropic `max_tokens` → OpenAI `max_completion_tokens` after conversion); pick the seam whose shape your `path` matches.
+
 ---
 
 ## Tier-1 ops — shallow field rewrites
@@ -90,9 +126,9 @@ before_upstream.ops = [
 
 Transform sets are defined under `[transforms.<name>]` and referenced by name.
 
-### Default resolution order
+### Axis 2 — declaration scope (which sets attach)
 
-For every route, the effective transform list is:
+For every route, the effective transform list is resolved by merging three declaration scopes:
 
 ```
 mode-defaults  →  sector-defaults  →  entry transforms
@@ -101,6 +137,8 @@ mode-defaults  →  sector-defaults  →  entry transforms
 - **mode-defaults**: `[transform_defaults]` — a map of `upstream_mode → [set_names]`. Applied to every route using that upstream mode.
 - **sector-defaults**: `transforms = "..."` on a `[models.<section>]` category block.
 - **entry transforms**: `transforms = "..."` in the model entry itself (5th element of the positional array, or `transforms` key in the inline-table form).
+
+These scopes attach **whole transform sets**, not individual hooks. A single set attached at any scope can declare `request_ingress`, `before_conversion`, `before_upstream`, `after_upstream`, and `response_egress` slots simultaneously — all of them fire at their lifecycle stage (Axis 1). There is no mechanism to attach, say, a set's `before_upstream` ops per-model while attaching its `request_ingress` ops globally; the granularity is the set, not the hook.
 
 Multiple names are comma-separated strings: `transforms = "set_a,set_b"`. List form (`transforms = ["a","b"]`) is **not** supported — use CSV.
 
