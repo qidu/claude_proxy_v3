@@ -10,7 +10,7 @@ before_upstream.ops = [
 
 [transforms.deepseek_v4_anthropic_compat]
 schema = "anthropic-messages"
-endpoint_readin.builtins = ["lowercase_tool_schema_types"]
+request_ingress.builtins = ["lowercase_tool_schema_types"]
 before_upstream.builtins = ["inject_missing_tool_results"]
 
 # tranforms.* is unused if which is un-referenced in any model or section
@@ -28,7 +28,7 @@ before_upstream.ops = [
 
 [transforms.writeout_marker]
 schema = "openai-completions"
-endpoint_writeout.ops = [
+response_egress.ops = [
   {op = "set", path = "$response.id", value = "step12_response_path_active"},
 ]
 

@@ -1023,7 +1023,7 @@ export default {
       let upstreamMode: string | undefined;
       let forceStreaming: boolean = false;
       // Route resolved in the passthrough/fixed path, threaded into the final
-      // runAttempt so its endpoint_readin/writeout transforms fire (this path
+      // runAttempt so its request_ingress/response_egress transforms fire (this path
       // bypasses compositeAttempts/buildRouteAttempt which set route otherwise).
       let outerRoute: ModelRouteConfig | undefined;
       let isGeminiBypass = false;
@@ -2026,13 +2026,13 @@ export default {
         let attemptAuthHeaders = attempt.authHeaders;
         const attemptRoute = attempt.route;
 
-        // endpoint_readin: apply transforms to the inbound body before any handler sees it.
+        // request_ingress: apply transforms to the inbound body before any handler sees it.
         if (attemptRoute && attemptRoute.transforms.length > 0) {
           const bodyText = await attemptRequest.clone().text();
           let parsedBody: Record<string, unknown>;
           try { parsedBody = JSON.parse(bodyText); } catch { parsedBody = {}; }
           const hookCtx: HookContext = {
-            hook: 'endpoint_readin',
+            hook: 'request_ingress',
             route: attemptRoute,
             upstreamMode: attemptUpstreamMode || 'openai-completions',
             clientModel: (parsedBody.model as string) || attemptModelId || 'unknown',
@@ -2040,7 +2040,7 @@ export default {
             streaming: parsedBody.stream === true,
             logger,
           };
-          const transformed = runHook('endpoint_readin', { body: parsedBody, headers: attemptAuthHeaders }, hookCtx);
+          const transformed = runHook('request_ingress', { body: parsedBody, headers: attemptAuthHeaders }, hookCtx);
           // Builtins/ops mutate `body` in place, so `transformed.body` keeps the
           // same reference as `parsedBody` — an identity check can't detect the
           // change. Always rebuild the request from the (possibly mutated) body.
@@ -2229,12 +2229,12 @@ export default {
           }
         }
 
-        // endpoint_writeout: apply header + body transforms on the response going back to the client.
+        // response_egress: apply header + body transforms on the response going back to the client.
         if (attemptRoute && attemptRoute.transforms.length > 0) {
           // Re-read content-type after any streaming filter pipes applied above.
           const writeoutContentType = response.headers.get('content-type') || '';
           const writeoutCtx: HookContext = {
-            hook: 'endpoint_writeout',
+            hook: 'response_egress',
             route: attemptRoute,
             upstreamMode: attemptUpstreamMode || 'openai-completions',
             clientModel: attemptModelId || 'unknown',
@@ -2273,7 +2273,7 @@ export default {
           // never observe a stale content-encoding from a decompressed body.
           const responseHeaders: Record<string, string> = {};
           sanitizeUpstreamResponseHeaders(response).forEach((v, k) => { responseHeaders[k] = v; });
-          const { headers: transformedHeaders } = runHook('endpoint_writeout', { body: {}, headers: responseHeaders }, writeoutCtx);
+          const { headers: transformedHeaders } = runHook('response_egress', { body: {}, headers: responseHeaders }, writeoutCtx);
           if (transformedHeaders !== responseHeaders) {
             const newHeaders = new Headers(transformedHeaders);
             response = new Response(response.body, { status: response.status, statusText: response.statusText, headers: newHeaders });

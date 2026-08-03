@@ -202,7 +202,7 @@ describe('Tier-2 builtin: lowercase_tool_schema_types', () => {
   const set: TransformSet = {
     name: 'lc_schema',
     schema: 'openai-completions',
-    endpoint_readin: { builtins: ['lowercase_tool_schema_types'] },
+    request_ingress: { builtins: ['lowercase_tool_schema_types'] },
   };
 
   it('lowercases type fields in tool parameters', () => {
@@ -214,7 +214,7 @@ describe('Tier-2 builtin: lowercase_tool_schema_types', () => {
         },
       }],
     };
-    const result = runHook('endpoint_readin', payload(body), makeCtx([set], 'endpoint_readin'));
+    const result = runHook('request_ingress', payload(body), makeCtx([set], 'request_ingress'));
     const params = ((result.body.tools as any)[0]).function.parameters;
     assert.equal(params.type, 'object');
     assert.equal(params.properties.q.type, 'string');
@@ -226,7 +226,7 @@ describe('Tier-2 builtin: lowercase_tool_schema_types', () => {
         input_schema: { type: 'OBJECT', properties: { n: { type: 'INTEGER' } } },
       }],
     };
-    const result = runHook('endpoint_readin', payload(body), makeCtx([set], 'endpoint_readin'));
+    const result = runHook('request_ingress', payload(body), makeCtx([set], 'request_ingress'));
     const schema = ((result.body.tools as any)[0]).input_schema;
     assert.equal(schema.type, 'object');
     assert.equal(schema.properties.n.type, 'integer');
@@ -234,7 +234,7 @@ describe('Tier-2 builtin: lowercase_tool_schema_types', () => {
 
   it('is a no-op when tools is absent', () => {
     const body = { model: 'x' };
-    const result = runHook('endpoint_readin', payload(body), makeCtx([set], 'endpoint_readin'));
+    const result = runHook('request_ingress', payload(body), makeCtx([set], 'request_ingress'));
     assert.equal(result.body['model'], 'x');
   });
 });
@@ -626,16 +626,16 @@ describe('header transforms', () => {
   const set: TransformSet = {
     name: 'hdr_test',
     schema: 'openai-completions',
-    endpoint_writeout: {
+    response_egress: {
       headers: { set: { 'x-proxy': 'v3' }, remove: ['openai-organization'] },
     },
   };
 
   it('sets and removes headers', () => {
     const result = runHook(
-      'endpoint_writeout',
+      'response_egress',
       payload({}, { 'openai-organization': 'org-1', 'content-type': 'application/json' }),
-      makeCtx([set], 'endpoint_writeout'),
+      makeCtx([set], 'response_egress'),
     );
     assert.equal(result.headers['x-proxy'], 'v3');
     assert.equal('openai-organization' in result.headers, false);
@@ -692,18 +692,18 @@ describe('buildEventTransformer', () => {
       schema: 'openai-completions',
       before_upstream: { ops: [{ op: 'remove', path: 'output_config' }] },
     };
-    const ctx = makeCtx([set], 'endpoint_writeout');
-    assert.equal(buildEventTransformer('endpoint_writeout', ctx), null);
+    const ctx = makeCtx([set], 'response_egress');
+    assert.equal(buildEventTransformer('response_egress', ctx), null);
   });
 
   it('returns a transformer when transforms declare the hook', () => {
     const set: TransformSet = {
       name: 'has_writeout',
       schema: 'openai-completions',
-      endpoint_writeout: { ops: [{ op: 'remove', path: 'model' }] },
+      response_egress: { ops: [{ op: 'remove', path: 'model' }] },
     };
-    const ctx = makeCtx([set], 'endpoint_writeout');
-    const xf = buildEventTransformer('endpoint_writeout', ctx);
+    const ctx = makeCtx([set], 'response_egress');
+    const xf = buildEventTransformer('response_egress', ctx);
     assert.ok(xf !== null);
     const result = xf!({ model: 'x', id: '1' }, ctx);
     assert.ok(result !== null);
@@ -814,12 +814,12 @@ describe('applyAfterUpstream', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Step 11 — endpoint_writeout body ops
+// Step 11 — response_egress body ops
 // ---------------------------------------------------------------------------
 
 function makeWriteoutCtx(transforms: TransformSet[]): HookContext {
   return {
-    hook: 'endpoint_writeout',
+    hook: 'response_egress',
     route: makeRoute(transforms),
     upstreamMode: 'openai-completions',
     clientModel: 'test-model',
@@ -834,7 +834,7 @@ describe('applyWriteoutBody', () => {
     const set: TransformSet = {
       name: 'writeout_response_path',
       schema: 'openai-completions',
-      endpoint_writeout: { ops: [{ op: 'set', path: '$response.id', value: 'rewritten-id' }] },
+      response_egress: { ops: [{ op: 'set', path: '$response.id', value: 'rewritten-id' }] },
     };
     const ctx = makeWriteoutCtx([set]);
     const result = await applyWriteoutBody(makeJsonResponse({ id: 'original-id', model: 'x' }), ctx);
@@ -847,7 +847,7 @@ describe('applyWriteoutBody', () => {
     const set: TransformSet = {
       name: 'writeout_response_ops',
       schema: 'openai-completions',
-      endpoint_writeout: {
+      response_egress: {
         ops: [
           { op: 'rename', path: '$response.id', to: 'request_id' },
           { op: 'remove', path: '$response.model' },
@@ -863,7 +863,7 @@ describe('applyWriteoutBody', () => {
     assert.equal('$response.id' in body, false);
   });
 
-  it('fast-path: returns the same Response object when no transforms declare endpoint_writeout', async () => {
+  it('fast-path: returns the same Response object when no transforms declare response_egress', async () => {
     // declared at a different hook — should NOT trigger writeout body ops
     const set: TransformSet = {
       name: 'before_only',
@@ -887,7 +887,7 @@ describe('applyWriteoutBody', () => {
     const set: TransformSet = {
       name: 'writeout_strip_model',
       schema: 'openai-completions',
-      endpoint_writeout: { ops: [{ op: 'remove', path: 'model' }] },
+      response_egress: { ops: [{ op: 'remove', path: 'model' }] },
     };
     const ctx = makeWriteoutCtx([set]);
     const original = makeJsonResponse({ id: '1', model: 'secret', choices: [] });
@@ -904,7 +904,7 @@ describe('applyWriteoutBody', () => {
     const set: TransformSet = {
       name: 'noop',
       schema: 'openai-completions',
-      endpoint_writeout: { ops: [] },
+      response_egress: { ops: [] },
     };
     const ctx = makeWriteoutCtx([set]);
     const original = new Response(JSON.stringify({ id: '1' }), {
@@ -920,7 +920,7 @@ describe('applyWriteoutBody', () => {
     const set: TransformSet = {
       name: 'writeout_remove',
       schema: 'openai-completions',
-      endpoint_writeout: { ops: [{ op: 'remove', path: 'model' }] },
+      response_egress: { ops: [{ op: 'remove', path: 'model' }] },
     };
     const ctx = makeWriteoutCtx([set]);
     const sseBody = 'data: {"type":"message_start"}\n\ndata: [DONE]\n\n';
@@ -933,7 +933,7 @@ describe('applyWriteoutBody', () => {
     const set: TransformSet = {
       name: 'writeout_remove',
       schema: 'openai-completions',
-      endpoint_writeout: { ops: [{ op: 'remove', path: 'model' }] },
+      response_egress: { ops: [{ op: 'remove', path: 'model' }] },
     };
     const ctx = makeWriteoutCtx([set]);
     const original = new Response('not json {{{', { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -942,16 +942,16 @@ describe('applyWriteoutBody', () => {
     assert.equal(text, 'not json {{{');
   });
 
-  it('folds left-to-right across multiple sets declared at endpoint_writeout', async () => {
+  it('folds left-to-right across multiple sets declared at response_egress', async () => {
     const a: TransformSet = {
       name: 'a_rename',
       schema: 'openai-completions',
-      endpoint_writeout: { ops: [{ op: 'rename', path: 'a', to: 'b' }] },
+      response_egress: { ops: [{ op: 'rename', path: 'a', to: 'b' }] },
     };
     const b: TransformSet = {
       name: 'b_remove',
       schema: 'openai-completions',
-      endpoint_writeout: { ops: [{ op: 'remove', path: 'b' }] },
+      response_egress: { ops: [{ op: 'remove', path: 'b' }] },
     };
     const ctx = makeWriteoutCtx([a, b]);
     const original = makeJsonResponse({ a: 1, c: 2 });
@@ -963,7 +963,7 @@ describe('applyWriteoutBody', () => {
 });
 
 describe('pipeEventTransformer (writeout SSE)', () => {
-  it('fast-path: returns null when no transforms declare endpoint_writeout', () => {
+  it('fast-path: returns null when no transforms declare response_egress', () => {
     const set: TransformSet = {
       name: 'before_only',
       schema: 'openai-completions',
@@ -981,7 +981,7 @@ describe('pipeEventTransformer (writeout SSE)', () => {
     const set: TransformSet = {
       name: 'writeout_rename',
       schema: 'openai-completions',
-      endpoint_writeout: { ops: [{ op: 'rename', path: 'a', to: 'b' }] },
+      response_egress: { ops: [{ op: 'rename', path: 'a', to: 'b' }] },
     };
     const ctx = makeWriteoutCtx([set]);
     const input = 'data: {"a":1,"x":"y"}\n\ndata: [DONE]\n\n';
@@ -1007,10 +1007,10 @@ describe('pipeEventTransformer (writeout SSE)', () => {
     const set: TransformSet = {
       name: 'noop_set',
       schema: 'openai-completions',
-      endpoint_writeout: { ops: [{ op: 'set', path: 'kept', value: 1 }] },
+      response_egress: { ops: [{ op: 'set', path: 'kept', value: 1 }] },
     };
     const ctx = makeWriteoutCtx([set]);
-    const transformer = buildEventTransformer('endpoint_writeout', ctx);
+    const transformer = buildEventTransformer('response_egress', ctx);
     assert.ok(transformer !== null);
     const dropped = transformer!({ a: 1 }, ctx); // not null => not dropped
     assert.notEqual(dropped, null);
@@ -1020,7 +1020,7 @@ describe('pipeEventTransformer (writeout SSE)', () => {
     const set: TransformSet = {
       name: 'writeout_set',
       schema: 'openai-completions',
-      endpoint_writeout: { ops: [{ op: 'set', path: 'flag', value: true }] },
+      response_egress: { ops: [{ op: 'set', path: 'flag', value: true }] },
     };
     const ctx = makeWriteoutCtx([set]);
     const input = 'data: {"x":1}\n\ndata: {"x":2}\n\n';
@@ -1038,17 +1038,17 @@ describe('pipeEventTransformer (writeout SSE)', () => {
 
 describe('hasHookOps', () => {
   it('returns false for empty transform list', () => {
-    assert.equal(hasHookOps('endpoint_writeout', undefined), false);
-    assert.equal(hasHookOps('endpoint_writeout', []), false);
+    assert.equal(hasHookOps('response_egress', undefined), false);
+    assert.equal(hasHookOps('response_egress', []), false);
   });
   it('returns true when any set declares the hook', () => {
     const a: TransformSet = { name: 'a', schema: 'openai-completions' }; // no slot
     const b: TransformSet = {
       name: 'b',
       schema: 'openai-completions',
-      endpoint_writeout: { ops: [] },
+      response_egress: { ops: [] },
     };
-    assert.equal(hasHookOps('endpoint_writeout', [a, b]), true);
+    assert.equal(hasHookOps('response_egress', [a, b]), true);
   });
   it('returns true when checking other hooks too', () => {
     const set: TransformSet = {
@@ -1057,7 +1057,7 @@ describe('hasHookOps', () => {
       before_upstream: { ops: [] },
     };
     assert.equal(hasHookOps('before_upstream', [set]), true);
-    assert.equal(hasHookOps('endpoint_writeout', [set]), false);
+    assert.equal(hasHookOps('response_egress', [set]), false);
   });
 });
 
@@ -1074,7 +1074,7 @@ describe('engine: nested-path safety (no literal-bracketed keys)', () => {
     const set: TransformSet = {
       name: 'evil_nested',
       schema: 'openai-completions',
-      endpoint_writeout: { ops: [{ op: 'set', path: '$response.choices[0].message.content', value: 'pirate' }] },
+      response_egress: { ops: [{ op: 'set', path: '$response.choices[0].message.content', value: 'pirate' }] },
     };
     const ctx = makeWriteoutCtx([set]);
     const original = makeJsonResponse({ id: 'ok', choices: [{ message: { content: 'real' } }] });

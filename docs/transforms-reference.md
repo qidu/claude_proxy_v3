@@ -8,17 +8,17 @@ One-page cheat sheet. For design rationale see `design_request_transform_hooks.m
 
 | Hook | Alias | Fires when | Schema seen | Side |
 |------|-------|-----------|-------------|------|
-| `endpoint_readin` | `request_ingress` | After JSON parse, before routing | client | request |
+| `request_ingress` | `endpoint_readin` | After JSON parse, before routing | client | request |
 | `before_conversion` | — | After routing, before format converter | client | request |
 | `before_upstream` | — | After format conversion, before `fetch()` | upstream | request |
 | `after_upstream` | — | After `fetch()`, before `!ok` check | upstream | response |
-| `endpoint_writeout` | `response_egress` | Before `Response` returned to client | client | response |
+| `response_egress` | `endpoint_writeout` | Before `Response` returned to client | client | response |
 
 **Ordering**: hooks fire in the table order above. Within a hook, declared transform sets run left-to-right (mode-defaults → sector-defaults → entry transforms). Within each set, Tier-2 built-ins run first, then Tier-1 ops in declared order.
 
-**Aliases**: `request_ingress` and `response_egress` are accepted everywhere `endpoint_readin` / `endpoint_writeout` appear in `proxy_config.toml`. They are normalized to the canonical names at config load time.
+**Aliases**: `endpoint_readin` and `endpoint_writeout` are accepted everywhere `request_ingress` / `response_egress` appear in `proxy_config.toml` (legacy names). They are normalized to the canonical names at config load time.
 
-**Header transforms** are supported only on `before_upstream` and `endpoint_writeout`. A `headers` block under any other hook is a TypeScript type error.
+**Header transforms** are supported only on `before_upstream` and `response_egress`. A `headers` block under any other hook is a TypeScript type error.
 
 ---
 
@@ -76,7 +76,7 @@ Built-ins are declared in the `builtins` list of a hook slot. They run **before*
 [transforms.deepseek_compat]
 schema = "openai-completions"
 
-endpoint_readin.builtins = ["lowercase_tool_schema_types"]
+request_ingress.builtins = ["lowercase_tool_schema_types"]
 
 before_upstream.builtins = ["recover_tool_message_name"]
 before_upstream.ops = [
@@ -128,7 +128,7 @@ Or inline-table form (equivalent):
 To see which transforms resolve for a route, run the server with `LOG_LEVEL=debug`. One line per request is emitted showing the resolved set names and per-hook op/builtin counts:
 
 ```
-[req_…] [DEBUG] transforms: endpoint_readin=[deepseek_compat:b=1] before_upstream=[deepseek_compat:b=1,ops=1]
+[req_…] [DEBUG] transforms: request_ingress=[deepseek_compat:b=1] before_upstream=[deepseek_compat:b=1,ops=1]
 ```
 
 `b=N` = N built-ins, `ops=N` = N Tier-1 ops. Only hooks with at least one op or builtin are listed.

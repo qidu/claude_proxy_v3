@@ -889,11 +889,11 @@ entry (renames `max_completion_tokens` back to `max_tokens`).
 | Field | Values | Purpose |
 |---|---|---|
 | `schema` | `openai-completions` \| `anthropic-messages` \| `openai-responses` \| `gemini-generatecontent` | Schema the op paths resolve against. Required per set. |
-| `endpoint_readin.builtins` / `.ops` | see below | Runs after inbound parse, before routing. Client schema. |
+| `request_ingress.builtins` / `.ops` | see below | Runs after inbound parse, before routing. Client schema. |
 | `before_conversion.builtins` / `.ops` | see below | Runs in-handler after routing, before format conversion. Client schema. |
 | `before_upstream.builtins` / `.ops` / `.headers` | see below | Runs just before the upstream fetch. Upstream schema. **Primary A/B seam.** |
 | `after_upstream.builtins` / `.ops` | see below | Runs after upstream responds, before response conversion. |
-| `endpoint_writeout.builtins` / `.ops` / `.headers` | see below | Runs before the client response is written. Client response schema. |
+| `response_egress.builtins` / `.ops` / `.headers` | see below | Runs before the client response is written. Client response schema. |
 
 **Tier-1 ops** (generic field rewrites, declared under a hook's `.ops` array):
 
@@ -905,7 +905,9 @@ entry (renames `max_completion_tokens` back to `max_tokens`).
 | `{op="remove", path="output_config"}` | Delete a field. |
 | `{op="map_value", path="messages[role=assistant].content", when_sibling="tool_calls", from="", to=null}` | Replace a specific value (optional `when_sibling` guard). |
 
-Paths: bare field name for top-level (`max_tokens`); `messages[].field` for all messages; `messages[role=X].field` for role-filtered; `$response.field` for response-body fields (writeout/after_upstream hooks).
+Paths: bare field name for top-level (`max_tokens`); `messages[].field` for all messages; `messages[role=X].field` for role-filtered; `$response.field` for response-body fields (`response_egress`/`after_upstream` hooks).
+
+> **Legacy hook names**: `endpoint_readin` and `endpoint_writeout` are accepted as backwards-compatible aliases for `request_ingress` and `response_egress` respectively. They are normalized to the canonical names at config load time. New configs should use the canonical names.
 
 **Tier-2 builtins** (deep/cross-message logic, declared under a hook's `.builtins` array):
 
@@ -926,13 +928,13 @@ HTTP 400: Invalid schema for function 'glob_tool':
 "STRING" is not valid under any of the schemas listed in the 'anyOf' keyword
 ```
 
-Fix by wiring `lowercase_tool_schema_types` at `endpoint_readin` and attaching the set to
+Fix by wiring `lowercase_tool_schema_types` at `request_ingress` and attaching the set to
 the model entry:
 
 ```toml
 [transforms.deepseek_v4_anthropic_compat]
 schema = "anthropic-messages"
-endpoint_readin.builtins = ["lowercase_tool_schema_types"]
+request_ingress.builtins = ["lowercase_tool_schema_types"]
 before_upstream.builtins  = ["inject_missing_tool_results"]
 
 [models.free]

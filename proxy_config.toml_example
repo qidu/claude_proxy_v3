@@ -289,11 +289,11 @@ base_url = "https://openrouter.ai/api"
 # openai-responses | gemini-generatecontent) and wires ops/builtins to one or
 # more hook points in the pipeline:
 #
-#   endpoint_readin   — immediately after the client request body is parsed
+#   request_ingress   — immediately after the client request body is parsed
 #   before_conversion — before protocol conversion (e.g. OpenAI → Anthropic)
 #   before_upstream   — just before the HTTP call to the upstream (supports headers)
 #   after_upstream    — immediately after the upstream response arrives (non-streaming)
-#   endpoint_writeout — just before the response is written to the client (supports headers)
+#   response_egress   — just before the response is written to the client (supports headers)
 #
 # Tier-1 ops (generic field rewrites):
 #   rename     — rename a top-level field or per-message field
@@ -353,7 +353,7 @@ base_url = "https://openrouter.ai/api"
 # Example: rewrite a response-side field before it reaches the client.
 # [transforms.mask_model_id]
 # schema = "openai-completions"
-# endpoint_writeout.ops = [{op = "set", path = "$response.model", value = "proxy-model"}]
+# response_egress.ops = [{op = "set", path = "$response.model", value = "proxy-model"}]
 
 # Example: attach transforms to a specific model entry.
 # In [models.gpt], add transforms = "strict_tools" to an entry:
@@ -380,7 +380,7 @@ base_url = "https://openrouter.ai/api"
 #   - rewrite assistant content "" → null when tool_calls present
 # [transforms.deepseek_compat]
 # schema = "openai-completions"
-# endpoint_readin.builtins = ["lowercase_tool_schema_types"]
+# request_ingress.builtins = ["lowercase_tool_schema_types"]
 # before_upstream.builtins = ["recover_tool_message_name"]
 # before_upstream.ops = [
 #   {op = "map_value", path = "messages[role=assistant].content", when_sibling = "tool_calls", from = "", to = null},

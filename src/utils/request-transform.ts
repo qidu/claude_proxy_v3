@@ -18,11 +18,11 @@ import { sanitizeUpstreamResponseHeaders } from './routing.js';
 // ---------------------------------------------------------------------------
 
 export type HookPoint =
-  | 'endpoint_readin'
+  | 'request_ingress'
   | 'before_conversion'
   | 'before_upstream'
   | 'after_upstream'
-  | 'endpoint_writeout';
+  | 'response_egress';
 
 export interface HookContext {
   hook: HookPoint;
@@ -32,7 +32,7 @@ export interface HookContext {
   requestId: string;
   streaming: boolean;
   logger: Logger;
-  /** Upstream HTTP status — set on after_upstream / endpoint_writeout only. */
+  /** Upstream HTTP status — set on after_upstream / response_egress only. */
   status?: number;
 }
 
@@ -376,7 +376,7 @@ function applyTransformSet(
     applyOpToBody(op, body);
   }
 
-  // Header transforms (before_upstream / endpoint_writeout only)
+  // Header transforms (before_upstream / response_egress only)
   const headerSpec = (slot as { headers?: { set?: Record<string, string>; remove?: string[] } }).headers;
   headers = applyHeaderTransforms(headers, headerSpec);
 
@@ -395,7 +395,7 @@ function applyTransformSet(
  */
 export function formatTransformsDebug(transforms: TransformSet[]): string {
   if (!transforms || transforms.length === 0) return '';
-  const HOOKS: HookPoint[] = ['endpoint_readin', 'before_conversion', 'before_upstream', 'after_upstream', 'endpoint_writeout'];
+  const HOOKS: HookPoint[] = ['request_ingress', 'before_conversion', 'before_upstream', 'after_upstream', 'response_egress'];
   const parts: string[] = [];
   for (const hook of HOOKS) {
     const activeSets = transforms.filter(s => s[hook] !== undefined);
@@ -524,9 +524,9 @@ export function hasHookOps(hook: HookPoint, transforms: TransformSet[] | undefin
 }
 
 /**
- * Apply `endpoint_writeout` body transforms to a final client Response.
+ * Apply `response_egress` body transforms to a final client Response.
  *
- * - Fast-path: when no transforms declare `endpoint_writeout` ops, returns the
+ * - Fast-path: when no transforms declare `response_egress` ops, returns the
  *   original Response unchanged (no buffering).
  * - Buffered JSON: buffers the body, applies ops, returns a new Response with
  *   the rewritten JSON body (status/headers preserved).
@@ -541,7 +541,7 @@ export async function applyWriteoutBody(
   response: Response,
   ctx: HookContext,
 ): Promise<Response> {
-  if (!hasHookOps('endpoint_writeout', ctx.route.transforms)) return response;
+  if (!hasHookOps('response_egress', ctx.route.transforms)) return response;
 
   const contentType = response.headers.get('content-type') || '';
   if (!contentType.includes('application/json')) return response;
@@ -563,10 +563,10 @@ export async function applyWriteoutBody(
   const hookCtx: HookContext = { ...ctx, status: response.status };
   let headers: Record<string, string> = {};
   for (const set of ctx.route.transforms!) {
-    const slot = set['endpoint_writeout'];
+    const slot = set['response_egress'];
     if (!slot) continue;
-    ({ body, headers } = applyTransformSet(set, 'endpoint_writeout', body, headers));
-    void headers; // header ops on endpoint_writeout run in index.ts central wrap
+    ({ body, headers } = applyTransformSet(set, 'response_egress', body, headers));
+    void headers; // header ops on response_egress run in index.ts central wrap
   }
   void hookCtx;
 
@@ -582,7 +582,7 @@ export async function applyWriteoutBody(
  * writeout hook's per-event transformer before being written to the new stream.
  *
  * Returns the original stream body unchanged when no transforms declare
- * `endpoint_writeout` ops (fast path). Events whose transformer returns null are
+ * `response_egress` ops (fast path). Events whose transformer returns null are
  * dropped. Other events are re-emitted as `data: <json>\n\n`. Non-data lines and
  * blank-line-terminated comments are passed through verbatim.
  */
@@ -590,7 +590,7 @@ export function pipeEventTransformer(
   responseBody: ReadableStream<Uint8Array>,
   ctx: HookContext,
 ): ReadableStream<Uint8Array> | null {
-  const transformer = buildEventTransformer('endpoint_writeout', ctx);
+  const transformer = buildEventTransformer('response_egress', ctx);
   if (!transformer) return null;
 
   const decoder = new TextDecoder();

@@ -19,11 +19,11 @@ hook points in the proxy lifecycle. Per-model transform rules live in `proxy_con
 
 | Hook | Fires | Body shape | Where wired |
 |------|-------|-----------|-------------|
-| `endpoint_readin` | after inbound JSON parse, before routing | client schema | `src/index.ts` — centrally, once |
+| `request_ingress` | after inbound JSON parse, before routing | client schema | `src/index.ts` — centrally, once |
 | `before_conversion` | inside handler, after routing, before format conversion | client schema | per-handler |
 | `before_upstream` | inside handler, after format conversion, before `fetch` | upstream schema | per-handler |
 | `after_upstream` | after `fetch` returns, before `!response.ok` check | upstream response schema | per-handler |
-| `endpoint_writeout` | before returning `Response` to client | client response schema | `src/index.ts` (central, all four sub-steps) |
+| `response_egress` | before returning `Response` to client | client response schema | `src/index.ts` (central, all four sub-steps) |
 
 ### Two-tier transform engine
 
@@ -59,7 +59,7 @@ declaration order. A later op sees results of earlier ops.
 | `src/utils/request-transform.ts` | Engine: `runHook`, `applyAfterUpstream`, `buildEventTransformer`, built-in implementations |
 | `src/utils/config-loader.ts` | Types (`TransformSet`, `TransformOp`, `BuiltinName`), parsing (`parseTransformOpsInline`), validation (`validateTransformSet`, `validateAllTransforms`), resolution (`resolveTransforms`) |
 | `proxy_config.toml` | Declared transform sets: `deepseek_compat`, `minimax_compat`, `max_tokens_rename`; `[transform_defaults]` binding mode defaults |
-| `src/index.ts` | `endpoint_readin` and `endpoint_writeout` (all four sub-steps: streaming flag, body for JSON, SSE event transformer for streams, headers) applied centrally in `runAttempt` |
+| `src/index.ts` | `request_ingress` and `response_egress` (all four sub-steps: streaming flag, body for JSON, SSE event transformer for streams, headers) applied centrally in `runAttempt` |
 | `src/handlers/*.ts` | `before_conversion`, `before_upstream`, `after_upstream` wired per-handler |
 | `tests/unit/request-transform.test.ts` | Engine unit tests |
 | `tests/unit/transforms-config.test.ts` | Config parsing and validation tests |
@@ -71,7 +71,7 @@ declaration order. A later op sees results of earlier ops.
 ```toml
 [transforms.deepseek_compat]
 schema = "openai-completions"
-endpoint_readin.builtins = ["lowercase_tool_schema_types"]
+request_ingress.builtins = ["lowercase_tool_schema_types"]
 before_upstream.builtins = ["recover_tool_message_name"]
 before_upstream.ops = [
   { op = "map_value", path = "messages[role=assistant].content", when_sibling = "tool_calls", from = "", to = null },
@@ -139,7 +139,7 @@ Wired at every non-streaming fetch site:
 
 ---
 
-## `endpoint_writeout` body ops (Step 11)
+## `response_egress` body ops (Step 11)
 
 Closes the deferred gap from the original design. `applyWriteoutBody`
 (mirrors `applyAfterUpstream`, but on the client-schema response) and

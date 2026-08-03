@@ -206,32 +206,32 @@ outbound Response
 
 | Hook | Fires | Body shape | Sees | Use for |
 |------|-------|-----------|------|---------|
-| **`endpoint_readin`** | right after inbound parse, **before** route/alias resolution | *client* schema | raw client body + headers (no route yet) | normalize client quirks (uppercase JSON-Schema types from antigravity), strip client-only fields |
+| **`request_ingress`** | right after inbound parse, **before** route/alias resolution | *client* schema | raw client body + headers (no route yet) | normalize client quirks (uppercase JSON-Schema types from antigravity), strip client-only fields |
 | **`before_conversion`** | inside handler, **after** dispatch/routing, **before** the format converter | *client* schema | client body + **resolved `route` / `upstreamMode`** | client-schema tweaks that need to know the target (e.g. drop a field only for a specific upstream, before it gets converted/renamed) |
 | **`before_upstream`** | inside handler, **after** format conversion, **immediately before** `fetch` | *upstream* schema | final upstream body + upstream headers + resolved `route` | the A/B differentiators: `content:null`, tool-name recovery, `max_tokens`→`max_completion_tokens`, header set/remove |
 | **`after_upstream`** | **after** `fetch` returns, **before** response conversion | *upstream* response schema | upstream body/stream + status | fix upstream response quirks, inject/normalize fields, remap error bodies |
-| **`endpoint_writeout`** | just before returning `Response` to client | *client* response schema | final client body/stream + response headers | **user-facing response rewriting**: reshape body fields, `map_value`, strip provider headers, add `x-*` metadata |
+| **`response_egress`** | just before returning `Response` to client | *client* response schema | final client body/stream + response headers | **user-facing response rewriting**: reshape body fields, `map_value`, strip provider headers, add `x-*` metadata |
 
 #### Why these five (and why the split)
 
-- **`endpoint_readin` vs `before_conversion`** — both see *client-schema* body, but `endpoint_readin` runs **centrally before routing** (no `route` yet) while `before_conversion` runs **in-handler after routing** (`route` / `upstreamMode` known). Use readin for target-agnostic client normalization; use before_conversion when the client-schema tweak must depend on which upstream the request is headed to.
+- **`request_ingress` vs `before_conversion`** — both see *client-schema* body, but `request_ingress` runs **centrally before routing** (no `route` yet) while `before_conversion` runs **in-handler after routing** (`route` / `upstreamMode` known). Use request_ingress for target-agnostic client normalization; use before_conversion when the client-schema tweak must depend on which upstream the request is headed to.
 - **`before_conversion` vs `before_upstream`** — the format converter runs *between* them. A rule like "lowercase schema types" is a *client-schema* concern (before_conversion); "`content:"" → null`" is an *upstream-schema* concern that only exists after conversion (before_upstream). Collapsing them would force rules to guess which shape they operate on — exactly today's ambiguity.
 - **`before_upstream` is the primary A/B seam.** A and B share endpoint + `upstream_mode`, so they reach the *same* handler and the *same* converted body. They differ **only** by the transform set attached to their `route` — resolved at `getModelRouteConfig` and applied here.
 
 ### 5.3 Where each hook physically attaches
 
-- `endpoint_readin` — `index.ts` ~line 1078, once, right after `JSON.parse(bodyText)`. Central, before dispatch.
+- `request_ingress` — `index.ts` ~line 1078, once, right after `JSON.parse(bodyText)`. Central, before dispatch.
 - `before_conversion` — inside each handler, right after entry / before the `completionsToXxxBody` call (e.g. `chat-completions.ts:119`, `:225`). Per-handler because it needs the resolved `route` but must run before conversion.
 - `before_upstream` — inside each handler, at the point just before `fetch` (e.g. `chat-completions.ts:128`, `:228`, `:251`; `messages.ts` upstream fetch; etc.). This is per-handler because the converted body only exists there.
 - `after_upstream` — inside each handler, right after `const upstreamResponse = await fetch(...)` and **before** the `if (!response.ok)` early-return, so it fires on both success and error responses (open-question #7). `ctx.status` distinguishes them.
-- `endpoint_writeout` — **split (open-question #5 = both)**: header ops run centrally in the `index.ts` dispatch wrap (~line 2096), once for every handler; body ops run in-handler (buffered JSON at `return new Response(...)`, streaming via per-event `transformEvent` on the SSE loop, `chat-completions.ts:166`). One declared set, two execution sites.
+- `response_egress` — **split (open-question #5 = both)**: header ops run centrally in the `index.ts` dispatch wrap (~line 2096), once for every handler; body ops run in-handler (buffered JSON at `return new Response(...)`, streaming via per-event `transformEvent` on the SSE loop, `chat-completions.ts:166`). One declared set, two execution sites.
 
-**Streaming caveat:** `after_upstream` / `endpoint_writeout` must support the SSE case. For streams, a body transform is a **per-event** callback (fired on each parsed SSE event, like the existing loop at `chat-completions.ts:166`), not a whole-body function. Header transforms run once. The hook signature must distinguish `transformBody` (buffered) from `transformEvent` (streamed).
+**Streaming caveat:** `after_upstream` / `response_egress` must support the SSE case. For streams, a body transform is a **per-event** callback (fired on each parsed SSE event, like the existing loop at `chat-completions.ts:166`), not a whole-body function. Header transforms run once. The hook signature must distinguish `transformBody` (buffered) from `transformEvent` (streamed).
 
 ### 5.4 Signature
 
 ```ts
-type HookPoint = 'endpoint_readin' | 'before_conversion' | 'before_upstream' | 'after_upstream' | 'endpoint_writeout';
+type HookPoint = 'request_ingress' | 'before_conversion' | 'before_upstream' | 'after_upstream' | 'response_egress';
 
 interface HookContext {
   hook: HookPoint;
@@ -241,7 +241,7 @@ interface HookContext {
   requestId: string;
   streaming: boolean;
   logger: Logger;
-  status?: number;              // upstream HTTP status; set on after_upstream / endpoint_writeout only.
+  status?: number;              // upstream HTTP status; set on after_upstream / response_egress only.
                                 // non-2xx ⇒ body is a provider error shape, not the success schema (see §6 #7)
 }
 
@@ -260,13 +260,13 @@ runs (and therefore which schema shape the path resolves against — client vs u
 [transforms.deepseek_compat]
 schema = "openai-completions"
 
-endpoint_readin.builtins = [ "lowercase_tool_schema_types" ]   # client-schema: before conversion
+request_ingress.builtins = [ "lowercase_tool_schema_types" ]   # client-schema: before conversion
 before_upstream.builtins = [ "recover_tool_message_name" ]     # upstream-schema: just before fetch
 before_upstream.ops = [
   { op = "map_value", path = "messages[role=assistant].content", when_sibling = "tool_calls", from = "", to = null },
   { op = "rename",    path = "max_tokens", to = "max_completion_tokens" },
 ]
-endpoint_writeout.headers = { remove = [ "openai-organization" ] }
+response_egress.headers = { remove = [ "openai-organization" ] }
 ```
 
 The engine resolves `route.transforms` → a `{ [hook]: { ops, builtins } }` map and a single dispatcher `runHook(hook, payload, ctx)` is called at each of the five seams.
@@ -277,9 +277,9 @@ The engine resolves `route.transforms` → a `{ [hook]: { ops, builtins } }` map
 
 ### Transform layer
 1. **Response transforms too?** **DECIDED: yes, in scope for v1.** The two hooks form request/response pairs:
-   - request: `endpoint_readin` (client schema) → `before_upstream` (upstream schema)
-   - response: `after_upstream` (upstream schema) → **`endpoint_writeout`** (client schema — the **user-facing response-rewriting hook**)
-   `endpoint_writeout` is where users reshape the response the client finally sees (strip/inject fields & headers, rename, `map_value`), operating on the client-schema response after any format conversion. `after_upstream` handles upstream-schema response quirks before conversion.
+   - request: `request_ingress` (client schema) → `before_upstream` (upstream schema)
+   - response: `after_upstream` (upstream schema) → **`response_egress`** (client schema — the **user-facing response-rewriting hook**)
+   `response_egress` is where users reshape the response the client finally sees (strip/inject fields & headers, rename, `map_value`), operating on the client-schema response after any format conversion. `after_upstream` handles upstream-schema response quirks before conversion.
 2. **Ordering vs `upstream_mode` conversion** — **DECIDED (confirmed).** `before_upstream` is the sole *upstream-schema* request seam: it runs *after* format conversion (`completionsToClaudeBody`, etc.) so ops operate on the final upstream body. The pre-conversion need is covered by `before_conversion` (client-schema, in-handler, post-routing — added in #6), so no additional hook is required.
 3. **`max_tokens` mapping** — **DECIDED: fold it in.** Today `routing.ts:305-346` is an *inverted* rule: for `openai-completions`/`openai-responses` upstreams it renames `max_tokens`→`max_completion_tokens` for **everyone except** `api.qnaigc.com` (hostname `includes` check). Migration:
    - The `rename max_tokens → max_completion_tokens` `before_upstream` op becomes the **default transform bound to the `openai-completions` and `openai-responses` upstream modes** (a mode-level default transform set, so no per-model config needed).
@@ -290,8 +290,8 @@ The engine resolves `route.transforms` → a `{ [hook]: { ops, builtins } }` map
    **Sub-question DECIDED: validate at config load.** Each transform set's `ops` paths are checked against its declared `schema`'s known field vocabulary (derived from `src/types/*.ts`) when the config is parsed. An unknown/misspelled path (or a path illegal for that schema, e.g. `messages[].content` under a Gemini schema) is a **hard load error** — the config is rejected, not silently no-op'd (CLAUDE.md §8 Fail Loud). Wiring: extend the existing config validation in `src/utils/config-loader.ts` (alongside `getModelRouteConfig` resolution) with a `validateTransformSet(set)` pass that enumerates legal shallow paths per schema; named `builtins` are validated against the built-in registry. Referencing an undefined transform name in a model's `transforms = [...]` list is likewise a load error.
 
 ### Hook points
-5. **`endpoint_writeout` placement** — **DECIDED: both.** Central wrap around the dispatch result in `index.ts` (~line 2096) runs the **header** ops once, uniformly, for every handler. Body/stream ops run **in-handler**: buffered JSON via a whole-body transform at the `return new Response(...)`, streaming via a per-event `transformEvent` on the SSE loop (`chat-completions.ts:166`). So a single `endpoint_writeout` transform set may split at execution time — headers centrally, body in the handler — but authors declare it as one set.
-6. **Hook count** — **DECIDED: add `before_conversion`, so 5 hooks.** It runs in-handler after routing but before the format converter, giving rules a client-schema seam that knows the resolved `route` / `upstreamMode` (which `endpoint_readin`, running centrally pre-routing, does not). See §5.2 for the full ordering.
+5. **`response_egress` placement** — **DECIDED: both.** Central wrap around the dispatch result in `index.ts` (~line 2096) runs the **header** ops once, uniformly, for every handler. Body/stream ops run **in-handler**: buffered JSON via a whole-body transform at the `return new Response(...)`, streaming via a per-event `transformEvent` on the SSE loop (`chat-completions.ts:166`). So a single `response_egress` transform set may split at execution time — headers centrally, body in the handler — but authors declare it as one set.
+6. **Hook count** — **DECIDED: add `before_conversion`, so 5 hooks.** It runs in-handler after routing but before the format converter, giving rules a client-schema seam that knows the resolved `route` / `upstreamMode` (which `request_ingress`, running centrally pre-routing, does not). See §5.2 for the full ordering.
 7. **Error responses** — **DECIDED: fire on non-2xx too.** `after_upstream` runs for *every* upstream response so transforms can remap/normalize error bodies (e.g. wrap a raw provider error into the client's expected `{error:{type,message}}` shape). Consequences:
    - The hook must be invoked **before** each `if (!response.ok)` early-return — these are pervasive (every handler; ~20 sites, e.g. `chat-completions.ts:142`, `messages.ts:392/631`, `openai.ts:646/767/1005`, `responses.ts:467/621/1110…`). Simplest wiring: fire `after_upstream` immediately after the `fetch`, ahead of the `!ok` check, so both success and error paths pass through it.
    - `HookContext` carries `status` (see §5.4) so an error-remap op can key off it; the error body schema differs from the success schema, so ops on error bodies target the provider error shape, not `choices[]`/`content[]`.

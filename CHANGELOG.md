@@ -7,6 +7,25 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Rename: canonical hook names `endpoint_readin`/`endpoint_writeout` → `request_ingress`/`response_egress`
+
+The transform-hook names `endpoint_readin` and `endpoint_writeout` were opaque
+jargon (a prior review at `docs/review_of_transforms_hooks_implementation.md`
+flagged this). They are now renamed to the self-describing
+`request_ingress` / `response_egress` everywhere: TypeScript types
+(`TransformSet`, `HookPoint`, `HookKey`), runtime keys, validator, error
+messages, README, `docs/transforms-reference.md`, `proxy_config.toml_example`,
+`proxy_config.toml_transforms_example`, and tests.
+
+**Backwards compatibility**: `endpoint_readin` and `endpoint_writeout` remain
+accepted as legacy aliases in `proxy_config.toml` — the existing
+`normalizeHookAlias()` mechanism was simply flipped so the alias direction now
+maps old → new canonical. Existing configs continue to load unchanged. The
+`HOOK_KEYS` parser set still contains both names.
+
+The other three hooks (`before_conversion`, `before_upstream`, `after_upstream`)
+are unchanged — they had no aliases and still don't.
+
 ### Feature: schema-aware tool-arg coercion on the `:generateContent` egress path
 
 Antigravity's Gemini endpoint validates the model's tool calls against each

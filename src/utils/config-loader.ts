@@ -102,11 +102,11 @@ export interface TransformSet {
   name: string;
   schema: TransformSchema;
   // ops/builtins may be scoped to a hook or declared at the top level (apply to all hooks)
-  endpoint_readin?: { ops?: TransformOp[]; builtins?: BuiltinName[] };
+  request_ingress?: { ops?: TransformOp[]; builtins?: BuiltinName[] };
   before_conversion?: { ops?: TransformOp[]; builtins?: BuiltinName[] };
   before_upstream?: { ops?: TransformOp[]; builtins?: BuiltinName[]; headers?: { set?: Record<string, string>; remove?: string[] } };
   after_upstream?: { ops?: TransformOp[]; builtins?: BuiltinName[] };
-  endpoint_writeout?: { ops?: TransformOp[]; builtins?: BuiltinName[]; headers?: { set?: Record<string, string>; remove?: string[] } };
+  response_egress?: { ops?: TransformOp[]; builtins?: BuiltinName[]; headers?: { set?: Record<string, string>; remove?: string[] } };
 }
 
 // Legal shallow paths per schema (used for load-time validation)
@@ -152,14 +152,14 @@ const BUILTIN_NAMES: Set<BuiltinName> = new Set(['lowercase_tool_schema_types', 
 
 /**
  * Backward-compatible hook name aliases.
- * `request_ingress` is an alias for `endpoint_readin`.
- * `response_egress`  is an alias for `endpoint_writeout`.
+ * `endpoint_readin` is a legacy alias for `request_ingress`.
+ * `endpoint_writeout` is a legacy alias for `response_egress`.
  * Aliases are normalized to canonical names at parse time; the runtime engine
  * always sees canonical names only.
  */
-const HOOK_ALIASES: Record<string, 'endpoint_readin' | 'endpoint_writeout'> = {
-  request_ingress: 'endpoint_readin',
-  response_egress: 'endpoint_writeout',
+const HOOK_ALIASES: Record<string, 'request_ingress' | 'response_egress'> = {
+  endpoint_readin: 'request_ingress',
+  endpoint_writeout: 'response_egress',
 };
 
 /** Normalize an alias to its canonical HookPoint name; returns input unchanged if not an alias. */
@@ -214,7 +214,7 @@ export function validateTransformSet(name: string, set: TransformSet): Transform
     return errs;
   }
 
-  const hookNames = ['endpoint_readin', 'before_conversion', 'before_upstream', 'after_upstream', 'endpoint_writeout'] as const;
+  const hookNames = ['request_ingress', 'before_conversion', 'before_upstream', 'after_upstream', 'response_egress'] as const;
   for (const hook of hookNames) {
     const slot = set[hook];
     if (!slot) continue;
@@ -1247,9 +1247,9 @@ function parseCompositeTargetConfig(value: string): CompositeTargetConfig {
 // ---------------------------------------------------------------------------
 
 type TransformHookSlot = NonNullable<TransformSet['before_upstream']>;
-type HookKey = 'endpoint_readin' | 'before_conversion' | 'before_upstream' | 'after_upstream' | 'endpoint_writeout';
-// HOOK_KEYS includes aliases so the TOML parser accepts them; normalizeHookAlias() maps them to canonical keys before use.
-const HOOK_KEYS = new Set<string>(['endpoint_readin', 'before_conversion', 'before_upstream', 'after_upstream', 'endpoint_writeout', 'request_ingress', 'response_egress']);
+type HookKey = 'request_ingress' | 'before_conversion' | 'before_upstream' | 'after_upstream' | 'response_egress';
+// HOOK_KEYS includes legacy aliases so the TOML parser accepts them; normalizeHookAlias() maps them to canonical keys before use.
+const HOOK_KEYS = new Set<string>(['request_ingress', 'before_conversion', 'before_upstream', 'after_upstream', 'response_egress', 'endpoint_readin', 'endpoint_writeout']);
 
 /**
  * Parse a TOML array of quoted strings into a string[].
@@ -1257,7 +1257,7 @@ const HOOK_KEYS = new Set<string>(['endpoint_readin', 'before_conversion', 'befo
  * Here `elements` is already split by the array parser.
  */
 function parseTransformArrayField(set: TransformSet, cleanKey: string, elements: string[]): void {
-  // cleanKey may be "builtins", "before_upstream.builtins", "endpoint_readin.ops", etc.
+  // cleanKey may be "builtins", "before_upstream.builtins", "request_ingress.ops", etc.
   const dotIdx = cleanKey.indexOf('.');
   if (dotIdx === -1) {
     // top-level (no hook scope): treat "builtins" as applying to all hooks isn't supported;

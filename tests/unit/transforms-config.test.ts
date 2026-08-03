@@ -142,7 +142,7 @@ describe('validateTransformSet', () => {
     const set: TransformSet = {
       name: 'bad',
       schema: 'openai-completions',
-      endpoint_writeout: { ops: [{ op: 'set', path: '$response.choices[].message.content', value: 'x' }] },
+      response_egress: { ops: [{ op: 'set', path: '$response.choices[].message.content', value: 'x' }] },
     };
     const errs = validateTransformSet('bad', set);
     assert.equal(errs.length, 1);
@@ -154,7 +154,7 @@ describe('validateTransformSet', () => {
     const set: TransformSet = {
       name: 'good',
       schema: 'openai-completions',
-      endpoint_writeout: { ops: [{ op: 'set', path: '$response.id', value: 'x' }] },
+      response_egress: { ops: [{ op: 'set', path: '$response.id', value: 'x' }] },
     };
     assert.deepEqual(validateTransformSet('good', set), []);
   });
@@ -163,7 +163,7 @@ describe('validateTransformSet', () => {
     const set: TransformSet = {
       name: 'bad',
       schema: 'anthropic-messages',
-      endpoint_writeout: { ops: [{ op: 'set', path: '$response.content[0].text', value: 'x' }] },
+      response_egress: { ops: [{ op: 'set', path: '$response.content[0].text', value: 'x' }] },
     };
     // First, the schema check: $response.content[0].text is NOT in the
     // anthropic-messages whitelist, so the validator already fails for that
@@ -252,14 +252,26 @@ before_upstream.builtins = ["recover_tool_message_name"]
     assert.deepEqual(set.before_upstream?.builtins, ['recover_tool_message_name']);
   });
 
-  it('parses endpoint_readin.builtins array', () => {
+  it('parses request_ingress.builtins array', () => {
+    const config = parseSimpleToml(`
+[transforms.tool_norm]
+schema = "openai-completions"
+request_ingress.builtins = ["lowercase_tool_schema_types"]
+`);
+    const set = config.transforms?.['tool_norm'];
+    assert.deepEqual(set?.request_ingress?.builtins, ['lowercase_tool_schema_types']);
+  });
+
+  it('normalizes legacy endpoint_readin alias to request_ingress', () => {
     const config = parseSimpleToml(`
 [transforms.tool_norm]
 schema = "openai-completions"
 endpoint_readin.builtins = ["lowercase_tool_schema_types"]
 `);
     const set = config.transforms?.['tool_norm'];
-    assert.deepEqual(set?.endpoint_readin?.builtins, ['lowercase_tool_schema_types']);
+    // Legacy alias `endpoint_readin` must normalize to canonical `request_ingress`.
+    assert.deepEqual(set?.request_ingress?.builtins, ['lowercase_tool_schema_types']);
+    assert.equal(set?.endpoint_readin, undefined);
   });
 
   it('parses before_upstream.ops array of inline tables', () => {
@@ -293,7 +305,7 @@ openai-responses = ["max_tokens_completion"]
     const config = parseSimpleToml(`
 [transforms.deepseek_compat]
 schema = "openai-completions"
-endpoint_readin.builtins = ["lowercase_tool_schema_types"]
+request_ingress.builtins = ["lowercase_tool_schema_types"]
 before_upstream.builtins = ["recover_tool_message_name"]
 before_upstream.ops = [{op="map_value",path="messages[role=assistant].content",when_sibling="tool_calls",from="",to=null}]
 
@@ -306,7 +318,7 @@ openai-completions = ["max_tokens_completion"]
 `);
     const ds = config.transforms?.['deepseek_compat'];
     assert.ok(ds);
-    assert.deepEqual(ds.endpoint_readin?.builtins, ['lowercase_tool_schema_types']);
+    assert.deepEqual(ds.request_ingress?.builtins, ['lowercase_tool_schema_types']);
     assert.deepEqual(ds.before_upstream?.builtins, ['recover_tool_message_name']);
     assert.equal(ds.before_upstream?.ops?.length, 1);
 
@@ -353,7 +365,7 @@ before_upstream.ops = [{op = "rename", path = "max_tokens", to = "max_completion
 
 [transforms.deepseek_compat]
 schema = "openai-completions"
-endpoint_readin.builtins = ["lowercase_tool_schema_types"]
+request_ingress.builtins = ["lowercase_tool_schema_types"]
 before_upstream.builtins = ["recover_tool_message_name"]
 before_upstream.ops = [{op = "map_value", path = "messages[role=assistant].content", when_sibling = "tool_calls", from = "", to = null}]
 
@@ -374,17 +386,17 @@ describe('inline-table transforms field', () => {
     assert.equal(route!.transforms[1].name, 'deepseek_compat');
   });
 
-  it('deepseek_compat: endpoint_readin has lowercase_tool_schema_types builtin', () => {
+  it('deepseek_compat: request_ingress has lowercase_tool_schema_types builtin', () => {
     assert.ok(route);
     const deepseek = route!.transforms.find(s => s.name === 'deepseek_compat');
     assert.ok(deepseek, 'deepseek_compat set should be present');
-    assert.deepEqual(deepseek!.endpoint_readin?.builtins, ['lowercase_tool_schema_types']);
+    assert.deepEqual(deepseek!.request_ingress?.builtins, ['lowercase_tool_schema_types']);
   });
 
   it('deepseek_compat: before_upstream lowercases tool schema types', () => {
     assert.ok(route);
     const ctx: HookContext = {
-      hook: 'endpoint_readin',
+      hook: 'request_ingress',
       route: route!,
       upstreamMode: 'openai-completions',
       clientModel: 'mymodel',
@@ -395,7 +407,7 @@ describe('inline-table transforms field', () => {
     const body = {
       tools: [{ function: { parameters: { type: 'OBJECT', properties: { x: { type: 'STRING' } } } } }],
     };
-    const result = runHook('endpoint_readin', { body, headers: {} }, ctx);
+    const result = runHook('request_ingress', { body, headers: {} }, ctx);
     const fn = (result.body.tools as any[])[0].function;
     assert.equal(fn.parameters.type, 'object');
     assert.equal(fn.parameters.properties.x.type, 'string');
