@@ -12,6 +12,37 @@ Fast, no proxy required. Covers the transform engine, config parsing, routing lo
 npm run test:unit           # runs tsx --test tests/unit/**/*.test.ts
 ```
 
+#### Unit test coverage map
+
+16 files, ~285 test cases. Every test imports `./src` directly (no HTTP). The table maps each source module to the unit tests that exercise it; "via handler" marks modules covered only through `index.ts`/handler entry points rather than a dedicated unit test.
+
+| Source module | Direct unit coverage |
+|---|---|
+| `converters/claude-to-openai.ts` | `thinking-roundtrip`, `token-usage` |
+| `converters/streaming.ts` | `token-usage` |
+| `converters/gemini-streaming.ts` | `token-usage` |
+| `converters/openai-to-claude.ts` | `token-usage` (`extractTokenCounts`) |
+| `converters/gemini-to-claude.ts` | `gemini-to-claude` (response + generateContent shapes, stop-reason mapping, citations, image/tool/thinking blocks) |
+| `converters/claude-to-gemini.ts` | `claude-to-gemini` (role mapping, text/image blocks, system_instruction, generation_config, cached_content) |
+| `converters/openai-to-gemini.ts` | `openai-to-gemini` (text/tool_calls/thinking/reasoning_content, schema-aware arg coercion, empty-chunk handling) |
+| `converters/completions-to-responses.ts` | `responses-completions-roundtrip` (text/tool_calls/reasoning, compacted shape) |
+| `converters/responses-to-completions.ts` | `responses-completions-roundtrip` (input→messages, tool format flattening, tool_choice mapping, reasoning threading) |
+| `utils/request-transform.ts` | `request-transform` (hook plumbing, ops, builtins incl. `filter_anthropic_beta`) |
+| `utils/config-loader.ts` | `transforms-config`, `coordinator`, `request-transform`, plus in-process `testcases/15_config_parse` and `16_security/config_loader_pollution` |
+| `utils/coordinator.ts` | `coordinator` |
+| `utils/routing.ts` | `routing` (`buildUpstreamUrl`) |
+| `utils/token-counting.ts` | `token-usage` |
+| `utils/dashboard-stats.ts` | `token-usage` (usage-tracking stream) |
+| `utils/model-usage-recorder.ts` | `token-usage` |
+| `utils/conversation-store.ts` | via `testcases/16_security/conversation_store` (dist-import) |
+| `utils/errors.ts` | `errors` (all 7 error classes, transport classification, validation helpers) |
+| `utils/stringify.ts` | `stringify` |
+| `utils/validation.ts`, `thinking.ts`, `hash-detect.ts`, `beta-features.ts`, `tool-blocklist.ts`, `sdk-handler.ts` | via handler (integration testcases only) |
+| `handlers/messages.ts`, `responses.ts`, `openai.ts` | via handler + `auth-with-model`, `responses-gemini-url`, `openai-gemini-role-default`, `think-tag-extraction` |
+| `handlers/gemini.ts`, `chat-completions.ts`, `claude.ts`, `models.ts`, `embeddings.ts`, `dashboard.ts`, `token-counting.ts` | integration only (`testcases/`) |
+| `index.ts` (handler entry) | `auth-with-model`, `routing`, `responses-gemini-url`, `think-tag-extraction`, `openai-gemini-role-default` |
+| `tui.ts`, `heatmap.ts`, `utils/logger.ts`, `utils/fetch-timeout.ts` | not unit-tested (UI / IO-bound; low unit-test value) |
+
 ### 2. Integration / coverage testcases — `testcases/` via `run-tests.js`
 
 Scenario-level tests that spin up an isolated proxy process per suite. Run from the project root.
@@ -308,6 +339,36 @@ The two `-comp` variants exercise the proxy's OpenAI-compatible passthrough; the
 ```bash
 OPENAI_API_KEY=sk-agent-test-key .venv-crewai/bin/python tests/multi-agents-test.py <M> 3 1
 ```
+
+---
+
+## Multi-Agent SDK Coverage Summary
+
+The two `multi-agents-test.*` runners exercise **8 distinct agent SDKs** end-to-end against a running proxy, distributed across the TS and Python runners. Each runner shares the same `MODELS` list (4 model routes) and `USER_TASKS` set (8 codebase-analysis tasks tuned to force real multi-glob + multi-read tool use), so a full sweep is `8 tasks × 4 models × N agents`.
+
+### Agent → proxy surface coverage
+
+| Runner | Agent | SDK package | Proxy endpoint exercised | Proxy source path covered |
+|---|---|---|---|---|
+| TS | **Codex** | `@openai/codex-sdk` | `/v1/responses` (primary) + `/v1/chat/completions` (fallback, needs `DEV_PASS_THROUGH`) | `handlers/responses.ts`, `handlers/chat-completions.ts`, `converters/completions-to-responses.ts` |
+| TS | **Claude** | `@anthropic-ai/claude-agent-sdk` | `/v1/messages` | `handlers/messages.ts`, `handlers/claude.ts` |
+| TS | **Gemini** | `@google/genai` | `/v1beta/.../generateContent` (+ custom tool-calling loop) | `handlers/gemini.ts`, `converters/gemini-*` |
+| TS | **Pi** | `@earendil-works/pi-agent-core` | `/v1/messages` (via `anthropicMessagesApi()`) | `handlers/messages.ts`, `handlers/claude.ts` |
+| TS | **OpenCode** | `@opencode-ai/sdk` | `/v1/chat/completions` + `/v1/messages` (provider-dependent) | `handlers/chat-completions.ts`, `handlers/messages.ts` |
+| PY | **Antigravity** | `google-antigravity` | `/v1/chat/completions` (OpenAI cfg) or `/v1beta/.../generateContent` (Gemini cfg) | `handlers/chat-completions.ts`, `handlers/gemini.ts` |
+| PY | **LangGraph** | `langgraph` + `langchain-openai` | `/v1/chat/completions` | `handlers/chat-completions.ts` |
+| PY | **CrewAI** | `crewai` + `pydantic` | `/v1/chat/completions` | `handlers/chat-completions.ts` |
+
+### What the matrix exercises
+
+- **Endpoint breadth**: all four core inbound endpoints (`/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1beta/.../generateContent`) are hit by at least two distinct SDKs, so a regression in any one handler surfaces from multiple clients.
+- **Format conversion**: the 4 model routes mix upstream modes (`deepseek-v4-comp`/`max-m3-comp` → openai-completions; `deepseek-v4-anth`/`max-m3-anth` → anthropic-messages), forcing Claude↔OpenAI and OpenAI↔Gemini conversion paths on every run.
+- **Tool-calling loops**: every agent runs a real multi-turn tool loop (Glob/Read against `./tests/`), exercising streaming SSE, `tool_use`/`tool_result` round-trips, and `tool_choice` handling — the same surface the unit tests in `tests/unit/` cover field-by-field.
+- **Auth flows**: the matrix implicitly covers `x-api-key` (Claude/Pi), `Authorization: Bearer` (Codex/LangGraph/CrewAI/OpenCode), `x-goog-api-key` (Gemini/Antigravity-Gemini), and `auth_passthrough_with = "config_key"` (Antigravity-OpenAI).
+
+### Relationship to `tests/unit/` and `testcases/`
+
+The multi-agent runners are **end-to-end smoke tests**, not regression suites: they prove the proxy composes correctly with real-world agent SDKs but cannot pin exact conversion shapes (an upstream model's free-form text is in the loop). Precise field-level coverage of the converters and handlers lives in `tests/unit/` (see [Unit test coverage map](#unit-test-coverage-map)); HTTP-level behavioral coverage of routing, validation, and error paths lives in `testcases/` (see `testcases/README.md` → Coverage Summary). A failing multi-agent run usually points at a wiring or format-conversion bug worth reproducing as a focused unit or testcase.
 
 ---
 

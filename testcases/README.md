@@ -336,6 +336,40 @@ The proxy configuration must have upstream API keys for all of the following pro
 - Config-mutating tests (09_composite TC1110, 12_config_validation) restore original state after each test case
 - TUI interactive features are tested via the dashboard API they call; interactive TTY testing requires manual testing or a terminal automation tool
 
+## Coverage Summary
+
+31 test files, ~380 test functions across 16 numbered suites. Most suites are **HTTP integration** (they talk to a live proxy on `localhost:7777`); a subset load `dist/` modules **in-process** and need no running proxy.
+
+### HTTP integration vs. in-process
+
+| Mode | Suites |
+|---|---|
+| **HTTP integration** (live proxy required) | `01_endpoints`, `02_features`, `03_errors`, `04_models`, `05_upstream_modes`, `06_integration`, `07_dashboard`, `08_regression`, `09_composite`, `10_auth`, `11_responses`, `12_config_validation`, `13_fusion`, `14_routing`, `16_security` (most files) |
+| **In-process** (`dist/`-import, no proxy) | `15_config_parse`, `16_security/conversation_store`, `16_security/dev_pass_through_responses`, `16_security/openai_responses_routing`, `16_security/reasoning_effort_conversion` |
+
+The in-process subset is CI-friendly: it only needs `npm run build` and stubs `globalThis.fetch` where an upstream call would otherwise happen. The HTTP suites require the proxy plus real upstream provider keys (see [Provider API Keys Required](#provider-api-keys-required)).
+
+### Source surface exercised by the suites
+
+| Source area | Primary suites |
+|---|---|
+| `handlers/messages.ts`, `claude.ts` (Claude Messages path) | `01_endpoints/messages`, `01_endpoints/messages_streaming`, `02_features/*`, `08_regression`, `16_security/openai_responses_routing` |
+| `handlers/gemini.ts` (Interactions + generateContent) | `01_endpoints/interactions`, `01_endpoints/generateContent` |
+| `handlers/openai.ts`, `chat-completions.ts` | `05_upstream_modes`, `16_security/dev_pass_through`, `16_security/dev_pass_through_responses` |
+| `handlers/responses.ts` (Responses API) | `11_responses`, `16_security/dev_pass_through_responses` |
+| `handlers/models.ts`, `embeddings.ts`, `token-counting.ts`, `dashboard.ts` | `04_models`, `05_upstream_modes`, `07_dashboard` |
+| `utils/config-loader.ts` (parse, serialize, routing, schedules, prototype-pollution denylist) | `14_routing`, `15_config_parse`, `12_config_validation`, `16_security/config_loader_pollution`, `16_security/schedule_routing` |
+| `utils/validation.ts` | `03_errors/validation`, `16_security/dev_pass_through` |
+| `utils/privacy-filter.ts`, `kompress.ts` | `16_security/privacy_filter`, `16_security/kompress` |
+| `utils/conversation-store.ts` | `16_security/conversation_store` (+ `11_responses` for the gated-drop path) |
+| `utils/hash-detect.ts` (SSRF guard surface) | `16_security/ssrf_dynamic_route` |
+| `utils/coordinator.ts` (fusion planning) | `13_fusion`, `16_security/free_fanout` |
+| Converters (`claude-to-openai`, `gemini-*`, `responses↔completions`) | indirect via `01_endpoints`, `05_upstream_modes`, `16_security/reasoning_effort_conversion`; field-level coverage lives in `tests/unit/` |
+
+### Relationship to `tests/unit/`
+
+The unit suite (`tests/unit/*.test.ts`, see `tests/README.md`) provides field-level coverage of the converters, transform engine, config parser, error classes, and token accounting — the parts that HTTP integration tests can't pin precisely because they round-trip through a live upstream. The two suites are complementary: `tests/unit/` for exact shape correctness, `testcases/` for end-to-end wiring and behavioral regressions. Modules with **no** direct unit coverage (UI-bound `tui.ts`/`heatmap.ts`, IO-bound `logger.ts`/`fetch-timeout.ts`) are exercised here only implicitly through HTTP paths.
+
 ## Logs
 
 - Record testing results in file `test_results_at_<date>-<time>.md` to directory `./tests/logs/results/`.
