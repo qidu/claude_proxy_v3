@@ -553,6 +553,35 @@ export function handleDashboardPage(env: Env): Response {
       </div>
     </div>
 
+    <div id="compositeTargetWizard" class="modal-overlay" hidden>
+      <div class="modal" role="dialog" aria-labelledby="ctgtTitle" aria-modal="true">
+        <button type="button" class="modal-close-x" id="ctgt-close-x" aria-label="Close wizard" title="Close (Esc)">×</button>
+        <div class="wizard-steps" id="ctgt-steps">Step 1 of 2</div>
+        <h3 id="ctgtTitle">Add target</h3>
+        <div id="ctgtBody"></div>
+        <div class="modal-status" id="ctgt-status"></div>
+        <div class="modal-actions">
+          <button type="button" class="mini-btn" id="ctgt-cancel">Cancel</button>
+          <button type="button" class="mini-btn" id="ctgt-back" hidden>Back</button>
+          <button type="button" class="mini-btn" id="ctgt-submit">Next</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="modelEntryWizard" class="modal-overlay" hidden>
+      <div class="modal" role="dialog" aria-labelledby="meTitle" aria-modal="true">
+        <button type="button" class="modal-close-x" id="me-close-x" aria-label="Close wizard" title="Close (Esc)">×</button>
+        <div class="wizard-steps" id="me-steps">Step 1 of 1</div>
+        <h3 id="meTitle">Add model entry</h3>
+        <div id="meBody"></div>
+        <div class="modal-status" id="me-status"></div>
+        <div class="modal-actions">
+          <button type="button" class="mini-btn" id="me-cancel">Cancel</button>
+          <button type="button" class="mini-btn" id="me-submit">Create entry</button>
+        </div>
+      </div>
+    </div>
+
     <div class="side-nav" id="sideNav">
       <a href="#section-config">Config</a>
       <a href="#section-model">Model</a>
@@ -701,24 +730,89 @@ export function handleDashboardPage(env: Env): Response {
         } catch {}
       }
 
-      // Prompts the user to pick a composite-alias mode. Returns one of
-      // 'composite' | 'fusion' | 'coordinator', or null on cancel / invalid input.
-      // Reused by add-composite-alias and add-composite-target (empty alias).
-      function promptAliasMode() {
-        // Note: \\n in this source so the outer HTML template literal doesn't
-        // collapse it into a real newline (which would break the inner JS
-        // single-quoted string, since JS string literals can't span lines).
-        const raw = window.prompt(
-          'Mode for new alias:\\n  1) composite  [C]  — share / primary / fallback\\n  2) fusion  [F]  — panel / judge / synth\\n  3) coordinator  [O]  — planner / executor stages\\n\\nEnter 1, 2, or 3:',
-          '1'
-        );
-        if (raw === null) return null;
-        const trimmed = raw.trim();
-        if (trimmed === '1') return 'composite';
-        if (trimmed === '2') return 'fusion';
-        if (trimmed === '3') return 'coordinator';
-        window.alert('Invalid mode — choose 1, 2, or 3.');
-        return null;
+      // Shared helpers used by both the "Add composite alias" wizard
+      // (openAddAliasWizard) and the "Add target" wizard
+      // (openAddCompositeTargetWizard). Kept module-level so the two
+      // wizards cannot drift on per-mode field shape.
+
+      // Returns the step-3 target-property fields HTML for a given alias
+      // mode. Lifted verbatim from openAddAliasWizard.renderStep3.
+      function compositeTargetFieldsHtml(mode) {
+        if (mode === 'composite') {
+          return '<label for="wiz-share">share</label>' +
+            '<input type="number" id="wiz-share" min="0" step="1" value="0" style="width:70px;" />' +
+            '<label for="wiz-routing">routing type</label>' +
+            '<select id="wiz-routing">' +
+              '<option value="fallback" selected>fallback</option>' +
+              '<option value="primary">primary</option>' +
+            '</select>' +
+            '<label for="wiz-fallback">fallback priority</label>' +
+            '<input type="number" id="wiz-fallback" min="0" step="1" placeholder="blank = no priority" />' +
+            '<div class="helper-text">fallback: used after primary is at capacity. primary: preferred target.</div>';
+        }
+        if (mode === 'fusion') {
+          return '<label for="wiz-fusion-weight">fusion weight</label>' +
+            '<input type="number" id="wiz-fusion-weight" min="0" step="1" value="1" />' +
+            '<label for="wiz-fusion-role">role</label>' +
+            '<select id="wiz-fusion-role">' +
+              '<option value="panel">[p]anel → panel</option>' +
+              '<option value="judge">[j]udge → judge</option>' +
+              '<option value="synth">[s]ynth → synth</option>' +
+            '</select>';
+        }
+        // coordinator
+        return '<label for="wiz-coord">coord</label>' +
+          '<input type="number" id="wiz-coord" min="0" step="1" value="1" />' +
+          '<label for="wiz-coord-role">role</label>' +
+          '<select id="wiz-coord-role">' +
+            '<option value="planner">[p]lanner</option>' +
+            '<option value="executor">[e]xecutor</option>' +
+          '</select>';
+      }
+
+      // parseNum mirrors openAddAliasWizard's inner helper: blank → null,
+      // invalid → NaN, otherwise the number.
+      function parseCompositeNum(v) {
+        if (v === '' || v === null || v === undefined) return null;
+        const n = Number(v);
+        if (!Number.isFinite(n) || n < 0) return NaN;
+        return n;
+      }
+
+      // Builds the target cfg object for the given mode by reading the
+      // step-3 inputs. setStatus(msg, kind) reports inline errors. Returns
+      // the cfg, or null on validation failure.
+      function buildCompositeTargetCfg(mode, setStatus) {
+        if (mode === 'composite') {
+          const shareEl = document.getElementById('wiz-share');
+          const routingEl = document.getElementById('wiz-routing');
+          const fallbackEl = document.getElementById('wiz-fallback');
+          let share = parseCompositeNum(shareEl ? shareEl.value : 0);
+          const fallback = parseCompositeNum(fallbackEl ? fallbackEl.value : '');
+          if (share === null) share = 0;
+          if (Number.isNaN(share)) { setStatus('share must be a non-negative number.', 'error'); return null; }
+          if (Number.isNaN(fallback)) { setStatus('fallback priority must be a non-negative number or blank.', 'error'); return null; }
+          const cfg = { share: share };
+          const isPrimary = routingEl && routingEl.value === 'primary';
+          if (isPrimary) cfg.primary = true;
+          if (!isPrimary && fallback !== null) cfg.fallback = fallback;
+          return cfg;
+        }
+        if (mode === 'fusion') {
+          const wEl = document.getElementById('wiz-fusion-weight');
+          const roleEl = document.getElementById('wiz-fusion-role');
+          let w = parseCompositeNum(wEl ? wEl.value : 1);
+          if (w === null) w = 1;
+          if (Number.isNaN(w)) { setStatus('fusion weight must be a non-negative number.', 'error'); return null; }
+          return { fusion: w, role: roleEl ? roleEl.value : 'panel' };
+        }
+        // coordinator
+        const cEl = document.getElementById('wiz-coord');
+        const roleEl = document.getElementById('wiz-coord-role');
+        let c = parseCompositeNum(cEl ? cEl.value : 1);
+        if (c === null) c = 1;
+        if (Number.isNaN(c)) { setStatus('coord must be a non-negative number.', 'error'); return null; }
+        return { coord: c, role: roleEl ? roleEl.value : 'planner' };
       }
 
       // In-page wizard for adding a new composite alias. Single-target only:
@@ -804,40 +898,7 @@ export function handleDashboardPage(env: Env): Response {
           state.step = 3;
           stepsEl.textContent = 'Step 3 of 3';
           titleEl.textContent = 'New composite alias — Step 3: Target properties';
-          var fields = '';
-          if (state.mode === 'composite') {
-            fields =
-              '<label for="wiz-share">share</label>' +
-              '<input type="number" id="wiz-share" min="0" step="1" value="0" style="width:70px;" />' +
-              '<label for="wiz-routing">routing type</label>' +
-              '<select id="wiz-routing">' +
-                '<option value="fallback" selected>fallback</option>' +
-                '<option value="primary">primary</option>' +
-              '</select>' +
-              '<label for="wiz-fallback">fallback priority</label>' +
-              '<input type="number" id="wiz-fallback" min="0" step="1" placeholder="blank = no priority" />' +
-              '<div class="helper-text">fallback: used after primary is at capacity. primary: preferred target.</div>';
-          } else if (state.mode === 'fusion') {
-            fields =
-              '<label for="wiz-fusion-weight">fusion weight</label>' +
-              '<input type="number" id="wiz-fusion-weight" min="0" step="1" value="1" />' +
-              '<label for="wiz-fusion-role">role</label>' +
-              '<select id="wiz-fusion-role">' +
-                '<option value="panel">[p]anel → panel</option>' +
-                '<option value="judge">[j]udge → judge</option>' +
-                '<option value="synth">[s]ynth → synth</option>' +
-              '</select>';
-          } else {
-            fields =
-              '<label for="wiz-coord">coord</label>' +
-              '<input type="number" id="wiz-coord" min="0" step="1" value="1" />' +
-              '<label for="wiz-coord-role">role</label>' +
-              '<select id="wiz-coord-role">' +
-                '<option value="planner">[p]lanner</option>' +
-                '<option value="executor">[e]xecutor</option>' +
-              '</select>';
-          }
-          bodyEl.innerHTML = fields;
+          bodyEl.innerHTML = compositeTargetFieldsHtml(state.mode);
           if (state.mode === 'composite') {
             var routingSelEl = document.getElementById('wiz-routing');
             if (routingSelEl) {
@@ -903,44 +964,8 @@ export function handleDashboardPage(env: Env): Response {
           return target;
         }
 
-        function parseNum(v) {
-          if (v === '' || v === null || v === undefined) return null;
-          const n = Number(v);
-          if (!Number.isFinite(n) || n < 0) return NaN;
-          return n;
-        }
-
         function buildTargetCfg() {
-          if (state.mode === 'composite') {
-            const shareEl = document.getElementById('wiz-share');
-            const routingEl = document.getElementById('wiz-routing');
-            const fallbackEl = document.getElementById('wiz-fallback');
-            const share = parseNum(shareEl ? shareEl.value : 0);
-            const fallback = parseNum(fallbackEl ? fallbackEl.value : '');
-            if (share === null) share = 0;
-            if (Number.isNaN(share)) { setStatus('share must be a non-negative number.', 'error'); return null; }
-            if (Number.isNaN(fallback)) { setStatus('fallback priority must be a non-negative number or blank.', 'error'); return null; }
-            const cfg = { share: share };
-            const isPrimary = routingEl && routingEl.value === 'primary';
-            if (isPrimary) cfg.primary = true;
-            if (!isPrimary && fallback !== null) cfg.fallback = fallback;
-            return cfg;
-          }
-          if (state.mode === 'fusion') {
-            const wEl = document.getElementById('wiz-fusion-weight');
-            const roleEl = document.getElementById('wiz-fusion-role');
-            const w = parseNum(wEl ? wEl.value : 1);
-            if (w === null) w = 1;
-            if (Number.isNaN(w)) { setStatus('fusion weight must be a non-negative number.', 'error'); return null; }
-            return { fusion: w, role: roleEl ? roleEl.value : 'panel' };
-          }
-          // coordinator
-          const cEl = document.getElementById('wiz-coord');
-          const roleEl = document.getElementById('wiz-coord-role');
-          const c = parseNum(cEl ? cEl.value : 1);
-          if (c === null) c = 1;
-          if (Number.isNaN(c)) { setStatus('coord must be a non-negative number.', 'error'); return null; }
-          return { coord: c, role: roleEl ? roleEl.value : 'planner' };
+          return buildCompositeTargetCfg(state.mode, setStatus);
         }
 
         function close() {
@@ -1011,6 +1036,335 @@ export function handleDashboardPage(env: Env): Response {
 
         overlay.hidden = false;
         renderStep1();
+      }
+
+      // In-page wizard for adding a new target to an existing composite
+      // alias. Replaces the old window.prompt chain. Step layout depends
+      // on whether the alias is empty (mode not yet decided):
+      //   empty alias:      1) mode picker  2) target id  3) target props
+      //   non-empty alias:  1) target id    2) target props  (mode inferred)
+      // For a plain composite alias with no per-mode shape, the props step
+      // is skipped and the target is inserted as {} (parity with the old
+      // dashboard.ts:1989 path).
+      function openAddCompositeTargetWizard(alias) {
+        const overlay = document.getElementById('compositeTargetWizard');
+        if (!overlay) return;
+
+        const stepsEl = document.getElementById('ctgt-steps');
+        const titleEl = document.getElementById('ctgtTitle');
+        const bodyEl = document.getElementById('ctgtBody');
+        const statusEl = document.getElementById('ctgt-status');
+        const cancelBtn = document.getElementById('ctgt-cancel');
+        const backBtn = document.getElementById('ctgt-back');
+        const submitBtn = document.getElementById('ctgt-submit');
+        const closeXBtn = document.getElementById('ctgt-close-x');
+        if (!stepsEl || !titleEl || !bodyEl || !statusEl || !cancelBtn || !backBtn || !submitBtn || !closeXBtn) return;
+
+        if (!currentConfig.composite[alias]) {
+          currentConfig.composite[alias] = {};
+        }
+
+        // Infer the alias's mode from its existing targets. Same logic the
+        // rendering uses (dashboard.ts composite-block head tag).
+        const existingKeys = Object.keys(currentConfig.composite[alias]).filter((k) => k !== 'token_limit' && k !== 'fusion_options');
+        const isCoordHead = existingKeys.some((k) => { const c = currentConfig.composite[alias][k] || {}; return typeof c.coord === 'number' && c.coord > 0; });
+        const isFusionHead = !isCoordHead && !!currentConfig.composite[alias].fusion_options;
+        const inferredMode = isCoordHead ? 'coordinator' : isFusionHead ? 'fusion' : 'composite';
+        const aliasEmpty = existingKeys.length === 0;
+
+        // state.mode is meaningful only when aliasEmpty (user picks).
+        // Once the alias has targets we lock to inferredMode.
+        const state = { step: 1, mode: aliasEmpty ? 'composite' : inferredMode, target: '' };
+        const hasPropsStep = aliasEmpty || inferredMode === 'fusion' || inferredMode === 'coordinator';
+        const totalSteps = (aliasEmpty ? 1 : 0) + 1 + (hasPropsStep ? 1 : 0);
+
+        function setStatus(msg, kind) {
+          statusEl.textContent = msg || '';
+          statusEl.className = 'modal-status' + (kind ? ' ' + kind : '');
+        }
+
+        function setMode(mode) {
+          state.mode = mode;
+          bodyEl.querySelectorAll('#ctgt-mode-options .mode-option').forEach(function (el) {
+            el.classList.toggle('selected', el.getAttribute('data-mode') === mode);
+          });
+        }
+
+        function stepLabel() {
+          return 'Step ' + state.step + ' of ' + totalSteps;
+        }
+
+        function renderModePicker() {
+          bodyEl.innerHTML =
+            '<label>Mode</label>' +
+            '<div class="mode-options" id="ctgt-mode-options">' +
+              '<div class="mode-option" data-mode="composite">[C] composite<br /><span style="font-size:11px;color:#666;">share / primary / fallback</span></div>' +
+              '<div class="mode-option" data-mode="fusion">[F] fusion<br /><span style="font-size:11px;color:#666;">panel / judge / synth</span></div>' +
+              '<div class="mode-option" data-mode="coordinator">[O] coordinator<br /><span style="font-size:11px;color:#666;">planner / executor stages</span></div>' +
+            '</div>';
+          bodyEl.querySelectorAll('#ctgt-mode-options .mode-option').forEach(function (el) {
+            el.addEventListener('click', function () {
+              setMode(el.getAttribute('data-mode'));
+              setStatus('');
+            });
+          });
+          setMode(state.mode);
+        }
+
+        function renderTargetId() {
+          bodyEl.innerHTML =
+            '<label for="ctgt-target-name">Target model id</label>' +
+            '<input type="text" id="ctgt-target-name" placeholder="e.g. minimax-m3" autocomplete="off" />' +
+            '<div class="helper-text">Free text — type an existing model id defined under [models.*].</div>';
+          const tgtInput = document.getElementById('ctgt-target-name');
+          if (tgtInput) {
+            tgtInput.value = state.target;
+            tgtInput.focus();
+          }
+        }
+
+        function renderProps() {
+          bodyEl.innerHTML = compositeTargetFieldsHtml(state.mode);
+          if (state.mode === 'composite') {
+            var routingSelEl = document.getElementById('wiz-routing');
+            if (routingSelEl) {
+              routingSelEl.addEventListener('change', function () {
+                var fbInput = document.getElementById('wiz-fallback');
+                if (fbInput) fbInput.hidden = routingSelEl.value === 'primary';
+              });
+            }
+          }
+        }
+
+        function render() {
+          stepsEl.textContent = stepLabel();
+          titleEl.textContent = 'Add target to composite.' + alias + ' — Step ' + state.step + ': ' + (
+            aliasEmpty && state.step === 1 ? 'mode' :
+            (state.step === (aliasEmpty ? 2 : 1)) ? 'target model' : 'target properties'
+          );
+          if (aliasEmpty && state.step === 1) {
+            renderModePicker();
+            backBtn.hidden = true;
+            submitBtn.textContent = 'Next';
+            return;
+          }
+          const targetStep = aliasEmpty ? 2 : 1;
+          if (state.step === targetStep) {
+            renderTargetId();
+            backBtn.hidden = !aliasEmpty;
+            submitBtn.textContent = hasPropsStep ? 'Next' : 'Create target';
+            return;
+          }
+          // props step
+          renderProps();
+          backBtn.hidden = false;
+          submitBtn.textContent = 'Create target';
+        }
+
+        function validateTargetId() {
+          const tgtInput = document.getElementById('ctgt-target-name');
+          if (!tgtInput) return null;
+          const target = (tgtInput.value || '').trim();
+          if (!target) {
+            setStatus('Target model id is required.', 'error');
+            tgtInput.focus();
+            return null;
+          }
+          if (currentConfig.composite[alias][target]) {
+            setStatus('Composite target already exists.', 'error');
+            tgtInput.focus();
+            return null;
+          }
+          return target;
+        }
+
+        function close() {
+          if (overlay._ctgtKeydown) {
+            document.removeEventListener('keydown', overlay._ctgtKeydown);
+            overlay._ctgtKeydown = null;
+          }
+          overlay.hidden = true;
+          setStatus('');
+          configDirty = false;
+        }
+
+        function onSubmit() {
+          setStatus('');
+          const targetStep = aliasEmpty ? 2 : 1;
+          if (aliasEmpty && state.step === 1) {
+            // mode picked; default 'composite' if user never clicked.
+            state.step = 2;
+            render();
+            return;
+          }
+          if (state.step === targetStep) {
+            const target = validateTargetId();
+            if (!target) return;
+            state.target = target;
+            if (hasPropsStep) {
+              state.step = targetStep + 1;
+              render();
+              return;
+            }
+            // No props step (plain composite alias, non-empty). Insert {}.
+            currentConfig.composite[alias][state.target] = {};
+            finalize();
+            return;
+          }
+          // props step
+          const cfg = buildCompositeTargetCfg(state.mode, setStatus);
+          if (!cfg) return;
+          currentConfig.composite[alias][state.target] = cfg;
+          finalize();
+        }
+
+        function finalize() {
+          renderConfigForm(currentConfig);
+          saveConfig().then(function () {
+            close();
+          }).catch(function (err) {
+            delete currentConfig.composite[alias][state.target];
+            renderConfigForm(currentConfig);
+            setStatus('Save failed: ' + (err && err.message ? err.message : err), 'error');
+          });
+        }
+
+        function onBack() {
+          setStatus('');
+          const targetStep = aliasEmpty ? 2 : 1;
+          if (state.step === targetStep && aliasEmpty) {
+            state.step = 1;
+            render();
+            return;
+          }
+          if (state.step === targetStep + 1) {
+            state.step = targetStep;
+            render();
+            return;
+          }
+        }
+
+        cancelBtn.onclick = function () { close(); };
+        backBtn.onclick = function () { onBack(); };
+        submitBtn.onclick = function () { onSubmit(); };
+        closeXBtn.onclick = function () { close(); };
+
+        overlay._ctgtKeydown = function (ev) {
+          if (ev.key === 'Escape' || ev.key === 'x' || ev.key === 'X') {
+            ev.preventDefault();
+            close();
+          }
+        };
+        document.addEventListener('keydown', overlay._ctgtKeydown);
+
+        overlay.hidden = false;
+        render();
+      }
+
+      // In-page wizard for adding a new model entry to a [models.<category>]
+      // section. Replaces the old single window.prompt. Collects key + alias
+      // + optional base_url so the row is immediately useful, and writes the
+      // correctly-shaped array ([alias] or [alias, base, '']) so the backend
+      // validator (which rejects bare 2-element arrays) accepts it.
+      function openAddModelWizard(category) {
+        const overlay = document.getElementById('modelEntryWizard');
+        if (!overlay) return;
+
+        const stepsEl = document.getElementById('me-steps');
+        const titleEl = document.getElementById('meTitle');
+        const bodyEl = document.getElementById('meBody');
+        const statusEl = document.getElementById('me-status');
+        const cancelBtn = document.getElementById('me-cancel');
+        const submitBtn = document.getElementById('me-submit');
+        const closeXBtn = document.getElementById('me-close-x');
+        if (!stepsEl || !titleEl || !bodyEl || !statusEl || !cancelBtn || !submitBtn || !closeXBtn) return;
+
+        function setStatus(msg, kind) {
+          statusEl.textContent = msg || '';
+          statusEl.className = 'modal-status' + (kind ? ' ' + kind : '');
+        }
+
+        function render() {
+          stepsEl.textContent = 'Step 1 of 1';
+          titleEl.textContent = 'Add model entry to models.' + category;
+          bodyEl.innerHTML =
+            '<label for="me-key">Model key</label>' +
+            '<input type="text" id="me-key" placeholder="e.g. gpt-5-mini" autocomplete="off" />' +
+            '<div class="helper-text">Wildcard keys (e.g. "*" or "gpt-*") are treated as routing patterns, not concrete model names.</div>' +
+            '<label for="me-alias">Target model (upstream model id to map to)</label>' +
+            '<input type="text" id="me-alias" placeholder="e.g. gpt-5-mini-2025-08-07" autocomplete="off" />' +
+            '<label for="me-base">Base URL override (optional)</label>' +
+            '<input type="text" id="me-base" placeholder="https://..." autocomplete="off" />';
+          const keyInput = document.getElementById('me-key');
+          if (keyInput) keyInput.focus();
+        }
+
+        function close() {
+          if (overlay._meKeydown) {
+            document.removeEventListener('keydown', overlay._meKeydown);
+            overlay._meKeydown = null;
+          }
+          overlay.hidden = true;
+          setStatus('');
+          configDirty = false;
+        }
+
+        function onSubmit() {
+          setStatus('');
+          const keyInput = document.getElementById('me-key');
+          const aliasInput = document.getElementById('me-alias');
+          const baseInput = document.getElementById('me-base');
+          if (!keyInput) return;
+          const key = (keyInput.value || '').trim();
+          const alias = (aliasInput && aliasInput.value || '').trim();
+          const base = (baseInput && baseInput.value || '').trim();
+          if (!key) {
+            setStatus('Model key is required.', 'error');
+            keyInput.focus();
+            return;
+          }
+          // Reserved keys the rendering/config use internally — allowing
+          // them would corrupt the category (modelEntryRow would shadow
+          // upstream_mode / base_url rows).
+          if (key === 'upstream_mode' || key === 'base_url' || key === 'api_key') {
+            setStatus('Key "' + key + '" is reserved for category-level fields.', 'error');
+            keyInput.focus();
+            return;
+          }
+          if (currentConfig.models[category] && currentConfig.models[category][key] !== undefined) {
+            setStatus('Model key already exists in this category.', 'error');
+            keyInput.focus();
+            return;
+          }
+          // Build the array shape the backend validator accepts. A bare
+          // 2-element [alias, base] is rejected (see collectConfigPayload
+          // comment), so emit 1 or 3 elements.
+          const value = base ? [alias, base, ''] : [alias];
+          currentConfig.models[category][key] = value;
+          renderConfigForm(currentConfig);
+          saveConfig().then(function () {
+            close();
+          }).catch(function (err) {
+            delete currentConfig.models[category][key];
+            renderConfigForm(currentConfig);
+            setStatus('Save failed: ' + (err && err.message ? err.message : err), 'error');
+          });
+        }
+
+        cancelBtn.onclick = function () { close(); };
+        submitBtn.onclick = function () { onSubmit(); };
+        closeXBtn.onclick = function () { close(); };
+
+        overlay._meKeydown = function (ev) {
+          if (ev.key === 'Escape' || ev.key === 'x' || ev.key === 'X') {
+            ev.preventDefault();
+            close();
+          }
+        };
+        document.addEventListener('keydown', overlay._meKeydown);
+
+        overlay.hidden = false;
+        render();
       }
 
       // In-page wizard for adding a new schedule alias. Steps:
@@ -1372,10 +1726,33 @@ export function handleDashboardPage(env: Env): Response {
           + '</select>';
       }
 
+      // Per-model upstream_mode override select. Empty value means "inherit
+      // from category" — preserved as no override when serialized back to
+      // TOML (see serializeModelEntry: mode === '' produces no mode= key).
+      // Mirrors upstreamModeSelect's option set so the per-model pick cannot
+      // drift from the category-level list.
+      function perModelModeSelect(categoryName, modelKey, currentMode) {
+        const disabledAttr = isReadOnly ? ' disabled' : '';
+        const options = ['', 'anthropic-messages', 'openai-completions', 'openai-responses', 'gemini-generatecontent', 'gemini-interactions'];
+        const optionHtml = options.map((mode) => {
+          const selected = mode === currentMode ? ' selected' : '';
+          const label = mode === '' ? '(inherit)' : mode;
+          return '<option value="' + escapeHtml(mode) + '"' + selected + '>' + escapeHtml(label) + '</option>';
+        }).join('');
+
+        return '<select data-kind="model-mode" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '" style="width:160px;"' + disabledAttr + '>'
+          + optionHtml
+          + '</select>';
+      }
+
       function modelEntryRow(categoryName, modelKey, modelValue) {
         const disabledAttr = isReadOnly ? ' disabled' : '';
         const alias = Array.isArray(modelValue) ? modelValue[0] || '' : (modelValue || '');
         const base = Array.isArray(modelValue) ? modelValue[1] || '' : '';
+        // GET sanitizer emits [target, base_url, mode] (api_key stripped);
+        // mode lives at index 2 and is '' when the entry inherits the
+        // category's upstream_mode.
+        const perModelMode = Array.isArray(modelValue) ? modelValue[2] || '' : '';
         // Wildcard entries (e.g. "*", "claude-*", "gemini-*") are routing
         // patterns, not concrete model names, so they cannot be tested via
         // the proxy's /v1/messages endpoint. Hide the test button but keep
@@ -1391,6 +1768,7 @@ export function handleDashboardPage(env: Env): Response {
           + '<div class="row-actions">'
             + testBtnHtml
             + '<input type="text" data-kind="model-base" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '" value="' + escapeHtml(base) + '" placeholder="base_url override"' + disabledAttr + ' />'
+            + perModelModeSelect(categoryName, modelKey, perModelMode)
             + '<button type="button" class="mini-btn danger" data-action="remove-model" data-category="' + escapeHtml(categoryName) + '" data-key="' + escapeHtml(modelKey) + '"' + (isReadOnly ? ' disabled' : '') + '>x</button>'
           + '</div>'
           + '</div>';
@@ -1652,11 +2030,14 @@ export function handleDashboardPage(env: Env): Response {
           const alias = el.value;
           const baseEl = document.querySelector('[data-kind="model-base"][data-category="' + category + '"][data-key="' + key + '"]');
           const base = baseEl ? baseEl.value : '';
+          const modeEl = document.querySelector('[data-kind="model-mode"][data-category="' + category + '"][data-key="' + key + '"]');
+          const mode = modeEl ? modeEl.value : '';
           // Backend validator accepts model entries as [target] (1 elem) or
-          // [target, base_url, ''] (3 elems) — see isSafeModelArray /
+          // [target, base_url, mode] (3 elems) — see isSafeModelArray /
           // TC1214. A bare 2-element array would be rejected as
-          // "Invalid model entry for <category>.<key>".
-          payload.models[category][key] = base ? [alias, base, ''] : [alias];
+          // "Invalid model entry for <category>.<key>". Index 2 carries the
+          // per-model upstream_mode override ('' = inherit category).
+          payload.models[category][key] = (base || mode) ? [alias, base, mode] : [alias];
         });
 
         Object.entries(currentConfig.composite || {}).forEach(([aliasName, targets]) => {
@@ -1883,15 +2264,10 @@ export function handleDashboardPage(env: Env): Response {
           const category = target.dataset.category;
           if (!category) return;
           ensureCategory(category);
-          const key = window.prompt('New model key (e.g. gpt-5-mini):');
-          if (!key) return;
-          if (currentConfig.models[category][key] !== undefined) {
-            window.alert('Model key already exists in this category');
-            return;
-          }
-          currentConfig.models[category][key] = ['', ''];
-          renderConfigForm(currentConfig);
-          saveConfig();
+          // Mark dirty before opening the wizard so stats auto-reload is
+          // paused while the user fills the modal.
+          configDirty = true;
+          openAddModelWizard(category);
           return;
         }
 
@@ -1927,68 +2303,10 @@ export function handleDashboardPage(env: Env): Response {
         if (action === 'add-composite-target') {
           const alias = target.dataset.alias;
           if (!alias) return;
-          // Mark dirty before the prompt so stats auto-reload is paused
-          // while the user is still typing the target model name.
+          // Mark dirty before opening the wizard so stats auto-reload is
+          // paused while the user is filling in the modal.
           configDirty = true;
-          if (!currentConfig.composite[alias]) {
-            currentConfig.composite[alias] = {};
-          }
-          const existingTargetKeys = Object.keys(currentConfig.composite[alias] || {}).filter((k) => k !== 'token_limit' && k !== 'fusion_options');
-          if (existingTargetKeys.length === 0) {
-            // Empty alias — pick a mode first so the new target seeds the right fields.
-            const mode = promptAliasMode();
-            if (mode === null) {
-              configDirty = false;
-              return;
-            }
-            const targetModel = window.prompt('New target model for composite.' + alias + ' (first target, sets mode):');
-            if (!targetModel) {
-              configDirty = false;
-              return;
-            }
-            if (currentConfig.composite[alias][targetModel]) {
-              window.alert('Composite target already exists');
-              configDirty = false;
-              return;
-            }
-            if (mode === 'coordinator') {
-              // Note: \\n so the outer HTML template literal doesn't collapse the escape
-              // into a real newline (which would break this single-quoted string).
-              const role = window.prompt('Role for ' + targetModel + ':\\n  1) [p]lanner\\n  2) [e]xecutor\\nEnter 1, 2, p, or e:', '1');
-              if (role === null) {
-                configDirty = false;
-                return;
-              }
-              const trimmed = role.trim().toLowerCase();
-              const roleNorm = trimmed === '1' || trimmed === 'p' ? 'planner' : trimmed === '2' || trimmed === 'e' ? 'executor' : null;
-              if (roleNorm === null) {
-                window.alert('Invalid role — choose 1, 2, p, or e.');
-                configDirty = false;
-                return;
-              }
-              currentConfig.composite[alias][targetModel] = { coord: 1, role: roleNorm };
-            } else if (mode === 'fusion') {
-              currentConfig.composite[alias][targetModel] = { fusion: 1, role: 'panel' };
-            } else {
-              currentConfig.composite[alias][targetModel] = {};
-            }
-            renderConfigForm(currentConfig);
-            saveConfig();
-            return;
-          }
-          const targetModel = window.prompt('New target model for composite.' + alias + ':');
-          if (!targetModel) {
-            configDirty = false;
-            return;
-          }
-          if (currentConfig.composite[alias][targetModel]) {
-            window.alert('Composite target already exists');
-            configDirty = false;
-            return;
-          }
-          currentConfig.composite[alias][targetModel] = {};
-          renderConfigForm(currentConfig);
-          saveConfig();
+          openAddCompositeTargetWizard(alias);
           return;
         }
 

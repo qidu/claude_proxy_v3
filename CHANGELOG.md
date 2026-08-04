@@ -7,6 +7,53 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: dashboard now preserves per-model `upstream_mode` overrides on save
+
+Editing a `[models.*]` inline-table entry on `/dashboard` silently dropped
+the per-model `upstream_mode` (a.k.a. short alias `mode`) override on every
+save. `modelEntryRow` only rendered inputs for the target alias and
+`base_url`, and `collectConfigPayload` always sent `[target, base_url, '']`
+— so the backend `applyDashboardConfigUpdate` (which already reads `value[2]`
+as the mode) received an empty string and rewrote the entry with no override.
+After the fix, each model row renders a per-model `<select>` seeded from
+the GET payload's 3-element `[target, base_url, mode]` shape (mode index 2,
+`(inherit)` option for empty), and the PUT payload carries the picked mode
+at index 2. The existing inline-table aliases from `parseSimpleToml`
+(`upstream_mode`/`mode`, `base_url`/`url`, `api_key`/`key`) round-trip
+end-to-end now.
+
+### Dashboard: in-page wizards for "Add target" and "Add model entry"
+
+The two remaining `window.prompt`-based "add" flows on the `/dashboard`
+config editor are now self-contained modal wizards, matching the look and
+feel of the existing "Add composite alias" wizard (step indicator, Back /
+Next / Cancel, Esc-to-close, inline `modal-status` validation, and the
+`configDirty` gate that pauses stats auto-reload while the modal is open).
+
+- **"Add target"** (`composite.<alias>` → Add target) replaces the prompt
+  chain that asked for mode → model id → (coordinator only) role. For an
+  empty alias it shows a mode-picker step; for a non-empty alias the mode
+  is inferred from the existing targets and the wizard steps straight to
+  the target-id + per-mode properties form (composite: share / routing /
+  fallback, fusion: weight / role, coordinator: coord / role). Plain
+  composite aliases with no per-mode shape skip the properties step, as
+  before.
+- **"Add model entry"** (`models.<category>` → Add model entry) replaces
+  the single key prompt with a small form collecting model key, alias
+  (upstream model id), and an optional base_url override, so the new row
+  is immediately useful instead of seeded with blanks. Wildcard keys
+  (`*`, `gpt-*`) are still allowed.
+- The per-mode target-property fields and the cfg builder were extracted
+  into shared module-level helpers (`compositeTargetFieldsHtml`,
+  `buildCompositeTargetCfg`) so the alias wizard and the new target
+  wizard cannot drift on field shape.
+- Side fix: new model entries are now written with the correctly-shaped
+  array (`[alias]` or `[alias, base_url, '']`) instead of the previous
+  `['', '']` 2-element seed, which the backend config validator rejects.
+  The old prompt path would have produced a row that failed validation
+  on save once the user typed anything into it.
+- The now-dead `promptAliasMode` helper has been removed.
+
 ### Fix: inline-table model entries now accept canonical key aliases
 
 `[models.*]` inline-table entries (e.g. `"glm-5.2-a" = {target = "...", ...}`)

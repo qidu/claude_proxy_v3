@@ -35,6 +35,8 @@ import {
   getCompositeAliasMode,
   resolveScheduleTarget,
   isScheduleAlias,
+  applyDashboardConfigUpdate,
+  toDashboardConfigPayload,
   type ProxyConfig,
   type TransformSet,
 } from '../../src/utils/config-loader.js';
@@ -1096,5 +1098,93 @@ describe('resolveScheduleTarget / isScheduleAlias', () => {
     const monday = new Date('2026-01-05T10:00:00');
     assert.equal(resolveScheduleTarget('saver', cfg, saturday), 'we');
     assert.equal(resolveScheduleTarget('saver', cfg, monday), undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyDashboardConfigUpdate — per-model mode round-trip
+// ---------------------------------------------------------------------------
+// Regression: the HTML dashboard's collectConfigPayload used to send
+// [target, base_url, ''] (always-empty mode), wiping any per-model
+// upstream_mode override on save. These tests lock in that the PUT
+// handler preserves a non-empty mode at index 2 of the 3-element
+// dashboard array, and that an explicit '' does clear it.
+
+describe('applyDashboardConfigUpdate per-model mode', () => {
+  it('preserves per-model upstream_mode override sent at dashboard-array index 2', () => {
+    const base: ProxyConfig = {
+      models: {
+        free: {
+          upstream_mode: 'openai-completions',
+          base_url: 'https://default.example',
+          api_key: 'default-key',
+          // [target, base_url, api_key, mode] — internal 4-element shape
+          'glm-5.2-a': ['glm-5.2', 'https://override.example', 'override-key', 'anthropic-messages'],
+        },
+      },
+    };
+    // Dashboard sends [target, base_url, mode] — api_key stripped, mode at
+    // index 2 (the shape produced by sanitizeDashboardCategoryConfig and
+    // consumed by applyDashboardConfigUpdate).
+    const next = applyDashboardConfigUpdate(base, {
+      models: {
+        free: {
+          upstream_mode: 'openai-completions',
+          base_url: 'https://default.example',
+          'glm-5.2-a': ['glm-5.2', 'https://override.example', 'anthropic-messages'],
+        },
+      },
+      composite: {},
+      schedule: {},
+    });
+    const entry = (next.models!.free as Record<string, unknown>)['glm-5.2-a'] as string[];
+    // Internal stored shape is [target, base_url, api_key, mode]
+    assert.equal(entry[0], 'glm-5.2');
+    assert.equal(entry[1], 'https://override.example');
+    assert.equal(entry[2], 'override-key', 'api_key must be preserved from base');
+    assert.equal(entry[3], 'anthropic-messages', 'per-model mode must be preserved');
+  });
+
+  it('clears per-model mode when dashboard sends empty string at index 2', () => {
+    const base: ProxyConfig = {
+      models: {
+        free: {
+          upstream_mode: 'openai-completions',
+          base_url: 'https://default.example',
+          api_key: 'default-key',
+          'glm-5.2-a': ['glm-5.2', '', 'override-key', 'anthropic-messages'],
+        },
+      },
+    };
+    const next = applyDashboardConfigUpdate(base, {
+      models: {
+        free: {
+          upstream_mode: 'openai-completions',
+          base_url: 'https://default.example',
+          // User picked "(inherit)" in the per-model mode select → ''
+          'glm-5.2-a': ['glm-5.2', '', ''],
+        },
+      },
+      composite: {},
+      schedule: {},
+    });
+    const entry = (next.models!.free as Record<string, unknown>)['glm-5.2-a'] as string[];
+    assert.equal(entry[3], '', 'per-model mode must be cleared to inherit');
+  });
+
+  it('toDashboardConfigPayload emits mode at index 2 of the 3-element GET array', () => {
+    const cfg: ProxyConfig = {
+      models: {
+        free: {
+          upstream_mode: 'openai-completions',
+          base_url: 'https://default.example',
+          api_key: 'secret',
+          'glm-5.2-a': ['glm-5.2', 'https://override.example', 'secret', 'anthropic-messages'],
+        },
+      },
+    };
+    const payload = toDashboardConfigPayload(cfg);
+    const entry = (payload.models.free as Record<string, unknown>)['glm-5.2-a'] as string[];
+    assert.deepEqual(entry, ['glm-5.2', 'https://override.example', 'anthropic-messages']);
   });
 });
