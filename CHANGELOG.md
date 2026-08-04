@@ -7,6 +7,18 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: config validator accepts `sdk://` `base_url`
+
+`validateProxyConfig` previously rejected any non-`http(s)` scheme in
+`default_upstream.default_base_url`, `[models.*].base_url`, and per-model
+overrides. This flagged valid `sdk://` entries (e.g.
+`models.free.llama3.base_url = "sdk://chatjimmy.ai/api"`) as
+`base_url must use http or https protocol, got: sdk:`. The `sdk://` scheme is
+a project-internal convention rewritten to `https://` at request time by
+`src/utils/sdk-handler.ts`, so it is now accepted alongside `http`/`https`.
+Added a positive `sdk://` unit test; the existing `ftp://bad` rejection case
+still holds.
+
 ### Tests: unit coverage for `hash-detect.ts`, handlers, `config-loader.ts`, `validation.ts`
 
 Closed the largest coverage gaps flagged in the test-coverage review by adding

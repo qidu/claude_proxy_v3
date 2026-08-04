@@ -2190,8 +2190,10 @@ function validateBaseUrls(config: ProxyConfig, errors: ConfigValidationError[]):
     if (trimmed === '') return;
     try {
       const parsed = new URL(trimmed);
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        errors.push({ path, message: `base_url must use http or https protocol, got: ${parsed.protocol}` });
+      // sdk:// is a project-internal scheme rewritten to https:// at request
+      // time by the SDK handler (see src/utils/sdk-handler.ts).
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'sdk:') {
+        errors.push({ path, message: `base_url must use http, https, or sdk protocol, got: ${parsed.protocol}` });
       }
     } catch {
       errors.push({ path, message: `base_url is not a valid URL: ${trimmed}` });

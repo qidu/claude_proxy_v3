@@ -759,6 +759,14 @@ describe('validateProxyConfig', () => {
     assert.ok(r.errors.some(e => e.path === 'default_upstream.default_base_url'));
   });
 
+  it('accepts sdk:// base_url (rewritten to https at request time)', () => {
+    const cfg: ProxyConfig = {
+      models: { free: { base_url: 'https://x', llama3: ['llama3.1-8B', 'sdk://chatjimmy.ai/api', '-'] } as any },
+    };
+    const r = validateProxyConfig(cfg);
+    assert.ok(!r.errors.some(e => e.path.includes('llama3') && e.message.includes('sdk')));
+  });
+
   it('flags unparseable base_url', () => {
     const cfg: ProxyConfig = {
       default_upstream: { default_base_url: 'not a url at all' },
