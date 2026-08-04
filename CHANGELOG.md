@@ -7,6 +7,22 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Feature: `ensure_tool_config_cache_ttl` builtin (system → injection points)
+
+The `ensure_tool_config_cache_ttl` builtin now translates Anthropic-native
+prompt caching on the system prompt into the litellm/Bedrock-bridge
+convention. It reads `cache_control` from `body.system` content blocks (the
+array-of-blocks shape — a plain-string `system` is ignored) and appends a
+`{location:"tool_config", control:{...}}` entry to
+`body.cache_control_injection_points` when no `tool_config` entry already
+exists (caller-provided entries win). The serialized body is reordered so
+`cache_control_injection_points` lands after `tools`.
+
+No-op when `system` is absent, is a plain string, or carries no block-level
+`cache_control`. Attach via the existing `[transforms.bedrock_tool_cache_ttl_compat]`
+set on any bedrock-via-litellm route that uses system-prompt caching. See
+[docs/transforms-reference.md](./docs/transforms-reference.md).
+
 ### Fix: TOML save path now preserves `[transforms.*]` and `[transform_defaults]`
 
 `serializeProxyConfigToml` (used by `persistProxyConfigToPath`, which backs

@@ -723,6 +723,106 @@ describe('Tier-2 builtin: filter_anthropic_beta', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tier-2 builtin: ensure_tool_config_cache_ttl
+// ---------------------------------------------------------------------------
+
+describe('Tier-2 builtin: ensure_tool_config_cache_ttl', () => {
+  // Shared set: anthropic-messages schema, builtin at before_upstream.
+  const set: TransformSet = {
+    name: 'tool_cache_ttl',
+    schema: 'anthropic-messages',
+    before_upstream: { builtins: ['ensure_tool_config_cache_ttl'] },
+  };
+
+  it('appends a tool_config injection point derived from a system block cache_control', () => {
+    const body = {
+      system: [
+        { type: 'text', text: 'You are helpful.', cache_control: { type: 'ephemeral', ttl: '1h' } },
+      ],
+      tools: [{ name: 'get_weather', input_schema: {} }],
+    };
+    const result = runHook('before_upstream', payload(body), makeCtx([set]));
+    const ccip = result.body.cache_control_injection_points as Array<Record<string, unknown>>;
+    assert.deepEqual(ccip, [{ location: 'tool_config', control: { type: 'ephemeral', ttl: '1h' } }]);
+  });
+
+  it('preserves ttl when present and omits it when absent', () => {
+    const body = {
+      system: [
+        { type: 'text', text: 'x', cache_control: { type: 'ephemeral' } },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), makeCtx([set]));
+    const ccip = result.body.cache_control_injection_points as Array<Record<string, unknown>>;
+    assert.deepEqual(ccip, [{ location: 'tool_config', control: { type: 'ephemeral' } }]);
+    assert.equal('ttl' in (ccip[0].control as Record<string, unknown>), false);
+  });
+
+  it('is a no-op when system is a plain string', () => {
+    const body = { system: 'You are helpful.', tools: [{ name: 't', input_schema: {} }] };
+    const result = runHook('before_upstream', payload(body), makeCtx([set]));
+    assert.equal('cache_control_injection_points' in result.body, false);
+  });
+
+  it('is a no-op when system is absent', () => {
+    const body = { tools: [{ name: 't', input_schema: {} }] };
+    const result = runHook('before_upstream', payload(body), makeCtx([set]));
+    assert.equal('cache_control_injection_points' in result.body, false);
+  });
+
+  it('is a no-op when no system block carries cache_control', () => {
+    const body = {
+      system: [{ type: 'text', text: 'no cc here' }],
+      tools: [{ name: 't', input_schema: {} }],
+    };
+    const result = runHook('before_upstream', payload(body), makeCtx([set]));
+    assert.equal('cache_control_injection_points' in result.body, false);
+  });
+
+  it('is caller-wins: leaves an existing tool_config injection point untouched', () => {
+    const existing = { location: 'tool_config', control: { type: 'ephemeral', ttl: '5m' } };
+    const body = {
+      system: [
+        { type: 'text', text: 'x', cache_control: { type: 'ephemeral', ttl: '1h' } },
+      ],
+      cache_control_injection_points: [existing],
+    };
+    const result = runHook('before_upstream', payload(body), makeCtx([set]));
+    const ccip = result.body.cache_control_injection_points as Array<Record<string, unknown>>;
+    assert.equal(ccip.length, 1, 'must not append a duplicate tool_config entry');
+    assert.equal(ccip[0], existing, 'existing entry must not be mutated');
+  });
+
+  it('places cache_control_injection_points AFTER tools in body key order', () => {
+    const body = {
+      system: [
+        { type: 'text', text: 'x', cache_control: { type: 'ephemeral', ttl: '1h' } },
+      ],
+      tools: [{ name: 't', input_schema: {} }],
+    };
+    const result = runHook('before_upstream', payload(body), makeCtx([set]));
+    const keys = Object.keys(result.body);
+    const toolsIdx = keys.indexOf('tools');
+    const ccipIdx = keys.indexOf('cache_control_injection_points');
+    assert.notEqual(toolsIdx, -1, 'tools must be present');
+    assert.notEqual(ccipIdx, -1, 'cache_control_injection_points must be present');
+    assert.ok(ccipIdx > toolsIdx, 'cache_control_injection_points must come after tools');
+  });
+
+  it('reads the FIRST system block carrying cache_control when multiple qualify', () => {
+    const body = {
+      system: [
+        { type: 'text', text: 'a', cache_control: { type: 'ephemeral', ttl: '1h' } },
+        { type: 'text', text: 'b', cache_control: { type: 'ephemeral', ttl: '5m' } },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), makeCtx([set]));
+    const ccip = result.body.cache_control_injection_points as Array<Record<string, unknown>>;
+    assert.deepEqual(ccip[0].control, { type: 'ephemeral', ttl: '1h' });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Multiple transform sets, fold order
 // ---------------------------------------------------------------------------
 

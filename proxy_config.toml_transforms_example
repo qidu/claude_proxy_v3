@@ -41,6 +41,18 @@ schema = "anthropic-messages"
 anthropic_beta_map = {"computer-use-2025-01-24" = "computer-use-2025-01-24", "advanced-tool-use-2025-11-20" = "tool-search-tool-2025-10-19", "unsupported-feature" = ""}
 before_upstream.builtins = ["filter_anthropic_beta"]
 
+# Translate Anthropic-native prompt caching on the system prompt into the
+# litellm/Bedrock-bridge convention. Reads cache_control from body.system
+# content blocks (array-of-blocks shape), then appends a
+#   {location = "tool_config", control = {type = "ephemeral", ttl = "1h"}}
+# entry to body.cache_control_injection_points when no tool_config entry
+# already exists (caller wins). The serialized body is reordered so
+# cache_control_injection_points lands after tools.
+# Attach to any bedrock-via-litellm route that uses system-prompt caching.
+[transforms.bedrock_tool_cache_ttl_compat]
+schema = "anthropic-messages"
+before_upstream.builtins = ["ensure_tool_config_cache_ttl"]
+
 [transform_defaults]
 openai-completions = ["max_tokens_rename"]
 openai-responses = ["max_tokens_rename"]

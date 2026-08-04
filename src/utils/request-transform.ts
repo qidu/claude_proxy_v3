@@ -257,6 +257,65 @@ function applyBuiltin(
     return;
   }
 
+  if (name === 'ensure_tool_config_cache_ttl') {
+    // Translate the Anthropic-native system-block cache_control into the
+    // litellm/Bedrock-bridge convention cache_control_injection_points.
+    //
+    // Direction: READ cache_control from body.system content blocks (the
+    // array-of-blocks shape; a plain-string system carries no block-level
+    // cache_control and is ignored), then WRITE a {location:"tool_config"}
+    // entry into body.cache_control_injection_points — appending only when
+    // no tool_config entry already exists (caller-provided entries win).
+    //
+    // The serialized body must place cache_control_injection_points AFTER
+    // tools (some downstreams are sensitive to field order), so when tools
+    // is present we rebuild the body key order to enforce it.
+    //
+    // Canonical system block shape (per platform.claude.com prompt-caching):
+    //   system: [{type:"text", text:"...", cache_control:{type:"ephemeral", ttl?:"1h"}}]
+    if (!Array.isArray(body.system)) return;
+
+    // Find the first system block carrying a usable cache_control.
+    let derived: Record<string, unknown> | undefined;
+    for (const block of body.system as Record<string, unknown>[]) {
+      const cc = block.cache_control;
+      if (!cc || typeof cc !== 'object') continue;
+      const ccObj = cc as Record<string, unknown>;
+      if (typeof ccObj.type !== 'string') continue;
+      derived = { ...ccObj };
+      break;
+    }
+    if (!derived) return;
+
+    const injections = body.cache_control_injection_points;
+    if (Array.isArray(injections)) {
+      // Caller-wins: if a tool_config entry already exists, leave it untouched.
+      const hasToolConfig = (injections as Record<string, unknown>[]).some(
+        inj => inj.location === 'tool_config',
+      );
+      if (hasToolConfig) return;
+    }
+
+    // Append the derived entry.
+    const entry: Record<string, unknown> = {
+      location: 'tool_config',
+      control: derived,
+    };
+    if (Array.isArray(injections)) {
+      (injections as Record<string, unknown>[]).push(entry);
+    } else {
+      body.cache_control_injection_points = [entry];
+    }
+
+    // Enforce field order: cache_control_injection_points must land AFTER tools.
+    if ('tools' in body) {
+      const ccip = body.cache_control_injection_points;
+      delete body.cache_control_injection_points;
+      body.cache_control_injection_points = ccip;
+    }
+    return;
+  }
+
   if (name === 'filter_anthropic_beta') {
     // Filter and optionally rename entries in the anthropic-beta header using
     // the owning set's `anthropic_beta_map`. Mirrors LiteLLM's
