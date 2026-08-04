@@ -7,6 +7,53 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Tests: unit coverage for `hash-detect.ts`, handlers, `config-loader.ts`, `validation.ts`
+
+Closed the largest coverage gaps flagged in the test-coverage review by adding
+four unit-test files:
+
+- **`tests/unit/hash-detect.test.ts`** (47 cases) — full coverage of the
+  security-sensitive redaction scanner: `shannonEntropy`, `detectHashPriority`
+  (HIGH/LOW/NO branches, hexspeak whitelist, ordered-sequence filter, entropy
+  threshold, custom minLen), `detectB64Priority` (length floor, pure-hex skip,
+  entropy bar), `findHashSpans` (hex+b64 merge, overlap dedupe, left-to-right
+  ordering), and `buildWhitelist` (add/remove, file ingestion, comment
+  stripping, short/non-hex entry filtering).
+- **`tests/unit/handlers.test.ts`** (30 cases) — covers the exported pure
+  transformation helpers from the four big handlers: `completionsToClaudeBody`
+  (system extraction, tool_calls/tool_result grouping, reasoning_content→
+  thinking, tool mapping, stop normalization), `completionsToResponsesBody`
+  (instructions lift, input_text/output_text, function_call/output mapping,
+  passthrough fields), `claudeJsonToSyntheticCompletions` (text/tool_use/
+  thinking conversion, finish_reason mapping, usage totals), and
+  `isGeminiRequest` (path/URL classification).
+- **`tests/unit/config-loader.test.ts`** (103 cases) — covers `parseHumanTokenLimit`,
+  `formatTokenLimit`, `normalizeHookAlias`, `parseSimpleToml` (all sections +
+  inline tables, multi-line arrays, legacy aliases, `anthropic_beta_map`),
+  `validateTransformSet`/`validateAllTransforms`, `getModelConfig`
+  (exact/wildcard/default-catch-all precedence), `getModelRouteConfig`
+  (direct/composite/schedule resolution + cycle detection + wildcard
+  substitution), `validateProxyConfig` (model/composite/schedule/base_url
+  rules), `getModelNamesInConfig`, `findAliasNameConflicts`/
+  `stripConflictingAliases`, self-referencing composite target detection,
+  `getConfiguredModelIds`, `getAllowedHostsFromConfig`,
+  `getCompositeAliasMode`, and `resolveScheduleTarget` (hour/weekday/weekend
+  matching).
+- **`tests/unit/validation.test.ts`** (95 cases) — covers every public function in
+  `validation.ts`: `validateClaudeMessagesRequest` (required fields, numeric
+  bounds, `stop_sequences`/`metadata`/`stream`), `validateClaudeMessage`,
+  `validateClaudeContent`, every branch of `validateClaudeContentBlock`
+  (text/image-base64/image-url/document/tool_use/tool_result/thinking/
+  web_search_result), `clampThinkingBudget` (incl. interleaved-thinking
+  exception and the `max_tokens < 1024` throw), `validateThinkingConfig`,
+  `validateClaudeTokenCountingRequest`, `validateModelsRequestParams`,
+  `validateOpenAICompletionsRequest`, and `validateAuthHeaders`.
+
+The full network/streaming request paths in the four handlers remain covered
+by the integration suite in `./testcases`; these unit tests target the
+deterministic conversion logic that is hard to localize from integration
+failures alone. Total unit-test count rises from 309 to 584, all passing.
+
 ### Feature: `filter_anthropic_beta` builtin + `anthropic_beta_map` config
 
 Claude Code sends `anthropic-beta: header1,header2,...` to enable experimental
