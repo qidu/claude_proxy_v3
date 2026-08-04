@@ -81,7 +81,12 @@ function lowercaseSchemaTypes(schema: Record<string, unknown>): void {
   }
 }
 
-function applyBuiltin(name: BuiltinName, body: Record<string, unknown>): void {
+function applyBuiltin(
+  name: BuiltinName,
+  body: Record<string, unknown>,
+  headers: Record<string, string>,
+  set: TransformSet,
+): void {
   if (name === 'lowercase_tool_schema_types') {
     if (!Array.isArray(body.tools)) return;
     for (const tool of body.tools as Record<string, unknown>[]) {
@@ -251,6 +256,35 @@ function applyBuiltin(name: BuiltinName, body: Record<string, unknown>): void {
     }
     return;
   }
+
+  if (name === 'filter_anthropic_beta') {
+    // Filter and optionally rename entries in the anthropic-beta header using
+    // the owning set's `anthropic_beta_map`. Mirrors LiteLLM's
+    // anthropic_beta_headers_config.json semantics (docs/claude-beta-headers.md):
+    //   - entry not in map           → drop
+    //   - map value is null / ""     → drop
+    //   - map value is a non-empty   → emit the mapped name
+    // Input format is the real Claude Code comma-separated form
+    // (e.g. "a,b,c") — NOT the JSON array form beta-features.ts handles.
+    const raw = headers['anthropic-beta'];
+    if (!raw) return;
+    const map = set.anthropic_beta_map;
+    if (!map) return; // defensive: no map → pass through unchanged
+    const entries = raw.split(',').map(e => e.trim()).filter(Boolean);
+    const out: string[] = [];
+    for (const entry of entries) {
+      const mapped = map[entry];
+      if (mapped === undefined) continue;          // not in map → drop
+      if (mapped === null || mapped === '') continue; // explicit drop
+      out.push(mapped);
+    }
+    if (out.length === 0) {
+      delete headers['anthropic-beta'];
+    } else {
+      headers['anthropic-beta'] = out.join(',');
+    }
+    return;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +402,7 @@ function applyTransformSet(
 
   // Tier-2 built-ins first
   for (const b of slot.builtins ?? []) {
-    applyBuiltin(b, body);
+    applyBuiltin(b, body, headers, set);
   }
 
   // Tier-1 ops in declared order

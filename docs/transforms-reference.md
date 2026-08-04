@@ -105,6 +105,7 @@ Built-ins are declared in the `builtins` list of a hook slot. They run **before*
 | `lowercase_tool_schema_types` | `openai-completions`, `anthropic-messages` | Recursively lowercases every `type` field in `tools[*].function.parameters` (OpenAI shape) and `tools[*].input_schema` (Anthropic shape), including inside `anyOf`/`oneOf`/`allOf`. Required for upstreams that reject uppercase JSON-Schema type strings (e.g. DeepSeek). |
 | `recover_tool_message_name` | `openai-completions` | Fills in missing `name` on `role=tool` messages by back-filling from the matching `tool_calls[].function.name` in the preceding assistant turn. Required for upstreams that reject nameless tool messages. |
 | `inject_missing_tool_results` | `anthropic-messages` | Enforces three DeepSeek-Anthropic invariants: (A) reorders text-only assistant turns that appear between a tool_use assistant and its tool_result user message; (B) merges consecutive pure-tool user messages into one; (C) synthesizes a placeholder `tool_result` block for any `tool_use` id that has no matching result. |
+| `filter_anthropic_beta` | any | Filters and optionally renames entries in the `anthropic-beta` request header using the set's `anthropic_beta_map`. Entries not in the map, or mapped to `null`/`""`, are dropped; others are emitted under their mapped name. See [anthropic-beta header filtering](#filter_anthropic_beta--anthropic-beta-header-filtering) below. |
 
 ### Built-in example
 
@@ -119,6 +120,45 @@ before_upstream.ops = [
   { op = "rename", path = "max_tokens", to = "max_completion_tokens" },
 ]
 ```
+
+### `filter_anthropic_beta` — anthropic-beta header filtering
+
+Claude Code sends `anthropic-beta: header1,header2,...` to enable experimental
+features. Upstreams that don't understand a given flag reject the whole request
+with `invalid beta flag`. This built-in applies a per-set allow/map table so
+operators can keep only the flags a given upstream supports, and optionally
+rename them (e.g. Bedrock maps `advanced-tool-use-2025-11-20` to
+`tool-search-tool-2025-10-19`). Mirrors LiteLLM's
+`anthropic_beta_headers_config.json` — see
+[docs/claude-beta-headers.md](./claude-beta-headers.md) for the full model.
+
+The map is declared at the **top level** of the transform set (not under a hook
+slot), and the built-in is typically attached to `before_upstream`:
+
+```toml
+[transforms.bedrock_beta_compat]
+schema = "anthropic-messages"
+anthropic_beta_map = {"computer-use-2025-01-24" = "computer-use-2025-01-24", "advanced-tool-use-2025-11-20" = "tool-search-tool-2025-10-19", "unsupported-feature" = ""}
+before_upstream.builtins = ["filter_anthropic_beta"]
+```
+
+Filtering rules (input is the comma-separated form real Claude Code sends; the
+JSON-array form produced by `beta-features.ts` is **not** parsed here):
+
+1. **Entry not in map** → dropped (allowlist semantics).
+2. **Map value `""` (empty string)** → dropped. This is the TOML spelling of
+   LiteLLM's `null`, since TOML has no null scalar.
+3. **Map value is a non-empty string** → emitted under that mapped name
+   (pass-through when the value equals the key, rename otherwise).
+
+If every entry is dropped, the `anthropic-beta` header is removed entirely
+(no empty header is sent). The built-in is a no-op when the set has no
+`anthropic_beta_map` (the header passes through unchanged).
+
+> **Note — base header.** The base `anthropic-beta` header is populated by
+> `routing.ts` and only for `anthropic-messages` upstreams. This built-in is a
+> second-stage filter on top of that base; it does not add the header for
+> non-anthropic upstreams.
 
 ---
 

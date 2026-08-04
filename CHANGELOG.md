@@ -7,6 +7,47 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Feature: `filter_anthropic_beta` builtin + `anthropic_beta_map` config
+
+Claude Code sends `anthropic-beta: header1,header2,...` to enable experimental
+features. Upstreams that don't understand a given flag reject the request with
+`invalid beta flag`. Following the model in
+[docs/claude-beta-headers.md](./docs/claude-beta-headers.md) (mirrored from
+LiteLLM's `anthropic_beta_headers_config.json`), this proxy now supports a
+per-set allow/map table so operators can keep only the flags a given upstream
+supports, and optionally rename them (e.g. Bedrock maps
+`advanced-tool-use-2025-11-20` → `tool-search-tool-2025-10-19`).
+
+**New builtin** `filter_anthropic_beta`, attached at `before_upstream`. Reads
+the `anthropic-beta` request header (comma-separated form), filters each entry
+through the owning set's `anthropic_beta_map`:
+- entry not in the map → dropped (allowlist semantics);
+- map value `""` (TOML's spelling of null) → dropped;
+- map value is a non-empty string → emitted under that mapped name.
+
+When no entries survive, the header is removed entirely.
+
+**New config field** `anthropic_beta_map` on `[transforms.<name>]`:
+
+```toml
+[transforms.bedrock_beta_compat]
+schema = "anthropic-messages"
+anthropic_beta_map = {"computer-use-2025-01-24" = "computer-use-2025-01-24", "advanced-tool-use-2025-11-20" = "tool-search-tool-2025-10-19", "unsupported-feature" = ""}
+before_upstream.builtins = ["filter_anthropic_beta"]
+```
+
+See [docs/transforms-reference.md](./docs/transforms-reference.md) §
+`filter_anthropic_beta`.
+
+**Bug fix — `before_upstream` header transforms were discarded.** Every
+`before_upstream` call site destructured only `{ body }` from `runHook(...)` and
+threw away the returned `headers`, so the existing `headers.set` /
+`headers.remove` knob had no effect since it was introduced. All twelve call
+sites in `handlers/{messages,chat-completions,responses,openai,gemini,claude}.ts`
+now capture `headers` back and thread it into the upstream `fetch()`. This was a
+prerequisite for `filter_anthropic_beta` (which mutates headers) and also fixes
+the pre-existing `headers.set`/`headers.remove` mechanism.
+
 ### Rename: canonical hook names `endpoint_readin`/`endpoint_writeout` → `request_ingress`/`response_egress`
 
 The transform-hook names `endpoint_readin` and `endpoint_writeout` were opaque

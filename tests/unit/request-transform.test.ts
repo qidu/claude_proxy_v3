@@ -644,6 +644,85 @@ describe('header transforms', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tier-2 builtin: filter_anthropic_beta
+// ---------------------------------------------------------------------------
+
+describe('Tier-2 builtin: filter_anthropic_beta', () => {
+  // Shared set with a map exercising pass-through, rename, and drop-by-empty.
+  const set: TransformSet = {
+    name: 'beta_filter',
+    schema: 'anthropic-messages',
+    anthropic_beta_map: {
+      'computer-use-2025-01-24': 'computer-use-2025-01-24', // pass-through
+      'advanced-tool-use-2025-11-20': 'tool-search-tool-2025-10-19', // rename
+      'unsupported-feature': '', // explicit drop (empty string)
+      // 'unknown-header' intentionally absent → drop
+    },
+    before_upstream: { builtins: ['filter_anthropic_beta'] },
+  };
+
+  it('passes through mapped entries, renames, drops empty/unmapped', () => {
+    const headers = { 'anthropic-beta': 'computer-use-2025-01-24,advanced-tool-use-2025-11-20,unsupported-feature,unknown-header' };
+    const result = runHook('before_upstream', payload({}, headers), makeCtx([set]));
+    assert.equal(result.headers['anthropic-beta'], 'computer-use-2025-01-24,tool-search-tool-2025-10-19');
+  });
+
+  it('removes the header entirely when no entries survive', () => {
+    const headers = { 'anthropic-beta': 'unsupported-feature,unknown-header' };
+    const result = runHook('before_upstream', payload({}, headers), makeCtx([set]));
+    assert.equal('anthropic-beta' in result.headers, false);
+  });
+
+  it('is a no-op when no anthropic-beta header is present', () => {
+    const result = runHook('before_upstream', payload({}, {}), makeCtx([set]));
+    assert.equal('anthropic-beta' in result.headers, false);
+  });
+
+  it('is a no-op (passes header through unchanged) when the set has no map', () => {
+    const setNoMap: TransformSet = {
+      name: 'beta_nomap',
+      schema: 'anthropic-messages',
+      before_upstream: { builtins: ['filter_anthropic_beta'] },
+    };
+    const headers = { 'anthropic-beta': 'a,b,c' };
+    const result = runHook('before_upstream', payload({}, headers), makeCtx([setNoMap]));
+    assert.equal(result.headers['anthropic-beta'], 'a,b,c');
+  });
+
+  it('handles comma-separated input (real Claude Code format), not JSON', () => {
+    // The legacy beta-features.ts path treats the header as a JSON array and
+    // fails on comma-separated input. This builtin must NOT parse JSON.
+    const headers = { 'anthropic-beta': '["computer-use-2025-01-24","advanced-tool-use-2025-11-20"]' };
+    const result = runHook('before_upstream', payload({}, headers), makeCtx([set]));
+    // The literal JSON string is one comma-less "entry" not in the map → dropped.
+    assert.equal('anthropic-beta' in result.headers, false);
+  });
+
+  it('trims whitespace around comma-separated entries', () => {
+    const headers = { 'anthropic-beta': ' computer-use-2025-01-24 , advanced-tool-use-2025-11-20 ' };
+    const result = runHook('before_upstream', payload({}, headers), makeCtx([set]));
+    assert.equal(result.headers['anthropic-beta'], 'computer-use-2025-01-24,tool-search-tool-2025-10-19');
+  });
+
+  it('runs before headers.set/remove in the same slot', () => {
+    // Builtins execute before the headers.set/remove stage. A later
+    // headers.set can override the filtered value.
+    const setWithOverride: TransformSet = {
+      name: 'beta_override',
+      schema: 'anthropic-messages',
+      anthropic_beta_map: { 'a': 'a' },
+      before_upstream: {
+        builtins: ['filter_anthropic_beta'],
+        headers: { set: { 'anthropic-beta': 'forced-value' } },
+      },
+    };
+    const headers = { 'anthropic-beta': 'a,b,unknown' };
+    const result = runHook('before_upstream', payload({}, headers), makeCtx([setWithOverride]));
+    assert.equal(result.headers['anthropic-beta'], 'forced-value');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Multiple transform sets, fold order
 // ---------------------------------------------------------------------------
 

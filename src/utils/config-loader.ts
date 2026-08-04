@@ -95,12 +95,20 @@ export type TransformOp =
   | { op: 'remove';    path: string }
   | { op: 'map_value'; path: string; from: unknown; to: unknown; when_sibling?: string };
 
-export type BuiltinName = 'lowercase_tool_schema_types' | 'recover_tool_message_name' | 'inject_missing_tool_results';
+export type BuiltinName = 'lowercase_tool_schema_types' | 'recover_tool_message_name' | 'inject_missing_tool_results' | 'filter_anthropic_beta';
 
 /** A named transform set declared under [transforms.<name>] */
 export interface TransformSet {
   name: string;
   schema: TransformSchema;
+  /**
+   * Beta-header allow/map table consumed by the `filter_anthropic_beta` builtin.
+   * Keys: input anthropic-beta entries (comma-separated header value).
+   * Values: the upstream header name to emit, or null to drop. Entries not
+   * present in the map are also dropped. Mirrors LiteLLM's
+   * anthropic_beta_headers_config.json (see docs/claude-beta-headers.md).
+   */
+  anthropic_beta_map?: Record<string, string | null>;
   // ops/builtins may be scoped to a hook or declared at the top level (apply to all hooks)
   request_ingress?: { ops?: TransformOp[]; builtins?: BuiltinName[] };
   before_conversion?: { ops?: TransformOp[]; builtins?: BuiltinName[] };
@@ -148,7 +156,7 @@ const SCHEMA_PATHS: Record<TransformSchema, Set<string>> = {
   ]),
 };
 
-const BUILTIN_NAMES: Set<BuiltinName> = new Set(['lowercase_tool_schema_types', 'recover_tool_message_name', 'inject_missing_tool_results']);
+const BUILTIN_NAMES: Set<BuiltinName> = new Set(['lowercase_tool_schema_types', 'recover_tool_message_name', 'inject_missing_tool_results', 'filter_anthropic_beta']);
 
 /**
  * Backward-compatible hook name aliases.
@@ -212,6 +220,18 @@ export function validateTransformSet(name: string, set: TransformSet): Transform
   if (!legalPaths) {
     errs.push({ set: name, message: `unknown schema "${set.schema}"` });
     return errs;
+  }
+
+  // Validate anthropic_beta_map if present.
+  if (set.anthropic_beta_map !== undefined) {
+    for (const [k, v] of Object.entries(set.anthropic_beta_map)) {
+      if (typeof k !== 'string' || k.length === 0) {
+        errs.push({ set: name, message: `anthropic_beta_map has a non-string or empty key` });
+      }
+      if (v !== null && typeof v !== 'string') {
+        errs.push({ set: name, message: `anthropic_beta_map["${k}"] must be a string or null, got ${typeof v}` });
+      }
+    }
   }
 
   const hookNames = ['request_ingress', 'before_conversion', 'before_upstream', 'after_upstream', 'response_egress'] as const;
@@ -2652,6 +2672,39 @@ export function parseSimpleToml(content: string): ProxyConfig {
         if (fields['transforms']) entry.push(fields['transforms']);
         const category = config.models[currentCategory] as ModelCategoryConfig;
         category[cleanKey] = entry as [string, string, string, string, string];
+        continue;
+      }
+    }
+
+    // Handle transforms anthropic_beta_map inline table:
+    //   anthropic_beta_map = { "header-a" = "mapped-a", "header-b" = "" }
+    // Empty-string value means "drop" (TOML has no null scalar).
+    if (currentSection === 'transforms' && currentCategory && config.transforms) {
+      const betaMapMatch = trimmedNoComment.match(/^anthropic_beta_map\s*=\s*(\{.*\})$/);
+      if (betaMapMatch) {
+        const set = config.transforms[currentCategory];
+        const tableBody = betaMapMatch[1].slice(1, -1);
+        const map: Record<string, string | null> = {};
+        // Reuse the top-level-comma split that respects quoted strings.
+        const parts: string[] = [];
+        let buf = '';
+        let inQuote = false;
+        for (let ci = 0; ci < tableBody.length; ci++) {
+          const ch = tableBody[ci];
+          if (ch === '"') inQuote = !inQuote;
+          if (ch === ',' && !inQuote) { parts.push(buf); buf = ''; }
+          else buf += ch;
+        }
+        if (buf.trim()) parts.push(buf);
+        for (const part of parts) {
+          const kv = part.trim().match(/^"?([^"=]+?)"?\s*=\s*"([^"]*)"$/);
+          if (kv) {
+            const k = kv[1].trim().replace(/^"|"$/g, '');
+            // Empty string → null (drop). Otherwise the literal mapped name.
+            map[k] = kv[2] === '' ? null : kv[2];
+          }
+        }
+        set.anthropic_beta_map = map;
         continue;
       }
     }

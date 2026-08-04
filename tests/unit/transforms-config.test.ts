@@ -159,6 +159,36 @@ describe('validateTransformSet', () => {
     assert.deepEqual(validateTransformSet('good', set), []);
   });
 
+  it('accepts filter_anthropic_beta builtin and a valid anthropic_beta_map', () => {
+    const set: TransformSet = {
+      name: 'beta_good',
+      schema: 'anthropic-messages',
+      anthropic_beta_map: { 'a': 'a', 'b': null },
+      before_upstream: { builtins: ['filter_anthropic_beta'] },
+    };
+    assert.deepEqual(validateTransformSet('beta_good', set), []);
+  });
+
+  it('accepts filter_anthropic_beta with no map (no-op at runtime)', () => {
+    const set: TransformSet = {
+      name: 'beta_nomap',
+      schema: 'anthropic-messages',
+      before_upstream: { builtins: ['filter_anthropic_beta'] },
+    };
+    assert.deepEqual(validateTransformSet('beta_nomap', set), []);
+  });
+
+  it('rejects anthropic_beta_map with a non-string value', () => {
+    const set: TransformSet = {
+      name: 'bad',
+      schema: 'anthropic-messages',
+      anthropic_beta_map: { 'a': 123 as unknown as string },
+      before_upstream: { builtins: ['filter_anthropic_beta'] },
+    };
+    const errs = validateTransformSet('bad', set);
+    assert.ok(errs.some(e => e.message.includes('anthropic_beta_map') && e.message.includes('must be a string or null')));
+  });
+
   it('rejects $response.<field> with further nesting under anthropic-messages', () => {
     const set: TransformSet = {
       name: 'bad',
@@ -250,6 +280,23 @@ before_upstream.builtins = ["recover_tool_message_name"]
     const set = config.transforms?.['deepseek_compat'];
     assert.ok(set);
     assert.deepEqual(set.before_upstream?.builtins, ['recover_tool_message_name']);
+  });
+
+  it('parses anthropic_beta_map inline table (empty-string value → null)', () => {
+    const config = parseSimpleToml(`
+[transforms.beta_compat]
+schema = "anthropic-messages"
+anthropic_beta_map = {"advanced-tool-use-2025-11-20" = "tool-search-tool-2025-10-19", "computer-use-2025-01-24" = "computer-use-2025-01-24", "unsupported" = ""}
+before_upstream.builtins = ["filter_anthropic_beta"]
+`);
+    const set = config.transforms?.['beta_compat'];
+    assert.ok(set);
+    assert.deepEqual(set.anthropic_beta_map, {
+      'advanced-tool-use-2025-11-20': 'tool-search-tool-2025-10-19',
+      'computer-use-2025-01-24': 'computer-use-2025-01-24',
+      'unsupported': null, // empty-string → null (drop)
+    });
+    assert.deepEqual(set.before_upstream?.builtins, ['filter_anthropic_beta']);
   });
 
   it('parses request_ingress.builtins array', () => {

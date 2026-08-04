@@ -468,7 +468,7 @@ async function handleAsAnthropicMessages(
       streaming: isStreaming,
       logger,
     };
-    ({ body: claudeBody } = runHook('before_upstream', { body: claudeBody, headers: authHeaders }, hookCtx));
+    ({ body: claudeBody, headers: authHeaders } = runHook('before_upstream', { body: claudeBody, headers: authHeaders }, hookCtx));
   }
 
   logger.debug(requestId, `Responses->anthropic-messages: ${JSON.stringify(claudeBody).substring(0, 500)}`);
@@ -659,7 +659,7 @@ async function handleAsCompletions(
       streaming: isStreaming,
       logger,
     };
-    ({ body: upstreamBodyResponses } = runHook('before_upstream', { body: upstreamBodyResponses, headers: authHeaders }, hookCtx));
+    ({ body: upstreamBodyResponses, headers: authHeaders } = runHook('before_upstream', { body: upstreamBodyResponses, headers: authHeaders }, hookCtx));
   }
   let response = await fetch(targetUrl, {
     method: 'POST',
@@ -1164,7 +1164,7 @@ export async function handleResponsesInputTokensRequest(
         upstreamMode: 'openai-completions',
         clientModel: model, requestId, streaming: false, logger: activeLogger,
       };
-      ({ body: countRequest } = runHook('before_upstream', { body: countRequest, headers: authHeaders }, hookCtx));
+      ({ body: countRequest, headers: authHeaders } = runHook('before_upstream', { body: countRequest, headers: authHeaders }, hookCtx));
     }
 
     let response = await fetch(targetUrl, {
@@ -1214,7 +1214,7 @@ export async function handleResponsesInputTokensRequest(
       upstreamMode: upstreamMode || 'openai-responses',
       clientModel: model, requestId, streaming: false, logger: activeLogger,
     };
-    ({ body: passthroughBodyInputTokens } = runHook('before_upstream', { body: passthroughBodyInputTokens, headers: authHeaders }, hookCtx));
+    ({ body: passthroughBodyInputTokens, headers: authHeaders } = runHook('before_upstream', { body: passthroughBodyInputTokens, headers: authHeaders }, hookCtx));
   }
   let passthroughInputTokensResponse = await fetch(targetUrl, {
     method: 'POST',
@@ -1287,7 +1287,7 @@ export async function handleResponsesCompactRequest(
         upstreamMode: 'openai-completions',
         clientModel: model, requestId, streaming: false, logger: activeLogger,
       };
-      ({ body: completionsRequest } = runHook('before_upstream', { body: completionsRequest, headers: authHeaders }, hookCtx));
+      ({ body: completionsRequest, headers: authHeaders } = runHook('before_upstream', { body: completionsRequest, headers: authHeaders }, hookCtx));
     }
 
     let compactCompletionsResponse = await fetch(targetUrl, {
@@ -1337,7 +1337,7 @@ export async function handleResponsesCompactRequest(
       upstreamMode: upstreamMode || 'openai-responses',
       clientModel: model, requestId, streaming: false, logger: activeLogger,
     };
-    ({ body: passthroughBodyCompact } = runHook('before_upstream', { body: passthroughBodyCompact, headers: authHeaders }, hookCtx));
+    ({ body: passthroughBodyCompact, headers: authHeaders } = runHook('before_upstream', { body: passthroughBodyCompact, headers: authHeaders }, hookCtx));
   }
   let compactPassthroughResponse = await fetch(targetUrl, {
     method: 'POST',
@@ -1396,7 +1396,7 @@ async function handleAsPassthrough(
       clientModel: (requestBody.model as string) || 'unknown',
       requestId, streaming: isStreaming, logger,
     };
-    ({ body: upstreamBodyPassthrough } = runHook('before_upstream', { body: upstreamBodyPassthrough, headers: authHeaders }, hookCtx));
+    ({ body: upstreamBodyPassthrough, headers: authHeaders } = runHook('before_upstream', { body: upstreamBodyPassthrough, headers: authHeaders }, hookCtx));
   }
   let response = await fetch(targetUrl, {
     method: 'POST',

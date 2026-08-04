@@ -66,7 +66,7 @@ export async function handleChatCompletionsPassthrough(
       streaming: isStreaming,
       logger,
     };
-    ({ body: parsedBody } = runHook('before_upstream', { body: parsedBody, headers: authHeaders }, hookCtx));
+    ({ body: parsedBody, headers: authHeaders } = runHook('before_upstream', { body: parsedBody, headers: authHeaders }, hookCtx));
   }
 
   // When the upstream is anthropic-messages, convert completions body → Claude Messages,
@@ -202,7 +202,7 @@ export async function handleChatCompletionsPassthrough(
         streaming: isStreaming,
         logger,
       };
-      ({ body: responsesBody } = runHook('before_upstream', { body: responsesBody, headers: authHeaders }, hookCtxResp));
+      ({ body: responsesBody, headers: authHeaders } = runHook('before_upstream', { body: responsesBody, headers: authHeaders }, hookCtxResp));
     }
 
     let responsesUpstreamResponse = await fetch(targetUrl, {

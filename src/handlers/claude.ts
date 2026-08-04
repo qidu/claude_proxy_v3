@@ -123,7 +123,7 @@ export async function handleClaudeRequest(
             streaming: requestBody.stream === true,
             logger: activeLogger,
         };
-        ({ body: upstreamBody } = runHook('before_upstream', { body: upstreamBody, headers: authHeaders }, hookCtx));
+        ({ body: upstreamBody, headers: authHeaders } = runHook('before_upstream', { body: upstreamBody, headers: authHeaders }, hookCtx));
     }
 
     // Pass through to native Claude API

@@ -32,6 +32,15 @@ response_egress.ops = [
   {op = "set", path = "$response.id", value = "step12_response_path_active"},
 ]
 
+# Beta-header filtering/mapping. Attach filter_anthropic_beta at before_upstream
+# and declare an anthropic_beta_map: entries not in the map are dropped; entries
+# mapped to "" are dropped; others are emitted under the mapped name (rename).
+# See docs/claude-beta-headers.md and docs/transforms-reference.md.
+[transforms.bedrock_beta_compat]
+schema = "anthropic-messages"
+anthropic_beta_map = {"computer-use-2025-01-24" = "computer-use-2025-01-24", "advanced-tool-use-2025-11-20" = "tool-search-tool-2025-10-19", "unsupported-feature" = ""}
+before_upstream.builtins = ["filter_anthropic_beta"]
+
 [transform_defaults]
 openai-completions = ["max_tokens_rename"]
 openai-responses = ["max_tokens_rename"]

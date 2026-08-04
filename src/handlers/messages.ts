@@ -405,7 +405,7 @@ export async function handleMessagesRequest(
         streaming: requestBody.stream === true,
         logger: activeLogger,
       };
-      ({ body: upstreamBodyOpenai } = runHook('before_upstream', { body: upstreamBodyOpenai, headers: authHeaders }, hookCtx));
+      ({ body: upstreamBodyOpenai, headers: authHeaders } = runHook('before_upstream', { body: upstreamBodyOpenai, headers: authHeaders }, hookCtx));
     }
     let response = await fetch(targetUrl, {
       method: 'POST',
@@ -692,7 +692,7 @@ export async function handleMessagesRequest(
       streaming: requestBody.stream === true,
       logger: activeLogger,
     };
-    ({ body: upstreamBodyClaude } = runHook('before_upstream', { body: upstreamBodyClaude, headers: authHeaders }, hookCtxClaude));
+    ({ body: upstreamBodyClaude, headers: authHeaders } = runHook('before_upstream', { body: upstreamBodyClaude, headers: authHeaders }, hookCtxClaude));
   }
   let response = await fetch(targetUrl, {
     method: 'POST',

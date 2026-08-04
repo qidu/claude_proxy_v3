@@ -793,7 +793,7 @@ async function forwardCompletionsAsOpenAIResponses(
       upstreamMode: 'openai-responses',
       clientModel: model, requestId, streaming: isStreaming ?? false, logger,
     };
-    ({ body: responsesBody } = runHook('before_upstream', { body: responsesBody, headers: authHeaders }, hookCtx));
+    ({ body: responsesBody, headers: authHeaders } = runHook('before_upstream', { body: responsesBody, headers: authHeaders }, hookCtx));
   }
 
   let response = await fetch(targetUrl, {
@@ -1039,7 +1039,7 @@ export async function handleOpenAIRequest(
     activeLogger.debug(requestId, `Authorization: ${authBaerer.substring(0, 16)}... upstream`);
 
     // Prepare headers
-    const headers: Record<string, string> = {
+    let headers: Record<string, string> = {
         'Content-Type': 'application/json',
         ...authHeaders,
     };
@@ -1085,7 +1085,7 @@ export async function handleOpenAIRequest(
             streaming: isStreaming,
             logger: activeLogger,
           };
-          ({ body: upstreamBody } = runHook('before_upstream', { body: upstreamBody, headers: authHeaders }, hookCtx));
+          ({ body: upstreamBody, headers } = runHook('before_upstream', { body: upstreamBody, headers }, hookCtx));
         }
         let response = await fetch(targetUrl, {
             method: 'POST',

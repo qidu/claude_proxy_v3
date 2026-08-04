@@ -271,7 +271,7 @@ async function handleGeminiInteractionsRequest(
             streaming: isStreaming,
             logger: activeLogger,
         };
-        ({ body: upstreamBodyGemini } = runHook('before_upstream', { body: upstreamBodyGemini, headers: geminiHeaders }, hookCtx));
+        ({ body: upstreamBodyGemini, headers: geminiHeaders } = runHook('before_upstream', { body: upstreamBodyGemini, headers: geminiHeaders }, hookCtx));
     }
 
     let response = await fetch(fullTargetUrl, {
@@ -445,7 +445,7 @@ async function handleGeminiGenerateContentRequest(
             streaming: isStreaming,
             logger: activeLogger,
         };
-        ({ body: upstreamBodyGeminiGen } = runHook('before_upstream', { body: upstreamBodyGeminiGen, headers: geminiHeaders }, hookCtx));
+        ({ body: upstreamBodyGeminiGen, headers: geminiHeaders } = runHook('before_upstream', { body: upstreamBodyGeminiGen, headers: geminiHeaders }, hookCtx));
     }
 
     try {
