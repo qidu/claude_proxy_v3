@@ -221,6 +221,30 @@ describe('parseSimpleToml', () => {
     assert.equal(entry[4], 't1,t2');
   });
 
+  it('accepts upstream_mode / url / key aliases in inline-table entries', () => {
+    const cfg = parseSimpleToml(`
+      [models.free]
+      upstream_mode = "openai-completions"
+      base_url = "https://default.example"
+      api_key = "default-key"
+      "glm-5.2-a" = {target = "glm-5.2", upstream_mode = "anthropic-messages", url = "https://open.bigmodel.cn/api/anthropic", key = "bigmodel-key"}
+    `);
+    const entry = (cfg.models?.free as Record<string, unknown>)['glm-5.2-a'] as string[];
+    assert.deepEqual(entry, ['glm-5.2', 'https://open.bigmodel.cn/api/anthropic', 'bigmodel-key', 'anthropic-messages']);
+  });
+
+  it('canonical upstream_mode/base_url/api_key win over short aliases when both present', () => {
+    const cfg = parseSimpleToml(`
+      [models.free]
+      "m" = {upstream_mode = "anthropic-messages", mode = "openai-completions", base_url = "https://canonical", url = "https://short", api_key = "ck", key = "sk"}
+    `);
+    const entry = (cfg.models?.free as Record<string, unknown>)['m'] as string[];
+    assert.equal(entry[1], 'https://canonical');
+    assert.equal(entry[2], 'ck');
+    assert.equal(entry[3], 'anthropic-messages');
+  });
+
+
   it('parses [composite] section with target config objects', () => {
     const cfg = parseSimpleToml(`
       [composite]

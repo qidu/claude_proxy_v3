@@ -2762,10 +2762,14 @@ export function parseSimpleToml(content: string): ProxyConfig {
           const kv = field.trim().match(/^(\w+)\s*=\s*"([^"]*)"$/);
           if (kv) fields[kv[1]] = kv[2];
         }
-        // {} or {base_url=..., api_key=..., mode=...} with no target: default target to the alias key.
+        // Inline model tables accept both canonical and short aliases:
+        //   target; upstream_mode | mode; base_url | url; api_key | key.
+        // Canonical (upstream_mode/base_url/api_key) wins when both are present.
         const target = fields['target'] ?? cleanKey;
-        const mode = fields['mode'] ?? '';
-        const entry: string[] = [target, fields['base_url'] ?? '', fields['api_key'] ?? '', mode];
+        const mode = fields['upstream_mode'] ?? fields['mode'] ?? '';
+        const baseUrl = fields['base_url'] ?? fields['url'] ?? '';
+        const apiKey = fields['api_key'] ?? fields['key'] ?? '';
+        const entry: string[] = [target, baseUrl, apiKey, mode];
         if (fields['transforms']) entry.push(fields['transforms']);
         const category = config.models[currentCategory] as ModelCategoryConfig;
         category[cleanKey] = entry as [string, string, string, string, string];

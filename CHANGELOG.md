@@ -7,6 +7,21 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: inline-table model entries now accept canonical key aliases
+
+`[models.*]` inline-table entries (e.g. `"glm-5.2-a" = {target = "...", ...}`)
+previously only parsed the short keys `mode` / `base_url` / `api_key`. Setting
+the canonical `upstream_mode` (which the rest of the codebase and the category
+sections use) was silently ignored, so a per-model override had no effect and
+the model fell back to the category's `upstream_mode` — surfacing as 404s when
+a model's `base_url` was an Anthropic-format host but the section defaulted to
+`openai-completions`. The parser now accepts both forms, with the canonical
+`upstream_mode` / `base_url` / `api_key` winning when both are present:
+
+- `upstream_mode` | `mode`
+- `base_url` | `url`
+- `api_key` | `key`
+
 ### Feature: `ensure_tool_config_cache_ttl` builtin (system → injection points)
 
 The `ensure_tool_config_cache_ttl` builtin now translates Anthropic-native
