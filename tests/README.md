@@ -14,7 +14,7 @@ npm run test:unit           # runs tsx --test tests/unit/**/*.test.ts
 
 #### Unit test coverage map
 
-16 files, ~285 test cases. Every test imports `./src` directly (no HTTP). The table maps each source module to the unit tests that exercise it; "via handler" marks modules covered only through `index.ts`/handler entry points rather than a dedicated unit test.
+22 files, 676 test cases. Every test imports `./src` directly (no HTTP). The table maps each source module to the unit tests that exercise it; "via handler" marks modules covered only through `index.ts`/handler entry points rather than a dedicated unit test.
 
 | Source module | Direct unit coverage |
 |---|---|
@@ -37,7 +37,12 @@ npm run test:unit           # runs tsx --test tests/unit/**/*.test.ts
 | `utils/conversation-store.ts` | via `testcases/16_security/conversation_store` (dist-import) |
 | `utils/errors.ts` | `errors` (all 7 error classes, transport classification, validation helpers) |
 | `utils/stringify.ts` | `stringify` |
-| `utils/validation.ts`, `thinking.ts`, `hash-detect.ts`, `beta-features.ts`, `tool-blocklist.ts`, `sdk-handler.ts` | via handler (integration testcases only) |
+| `utils/thinking.ts` | `thinking` (OpenAI↔Claude + boolean/string normalization, budget validate/adjust/estimate, merge, token-counting validation) |
+| `utils/beta-features.ts` | `beta-features` (header parse/validate — unknown-feature drop, invalid-JSON→null, `hasBetaFeature`/`createBetaHeader` round-trip) |
+| `utils/validation.ts` | `validation` |
+| `utils/hash-detect.ts` | `hash-detect` |
+| `utils/tool-blocklist.ts` | `tests/infra/tool-blocklist.ts` (`eraseBlockedTools`) |
+| `utils/sdk-handler.ts` | via handler (integration testcases only) |
 | `handlers/messages.ts`, `responses.ts`, `openai.ts` | via handler + `auth-with-model`, `responses-gemini-url`, `openai-gemini-role-default`, `think-tag-extraction` |
 | `handlers/gemini.ts`, `chat-completions.ts`, `claude.ts`, `models.ts`, `embeddings.ts`, `dashboard.ts`, `token-counting.ts` | integration only (`testcases/`) |
 | `index.ts` (handler entry) | `auth-with-model`, `routing`, `responses-gemini-url`, `think-tag-extraction`, `openai-gemini-role-default` |

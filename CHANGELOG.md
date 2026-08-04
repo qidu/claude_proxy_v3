@@ -7,6 +7,16 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Test: add unit coverage for `thinking.ts` and `beta-features.ts`
+
+Both `src/utils/thinking.ts` and `src/utils/beta-features.ts` are pure,
+branch-heavy modules that previously had no direct unit tests (only indirect
+exercise via converters). Added `tests/unit/thinking.test.ts` and
+`tests/unit/beta-features.test.ts` covering normalization, budget
+validation/adjustment, estimation, merge logic, and the anthropic-beta header
+parse/validate contract (unknown features dropped, invalid JSON returns `null`
+without throwing). +76 unit tests (600 → 676), all passing.
+
 ### Fix: dashboard now preserves per-model `upstream_mode` overrides on save
 
 Editing a `[models.*]` inline-table entry on `/dashboard` silently dropped
