@@ -2222,6 +2222,82 @@ function validateBaseUrls(config: ProxyConfig, errors: ConfigValidationError[]):
   }
 }
 
+/**
+ * Serialize a single TransformOp as a TOML inline table. Mirrors the syntax
+ * accepted by parseTransformOpsInline (regex /(\w+)\s*=\s*"([^"]*)"/g plus a
+ * `to = null` special case). Non-string `value`/`to`/`from` are coerced via
+ * String() because the parser only reads quoted-string fields.
+ */
+function serializeTransformOp(op: TransformOp): string {
+  switch (op.op) {
+    case 'rename':
+      return `{op = "rename", path = ${JSON.stringify(op.path)}, to = ${JSON.stringify(op.to)}}`;
+    case 'set':
+      return `{op = "set", path = ${JSON.stringify(op.path)}, value = ${JSON.stringify(String(op.value))}}`;
+    case 'default':
+      return `{op = "default", path = ${JSON.stringify(op.path)}, value = ${JSON.stringify(String(op.value))}}`;
+    case 'remove':
+      return `{op = "remove", path = ${JSON.stringify(op.path)}}`;
+    case 'map_value': {
+      const to = op.to === null ? 'null' : JSON.stringify(String(op.to));
+      const tail = op.when_sibling ? `, when_sibling = ${JSON.stringify(op.when_sibling)}` : '';
+      return `{op = "map_value", path = ${JSON.stringify(op.path)}, from = ${JSON.stringify(String(op.from))}, to = ${to}${tail}}`;
+    }
+  }
+}
+
+/**
+ * Serialize one hook slot (e.g. before_upstream) as dotted-key TOML lines.
+ * Emits ops / builtins / headers.set / headers.remove only when present and
+ * non-empty, matching the parser's accepted dotted-key forms at lines 2736+.
+ *
+ * Note: headers.set / headers.remove are emitted when present even though
+ * parseSimpleToml does not yet parse them back — the round-trip loss is
+ * unchanged from today and documented in CHANGELOG.
+ */
+function serializeTransformHookSlot(slot: NonNullable<TransformSet['before_upstream']>, hookName: string): string[] {
+  const out: string[] = [];
+  if (slot.ops?.length) {
+    out.push(`${hookName}.ops = [${slot.ops.map(serializeTransformOp).join(', ')}]`);
+  }
+  if (slot.builtins?.length) {
+    out.push(`${hookName}.builtins = [${slot.builtins.map((b) => JSON.stringify(b)).join(', ')}]`);
+  }
+  if (slot.headers?.set) {
+    const entries = Object.entries(slot.headers.set);
+    if (entries.length) {
+      out.push(`${hookName}.headers.set = {${entries.map(([k, v]) => `${JSON.stringify(k)} = ${JSON.stringify(v)}`).join(', ')}}`);
+    }
+  }
+  if (slot.headers?.remove?.length) {
+    out.push(`${hookName}.headers.remove = [${slot.headers.remove.map((h) => JSON.stringify(h)).join(', ')}]`);
+  }
+  return out;
+}
+
+/**
+ * Serialize a [transforms.<name>] section. Hook order is fixed so output is
+ * deterministic; matches the canonical HookKey order used throughout the file.
+ */
+function serializeTransformSet(set: TransformSet): string[] {
+  const out: string[] = [];
+  out.push(`schema = ${JSON.stringify(set.schema)}`);
+  if (set.anthropic_beta_map) {
+    const entries = Object.entries(set.anthropic_beta_map);
+    if (entries.length) {
+      // Parser convention: empty string value means "drop" (line 2706).
+      out.push(`anthropic_beta_map = {${entries.map(([k, v]) => `${JSON.stringify(k)} = ${JSON.stringify(v === null ? '' : v)}`).join(', ')}}`);
+    }
+  }
+  const hookOrder: Array<'request_ingress' | 'before_conversion' | 'before_upstream' | 'after_upstream' | 'response_egress'> =
+    ['request_ingress', 'before_conversion', 'before_upstream', 'after_upstream', 'response_egress'];
+  for (const hook of hookOrder) {
+    const slot = set[hook];
+    if (slot) out.push(...serializeTransformHookSlot(slot, hook));
+  }
+  return out;
+}
+
 export function serializeProxyConfigToml(config: ProxyConfig): string {
   const lines: string[] = [];
 
@@ -2281,6 +2357,25 @@ export function serializeProxyConfigToml(config: ProxyConfig): string {
     lines.push('[defaults]');
     lines.push(...serializeTomlSection(config.defaults as Record<string, unknown>));
     lines.push('');
+  }
+
+  if (config.transforms) {
+    for (const [name, set] of Object.entries(config.transforms)) {
+      lines.push(`[transforms.${name}]`);
+      lines.push(...serializeTransformSet(set));
+      lines.push('');
+    }
+  }
+
+  if (config.transform_defaults) {
+    const entries = Object.entries(config.transform_defaults);
+    if (entries.length) {
+      lines.push('[transform_defaults]');
+      for (const [mode, names] of entries) {
+        lines.push(`${tomlKey(mode)} = [${names.map((n) => JSON.stringify(n)).join(', ')}]`);
+      }
+      lines.push('');
+    }
   }
 
   return lines.join('\n').replace(/\n$/, '');
@@ -3964,6 +4059,26 @@ export function persistProxyConfigToPath(configPath: string, config: ProxyConfig
 
   if ((config.dashboard?.api_key || '') !== (reparsed.dashboard?.api_key || '')) {
     throw new Error('Config serialization integrity check failed: dashboard.api_key changed on round-trip');
+  }
+
+  const expectedTransforms = Object.keys(config.transforms || {}).sort();
+  const actualTransforms = Object.keys(reparsed.transforms || {}).sort();
+  if (expectedTransforms.length !== actualTransforms.length ||
+      expectedTransforms.some((k, i) => k !== actualTransforms[i])) {
+    throw new Error(
+      `Config serialization integrity check failed: transforms set names changed on round-trip ` +
+      `(expected [${expectedTransforms.join(', ')}], got [${actualTransforms.join(', ')}])`
+    );
+  }
+
+  const expectedTransformDefaults = Object.keys(config.transform_defaults || {}).sort();
+  const actualTransformDefaults = Object.keys(reparsed.transform_defaults || {}).sort();
+  if (expectedTransformDefaults.length !== actualTransformDefaults.length ||
+      expectedTransformDefaults.some((k, i) => k !== actualTransformDefaults[i])) {
+    throw new Error(
+      `Config serialization integrity check failed: transform_defaults keys changed on round-trip ` +
+      `(expected [${expectedTransformDefaults.join(', ')}], got [${actualTransformDefaults.join(', ')}])`
+    );
   }
 
   // Atomic write: write to a temp file, back up the existing config, then rename.

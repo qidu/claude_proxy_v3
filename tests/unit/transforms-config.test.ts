@@ -13,6 +13,7 @@ import {
   validateTransformSet,
   validateAllTransforms,
   getModelRouteConfig,
+  serializeProxyConfigToml,
   type TransformSet,
   type ProxyConfig,
 } from '../../src/utils/config-loader.js';
@@ -531,5 +532,96 @@ describe('max_tokens_rename: mode-default wiring', () => {
     const result = runHook('before_upstream', { body: { temperature: 0.5 }, headers: {} }, ctx);
     assert.equal('max_completion_tokens' in result.body, false);
     assert.equal(result.body['temperature'], 0.5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// serializeProxyConfigToml — transforms / transform_defaults round-trip
+// ---------------------------------------------------------------------------
+
+describe('serializeProxyConfigToml: transforms round-trip', () => {
+  it('preserves transforms, ops, builtins, anthropic_beta_map, and transform_defaults through serialize → parse', () => {
+    const config: ProxyConfig = {
+      transforms: {
+        set_a: {
+          name: 'set_a',
+          schema: 'openai-completions',
+          before_upstream: {
+            ops: [
+              { op: 'rename', path: 'max_tokens', to: 'max_completion_tokens' },
+              { op: 'set', path: 'temperature', value: '0.7' },
+              { op: 'default', path: 'top_p', value: '0.9' },
+              { op: 'remove', path: 'output_config' },
+              { op: 'map_value', path: 'messages[role=assistant].content', from: '', to: null, when_sibling: 'tool_calls' },
+              { op: 'map_value', path: 'messages[role=user].content', from: 'x', to: 'y' },
+            ],
+            builtins: ['inject_missing_tool_results'],
+          },
+          request_ingress: {
+            builtins: ['lowercase_tool_schema_types'],
+          },
+        },
+        set_b: {
+          name: 'set_b',
+          schema: 'anthropic-messages',
+          anthropic_beta_map: {
+            'computer-use-2025-01-24': 'computer-use-2025-01-24',
+            'unsupported-feature': null,
+          },
+          before_upstream: {
+            builtins: ['filter_anthropic_beta'],
+          },
+        },
+      },
+      transform_defaults: {
+        'openai-completions': ['set_a'],
+      },
+    };
+
+    const serialized = serializeProxyConfigToml(config);
+    const reparsed = parseSimpleToml(serialized);
+
+    // transforms set names
+    assert.deepEqual(
+      Object.keys(reparsed.transforms || {}).sort(),
+      ['set_a', 'set_b'],
+    );
+
+    // set_a fields
+    const setA = reparsed.transforms!['set_a'];
+    assert.equal(setA.schema, 'openai-completions');
+    assert.deepEqual(
+      setA.before_upstream?.ops,
+      [
+        { op: 'rename', path: 'max_tokens', to: 'max_completion_tokens' },
+        { op: 'set', path: 'temperature', value: '0.7' },
+        { op: 'default', path: 'top_p', value: '0.9' },
+        { op: 'remove', path: 'output_config' },
+        { op: 'map_value', path: 'messages[role=assistant].content', from: '', to: null, when_sibling: 'tool_calls' },
+        { op: 'map_value', path: 'messages[role=user].content', from: 'x', to: 'y' },
+      ],
+    );
+    assert.deepEqual(setA.before_upstream?.builtins, ['inject_missing_tool_results']);
+    assert.deepEqual(setA.request_ingress?.builtins, ['lowercase_tool_schema_types']);
+
+    // set_b fields
+    const setB = reparsed.transforms!['set_b'];
+    assert.equal(setB.schema, 'anthropic-messages');
+    assert.deepEqual(setB.anthropic_beta_map, {
+      'computer-use-2025-01-24': 'computer-use-2025-01-24',
+      'unsupported-feature': null,
+    });
+    assert.deepEqual(setB.before_upstream?.builtins, ['filter_anthropic_beta']);
+
+    // transform_defaults
+    assert.deepEqual(reparsed.transform_defaults, {
+      'openai-completions': ['set_a'],
+    });
+  });
+
+  it('omits transforms and transform_defaults sections when absent', () => {
+    const serialized = serializeProxyConfigToml({});
+    assert.ok(!serialized.includes('[transforms.'));
+    assert.ok(!serialized.includes('[transform_defaults]'));
   });
 });

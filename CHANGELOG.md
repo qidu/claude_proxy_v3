@@ -7,6 +7,29 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: TOML save path now preserves `[transforms.*]` and `[transform_defaults]`
+
+`serializeProxyConfigToml` (used by `persistProxyConfigToPath`, which backs
+every TUI and dashboard-driven config save) had no branch for `transforms` or
+`transform_defaults`. As a result, any edit through the TUI or dashboard
+silently dropped every `[transforms.<name>]` section and the
+`[transform_defaults]` table on save. On reload, `[models.*]` entries still
+referenced transform-set names that no longer existed, so `validateAllTransforms`
+emitted per-reference errors and transform resolution produced empty sets.
+
+The fix adds serialization for transforms (schema, per-hook `ops`/`builtins`,
+`anthropic_beta_map`) and `transform_defaults`, and extends the round-trip
+integrity check in `persistProxyConfigToPath` to assert transform-set names and
+`transform_defaults` keys survive — so this class of silent loss is now caught
+at save time.
+
+Known pre-existing gap (not addressed here): `parseSimpleToml` has no branch
+that consumes `before_upstream.headers.set` / `headers.remove` (or the
+`response_egress` equivalents). The engine reads these fields
+(`applyHeaderTransforms` in `src/utils/request-transform.ts`), but they cannot
+currently be expressed in TOML. The serializer now emits them when present, so
+the on-disk form is correct; closing the parse-side gap is tracked separately.
+
 ### Fix: config validator accepts `sdk://` `base_url`
 
 `validateProxyConfig` previously rejected any non-`http(s)` scheme in
