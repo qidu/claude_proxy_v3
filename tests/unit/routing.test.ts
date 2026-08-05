@@ -231,6 +231,62 @@ describe('buildUpstreamUrl', () => {
     );
   });
 
+  it('dedupes a trailing v4 segment on baseUrl (BigModel-style)', () => {
+    assert.equal(
+      buildUpstreamUrl('https://open.bigmodel.cn/api/coding/paas/v4', 'v1/chat/completions'),
+      'https://open.bigmodel.cn/api/coding/paas/v4/chat/completions'
+    );
+  });
+
+  it('dedupes a trailing v2 segment on baseUrl', () => {
+    assert.equal(
+      buildUpstreamUrl('https://api.example.com/v2', 'v1/chat/completions'),
+      'https://api.example.com/v2/chat/completions'
+    );
+  });
+
+  it('dedupes any v\\d+ suffix segment when baseUrl ends with a version', () => {
+    assert.equal(
+      buildUpstreamUrl('https://api.example.com/v3', 'v2/responses'),
+      'https://api.example.com/v3/responses'
+    );
+  });
+
+  it('does not dedupe when baseUrl ends with a non-version segment', () => {
+    assert.equal(
+      buildUpstreamUrl('https://api.example.com/openai', 'v1/chat/completions'),
+      'https://api.example.com/openai/v1/chat/completions'
+    );
+  });
+
+  it('dedupes v4 with a v1/messages suffix (anthropic-messages schema)', () => {
+    assert.equal(
+      buildUpstreamUrl('https://open.bigmodel.cn/api/paas/v4', 'v1/messages'),
+      'https://open.bigmodel.cn/api/paas/v4/messages'
+    );
+  });
+
+  it('dedupes v2 with a v1/interactions suffix (interactions schema)', () => {
+    assert.equal(
+      buildUpstreamUrl('https://api.example.com/v2', 'v1/interactions'),
+      'https://api.example.com/v2/interactions'
+    );
+  });
+
+  it('dedupes v2 with a v1beta/models/:generateContent suffix', () => {
+    assert.equal(
+      buildUpstreamUrl('https://api.example.com/v2', 'v1beta/models/gemini-pro:generateContent'),
+      'https://api.example.com/v2/models/gemini-pro:generateContent'
+    );
+  });
+
+  it('dedupes v2 with a v1beta/models/:streamGenerateContent suffix', () => {
+    assert.equal(
+      buildUpstreamUrl('https://api.example.com/v2', 'v1beta/models/gemini-pro:streamGenerateContent?alt=sse'),
+      'https://api.example.com/v2/models/gemini-pro:streamGenerateContent?alt=sse'
+    );
+  });
+
   it('defensively avoids duplicating the exact suffix even when not a known marker', () => {
     assert.equal(
       buildUpstreamUrl('https://api.example.com/v1/models', 'v1/models'),

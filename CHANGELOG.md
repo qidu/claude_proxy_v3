@@ -7,6 +7,23 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: `buildUpstreamUrl` dedupes any trailing `v\d+` version segment
+
+`buildUpstreamUrl` (in `src/utils/routing.ts`) previously only stripped a
+doubled version segment when both the `base_url` tail and the suffix head
+were exactly `v1` or `v1beta`. Providers whose version segment is anything
+else (e.g. Zhipu/BigModel `…/paas/v4`) got the suffix's `v1/...` appended
+verbatim, producing a 404-inducing `/v4/v1/...` path under
+`openai-completions` (and likewise for `anthropic-messages`,
+`openai-responses`, and Gemini `v1beta/models/...:action` suffixes).
+
+Rule 3 now matches any trailing `v\d+[a-z]*` segment on `base_url` against
+any leading `v\d+[a-z]*/` segment on the suffix; the base's version wins and
+the suffix's leading version is dropped. The previous workaround of
+pre-baking the full path into `base_url` (still handled by rule 1) is no
+longer required for these providers. +8 unit tests in
+`tests/unit/routing.test.ts` (676 → 684), all passing.
+
 ### Test: add unit coverage for `thinking.ts` and `beta-features.ts`
 
 Both `src/utils/thinking.ts` and `src/utils/beta-features.ts` are pure,
