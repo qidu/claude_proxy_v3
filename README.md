@@ -161,6 +161,19 @@ Key ideas:
 > turns containing thinking blocks), a client-sent `{"type": "enabled"}` will be silently
 > dropped — use `"adaptive"` instead, which the model handles autonomously.
 
+> **Note — synthetic thinking-block signatures (Claude→OpenAI→Claude only):**
+> Anthropic's spec marks `signature` as REQUIRED on thinking content blocks, and clients such
+> as `@ai-sdk/anthropic` reject responses missing it. Upstreams reached via the conversion
+> paths (`openai-completions` / `openai-responses`, and the `sdk://` handler) emit reasoning
+> without a signature, so the proxy synthesizes a constant placeholder
+> (`SYNTHETIC_THINKING_SIGNATURE` = 'synthetic'). This **only** applies to the Claude→OpenAI→Claude
+> round-trip: the reverse converter round-trips reasoning via `reasoning_content` and drops the
+> signature before the upstream call, so the placeholder is never verified. For
+> `upstream_mode = "anthropic-messages"` the proxy does **not** synthesize anything — it is a
+> pure pass-through in both directions, so the upstream's own signature is preserved:
+>   - Client enables thinking + provides prior thinking blocks → forwarded as-is; signature passes through. ✓
+>   - Client enables thinking + provides prior thinking blocks but the signature is missing/garbage → forwarded as-is; a real Anthropic/Bedrock upstream rejects with HTTP 400.
+
 > **Note — `thinking.budget_tokens` vs `max_tokens`:** on `POST /v1/messages` and
 > `POST /v1/messages/count_tokens`, when `thinking` is enabled the validator reduces
 > `thinking.budget_tokens` down to `max_tokens` if the budget would otherwise exceed it.
