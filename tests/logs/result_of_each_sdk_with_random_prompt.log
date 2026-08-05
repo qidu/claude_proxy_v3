@@ -1,0 +1,1389 @@
+ROXY_BASE=http://localhost:8788 node tests/multi-sdk-test.ts -a
+Simple smoke: 2 model(s) x 5 SDK(s) x 20 prompt(s) at http://localhost:8788
+  model:  glm-5.2-anth
+  model:  glm-5.2-comp
+  sdk:    vercel-ai
+  sdk:    claude
+  sdk:    gemini
+  sdk:    codex
+  sdk:    pi
+  prompt: number_1_100/en
+  prompt: number_1_100/zh
+  prompt: number_1_10/en
+  prompt: number_1_10/zh
+  prompt: favorite_number/en
+  prompt: favorite_number/zh
+  prompt: letter/en
+  prompt: letter/zh
+  prompt: word/en
+  prompt: word/zh
+  prompt: color/en
+  prompt: color/zh
+  prompt: favorite_color/en
+  prompt: favorite_color/zh
+  prompt: animal/en
+  prompt: animal/zh
+  prompt: city/en
+  prompt: city/zh
+  prompt: coin/en
+  prompt: coin/zh
+
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: number_1_100/en ===========
+  Q (int_bounded [1,100]): Name a random number between 1 and 100. Answer with only the number.
+  answer (25 tokens): 42
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: number_1_100/zh ===========
+  Q (int_bounded [1,100]): 说一个1到100之间的随机整数。只回答这个数字。
+  answer (22 tokens): 42
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: number_1_10/en ===========
+  Q (int_bounded [1,10]): Name a random number between 1 and 10. Answer with only the number.
+  answer (25 tokens): 7
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: number_1_10/zh ===========
+  Q (int_bounded [1,10]): 说一个1到10之间的随机整数。只回答这个数字。
+  answer (22 tokens): 7
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: favorite_number/en ===========
+  Q (int_open): What is your favorite number? Answer with only the number.
+  answer (20 tokens): 42
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: favorite_number/zh ===========
+  Q (int_open): 你最喜欢的数字是什么？只回答这个数字。
+  answer (18 tokens): 7
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: letter/en ===========
+  Q (letter): Name a random letter of the English alphabet. Answer with only the letter.
+  answer (23 tokens): Q
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: letter/zh ===========
+  Q (letter): 说一个随机的英文字母。只回答这个字母。
+  answer (21 tokens): K
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: word/en ===========
+  Q (text): Name a random word. Answer with only the word.
+  answer (20 tokens): Banana
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: word/zh ===========
+  Q (text): 说一个随机的词。只回答这个词。
+  answer (19 tokens): 微澜
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: color/en ===========
+  Q (text): Name a random color. Answer with only the color.
+  answer (20 tokens): Chartreuse
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: color/zh ===========
+  Q (text): 说一个随机的颜色。只回答这个颜色。
+  answer (20 tokens): 青色
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: favorite_color/en ===========
+  Q (text): What is your favorite color? Answer with only the color.
+  answer (20 tokens): Blue
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: favorite_color/zh ===========
+  Q (text): 你最喜欢的颜色是什么？只回答这个颜色。
+  answer (18 tokens): 蓝色
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: animal/en ===========
+  Q (text): Name a random animal. Answer with only the animal.
+  answer (22 tokens): Platypus
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: animal/zh ===========
+  Q (text): 说一个随机的动物。只回答这个动物。
+  answer (20 tokens): 水豚
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: city/en ===========
+  Q (text): Name a random city. Answer with only the city name.
+  answer (21 tokens): Kyoto
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: city/zh ===========
+  Q (text): 说一个随机的城市。只回答这个城市的名字。
+  answer (20 tokens): 东京
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: coin/en ===========
+  Q (coin): Flip a coin. Answer with only 'heads' or 'tails'.
+  answer (22 tokens): heads
+
+=========== Model: glm-5.2-anth | SDK: vercel-ai | Prompt: coin/zh ===========
+  Q (coin): 抛一枚硬币。只回答“正面”或“反面”。
+  answer (21 tokens): 正面
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: number_1_100/en ===========
+  Q (int_bounded [1,100]): Name a random number between 1 and 100. Answer with only the number.
+  answer (121 tokens): 73
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: number_1_100/zh ===========
+  Q (int_bounded [1,100]): 说一个1到100之间的随机整数。只回答这个数字。
+  answer (133 tokens): 42
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: number_1_10/en ===========
+  Q (int_bounded [1,10]): Name a random number between 1 and 10. Answer with only the number.
+  answer (115 tokens): 7
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: number_1_10/zh ===========
+  Q (int_bounded [1,10]): 说一个1到10之间的随机整数。只回答这个数字。
+  answer (153 tokens): 7
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: favorite_number/en ===========
+  Q (int_open): What is your favorite number? Answer with only the number.
+  answer (179 tokens): 42
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: favorite_number/zh ===========
+  Q (int_open): 你最喜欢的数字是什么？只回答这个数字。
+  answer (280 tokens): 8
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: letter/en ===========
+  Q (letter): Name a random letter of the English alphabet. Answer with only the letter.
+  answer (125 tokens): Q
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: letter/zh ===========
+  Q (letter): 说一个随机的英文字母。只回答这个字母。
+  answer (155 tokens): R
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: word/en ===========
+  Q (text): Name a random word. Answer with only the word.
+  answer (168 tokens): Serendipity
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: word/zh ===========
+  Q (text): 说一个随机的词。只回答这个词。
+  answer (397 tokens): 风筝
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: color/en ===========
+  Q (text): Name a random color. Answer with only the color.
+  answer (118 tokens): Teal
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: color/zh ===========
+  Q (text): 说一个随机的颜色。只回答这个颜色。
+  answer (227 tokens): 靛蓝
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: favorite_color/en ===========
+  Q (text): What is your favorite color? Answer with only the color.
+  answer (183 tokens): Blue
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: favorite_color/zh ===========
+  Q (text): 你最喜欢的颜色是什么？只回答这个颜色。
+  answer (265 tokens): 蓝色
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: animal/en ===========
+  Q (text): Name a random animal. Answer with only the animal.
+  answer (147 tokens): Quokka
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: animal/zh ===========
+  Q (text): 说一个随机的动物。只回答这个动物。
+  answer (297 tokens): 水豚。
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: city/en ===========
+  Q (text): Name a random city. Answer with only the city name.
+  answer (112 tokens): Oslo
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: city/zh ===========
+  Q (text): 说一个随机的城市。只回答这个城市的名字。
+  answer (221 tokens): 京都
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: coin/en ===========
+  Q (coin): Flip a coin. Answer with only 'heads' or 'tails'.
+  answer (142 tokens): heads
+
+=========== Model: glm-5.2-comp | SDK: vercel-ai | Prompt: coin/zh ===========
+  Q (coin): 抛一枚硬币。只回答“正面”或“反面”。
+  answer (149 tokens): 正面
+
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: number_1_100/en ===========
+  Q (int_bounded [1,100]): Name a random number between 1 and 100. Answer with only the number.
+73  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: number_1_100/zh ===========
+  Q (int_bounded [1,100]): 说一个1到100之间的随机整数。只回答这个数字。
+42  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: number_1_10/en ===========
+  Q (int_bounded [1,10]): Name a random number between 1 and 10. Answer with only the number.
+7  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: number_1_10/zh ===========
+  Q (int_bounded [1,10]): 说一个1到10之间的随机整数。只回答这个数字。
+7  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: favorite_number/en ===========
+  Q (int_open): What is your favorite number? Answer with only the number.
+7  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: favorite_number/zh ===========
+  Q (int_open): 你最喜欢的数字是什么？只回答这个数字。
+7  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: letter/en ===========
+  Q (letter): Name a random letter of the English alphabet. Answer with only the letter.
+Q  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: letter/zh ===========
+  Q (letter): 说一个随机的英文字母。只回答这个字母。
+Q  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: word/en ===========
+  Q (text): Name a random word. Answer with only the word.
+pebble  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: word/zh ===========
+  Q (text): 说一个随机的词。只回答这个词。
+Cloud  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: color/en ===========
+  Q (text): Name a random color. Answer with only the color.
+Cerulean  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: color/zh ===========
+  Q (text): 说一个随机的颜色。只回答这个颜色。
+珊瑚红  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: favorite_color/en ===========
+  Q (text): What is your favorite color? Answer with only the color.
+Blue.  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: favorite_color/zh ===========
+  Q (text): 你最喜欢的颜色是什么？只回答这个颜色。
+蓝色。  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: animal/en ===========
+  Q (text): Name a random animal. Answer with only the animal.
+Platypus  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: animal/zh ===========
+  Q (text): 说一个随机的动物。只回答这个动物。
+水豚。  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: city/en ===========
+  Q (text): Name a random city. Answer with only the city name.
+Reykjavik  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: city/zh ===========
+  Q (text): 说一个随机的城市。只回答这个城市的名字。
+雷克雅未克  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: coin/en ===========
+  Q (coin): Flip a coin. Answer with only 'heads' or 'tails'.
+heads  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: claude | Prompt: coin/zh ===========
+  Q (coin): 抛一枚硬币。只回答“正面”或“反面”。
+正面  (claude status=success)
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: number_1_100/en ===========
+  Q (int_bounded [1,100]): Name a random number between 1 and 100. Answer with only the number.
+  answer: 42
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: number_1_100/zh ===========
+  Q (int_bounded [1,100]): 说一个1到100之间的随机整数。只回答这个数字。
+  answer: 42
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: number_1_10/en ===========
+  Q (int_bounded [1,10]): Name a random number between 1 and 10. Answer with only the number.
+  answer: 7
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: number_1_10/zh ===========
+  Q (int_bounded [1,10]): 说一个1到10之间的随机整数。只回答这个数字。
+  answer: 7
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: favorite_number/en ===========
+  Q (int_open): What is your favorite number? Answer with only the number.
+  answer: 7
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: favorite_number/zh ===========
+  Q (int_open): 你最喜欢的数字是什么？只回答这个数字。
+  answer: 7
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: letter/en ===========
+  Q (letter): Name a random letter of the English alphabet. Answer with only the letter.
+  answer: Q
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: letter/zh ===========
+  Q (letter): 说一个随机的英文字母。只回答这个字母。
+  answer: Q
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: word/en ===========
+  Q (text): Name a random word. Answer with only the word.
+  answer: Bicycle
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: word/zh ===========
+  Q (text): 说一个随机的词。只回答这个词。
+  answer: 云
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: color/en ===========
+  Q (text): Name a random color. Answer with only the color.
+  answer: Cerulean
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: color/zh ===========
+  Q (text): 说一个随机的颜色。只回答这个颜色。
+  answer: 青色
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: favorite_color/en ===========
+  Q (text): What is your favorite color? Answer with only the color.
+  answer: Blue
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: favorite_color/zh ===========
+  Q (text): 你最喜欢的颜色是什么？只回答这个颜色。
+  answer: 蓝色。
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: animal/en ===========
+  Q (text): Name a random animal. Answer with only the animal.
+  answer: Kangaroo
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: animal/zh ===========
+  Q (text): 说一个随机的动物。只回答这个动物。
+  answer: 水豚
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: city/en ===========
+  Q (text): Name a random city. Answer with only the city name.
+  answer: Kyoto
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: city/zh ===========
+  Q (text): 说一个随机的城市。只回答这个城市的名字。
+  answer: 雷克雅未克
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: coin/en ===========
+  Q (coin): Flip a coin. Answer with only 'heads' or 'tails'.
+  answer: heads
+
+=========== Model: glm-5.2-anth | SDK: gemini | Prompt: coin/zh ===========
+  Q (coin): 抛一枚硬币。只回答“正面”或“反面”。
+  answer: 正面
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: number_1_100/en ===========
+  Q (int_bounded [1,100]): Name a random number between 1 and 100. Answer with only the number.
+  answer: 42
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: number_1_100/zh ===========
+  Q (int_bounded [1,100]): 说一个1到100之间的随机整数。只回答这个数字。
+  answer: 42
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: number_1_10/en ===========
+  Q (int_bounded [1,10]): Name a random number between 1 and 10. Answer with only the number.
+  answer: 7
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: number_1_10/zh ===========
+  Q (int_bounded [1,10]): 说一个1到10之间的随机整数。只回答这个数字。
+  answer: 7
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: favorite_number/en ===========
+  Q (int_open): What is your favorite number? Answer with only the number.
+  answer: 7
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: favorite_number/zh ===========
+  Q (int_open): 你最喜欢的数字是什么？只回答这个数字。
+  answer: 42
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: letter/en ===========
+  Q (letter): Name a random letter of the English alphabet. Answer with only the letter.
+  answer: Q
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: letter/zh ===========
+  Q (letter): 说一个随机的英文字母。只回答这个字母。
+  answer: q
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: word/en ===========
+  Q (text): Name a random word. Answer with only the word.
+  answer: Banana
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: word/zh ===========
+  Q (text): 说一个随机的词。只回答这个词。
+  answer: 土豆
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: color/en ===========
+  Q (text): Name a random color. Answer with only the color.
+  answer: Turquoise
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: color/zh ===========
+  Q (text): 说一个随机的颜色。只回答这个颜色。
+  answer: 蓝色
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: favorite_color/en ===========
+  Q (text): What is your favorite color? Answer with only the color.
+  answer: Blue
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: favorite_color/zh ===========
+  Q (text): 你最喜欢的颜色是什么？只回答这个颜色。
+  answer: 蓝色
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: animal/en ===========
+  Q (text): Name a random animal. Answer with only the animal.
+  answer: Capybara
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: animal/zh ===========
+  Q (text): 说一个随机的动物。只回答这个动物。
+  answer: 树懒
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: city/en ===========
+  Q (text): Name a random city. Answer with only the city name.
+  answer: Kyoto
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: city/zh ===========
+  Q (text): 说一个随机的城市。只回答这个城市的名字。
+  answer: 东京
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: coin/en ===========
+  Q (coin): Flip a coin. Answer with only 'heads' or 'tails'.
+  answer: heads
+
+=========== Model: glm-5.2-anth | SDK: codex | Prompt: coin/zh ===========
+  Q (coin): 抛一枚硬币。只回答“正面”或“反面”。
+  answer: 反面
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: number_1_100/en ===========
+  Q (int_bounded [1,100]): Name a random number between 1 and 100. Answer with only the number.
+42
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: number_1_100/zh ===========
+  Q (int_bounded [1,100]): 说一个1到100之间的随机整数。只回答这个数字。
+42
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: number_1_10/en ===========
+  Q (int_bounded [1,10]): Name a random number between 1 and 10. Answer with only the number.
+7
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: number_1_10/zh ===========
+  Q (int_bounded [1,10]): 说一个1到10之间的随机整数。只回答这个数字。
+7
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: favorite_number/en ===========
+  Q (int_open): What is your favorite number? Answer with only the number.
+42
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: favorite_number/zh ===========
+  Q (int_open): 你最喜欢的数字是什么？只回答这个数字。
+42
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: letter/en ===========
+  Q (letter): Name a random letter of the English alphabet. Answer with only the letter.
+Q
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: letter/zh ===========
+  Q (letter): 说一个随机的英文字母。只回答这个字母。
+Q
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: word/en ===========
+  Q (text): Name a random word. Answer with only the word.
+Bicycle
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: word/zh ===========
+  Q (text): 说一个随机的词。只回答这个词。
+银河。
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: color/en ===========
+  Q (text): Name a random color. Answer with only the color.
+Cerulean
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: color/zh ===========
+  Q (text): 说一个随机的颜色。只回答这个颜色。
+青色
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: favorite_color/en ===========
+  Q (text): What is your favorite color? Answer with only the color.
+Blue.
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: favorite_color/zh ===========
+  Q (text): 你最喜欢的颜色是什么？只回答这个颜色。
+蓝色。
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: animal/en ===========
+  Q (text): Name a random animal. Answer with only the animal.
+Okapi
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: animal/zh ===========
+  Q (text): 说一个随机的动物。只回答这个动物。
+熊猫。
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: city/en ===========
+  Q (text): Name a random city. Answer with only the city name.
+Kyoto
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: city/zh ===========
+  Q (text): 说一个随机的城市。只回答这个城市的名字。
+雷克雅未克
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: coin/en ===========
+  Q (coin): Flip a coin. Answer with only 'heads' or 'tails'.
+tails
+
+=========== Model: glm-5.2-anth | SDK: pi | Prompt: coin/zh ===========
+  Q (coin): 抛一枚硬币。只回答“正面”或“反面”。
+正面
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: number_1_100/en ===========
+  Q (int_bounded [1,100]): Name a random number between 1 and 100. Answer with only the number.
+42  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: number_1_100/zh ===========
+  Q (int_bounded [1,100]): 说一个1到100之间的随机整数。只回答这个数字。
+37  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: number_1_10/en ===========
+  Q (int_bounded [1,10]): Name a random number between 1 and 10. Answer with only the number.
+7  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: number_1_10/zh ===========
+  Q (int_bounded [1,10]): 说一个1到10之间的随机整数。只回答这个数字。
+The user wants a random integer between 1 and 10. Just answer the number.
+
+I'll pick 7.7  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: favorite_number/en ===========
+  Q (int_open): What is your favorite number? Answer with only the number.
+7  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: favorite_number/zh ===========
+  Q (int_open): 你最喜欢的数字是什么？只回答这个数字。
+42  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: letter/en ===========
+  Q (letter): Name a random letter of the English alphabet. Answer with only the letter.
+Q  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: letter/zh ===========
+  Q (letter): 说一个随机的英文字母。只回答这个字母。
+The user wants a random English letter, just the letter.Q  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: word/en ===========
+  Q (text): Name a random word. Answer with only the word.
+The user wants a random word, answered with only the word.Pineapple  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: word/zh ===========
+  Q (text): 说一个随机的词。只回答这个词。
+The user wants a random word. Just one word.云  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: color/en ===========
+  Q (text): Name a random color. Answer with only the color.
+Chartreuse  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: color/zh ===========
+  Q (text): 说一个随机的颜色。只回答这个颜色。
+The user wants me to say a random color, and only answer with that color.青色  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: favorite_color/en ===========
+  Q (text): What is your favorite color? Answer with only the color.
+Blue.  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: favorite_color/zh ===========
+  Q (text): 你最喜欢的颜色是什么？只回答这个颜色。
+蓝色  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: animal/en ===========
+  Q (text): Name a random animal. Answer with only the animal.
+The user wants me to name a random animal, answering with only the animal name.Capybara  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: animal/zh ===========
+  Q (text): 说一个随机的动物。只回答这个动物。
+The user wants me to say a random animal and only respond with that animal.长颈鹿  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: city/en ===========
+  Q (text): Name a random city. Answer with only the city name.
+The user wants a random city name, only the city name.Valparaíso  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: city/zh ===========
+  Q (text): 说一个随机的城市。只回答这个城市的名字。
+东京  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: coin/en ===========
+  Q (coin): Flip a coin. Answer with only 'heads' or 'tails'.
+heads  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: claude | Prompt: coin/zh ===========
+  Q (coin): 抛一枚硬币。只回答“正面”或“反面”。
+反面  (claude status=success)
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: number_1_100/en ===========
+  Q (int_bounded [1,100]): Name a random number between 1 and 100. Answer with only the number.
+  answer: 1.  **Analyze the Request:** The user wants a random number between 1 and 100. The response must contain *only* the number.
+2.  **Generate a Random Number:** I will pick a random number in the specified range. Let's choose 73.
+3.  **Format the Output:** Ensure there is no additional text, punctuation, or explanation. Just the number.
+4.  **Final Output:** 73.73
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: number_1_100/zh ===========
+  Q (int_bounded [1,100]): 说一个1到100之间的随机整数。只回答这个数字。
+  answer: 1.  **分析请求：**
+    *   目标：说一个1到100之间的随机整数（含）。
+    *   约束：*只*回答这个数字。没有其他文本。
+
+2.  **生成随机数：**
+    *   挑选一个1到100之间的任意数字。就选42吧（经典的随机选择，但实际上任何数字都可以）。就选73吧（谢尔顿·库珀最喜欢的数字，很好的随机感）。就选57吧。
+
+3.  **格式化输出：**
+    *   严格要求只输出数字：`57`。
+
+4.  **最终验证：**
+    *   它是一个整数吗？是的。
+    *   它在1到100之间吗？是的。
+    *   是否*只有*数字？是的。57
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: number_1_10/en ===========
+  Q (int_bounded [1,10]): Name a random number between 1 and 10. Answer with only the number.
+  answer: 1.  **Analyze the Request:**
+    *   Target: A random number.
+    *   Range: Between 1 and 10 (inclusive).
+    *   Constraint: Answer with *only* the number.
+
+2.  **Generate a Random Number:**
+    *   Pick a number between 1 and 10.
+    *   Selection: 7.
+
+3.  **Format the Output:**
+    *   Apply the constraint: "Answer with only the number."
+    *   Result: 77
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: number_1_10/zh ===========
+  Q (int_bounded [1,10]): 说一个1到10之间的随机整数。只回答这个数字。
+  answer: 1.  **分析请求：**
+    *   任务：生成一个1到10之间的随机整数。
+    *   约束条件：只回答这个数字。没有其他文本。
+
+2.  **生成一个1到10之间的随机整数：**
+    *   数字：7（只是随便挑一个，这里选7）。
+
+3.  **格式化输出：**
+    *   必须严格只包含数字。不要“这是你的数字：”或任何标点符号。
+
+4.  **最终输出：**
+    *   77
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: favorite_number/en ===========
+  Q (int_open): What is your favorite number? Answer with only the number.
+  answer: 1.  **Analyze the Request:**
+    *   Question: "What is your favorite number?"
+    *   Constraint: "Answer with only the number."
+
+2.  **Determine the Output:**
+    *   As an AI, I don't have personal feelings or favorites, but I need to pick a number to satisfy the prompt.
+    *   Commonly chosen AI numbers are 42 (Hitchhiker's Guide), 73 (Big Bang Theory), or just something simple like 0 or 1.
+    *   42 is a classic, recognizable, and culturally significant number for an AI to choose.
+
+3.  **Apply the Constraint:**
+    *   "Answer with only the number." -> Output must be *just* the number, no text, no punctuation if possible (or just the digits).
+
+4.  **Final Selection:**
+    *   4242
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: favorite_number/zh ===========
+  Q (int_open): 你最喜欢的数字是什么？只回答这个数字。
+  answer: 1.  **分析请求：**
+    *   问题："你最喜欢的数字是什么？" (What is your favorite number?)
+    *   约束条件："只回答这个数字。" (Only answer with this number.)
+
+2.  **确定人设/答案：**
+    *   作为一个人工智能，我没有个人情感，但我需要挑选一个数字来满足提示要求。
+    *   常见的“科技/AI”数字：0，1，2，42。
+    *   就选42吧（关于生命、宇宙及一切的经典答案），或者8（吉利），或者简单地选1（二进制基础）。还是选8或者42吧。实际上，1非常有AI的特色。那0也不错。就选42吧，因为很有趣。等等，还是选8吧，因为它在视觉上很对称，而且在AI的文化中通常很受欢迎。就选8吧。或者也许是73（谢尔顿·库珀的数字）。还是选42吧。等等，数字“0”代表AI的无实体感。
+    *   挑选一个。就选8吧。
+
+3.  **格式化输出：**
+    *   约束条件*严格*要求*只*回答这个数字。没有标点符号，没有多余的词。
+    *   输出：8（或者42，0，1）。我们用42吧。实际上，1最简单。我们就输出1。
+    *   还是输出7吧。大家都喜欢7。
+
+4.  **对照约束条件进行审查：**
+    *   提示："只回答这个数字。" (Only answer this number.)
+    *   如果我输出"7."，那个句号严格来说是个标点符号。最好只输出"7"。
+
+5.  **最终选择：**
+    *   8
+    *   等等，我还是输出7吧。
+    *   我们输出42吧。
+    *   还是输出1吧。
+    *   我就写8。
+    *   实际上，写0。
+    *   让我们直接输出"7"。7
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: letter/en ===========
+  Q (letter): Name a random letter of the English alphabet. Answer with only the letter.
+  answer: 1.  **Analyze the Request:**
+    *   Task: Name a random letter of the English alphabet.
+    *   Constraint: Answer with *only* the letter.
+
+2.  **Select a Letter:**
+    *   There are 26 letters (A-Z).
+    *   Let's pick "Q".
+
+3.  **Format the Output:**
+    *   The user strictly requested "Answer with only the letter."
+    *   Output: QQ
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: letter/zh ===========
+  Q (letter): 说一个随机的英文字母。只回答这个字母。
+  answer: 1.  **分析请求：**
+    *   目标：生成一个随机的英文字母。
+    *   约束条件：只输出该字母。没有其他单词或标点符号。
+
+2.  **选择一个随机字母：**
+    *   我将挑选英文字母表中的一个字母。
+    *   选择的字母：'K'（或任何其他字母）。我们选 'Q' 吧。等等，'M' 也不错。我们用 'G' 吧。
+
+3.  **格式化输出：**
+    *   只输出该字母。"G"
+
+4.  **对照约束条件进行复查：**
+    *   它是单个英文字母吗？是的。
+    *   它是*唯一*的输出吗？是的。
+
+5.  **最终选择：** 让我们输出 "J"。J
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: word/en ===========
+  Q (text): Name a random word. Answer with only the word.
+  answer: 1.  **Analyze the Request:**
+    *   Task: Name a random word.
+    *   Constraint: Answer with *only* the word (no extra text, punctuation, or formatting if possible, just the word).
+
+2.  **Select a Random Word:**
+    *   Brainstorming options: apple, sky, velociraptor, telemetry, effervescent, pencil, solenoid.
+    *   Selection: "effervescent" (seems sufficiently random and distinct, but simple words work too. Let's go with something simple like "bicycle" or "velociraptor". Actually, let's just pick "umbrella").
+
+3.  **Format the Output:**
+    *   Constraint check: *Only* the word.
+    *   Output: umbrellaUmbrella
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: word/zh ===========
+  Q (text): 说一个随机的词。只回答这个词。
+  answer: 1.  **分析请求：**
+    *   任务：说一个随机的词。
+    *   约束：*只*回答这个词。没有标点符号，没有多余的文本。
+
+2.  **选择一个随机词：**
+    *   需要是一个单一的、有效的词（中文还是英文？提示词是中文，所以用一个中文词）。
+    *   让我们选择一些简单但有趣的东西。"云朵"（cloud），"星空"（starry sky），"键盘"（keyboard），"微风"（breeze）。
+    *   就用"微光"（glimmer）吧。实际上，只要一个完全随机的名词就行："树木"（tree），"苹果"（apple），"宇宙"（universe）。
+    *   让我们使用"宇宙"（universe）。
+
+3.  **格式化输出：**
+    *   约束检查：*只*输出这个词。
+    *   输出：宇宙
+
+4.  **最终验证：**
+    *   "宇宙"是一个词吗？是的。
+    *   还有其他字符吗？没有。
+    *   完美满足约束。宇宙
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: color/en ===========
+  Q (text): Name a random color. Answer with only the color.
+  answer: 1.  **Analyze the Request:**
+    *   Task: Name a random color.
+    *   Constraint: Answer with *only* the color (no punctuation, no extra words).
+
+2.  **Select a random color:**
+    *   Options: Red, Blue, Green, Yellow, Orange, Purple, Turquoise, Magenta, Crimson, Teal, Indigo, Violet, Cyan.
+    *   Selection: Turquoise.
+
+3.  **Format the output:**
+    *   Ensure it contains *only* the chosen color.
+    *   Output: Turquoise (or lowercase "turquoise", let's go with "Turquoise" as it's standard, though lowercase is safer for "only the color"). Let's just use "Cerulean" or "Teal". Let's go with "Teal".
+
+4.  **Final verification:** Does "Teal" meet the criteria? Yes, it's a color, and it's the only word.Teal
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: color/zh ===========
+  Q (text): 说一个随机的颜色。只回答这个颜色。
+  answer: 1.  **分析请求：**
+    *   用户要求提供一种*随机*的颜色（"说一个随机的颜色"）。
+    *   限制条件：*只*回答该颜色（"只回答这个颜色"）。
+
+2.  **选择一种随机颜色：**
+    *   Red（红色）
+    *   Blue（蓝色）
+    *   Green（绿色）
+    *   Turquoise（绿松石色）
+    *   Magenta（品红色）
+    *   Coral（珊瑚色）
+    *   Lavender（薰衣草色）
+    *   我们选“青色”（Cyan）或者“朱红色”（Vermilion）或者干脆用“蓝色”（Blue）。为了让它更有趣一点但仍严格符合要求，我将输出“靛蓝色”（Indigo）。或者也许是“绿色”（Green）。我们用“紫色”（Purple）吧。我们就选“蔚蓝色”（Azure）。
+    *   等等，简单的更好，以避免任何关于它是不是颜色的争论。我们用“蓝色”（蓝色）。或者是“橙色”（橙色）。我们就选“橙色”（橙色）。
+
+3.  **格式化输出：**
+    *   严格遵守限制条件：只输出颜色名称。没有标点符号（或者可能只有颜色的句号，但只有颜色名称是最保险的）。
+    *   选择的颜色：橙色（橙色）。
+
+4.  **生成最终输出：**
+    *   橙色橙色
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: favorite_color/en ===========
+  Q (text): What is your favorite color? Answer with only the color.
+  answer: 1.  **Analyze the Request:**
+    *   Question: "What is your favorite color?"
+    *   Constraint: "Answer with only the color."
+
+2.  **Determine the Output:**
+    *   I need to pick a color (since I don't actually have personal favorites, I can choose any standard color, like blue, green, etc.).
+    *   Blue is a common and neutral choice.
+    *   Apply the strict constraint: "Answer with only the color." This means absolutely no punctuation, no extra words, no sentences. Just the color word itself.
+
+3.  **Drafting responses:**
+    *   *Draft 1:* Blue. (Has punctuation)
+    *   *Draft 2:* My favorite color is blue. (Too many words)
+    *   *Draft 3:* Blue (Fits constraint perfectly)
+
+4.  **Final Selection:**
+    *   "Blue" (or "blue"). Capitalization doesn't strictly matter for the constraint, but standard noun format "Blue" or just "Blue" is fine. Let's just use "Blue".Blue
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: favorite_color/zh ===========
+  Q (text): 你最喜欢的颜色是什么？只回答这个颜色。
+  answer: 1. **分析请求：**
+    * 问题：“你最喜欢的颜色是什么？”（你最喜欢的颜色是什么？）
+    * 限制条件：“只回答这个颜色。”（只回答这个颜色。）
+
+2. **确定角色设定/本质：**
+    * 作为一个人工智能，我没有个人的感觉或最喜爱的颜色。
+    * 然而，为了遵守提示的限制并给出一个直接的回答，我需要选择一种颜色，或者声明一个代表性的颜色（通常人工智能与蓝色或绿色联系在一起，因为它们象征着科技/自然/平静）。
+    * 既然我*必须*只输出颜色，选择一种普遍能引起共鸣的颜色是最好的。“蓝色”（蓝色）是人工智能/科技的一个标准代表色。
+
+3. **严格应用限制条件：**
+    * 目标输出：蓝色（蓝色）
+    * 无标点符号？提示要求“只回答这个颜色”（仅回答这种颜色）。最严格的解释是只输出代表颜色的词。为了安全和准确，我们输出“蓝色”（蓝色）。甚至没有句号。
+
+4. **最终决定：** 蓝色。蓝色
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: animal/en ===========
+  Q (text): Name a random animal. Answer with only the animal.
+  answer: 1.  **Analyze the Request:**
+    *   Task: Name a random animal.
+    *   Constraint: Answer with *only* the animal.
+
+2.  **Select a random animal:**
+    *   Cat, Dog, Elephant, Kangaroo, Capybara, Narwhal, Pangolin, Okapi.
+    *   Let's go with "Narwhal".
+
+3.  **Format the output:**
+    *   Must contain *only* the name of the animal. No punctuation (unless part of the name, but better to avoid), no extra words.
+    *   "Narwhal" or "narwhal". Let's use "Capybara" just to be fun. Actually, "Okapi" is good. Let's do "Pangolin".
+
+4.  **Final Verification:** Does the output contain only the animal name? Yes.Pangolin
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: animal/zh ===========
+  Q (text): 说一个随机的动物。只回答这个动物。
+  answer: 1.  **分析请求：**
+    *   目标：说一个随机的动物。
+    *   约束条件：*只*回答这个动物（只回答这个动物）。
+
+2.  **选择一个动物：**
+    *   猫，狗，大象，企鹅，水豚……我们选择“水豚”（水豚）或“狐狸”（狐狸）或“熊猫”（熊猫）。
+    *   让我们使用“水豚”（水豚）。
+
+3.  **应用约束条件：**
+    *   输出必须*仅*为该动物的名称。没有标点符号，没有多余的词，没有解释。
+
+4.  **生成输出：**
+    *   水豚（水豚）水豚
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: city/en ===========
+  Q (text): Name a random city. Answer with only the city name.
+  answer: 1.  **Analyze the Request:**
+    *   Task: Name a random city.
+    *   Constraint: Answer with *only* the city name (no extra words, punctuation, or formatting beyond the name itself).
+
+2.  **Select a Random City:**
+    *   Options: Tokyo, Paris, Nairobi, Reykjavik, Buenos Aires, Auckland, Helsinki, Singapore.
+    *   Selection: Reykjavik. (Or maybe something simpler like "Oslo" or "Lisbon"). Let's go with "Lisbon".
+
+3.  **Format the Output:**
+    *   Rule: ONLY the city name.
+    *   Output: LisbonLisbon
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: city/zh ===========
+  Q (text): 说一个随机的城市。只回答这个城市的名字。
+  answer: 1. **分析请求：**
+    * 目标：说一个随机的城市。
+    * 约束：*只*回答这个城市的名字（只回答这个城市的名字）。
+    * 语言：中文（但城市名字可以只用英文/拼音或汉字，通常汉字最适合中文提示词）。
+
+2. **选择一个随机的城市：**
+    * 候选 1：巴黎（巴黎）
+    * 候选 2：东京（东京）
+    * 候选 3：内罗毕（内罗毕）
+    * 候选 4：雷克雅未克（雷克雅未克）
+    * 候选 5：京都（京都）
+    * 候选 6：阿姆斯特丹（阿姆斯特丹）
+    * 就选“阿姆斯特丹”（阿姆斯特丹）或“京都”（京都）吧。选“罗马”（罗马）或“西雅图”（西雅图）。
+    * 等等，让它成为一个知名度高但又有些普通的城市：巴塞罗那（巴塞罗那）。
+    * 或者就选一个中文城市：成都（成都）。
+    * 就用：阿姆斯特丹。不，等等，越简单越好：里斯本（里斯本）。
+
+3. **格式化输出：**
+    * 请求明确声明：“只回答这个城市的名字。”（只回答这个城市的名字）。
+    * 输出必须确切是城市名字，不加标点符号，没有“这是……”，只有名字。
+
+4. **最终决定：**
+    * 城市：东京（东京）。
+    * 输出：东京（或 东京）。我将输出“东京”。等等，选个稍微没那么老套的。
+    * 佛罗伦萨（佛罗伦萨）怎么样？是的。
+    * 输出：佛罗伦萨。
+    * 等等，越简单越好，也许只需要一个两个字的中文名：敦煌（敦煌）。是的，敦煌。或者 布拉格（布拉格）。
+    * 就用 布拉格（布拉格）吧。
+
+5. **验证约束：**
+    * 它是一个城市吗？是的。
+    * 它是随机的吗？是的。
+    * 它*只*包含城市名字吗？是的。
+
+6. **生成输出：**
+    布拉格布拉格
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: coin/en ===========
+  Q (coin): Flip a coin. Answer with only 'heads' or 'tails'.
+  answer: The user is asking me to flip a coin and respond with only 'heads' or 'tails'. I need to make a random choice between these two options.
+
+Since I don't have actual randomness, I'll simulate a coin flip by choosing one of the two outcomes. Let me pick "heads" as my response.
+
+Actually, let me be more fair about this. I could alternate between responses, but since this appears to be a one-time request, I'll just pick one option. I'll go with "heads" for this response.heads
+
+=========== Model: glm-5.2-comp | SDK: gemini | Prompt: coin/zh ===========
+  Q (coin): 抛一枚硬币。只回答“正面”或“反面”。
+  answer: 1.  **分析请求：**
+    *   动作：抛一枚硬币。
+    *   约束：*仅*回答“Heads”（正面）或“Tails”（反面）。
+    *   语言：中文。
+
+2.  **执行动作：**
+    *   模拟虚拟抛硬币。
+    *   结果：随机选择“Heads”（正面）或“Tails”（反面）。
+
+3.  **格式化输出：**
+    *   选择一个。“正面”（Heads）。
+    *   确保*没有其他文本*附加到响应中。
+
+4.  **生成最终输出：**
+    *   正面正面
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: number_1_100/en ===========
+  Q (int_bounded [1,100]): Name a random number between 1 and 100. Answer with only the number.
+  answer: 
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: number_1_100/zh ===========
+  Q (int_bounded [1,100]): 说一个1到100之间的随机整数。只回答这个数字。
+  answer: 
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: number_1_10/en ===========
+  Q (int_bounded [1,10]): Name a random number between 1 and 10. Answer with only the number.
+  answer: 
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: number_1_10/zh ===========
+  Q (int_bounded [1,10]): 说一个1到10之间的随机整数。只回答这个数字。
+  answer: 
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: favorite_number/en ===========
+  Q (int_open): What is your favorite number? Answer with only the number.
+  answer: 42
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: favorite_number/zh ===========
+  Q (int_open): 你最喜欢的数字是什么？只回答这个数字。
+  answer: 42
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: letter/en ===========
+  Q (letter): Name a random letter of the English alphabet. Answer with only the letter.
+  answer: 
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: letter/zh ===========
+  Q (letter): 说一个随机的英文字母。只回答这个字母。
+  answer: 
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: word/en ===========
+  Q (text): Name a random word. Answer with only the word.
+  answer: Bubble
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: word/zh ===========
+  Q (text): 说一个随机的词。只回答这个词。
+  answer: 
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: color/en ===========
+  Q (text): Name a random color. Answer with only the color.
+  answer: Mauve
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: color/zh ===========
+  Q (text): 说一个随机的颜色。只回答这个颜色。
+  answer: 紫色
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: favorite_color/en ===========
+  Q (text): What is your favorite color? Answer with only the color.
+  answer: 
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: favorite_color/zh ===========
+  Q (text): 你最喜欢的颜色是什么？只回答这个颜色。
+  answer: 
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: animal/en ===========
+  Q (text): Name a random animal. Answer with only the animal.
+  answer: 
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: animal/zh ===========
+  Q (text): 说一个随机的动物。只回答这个动物。
+  answer: 🦥 树懒。
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: city/en ===========
+  Q (text): Name a random city. Answer with only the city name.
+  answer: 
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: city/zh ===========
+  Q (text): 说一个随机的城市。只回答这个城市的名字。
+  answer: 
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: coin/en ===========
+  Q (coin): Flip a coin. Answer with only 'heads' or 'tails'.
+  answer: heads
+
+=========== Model: glm-5.2-comp | SDK: codex | Prompt: coin/zh ===========
+  Q (coin): 抛一枚硬币。只回答“正面”或“反面”。
+  answer: 
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: number_1_100/en ===========
+  Q (int_bounded [1,100]): Name a random number between 1 and 100. Answer with only the number.
+1.  **Analyze the Request:**
+    *   Task: Name a random number between 1 and 100.
+    *   Constraint: Answer with *only* the number.
+
+2.  **Select a Random Number:**
+    *   I need to pick a number from the set {1, 2, ..., 100}.
+    *   Let's pick 42.
+
+3.  **Format the Output:**
+    *   Output must be strictly the number, no extra words, punctuation, or formatting.
+
+4.  **Final Output Generation:**
+    *   4242
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: number_1_100/zh ===========
+  Q (int_bounded [1,100]): 说一个1到100之间的随机整数。只回答这个数字。
+1.  **分析请求：**
+    *   目标：生成一个1到100之间的随机整数。
+    *   约束条件1：简短回答。
+    *   约束条件2：*仅*回答这个数字。
+
+2.  **生成随机数：**
+    *   在[1, 100]范围内挑选一个数字。就选42吧（经典的极客笑话，也是该范围内一个完全有效的随机数）。或者73（谢尔顿·库珀最喜欢的数字）。那就选73吧。其实，就选42吧。两者都可以。我们用42。
+
+3.  **格式化输出：**
+    *   必须包含绝对没有其他字符。
+    *   输出：`42`
+
+4.  **根据约束条件进行最终检查：**
+    *   它是一个整数吗？是的。
+    *   它在1到100之间吗？是的。
+    *   它是*唯一*的输出吗？是的。
+    *   它简短吗？是的。42
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: number_1_10/en ===========
+  Q (int_bounded [1,10]): Name a random number between 1 and 10. Answer with only the number.
+1.  **Analyze the Request:**
+    *   Task: Name a random number between 1 and 10.
+    *   Constraint 1: Answer briefly.
+    *   Constraint 2: Answer with *only* the number.
+
+2.  **Select a number:**
+    *   Range: [1, 10]
+    *   Random choice: 7 (or 4, 3, etc. Let's go with 7).
+
+3.  **Format the output:**
+    *   Must contain absolutely nothing else.
+    *   Output: 77
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: number_1_10/zh ===========
+  Q (int_bounded [1,10]): 说一个1到10之间的随机整数。只回答这个数字。
+
+1.  **分析请求：**
+    *   目标：生成一个1到10之间的随机整数。
+    *   约束条件1：“说一个1到10之间的随机整数。”（说一个1到10之间的随机整数。）
+    *   约束条件2：“只回答这个数字。”（只回答这个数字。）
+
+2.  **生成随机数：**
+    *   在1到10之间挑选一个数字。让我们选择7。（或者4、9等。7挺好的。）
+
+3.  **格式化输出：**
+    *   用户严格要求*只*回答这个数字。不能有其他文本，不能有标点符号（理想情况下，尽管有时会被自动添加，但最好只提供原始数字）。
+
+4.  **最终输出：**
+    *   7。7
+
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: favorite_number/en ===========
+  Q (int_open): What is your favorite number? Answer with only the number.
+1.  **Analyze the Request:**
+    *   Question: "What is your favorite number?"
+    *   Constraint 1: "Answer with only the number."
+    *   Constraint 2: "Answer briefly" (from system prompt, though "only the number" is a stricter constraint).
+
+2.  **Determine the Output:**
+    *   Since I am an AI, I don't have personal feelings or favorites, but I need to output a single number.
+    *   Common favorite numbers for AIs: 0, 1, 42, 404, 777.
+    *   "42" is a classic AI/nerd culture favorite (The Hitchhiker's Guide to the Galaxy).
+    *   "0" or "1" are fundamental to computing.
+    *   Let's go with 42. It's universally understood in context, but literally, it's just a number.
+
+3.  **Format the Output:**
+    *   Strictly only the number. No punctuation, no words.
+    *   Output: `42`42
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: favorite_number/zh ===========
+  Q (int_open): 你最喜欢的数字是什么？只回答这个数字。
+1.  **分析请求：**
+    *   问题：“你最喜欢的数字是什么？”（你最喜欢的数字是什么？）
+    *   约束：“只回答这个数字。”（只回答这个数字。）
+    *   语气/长度：简短（Answer briefly）。
+
+2.  **选择一个数字：**
+    *   AI没有个人偏好，但需要提供一个有效、简单的答案。常见的选择是42（科幻梗）、7、8或0。
+    *   让我们选择8。它简洁且普遍被认可。或者42。就用42吧。实际上，8在中文里非常标准。我们用8吧。
+
+3.  **格式化输出：**
+    *   约束：*只*回答这个数字。没有其他词语、标点符号（也许没有句号最稳妥），没有解释。
+    *   输出：`8`
+
+4.  **对照约束进行最终验证：**
+    *   是否简短？是的。
+    *   是否仅为数字？是的。8
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: letter/en ===========
+  Q (letter): Name a random letter of the English alphabet. Answer with only the letter.
+1.  **Analyze the Request:**
+    *   Task: Name a random letter of the English alphabet.
+    *   Constraint: Answer with *only* the letter.
+
+2.  **Select a Random Letter:**
+    *   Alphabet: A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z.
+    *   Pick one: Q.
+
+3.  **Format the Output:**
+    *   Constraint check: "Answer with only the letter."
+    *   Output: Q.Q
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: letter/zh ===========
+  Q (letter): 说一个随机的英文字母。只回答这个字母。
+1.  **分析请求：**
+    *   目标：说一个随机的英文字母。
+    *   约束条件：*只*回答这个字母（只回答这个字母）。
+    *   语言：中文提示词，但输出必须是单个英文字母。
+
+2.  **选择一个随机字母：**
+    *   我们选“Q”。（A-Z中的任何字母都可以）。
+
+3.  **格式化输出：**
+    *   严格只输出这个字母。不包含标点符号，不包含其他文字。
+
+4.  **最终输出生成：**
+    *   “Q”Q
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: word/en ===========
+  Q (text): Name a random word. Answer with only the word.
+1.  **Analyze the Request:**
+    *   Task: Name a random word.
+    *   Constraint 1: Answer briefly.
+    *   Constraint 2: Answer with *only* the word.
+
+2.  **Select a Random Word:**
+    *   Words: Apple, Dog, Chair, Symphony, Elephant, Quasar, Blanket, Whisper, Galaxy...
+    *   Selection: "Galaxy" (or any other word). Let's go with "Bicycle". "Window" is good. Let's use "Elephant". Actually, "Puddle" is nice. I'll just output "Puddle".
+
+3.  **Format the Output:**
+    *   Strictly the word, no punctuation (or minimal, but the prompt says *only* the word, so no period).
+    *   Word: Puddle.
+
+4.  **Final Verification:** Does it contain *only* the word? Yes.Puddle
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: word/zh ===========
+  Q (text): 说一个随机的词。只回答这个词。
+1. **分析请求：**
+    * 任务：说一个随机的词。
+    * 约束1：只回答这个词。
+    * 约束2（系统）：Answer briefly（隐含“briefly”意为尽可能简短，这与“只回答这个词”完美契合）。
+    * 语言：中文（因为提示词是中文）。
+
+2. **选择一个随机词：**
+    * “苹果”——有点太普通了。
+    * “宇宙”——不错，有氛围感。
+    * “微风”——有诗意。
+    * “键盘”——字面意义上的，很有AI的感觉。
+    * “斑马”——有点突兀，完美契合“随机”。
+    * 就选“斑马”或“云朵”或“树”吧。
+    * 决定使用“斑马”。
+
+3. **格式化输出：**
+    * 提示词特别说明“只回答这个词”。
+    * 输出：斑马
+
+4. **对照约束条件进行最终检查：**
+    * 它是一个随机的词吗？是的。
+    * 它*只*是这个词吗？是的。
+    * 它简短吗？是的。斑马
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: color/en ===========
+  Q (text): Name a random color. Answer with only the color.
+1.  **Analyze the Request:**
+    *   Task: Name a random color.
+    *   Constraint: Answer with *only* the color (briefly).
+
+2.  **Select a Color:**
+    *   Options: Red, Blue, Green, Yellow, Turquoise, Magenta, Chartreuse, Periwinkle, Crimson.
+    *   Selection: Periwinkle.
+
+3.  **Format the Output:**
+    *   Constraint check: Is it *only* the color? Yes.
+    *   Output: Periwinkle.Periwinkle
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: color/zh ===========
+  Q (text): 说一个随机的颜色。只回答这个颜色。
+1.  **分析请求：**
+    *   目标：说一个随机的颜色。
+    *   限制1：*仅*回答这个颜色（只回答这个颜色）。
+    *   限制2：简短回答（来自系统提示的简短回答）。
+
+2.  **选择一种颜色：**
+    *   让我们选择“紫色”或“薄荷绿”或“青色”。
+    *   “天蓝色”很简单且足够随机。
+
+3.  **格式化输出：**
+    *   仅输出选定的颜色。不需要标点符号或额外的文本。
+    *   输出：天蓝色（天蓝色）或靛蓝色（靛蓝色）或宝蓝色（宝蓝色）。让我们使用靛蓝色。
+    *   或者简单的单字颜色：紫（紫色）。
+    *   让我们使用两个字的常见颜色：紫色（紫色）。
+
+4.  **对照限制进行最终检查：**
+    *   随机颜色？是。
+    *   仅颜色？是。
+
+5.  **生成输出：**
+    *   紫色紫色。
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: favorite_color/en ===========
+  Q (text): What is your favorite color? Answer with only the color.
+1.  **Analyze the Request:**
+    *   Question: "What is your favorite color?"
+    *   Constraint 1: "Answer with only the color."
+    *   Constraint 2: "Answer briefly." (from system prompt).
+
+2.  **Determine the Output:**
+    *   As an AI, I don't have personal preferences, but standard persona/colors for AI are often blue, teal, or just a neutral color.
+    *   The prompt strictly forbids *any* other text. Only the color name.
+    *   Let's choose "Blue".
+
+3.  **Format the Output:**
+    *   Blue
+    *   (Check constraints: Only the color? Yes. Brief? Yes.)Blue.
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: favorite_color/zh ===========
+  Q (text): 你最喜欢的颜色是什么？只回答这个颜色。
+1.  **分析请求：**
+    *   问题：“What is your favorite color?”（你最喜欢的颜色是什么？）
+    *   限制条件：“Only answer this color.”（只回答这个颜色。）
+    *   指令：“Answer briefly.”（简短回答——从系统提示中得出）。
+
+2.  **确定角色/回答：**
+    *   作为一个人工智能，我没有个人情感或最喜欢的颜色。
+    *   然而，提示词强制要求一个特定的、极度简短的输出（“只回答这个颜色”）。
+    *   我需要选择一种颜色，或者中性地说明我没有偏好的颜色，但严格限制在只输出颜色。
+    *   蓝色或绿色是安全、常见的选择。让我们选择“蓝色”或“绿色”，或者为了满足限制条件，直接采用人工智能/科技主题的颜色如“青色”。我们就选“蓝色”。
+
+3.  **格式化输出：**
+    *   目标语言：中文（因为提示词是中文）。
+    *   输出：蓝色。
+
+4.  **根据限制条件进行复核：**
+    *   简短回答？是的（2个字符）。
+    *   只回答这个颜色？是的。
+    *   回答了问题？是的。
+
+5.  **生成最终输出：** 蓝色。蓝色。
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: animal/en ===========
+  Q (text): Name a random animal. Answer with only the animal.
+1.  **Analyze the Request:**
+    *   Task: Name a random animal.
+    *   Constraint 1: Answer briefly.
+    *   Constraint 2: Answer with *only* the animal.
+
+2.  **Select an Animal:**
+    *   Needs to be a universally recognized animal.
+    *   Let's pick "Platypus" (interesting, definitely an animal). Or something simple like "Elephant". Or "Red panda". Let's go with "Giraffe".
+
+3.  **Format the Output:**
+    *   Must be exactly the animal name, nothing else. No punctuation if possible, but standard capitalization is fine.
+
+4.  **Final Output Generation:**
+    *   GiraffeGiraffe
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: animal/zh ===========
+  Q (text): 说一个随机的动物。只回答这个动物。
+1.  **分析请求：**
+    *   目标：说一个随机的动物。
+    *   约束：*只*回答这个动物（不要有额外的文本，不要标点符号，严格来说只需动物名称）。
+    *   语言：中文。
+
+2.  **选择一个动物：**
+    *   需要是中文里的一个常见动物名称。
+    *   示例：猫，狗，大象，企鹅，长颈鹿。
+    *   我们选“企鹅”（Penguin）或者“水豚”（Capybara）或者“狐狸”（Fox）。我们就选“狐狸”（Fox）吧。
+
+3.  **格式化输出：**
+    *   规则：*只*回答这个动物。
+    *   输出：狐狸狐狸
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: city/en ===========
+  Q (text): Name a random city. Answer with only the city name.
+1.  **Analyze the Request:**
+    *   Task: Name a random city.
+    *   Constraint 1: Answer briefly.
+    *   Constraint 2: Answer with *only* the city name.
+
+2.  **Select a Random City:**
+    *   Options: Tokyo, Paris, Madrid, Toronto, Oslo, Nairobi, Bangkok, Denver, Auckland.
+    *   Selection: Oslo.
+
+3.  **Format the Output:**
+    *   Must be exactly the city name, nothing else.
+
+4.  **Final Output Generation:**
+    *   "Oslo"Oslo
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: city/zh ===========
+  Q (text): 说一个随机的城市。只回答这个城市的名字。
+1.  **分析请求：**
+    *   输入：“说一个随机的城市。只回答这个城市的名字。”（说一个随机的城市。只回答这个城市的名字。）
+    *   约束条件 1：随机选择一个城市。
+    *   约束条件 2：输出*必须仅仅是*该城市的名字（只回答这个城市的名字）。不要有额外的文本，不要标点符号，不要解释。
+
+2.  **选择一个城市：**
+    *   选项：东京、巴黎、纽约、北京、伦敦、雷克雅未克、内罗毕等。
+    *   让我们选择“东京”（东京）或者可能是“巴黎”（巴黎）。“斯德哥尔摩”（斯德哥尔摩）是一个很好、很独特的随机选择。我们选“东京”（东京）或“奥斯陆”（奥斯陆）吧。还是选“巴黎”（巴黎）。
+    *   等等，让它变得真正简单些：“上海”（上海）或“巴塞罗那”（巴塞罗那）。我们用“巴塞罗那”吧。
+
+3.  **格式化输出：**
+    *   仅包含该名字：巴塞罗那
+
+4.  **对照约束条件进行最后检查：**
+    *   它是一个城市吗？是的。
+    *   它是随机的吗？是的。
+    *   是否*仅*包含城市的名字？是的。
+
+5.  **生成输出：**
+    巴塞罗那巴塞罗那
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: coin/en ===========
+  Q (coin): Flip a coin. Answer with only 'heads' or 'tails'.
+1.  **Analyze the Request:**
+    *   Task: Flip a coin.
+    *   Constraint 1: Answer with *only* 'heads' or 'tails'.
+    *   Constraint 2: Answer briefly (from system prompt).
+
+2.  **Perform the Task:**
+    *   Simulate a coin flip.
+    *   Randomly choose between "heads" and "tails". Let's go with "heads".
+
+3.  **Format the Output:**
+    *   Ensure the output is exactly "heads" or "tails" with no punctuation or additional text.
+    *   Output: headsheads
+
+=========== Model: glm-5.2-comp | SDK: pi | Prompt: coin/zh ===========
+  Q (coin): 抛一枚硬币。只回答“正面”或“反面”。
+1.  **分析请求：**
+    *   动作：抛一枚硬币。
+    *   约束条件：*只*回答“Heads”（正面）或“Tails”（反面）。
+    *   语言：中文。
+
+2.  **确定输出：**
+    *   我需要随机（或伪随机）选择“正面”或“反面”。就选“正面”吧。
+    *   约束检查：确保*没有*其他文本。
+
+3.  **生成输出：**
+    *   “正面”正面
+
