@@ -7,6 +7,19 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: synthesize a `signature` on signature-less thinking blocks
+
+Anthropic's spec marks `signature` as REQUIRED on thinking content blocks, and
+clients like `@ai-sdk/anthropic` reject responses missing it with a
+`TypeValidationError`. Upstreams such as DeepSeek and bigmodel.cn's glm-5.2
+emit reasoning without a signature, so both the non-streaming converter
+(`src/converters/openai-to-claude.ts`) and the streaming converter
+(`src/converters/streaming.ts`) now fall back to a shared constant
+`SYNTHETIC_THINKING_SIGNATURE`. A constant (not a random/request-id value) is
+used because the field is only consumed for Anthropic's own reasoning
+round-trip verification — which does not apply to translated upstreams — so
+nothing keys off its value; a constant keeps it reproducible and testable.
+
 ### Fix: `buildUpstreamUrl` dedupes any trailing `v\d+` version segment
 
 `buildUpstreamUrl` (in `src/utils/routing.ts`) previously only stripped a

@@ -3,7 +3,7 @@
  */
 
 import { countClaudeRequestTokens, countTokensWithTiktoken, getTiktokenTokenizer, TokenCountingOptions } from '../utils/token-counting.js';
-import { TokenCountingConfig } from './openai-to-claude.js';
+import { TokenCountingConfig, SYNTHETIC_THINKING_SIGNATURE } from './openai-to-claude.js';
 import { stringify } from '../utils/stringify.js';
 
 export function createStreamTransformer(
@@ -257,14 +257,16 @@ export function createStreamTransformer(
                         index: 0
                     });
 
-                    // Send signature_delta before content_block_stop for thinking block if we have signature
-                    if (thinkingStarted && thinkingBlockIndex !== -1 && accumulatedSignature) {
+                    // Send signature_delta before content_block_stop for thinking block.
+                    // Fall back to a synthetic signature when the upstream provided none,
+                    // so signature-less thinking blocks still satisfy Anthropic's spec.
+                    if (thinkingStarted && thinkingBlockIndex !== -1) {
                         sendEvent(controller, 'content_block_delta', {
                             type: 'content_block_delta',
                             index: thinkingBlockIndex,
                             delta: {
                                 type: 'signature_delta',
-                                signature: accumulatedSignature,
+                                signature: accumulatedSignature || SYNTHETIC_THINKING_SIGNATURE,
                                 index: thinkingBlockIndex
                             }
                         });
@@ -494,14 +496,16 @@ export function createStreamTransformer(
                     index: 0
                 });
 
-                // Send signature_delta before content_block_stop for thinking block if we have signature
-                if (thinkingStarted && thinkingBlockIndex !== -1 && accumulatedSignature) {
+                // Send signature_delta before content_block_stop for thinking block.
+                // Fall back to a synthetic signature when the upstream provided none,
+                // so signature-less thinking blocks still satisfy Anthropic's spec.
+                if (thinkingStarted && thinkingBlockIndex !== -1) {
                     sendEvent(controller, 'content_block_delta', {
                         type: 'content_block_delta',
                         index: thinkingBlockIndex,
                         delta: {
                             type: 'signature_delta',
-                            signature: accumulatedSignature,
+                            signature: accumulatedSignature || SYNTHETIC_THINKING_SIGNATURE,
                             index: thinkingBlockIndex
                         }
                     });

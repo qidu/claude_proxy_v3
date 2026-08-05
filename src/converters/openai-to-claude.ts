@@ -6,6 +6,18 @@ import { ClaudeMessagesResponse, ClaudeContentBlock, ClaudeTokenCountingResponse
 import { OpenAIResponse, OpenAITokenCountingResponse, OpenAIModelsResponse, OpenAIModel, OpenAITextPart, OpenAIThinkingPart } from '../types/openai.js';
 import { countClaudeRequestTokens, getTiktokenTokenizer, TokenCountingOptions } from '../utils/token-counting.js';
 
+/**
+ * Anthropic's API spec marks `signature` as REQUIRED on thinking content
+ * blocks (clients like @ai-sdk/anthropic reject otherwise-valid responses
+ * with a TypeValidationError when the field is missing). Most non-Anthropic
+ * upstreams (DeepSeek, bigmodel.cn's glm-5.2, etc.) don't emit a signature,
+ * so we synthesize a stable placeholder. The signature is only functionally
+ * load-bearing for Anthropic's own reasoning round-trip verification, which
+ * does not apply to translated upstreams — convertClaudeToOpenAIRequest
+ * round-trips thinking via `reasoning_content`, not via signature.
+ */
+export const SYNTHETIC_THINKING_SIGNATURE = "synthetic";
+
 export interface TokenCountingConfig {
     enabled: boolean;
     modelName: string;
@@ -135,7 +147,7 @@ export async function convertOpenAIToClaudeResponse(
     // and emits `reasoning_content` on the next request, which DeepSeek requires.
     const inlineReasoning = (message as unknown as Record<string, unknown>).reasoning_content;
     if (inlineReasoning && typeof inlineReasoning === 'string') {
-        contentBlocks.push({ type: 'thinking', thinking: inlineReasoning } as unknown as ClaudeContentBlock);
+        contentBlocks.push({ type: 'thinking', thinking: inlineReasoning, signature: SYNTHETIC_THINKING_SIGNATURE } as unknown as ClaudeContentBlock);
     }
 
     // Handle text content
@@ -229,6 +241,12 @@ export async function convertOpenAIToClaudeResponse(
                 } else if (responseSignature) {
                     thinkingBlock.signature = responseSignature;
                 }
+            }
+
+            // Anthropic API spec requires `signature` on thinking blocks.
+            // Synthesize a placeholder when the upstream provided none.
+            if (!thinkingBlock.signature) {
+                thinkingBlock.signature = SYNTHETIC_THINKING_SIGNATURE;
             }
 
             contentBlocks.push(thinkingBlock);
