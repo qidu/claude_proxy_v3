@@ -274,8 +274,14 @@ export function buildUpstreamUrl(baseUrl: string, suffix: string): string {
     }
   }
 
-  const suffixMatch = suffix.match(/^(v1beta|v1)\/(.*)$/i);
-  if (suffixMatch && lowerBase.match(/\/(v1beta|v1)\/?$/)) {
+  // const suffixMatch = suffix.match(/^(v1beta|v1)\/(.*)$/i);
+  // if (suffixMatch && lowerBase.match(/\/(v1beta|v1)\/?$/)) {
+  // Version-dedupe: if base_url already ends with a version segment (v1, v2,
+  // v4, v1beta, …) and the suffix begins with its own version segment, strip
+  // the suffix's leading version to avoid a doubled segment like /v4/v1/...
+  // The base's version wins (e.g. /v4 + v1/chat/completions -> /v4/chat/completions)
+  const suffixMatch = suffix.match(/^(v\d+[a-z]*)\/(.*)$/i);
+  if (suffixMatch && lowerBase.match(/\/v\d+[a-z]*\/?$/)) {
     return `${baseUrl.replace(/\/$/, '')}/${suffixMatch[2]}`;
   }
 
