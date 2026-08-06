@@ -5,7 +5,7 @@
  */
 
 import type { Env, Logger } from '../types/shared.js';
-import { logPipelineStage } from '../utils/logger.js';
+import { logPipelineStage, logPipelineHeaders } from '../utils/logger.js';
 import { addForwardedHeaders, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream } from '../utils/dashboard-stats.js';
@@ -56,6 +56,7 @@ export async function handleChatCompletionsPassthrough(
   const isStreaming = parsedBody.stream === true;
   logger.debug(requestId, `${path} req: model=${parsedBody.model} messages=${Array.isArray(parsedBody.messages) ? (parsedBody.messages as unknown[]).length : 0} stream=${isStreaming}`);
   logPipelineStage(logger, requestId, 'inbound', path, parsedBody);
+  logPipelineHeaders(logger, requestId, 'inbound', path, request.headers);
 
   // before_upstream: apply any declared transforms (builtins + ops) before forwarding.
   if (route) {
@@ -87,13 +88,15 @@ export async function handleChatCompletionsPassthrough(
       delete anthropicHeaders['Authorization'];
     }
 
+    const anthropicFetchHeaders = {
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+      ...addForwardedHeaders(anthropicHeaders, request),
+    };
+    logPipelineHeaders(logger, requestId, 'upstream-request', targetUrl, anthropicFetchHeaders);
     let upstreamResponse = await fetch(targetUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'anthropic-version': '2023-06-01',
-        ...addForwardedHeaders(anthropicHeaders, request),
-      },
+      headers: anthropicFetchHeaders,
       body: JSON.stringify(claudeBody),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env as Record<string, unknown>)),
     });
@@ -105,6 +108,7 @@ export async function handleChatCompletionsPassthrough(
       });
     }
 
+    logPipelineHeaders(logger, requestId, 'upstream-response', targetUrl, upstreamResponse.headers);
     recordResponseStatusCodeFromUpstream(upstreamResponse.status);
     logger.debug(requestId, `${path} resp: status=${upstreamResponse.status} stream=${isStreaming}`);
 
@@ -180,9 +184,9 @@ export async function handleChatCompletionsPassthrough(
           await writer.abort();
         }
       })();
-      return new Response(readable, {
-        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'x-request-id': requestId },
-      });
+      const streamingOutHeaders = { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'x-request-id': requestId };
+      logPipelineHeaders(logger, requestId, 'outbound', path, streamingOutHeaders);
+      return new Response(readable, { headers: streamingOutHeaders });
     }
 
     // Non-streaming: convert Claude JSON → OpenAI completions JSON
@@ -191,10 +195,9 @@ export async function handleChatCompletionsPassthrough(
     const claudeJson = JSON.parse(claudeJsonText) as Record<string, unknown>;
     const completions = claudeJsonToSyntheticCompletions(claudeJson, model);
     logPipelineStage(logger, requestId, 'outbound', path, completions);
-    return new Response(JSON.stringify(completions), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
-    });
+    const nonStreamOutHeaders = { 'Content-Type': 'application/json', 'x-request-id': requestId };
+    logPipelineHeaders(logger, requestId, 'outbound', path, nonStreamOutHeaders);
+    return new Response(JSON.stringify(completions), { status: 200, headers: nonStreamOutHeaders });
   }
 
   // When the upstream is openai-responses, convert the completions body to Responses API format
@@ -217,13 +220,11 @@ export async function handleChatCompletionsPassthrough(
       ({ body: responsesBody, headers: authHeaders } = runHook('before_upstream', { body: responsesBody, headers: authHeaders }, hookCtxResp));
     }
     logPipelineStage(logger, requestId, 'upstream-request', targetUrl, responsesBody);
-
+    const responsesFetchHeaders = { 'Content-Type': 'application/json', ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request) };
+    logPipelineHeaders(logger, requestId, 'upstream-request', targetUrl, responsesFetchHeaders);
     let responsesUpstreamResponse = await fetch(targetUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
-      },
+      headers: responsesFetchHeaders,
       body: JSON.stringify(responsesBody),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env as Record<string, unknown>)),
     });
@@ -236,6 +237,7 @@ export async function handleChatCompletionsPassthrough(
       });
     }
 
+    logPipelineHeaders(logger, requestId, 'upstream-response', targetUrl, responsesUpstreamResponse.headers);
     recordResponseStatusCodeFromUpstream(responsesUpstreamResponse.status);
     logger.debug(requestId, `${path} resp: status=${responsesUpstreamResponse.status} stream=${isStreaming}`);
 
@@ -259,6 +261,7 @@ export async function handleChatCompletionsPassthrough(
           // best-effort debug logging only
         }
       })();
+      logPipelineHeaders(logger, requestId, 'outbound', path, responseHeaders);
       return new Response(clientStream, {
         status: responsesUpstreamResponse.status,
         statusText: responsesUpstreamResponse.statusText,
@@ -266,6 +269,7 @@ export async function handleChatCompletionsPassthrough(
       });
     }
 
+    logPipelineHeaders(logger, requestId, 'outbound', path, responseHeaders);
     return new Response(responsesUpstreamResponse.body, {
       status: responsesUpstreamResponse.status,
       statusText: responsesUpstreamResponse.statusText,
@@ -274,12 +278,11 @@ export async function handleChatCompletionsPassthrough(
   }
 
   logPipelineStage(logger, requestId, 'upstream-request', targetUrl, parsedBody);
+  const defaultFetchHeaders = { 'Content-Type': 'application/json', ...addForwardedHeaders(authHeaders, request) };
+  logPipelineHeaders(logger, requestId, 'upstream-request', targetUrl, defaultFetchHeaders);
   let upstreamResponse = await fetch(targetUrl, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...addForwardedHeaders(authHeaders, request),
-    },
+    headers: defaultFetchHeaders,
     body: JSON.stringify(parsedBody),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env as Record<string, unknown>)),
   });
@@ -292,6 +295,7 @@ export async function handleChatCompletionsPassthrough(
     });
   }
 
+  logPipelineHeaders(logger, requestId, 'upstream-response', targetUrl, upstreamResponse.headers);
   recordResponseStatusCodeFromUpstream(upstreamResponse.status);
   logger.debug(requestId, `${path} resp: status=${upstreamResponse.status} stream=${isStreaming}`);
 
@@ -316,6 +320,7 @@ export async function handleChatCompletionsPassthrough(
         // best-effort debug logging only
       }
     })();
+    logPipelineHeaders(logger, requestId, 'outbound', path, responseHeaders);
     return new Response(clientStream, {
       status: upstreamResponse.status,
       statusText: upstreamResponse.statusText,
@@ -323,6 +328,7 @@ export async function handleChatCompletionsPassthrough(
     });
   }
 
+  logPipelineHeaders(logger, requestId, 'outbound', path, responseHeaders);
   return new Response(upstreamResponse.body, {
     status: upstreamResponse.status,
     statusText: upstreamResponse.statusText,

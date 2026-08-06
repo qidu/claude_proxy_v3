@@ -4,7 +4,7 @@
  */
 
 import { Env, Logger } from '../types/shared.js';
-import { createLogger, logPipelineStage } from '../utils/logger.js';
+import { createLogger, logPipelineStage, logPipelineHeaders } from '../utils/logger.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { isSdkUrl, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
 import { addForwardedHeaders, sanitizeUpstreamResponseHeaders } from '../utils/routing.js';
@@ -34,6 +34,7 @@ export async function handleClaudeRequest(
     // Parse request body
     //const requestBody = await request.json() as Record<string, unknown>;
     logPipelineStage(activeLogger, requestId, 'inbound', '/v1/messages (native)', requestBody);
+    logPipelineHeaders(activeLogger, requestId, 'inbound', '/v1/messages (native)', request.headers);
 
     const isStreaming = requestBody.stream === true;
 
@@ -130,12 +131,11 @@ export async function handleClaudeRequest(
     // Pass through to native Claude API
     activeLogger.debug(requestId, `Sending to upstream: ${JSON.stringify(upstreamBody).substring(0, 500)}`);
     logPipelineStage(activeLogger, requestId, 'upstream-request', targetUrl, upstreamBody);
+    const upstreamHeaders = { 'Content-Type': 'application/json', ...addForwardedHeaders(authHeaders, request) };
+    logPipelineHeaders(activeLogger, requestId, 'upstream-request', targetUrl, upstreamHeaders);
     let response = await fetch(targetUrl, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            ...addForwardedHeaders(authHeaders, request),
-        },
+        headers: upstreamHeaders,
         body: JSON.stringify(upstreamBody),
         signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
@@ -149,6 +149,7 @@ export async function handleClaudeRequest(
         });
     }
 
+    logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, response.headers);
     recordResponseStatusCodeFromUpstream(response.status);
     recordUpstreamResponseToolCount('anthropic-messages', 0);
 
@@ -192,9 +193,11 @@ export async function handleClaudeRequest(
             // Upstream errors or aborts should not break the client response.
         });
 
+        const outboundHeaders = sanitizeUpstreamResponseHeaders(response);
+        logPipelineHeaders(activeLogger, requestId, 'outbound', '/v1/messages (native)', outboundHeaders);
         return new Response(clientStream, {
             status: response.status,
-            headers: sanitizeUpstreamResponseHeaders(response),
+            headers: outboundHeaders,
         });
     }
 
@@ -228,8 +231,10 @@ export async function handleClaudeRequest(
     }
 
     // Return response as-is (pass-through)
+    const finalOutboundHeaders = sanitizeUpstreamResponseHeaders(response);
+    logPipelineHeaders(activeLogger, requestId, 'outbound', '/v1/messages (native)', finalOutboundHeaders);
     return new Response(response.body, {
         status: response.status,
-        headers: sanitizeUpstreamResponseHeaders(response),
+        headers: finalOutboundHeaders,
     });
 }

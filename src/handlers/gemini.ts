@@ -6,7 +6,7 @@
  */
 
 import { Env } from '../types/shared.js';
-import { Logger, createLogger, logPipelineStage } from '../utils/logger.js';
+import { Logger, createLogger, logPipelineStage, logPipelineHeaders } from '../utils/logger.js';
 import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.js';
 import { GeminiInteractionRequest, GeminiInteractionResponse } from '../types/gemini.js';
 import { convertClaudeToGeminiRequest } from '../converters/claude-to-gemini.js';
@@ -137,6 +137,7 @@ async function handleGeminiCountTokensRequest(
         ...authHeaders,
     };
     geminiHeaders = addForwardedHeaders(geminiHeaders, request);
+    logPipelineHeaders(activeLogger, requestId, 'upstream-request', targetUrl, geminiHeaders);
 
     const response = await fetch(targetUrl, {
         method: 'POST',
@@ -145,6 +146,7 @@ async function handleGeminiCountTokensRequest(
         signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 
+    logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, response.headers);
     recordResponseStatusCodeFromUpstream(response.status);
 
     if (!response.ok) {
@@ -154,13 +156,9 @@ async function handleGeminiCountTokensRequest(
     }
 
     const responseText = await response.text();
-    return new Response(responseText, {
-        status: 200,
-        headers: {
-            'Content-Type': 'application/json',
-            'x-request-id': requestId,
-        },
-    });
+    const countTokensOutHeaders = { 'Content-Type': 'application/json', 'x-request-id': requestId };
+    logPipelineHeaders(activeLogger, requestId, 'outbound', ':countTokens', countTokensOutHeaders);
+    return new Response(responseText, { status: 200, headers: countTokensOutHeaders });
 }
 
 /**
@@ -179,6 +177,7 @@ async function handleGeminiInteractionsRequest(
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
     const requestBody = await request.json() as Record<string, unknown>;
     logPipelineStage(activeLogger, requestId, 'inbound', '/v1/interactions', requestBody);
+    logPipelineHeaders(activeLogger, requestId, 'inbound', '/v1/interactions', request.headers);
 
     activeLogger.debug(requestId, `Interactions request to: ${targetUrl}`);
     
@@ -276,6 +275,7 @@ async function handleGeminiInteractionsRequest(
     }
 
     logPipelineStage(activeLogger, requestId, 'upstream-request', fullTargetUrl, upstreamBodyGemini);
+    logPipelineHeaders(activeLogger, requestId, 'upstream-request', fullTargetUrl, geminiHeaders);
     let response = await fetch(fullTargetUrl, {
         method: 'POST',
         headers: geminiHeaders,
@@ -291,6 +291,7 @@ async function handleGeminiInteractionsRequest(
         });
     }
 
+    logPipelineHeaders(activeLogger, requestId, 'upstream-response', fullTargetUrl, response.headers);
     activeLogger.debug(requestId, `Response status: ${response.status}`);
     recordResponseStatusCodeFromUpstream(response.status);
 
@@ -341,13 +342,9 @@ async function handleGeminiInteractionsRequest(
     }
 
     logPipelineStage(activeLogger, requestId, 'outbound', '/v1/interactions', interactionResponse);
-    return new Response(JSON.stringify(interactionResponse), {
-        status: 200,
-        headers: {
-            'Content-Type': 'application/json',
-            'x-request-id': requestId,
-        },
-    });
+    const interactionsOutHeaders = { 'Content-Type': 'application/json', 'x-request-id': requestId };
+    logPipelineHeaders(activeLogger, requestId, 'outbound', '/v1/interactions', interactionsOutHeaders);
+    return new Response(JSON.stringify(interactionResponse), { status: 200, headers: interactionsOutHeaders });
 }
 
 
@@ -371,6 +368,7 @@ async function handleGeminiGenerateContentRequest(
     // Parse request body
     let requestBody = await request.json() as Record<string, unknown>;
     logPipelineStage(activeLogger, requestId, 'inbound', outputFormat === 'claude-format' ? '/v1/messages (via generateContent)' : ':generateContent', requestBody);
+    logPipelineHeaders(activeLogger, requestId, 'inbound', outputFormat === 'claude-format' ? '/v1/messages (via generateContent)' : ':generateContent', request.headers);
 
     // before_conversion: client-schema transforms that need route/upstreamMode resolved
     // but must run before the format converter sees the body.
@@ -456,6 +454,7 @@ async function handleGeminiGenerateContentRequest(
 
     try {
         logPipelineStage(activeLogger, requestId, 'upstream-request', fullTargetUrl, upstreamBodyGeminiGen);
+        logPipelineHeaders(activeLogger, requestId, 'upstream-request', fullTargetUrl, geminiHeaders);
         let response = await fetch(fullTargetUrl, {
             method: 'POST',
             headers: geminiHeaders,
@@ -471,6 +470,7 @@ async function handleGeminiGenerateContentRequest(
             });
         }
 
+        logPipelineHeaders(activeLogger, requestId, 'upstream-response', fullTargetUrl, response.headers);
         recordResponseStatusCodeFromUpstream(response.status);
 
         // Handle target API errors
@@ -557,6 +557,7 @@ async function handleGeminiNonStreamingResponse(
     endpointType: 'interactions' | 'openai-compatible' | 'native-gemini' = 'interactions'
 ): Promise<Response> {
     try {
+        // Upstream-response headers are logged by callers; only body is logged here.
         const responseText = await response.text();
         logger.debug(requestId, 'Gemini response received');
         logPipelineStage(logger, requestId, 'upstream-response', response.url || '(upstream)', responseText);
@@ -564,13 +565,9 @@ async function handleGeminiNonStreamingResponse(
         if (endpointType === 'native-gemini') {
             // Native Gemini format - return as-is
             logPipelineStage(logger, requestId, 'outbound', ':generateContent (native)', responseText);
-            return new Response(responseText, {
-                status: response.status,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-request-id': requestId,
-                },
-            });
+            const nativeOutHeaders = { 'Content-Type': 'application/json', 'x-request-id': requestId };
+            logPipelineHeaders(logger, requestId, 'outbound', ':generateContent (native)', nativeOutHeaders);
+            return new Response(responseText, { status: response.status, headers: nativeOutHeaders });
         } else if (endpointType === 'openai-compatible') {
             // Parse OpenAI-compatible response
             const openaiResponse = JSON.parse(responseText);
@@ -580,13 +577,9 @@ async function handleGeminiNonStreamingResponse(
                 requestId
             );
             logPipelineStage(logger, requestId, 'outbound', '/v1/messages', claudeResponse);
-            return new Response(JSON.stringify(claudeResponse), {
-                status: 200,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-request-id': requestId,
-                },
-            });
+            const openaiCompatOutHeaders = { 'Content-Type': 'application/json', 'x-request-id': requestId };
+            logPipelineHeaders(logger, requestId, 'outbound', '/v1/messages', openaiCompatOutHeaders);
+            return new Response(JSON.stringify(claudeResponse), { status: 200, headers: openaiCompatOutHeaders });
         } else {
             // Parse native Gemini generateContent response
             const geminiResponse = JSON.parse(responseText);
@@ -595,13 +588,9 @@ async function handleGeminiNonStreamingResponse(
             const claudeResponse = convertGeminiGenerateContentToClaude(geminiResponse, model, requestId);
             logPipelineStage(logger, requestId, 'outbound', '/v1/messages (via generateContent)', claudeResponse);
 
-            return new Response(JSON.stringify(claudeResponse), {
-                status: 200,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-request-id': requestId,
-                },
-            });
+            const genContentOutHeaders = { 'Content-Type': 'application/json', 'x-request-id': requestId };
+            logPipelineHeaders(logger, requestId, 'outbound', '/v1/messages (via generateContent)', genContentOutHeaders);
+            return new Response(JSON.stringify(claudeResponse), { status: 200, headers: genContentOutHeaders });
         }
     } catch (error) {
         logger.error(requestId, `Error converting Gemini response: ${(error as Error).message}`);
@@ -702,15 +691,14 @@ async function handleGeminiStreamingResponse(
         })();
         const transformedStream = outStream1;
 
-        return new Response(transformedStream, {
-            status: 200,
-            headers: {
-                'Content-Type': 'text/event-stream',
-                'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
-                'x-request-id': requestId,
-            },
-        });
+        const streamOutHeaders = {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'x-request-id': requestId,
+        };
+        logPipelineHeaders(logger, requestId, 'outbound', 'stream', streamOutHeaders);
+        return new Response(transformedStream, { status: 200, headers: streamOutHeaders });
     } catch (error) {
         logger.error(requestId, `Error creating streaming response: ${(error as Error).message}`);
         throw new Error(`Failed to create streaming response: ${(error as Error).message}`);

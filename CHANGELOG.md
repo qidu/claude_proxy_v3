@@ -7,6 +7,19 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Add: full-pipeline request/response header tracing (`LOG_LEVEL=trace`)
+
+Extended the trace logs added above to also emit the request/response headers at
+each pipeline stage (inbound, upstream-request, upstream-response, outbound).
+Auth-bearing headers (`Authorization`, `x-api-key`, `x-goog-api-key`,
+`anthropic-beta`) are stripped entirely (not masked) from the log output, per
+the rest of the codebase's redaction convention. Emitted as `[STAGE-HEADERS]
+endpoint: {…}` lines via `logger.trace`.
+
+- `logPipelineHeaders()` added to `src/utils/logger.ts` alongside
+  `logPipelineStage()`; wired at every fetch/return site across all handlers
+  (`claude`, `messages`, `chat-completions`, `gemini`, `openai`, `responses`).
+
 ### Add: full-pipeline request/response body tracing (`LOG_LEVEL=trace`)
 
 Added a new `trace` log level (below `debug`) that logs the message body at each

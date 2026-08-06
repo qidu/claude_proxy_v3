@@ -5,7 +5,7 @@
  */
 
 import { Env } from '../types/shared.js';
-import { Logger, createLogger, logPipelineStage } from '../utils/logger.js';
+import { Logger, createLogger, logPipelineStage, logPipelineHeaders } from '../utils/logger.js';
 import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.js';
 import { OpenAIRequest, OpenAIResponse } from '../types/openai.js';
 import { convertClaudeToOpenAIRequest, ThinkingConversionOptions, budgetToReasoningEffort } from '../converters/claude-to-openai.js';
@@ -194,6 +194,7 @@ export async function handleMessagesRequest(
   // Parse request body from cloned request
   const requestBody = isSdkUrl(targetUrl) ? await request.clone().json() as Record<string, unknown> : await request.json() as Record<string, unknown>;
   logPipelineStage(activeLogger, requestId, 'inbound', '/v1/messages', requestBody);
+  logPipelineHeaders(activeLogger, requestId, 'inbound', '/v1/messages', request.headers);
 
   // Normalize OpenAI-style thinking ({ enabled, budget_tokens }) to Claude
   // format ({ type, budget_tokens }) up-front so downstream code (format
@@ -323,12 +324,11 @@ export async function handleMessagesRequest(
       if (openaiRequestBody.tool_choice !== undefined) responsesBody.tool_choice = completionsToolChoiceToResponsesToolChoice(openaiRequestBody.tool_choice);
 
       logPipelineStage(activeLogger, requestId, 'upstream-request', targetUrl, responsesBody);
+      const responsesFetchHeaders1 = { 'Content-Type': 'application/json', ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request) };
+      logPipelineHeaders(activeLogger, requestId, 'upstream-request', targetUrl, responsesFetchHeaders1);
       let responsesResponse = await fetch(targetUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
-        },
+        headers: responsesFetchHeaders1,
         body: JSON.stringify(responsesBody),
         signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
       });
@@ -341,6 +341,7 @@ export async function handleMessagesRequest(
         });
       }
 
+      logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, responsesResponse.headers);
       recordResponseStatusCodeFromUpstream(responsesResponse.status);
       recordUpstreamResponseToolCount('openai-responses', 0);
 
@@ -413,12 +414,11 @@ export async function handleMessagesRequest(
       ({ body: upstreamBodyOpenai, headers: authHeaders } = runHook('before_upstream', { body: upstreamBodyOpenai, headers: authHeaders }, hookCtx));
     }
     logPipelineStage(activeLogger, requestId, 'upstream-request', targetUrl, upstreamBodyOpenai);
+    const openaiFetchHeaders = { 'Content-Type': 'application/json', ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request) };
+    logPipelineHeaders(activeLogger, requestId, 'upstream-request', targetUrl, openaiFetchHeaders);
     let response = await fetch(targetUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
-      },
+      headers: openaiFetchHeaders,
       body: JSON.stringify(upstreamBodyOpenai),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
@@ -450,6 +450,7 @@ export async function handleMessagesRequest(
       } catch (_e) { /* ignore */ }
     }
 
+    logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, response.headers);
     recordResponseStatusCodeFromUpstream(response.status);
     recordUpstreamResponseToolCount('openai-completions', 0);
 
@@ -595,12 +596,11 @@ export async function handleMessagesRequest(
     if (openaiRequest.tool_choice !== undefined) responsesBody.tool_choice = completionsToolChoiceToResponsesToolChoice(openaiRequest.tool_choice);
 
     logPipelineStage(activeLogger, requestId, 'upstream-request', targetUrl, responsesBody);
+    const responsesFetchHeaders2 = { 'Content-Type': 'application/json', ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request) };
+    logPipelineHeaders(activeLogger, requestId, 'upstream-request', targetUrl, responsesFetchHeaders2);
     let responsesResponse = await fetch(targetUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
-      },
+      headers: responsesFetchHeaders2,
       body: JSON.stringify(responsesBody),
       signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
@@ -613,6 +613,7 @@ export async function handleMessagesRequest(
       });
     }
 
+    logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, responsesResponse.headers);
     recordResponseStatusCodeFromUpstream(responsesResponse.status);
     recordUpstreamResponseToolCount('openai-responses', 0);
 
@@ -705,12 +706,11 @@ export async function handleMessagesRequest(
     };
     ({ body: upstreamBodyClaude, headers: authHeaders } = runHook('before_upstream', { body: upstreamBodyClaude, headers: authHeaders }, hookCtxClaude));
   }
+  const claudeFetchHeaders = { 'Content-Type': 'application/json', ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request) };
+  logPipelineHeaders(activeLogger, requestId, 'upstream-request', targetUrl, claudeFetchHeaders);
   let response = await fetch(targetUrl, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...addForwardedHeaders(normalizeOpenAIAuthHeaders(authHeaders, targetUrl), request),
-    },
+    headers: claudeFetchHeaders,
     body: JSON.stringify(upstreamBodyClaude),
     signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
   });
@@ -741,6 +741,7 @@ export async function handleMessagesRequest(
     } catch (_e) { /* ignore */ }
   }
 
+  logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, response.headers);
   recordResponseStatusCodeFromUpstream(response.status);
   recordUpstreamResponseToolCount('openai-completions', 0);
 
@@ -798,12 +799,11 @@ async function handleNonStreamingResponse(
     logPipelineStage(logger, requestId, 'outbound', '/v1/messages', claudeResponse);
 
     // Return response with Claude headers
+    const nonStreamOutHeaders = { 'Content-Type': 'application/json', 'x-request-id': requestId };
+    logPipelineHeaders(logger, requestId, 'outbound', '/v1/messages', nonStreamOutHeaders);
     return new Response(JSON.stringify(claudeResponse), {
       status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'x-request-id': requestId,
-      },
+      headers: nonStreamOutHeaders,
     });
   } catch (error) {
     logger.error(requestId, `Error converting response: ${(error as Error).message}`);
@@ -902,15 +902,14 @@ async function handleStreamingResponse(
     const transformedStream = outStream1;
 
     // Return streaming response with proper headers
-    return new Response(transformedStream, {
-      status: 200,
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'x-request-id': requestId,
-      },
-    });
+    const streamOutHeaders = {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'x-request-id': requestId,
+    };
+    logPipelineHeaders(logger, requestId, 'outbound', '/v1/messages', streamOutHeaders);
+    return new Response(transformedStream, { status: 200, headers: streamOutHeaders });
   } catch (error) {
     logger.error(requestId, `Error creating streaming response: ${(error as Error).message}`);
     throw new Error(`Failed to create streaming response: ${(error as Error).message}`);
@@ -1096,13 +1095,12 @@ function handleResponsesStreamAsClaude(
 
   pump();
 
-  return new Response(readable, {
-    status: 200,
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'x-request-id': requestId,
-    },
-  });
+  const responsesStreamOutHeaders = {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'x-request-id': requestId,
+  };
+  logPipelineHeaders(logger, requestId, 'outbound', '/v1/messages', responsesStreamOutHeaders);
+  return new Response(readable, { status: 200, headers: responsesStreamOutHeaders });
 }
