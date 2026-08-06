@@ -4,7 +4,7 @@
  */
 
 import { Env, Logger } from '../types/shared.js';
-import { createLogger, logPipelineStage } from '../utils/logger.js';
+import { createLogger, logPipelineStage, logPipelineHeaders } from '../utils/logger.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { isSdkUrl, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
 import { addForwardedHeaders } from '../utils/routing.js';
@@ -31,6 +31,7 @@ export async function handleClaudeRequest(
     // Parse request body
     //const requestBody = await request.json() as Record<string, unknown>;
     logPipelineStage(activeLogger, requestId, 'inbound', '/v1/messages (native)', requestBody);
+    logPipelineHeaders(activeLogger, requestId, 'inbound', '/v1/messages (native)', request.headers);
 
     const isStreaming = requestBody.stream === true;
 
@@ -113,18 +114,21 @@ export async function handleClaudeRequest(
     const requestBodyStr = JSON.stringify(requestBody);
     activeLogger.debug(requestId, `Sending to upstream: ${requestBodyStr}`);
     logPipelineStage(activeLogger, requestId, 'upstream-request', targetUrl, requestBody);
+    const upstreamFetchHeaders = {
+        'Content-Type': 'application/json',
+        ...addForwardedHeaders(authHeaders, request),
+    };
+    logPipelineHeaders(activeLogger, requestId, 'upstream-request', targetUrl, upstreamFetchHeaders);
     const response = await fetch(targetUrl, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            ...addForwardedHeaders(authHeaders, request),
-        },
+        headers: upstreamFetchHeaders,
         body: JSON.stringify(requestBody),
         signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env)),
     });
 
     recordResponseStatusCodeFromUpstream(response.status);
     recordUpstreamResponseToolCount('anthropic-messages', 0);
+    logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, response.headers);
 
     if (!response.ok) {
         // Read upstream response body for diagnostics
@@ -182,6 +186,7 @@ export async function handleClaudeRequest(
             // Native pass-through: the outbound body to the client is identical to
             // the upstream response body (no format conversion for /v1/messages native).
             logPipelineStage(activeLogger, requestId, 'outbound', '/v1/messages (native)', text);
+            logPipelineHeaders(activeLogger, requestId, 'outbound', '/v1/messages (native)', response.headers);
             if (accountingModel) {
                 try {
                     const payload = JSON.parse(text);

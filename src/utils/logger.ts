@@ -73,6 +73,31 @@ export function logPipelineStage(
   logger.trace(requestId, `[${PIPELINE_STAGE_LABEL[stage]}] ${endpoint}: ${preview}`);
 }
 
+const AUTH_HEADER_KEYS = new Set(['authorization', 'x-api-key', 'x-goog-api-key', 'anthropic-beta']);
+
+/**
+ * Log request/response headers at one of the four proxy pipeline stages.
+ * Auth headers (Authorization, x-api-key, x-goog-api-key, anthropic-beta) are stripped entirely.
+ * No-op unless LOG_LEVEL=trace.
+ */
+export function logPipelineHeaders(
+  logger: Logger,
+  requestId: string,
+  stage: PipelineStage,
+  endpoint: string,
+  headers: Headers | Record<string, string>,
+): void {
+  const entries: Record<string, string> = {};
+  if (headers instanceof Headers) {
+    headers.forEach((v, k) => { if (!AUTH_HEADER_KEYS.has(k.toLowerCase())) entries[k] = v; });
+  } else {
+    for (const [k, v] of Object.entries(headers)) {
+      if (!AUTH_HEADER_KEYS.has(k.toLowerCase())) entries[k] = v;
+    }
+  }
+  logger.trace(requestId, `[${PIPELINE_STAGE_LABEL[stage]}-HEADERS] ${endpoint}: ${JSON.stringify(entries)}`);
+}
+
 export function createLogger(env: Env | Record<string, unknown>): Logger {
   const logLevelRaw = env.LOG_LEVEL as string;
   const logLevel = (['trace', 'debug', 'info', 'warn', 'error'].includes(logLevelRaw) ? logLevelRaw : 'info') as LogLevel;

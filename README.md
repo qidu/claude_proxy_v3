@@ -736,6 +736,10 @@ could therefore send plain text with a stale `content-encoding: br` / `gzip`
 header. Clients such as opencode may then try to decode Brotli by default and
 fail to read the response body.
 
+Normalization is applied on **both** the streaming (`text/event-stream`) and
+non-streaming response paths of the Node server, so all handlers and response
+shapes go through the same `nodeResponseHeaders` helper in `src/server.ts`.
+
 ## Configuration Reference
 
 Most users only need `proxy_config.toml`. Optional environment variables tune behavior.

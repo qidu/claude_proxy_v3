@@ -7,6 +7,27 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: Node server stripped `content-encoding`/`content-length` only on the streaming path
+
+The Node server adapter's `nodeResponseHeaders` helper (see the earlier "Node server
+decoded response header normalization" entry) deletes `content-encoding` and
+`content-length` before writing headers to the client, because Node `fetch()` decodes
+upstream-compressed bodies while leaving the original compression headers on the
+`Response`. Forwarding them verbatim causes clients (e.g. opencode) to attempt to
+decompress already-decoded bytes and fail to read the body.
+
+This normalization was only wired into the **streaming** (`text/event-stream`) branch of
+the Node server (`src/server.ts`). The **non-streaming** branch was writing headers via
+`Object.fromEntries(response.headers.entries())`, bypassing the helper. Non-streaming
+Anthropic `/v1/messages` responses therefore still leaked stale `content-encoding: br` /
+`gzip` headers to clients.
+
+**Fix:** the non-streaming branch now uses `nodeResponseHeaders(response)` like the
+streaming branch, so header normalization is applied uniformly across both paths and all
+handlers.
+
+**Files changed:** `src/server.ts`.
+
 ### Fix: `/v1/responses` → `anthropic-messages` — out-of-order `function_call`/text items produced consecutive assistant messages
 
 Codex CLI routed through `max-m3-anth` (MiniMax's `anthropic-messages`-compatible endpoint)
