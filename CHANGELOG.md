@@ -7,6 +7,31 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Add: full-pipeline request/response body tracing (`LOG_LEVEL=trace`)
+
+Added a new `trace` log level (below `debug`) that logs the message body at each
+of the four stages of the proxy pipeline for every request:
+
+1. **inbound** — the raw body as received at the endpoint, before any conversion.
+2. **upstream-request** — the body after conversion, as sent to the upstream.
+3. **upstream-response** — the raw body (or SSE chunks) received back from upstream.
+4. **outbound** — the body (or SSE events) after conversion, as returned to the client.
+
+This makes it possible to diagnose format-conversion bugs by capturing the exact
+body at each stage instead of relying on synthetic reproduction.
+
+- `Logger` (`src/utils/logger.ts`, `src/types/shared.ts`) gained a `trace` method,
+  ordered below `debug` (`trace=-1, debug=0, info=1, warn=2, error=3`). `LOG_LEVEL=trace`
+  now enables both trace and debug output; `LOG_LEVEL=debug` does not emit trace lines.
+- New `logPipelineStage(logger, requestId, stage, endpoint, body)` helper in
+  `src/utils/logger.ts` labels output as `[IN]`, `[UPSTREAM-REQ]`, `[UPSTREAM-RESP]`, or
+  `[OUT]` and truncates bodies over 128,000 chars.
+- Wired into every request handler (`claude.ts`, `messages.ts`, `gemini.ts`, `openai.ts`,
+  `responses.ts`, `chat-completions.ts`) at all four stages, covering both streaming (SSE,
+  via stream `tee()` so the client stream is undisturbed) and non-streaming paths.
+- Fixed a bug in `createLogger`'s level-validation whitelist that would have silently
+  downgraded `LOG_LEVEL=trace` to `info` (the whitelist array didn't include `'trace'`).
+
 ### Fix: synthesize a `signature` on signature-less thinking blocks
 
 Anthropic's spec marks `signature` as REQUIRED on thinking content blocks, and

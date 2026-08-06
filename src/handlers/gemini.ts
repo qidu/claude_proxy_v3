@@ -6,7 +6,7 @@
  */
 
 import { Env } from '../types/shared.js';
-import { Logger, createLogger } from '../utils/logger.js';
+import { Logger, createLogger, logPipelineStage } from '../utils/logger.js';
 import { ClaudeMessagesRequest, ClaudeMessagesResponse } from '../types/claude.js';
 import { GeminiInteractionRequest, GeminiInteractionResponse } from '../types/gemini.js';
 import { convertClaudeToGeminiRequest } from '../converters/claude-to-gemini.js';
@@ -178,7 +178,8 @@ async function handleGeminiInteractionsRequest(
 ): Promise<Response> {
     const activeLogger = logger ?? createLogger((env ?? {}) as Record<string, unknown>);
     const requestBody = await request.json() as Record<string, unknown>;
-    
+    logPipelineStage(activeLogger, requestId, 'inbound', '/v1/interactions', requestBody);
+
     activeLogger.debug(requestId, `Interactions request to: ${targetUrl}`);
     
     // Convert Interactions format to generateContent format
@@ -274,6 +275,7 @@ async function handleGeminiInteractionsRequest(
         ({ body: upstreamBodyGemini, headers: geminiHeaders } = runHook('before_upstream', { body: upstreamBodyGemini, headers: geminiHeaders }, hookCtx));
     }
 
+    logPipelineStage(activeLogger, requestId, 'upstream-request', fullTargetUrl, upstreamBodyGemini);
     let response = await fetch(fullTargetUrl, {
         method: 'POST',
         headers: geminiHeaders,
@@ -305,7 +307,9 @@ async function handleGeminiInteractionsRequest(
     }
     
     // Convert generateContent response to Interactions format
-    const geminiResponse = await response.json() as any;
+    const geminiResponseText = await response.text();
+    logPipelineStage(activeLogger, requestId, 'upstream-response', fullTargetUrl, geminiResponseText);
+    const geminiResponse = JSON.parse(geminiResponseText) as any;
     
     const interactionResponse = {
         id: `v1_${Date.now()}_${requestId}`,
@@ -335,7 +339,8 @@ async function handleGeminiInteractionsRequest(
             });
         }
     }
-    
+
+    logPipelineStage(activeLogger, requestId, 'outbound', '/v1/interactions', interactionResponse);
     return new Response(JSON.stringify(interactionResponse), {
         status: 200,
         headers: {
@@ -365,6 +370,7 @@ async function handleGeminiGenerateContentRequest(
 
     // Parse request body
     let requestBody = await request.json() as Record<string, unknown>;
+    logPipelineStage(activeLogger, requestId, 'inbound', outputFormat === 'claude-format' ? '/v1/messages (via generateContent)' : ':generateContent', requestBody);
 
     // before_conversion: client-schema transforms that need route/upstreamMode resolved
     // but must run before the format converter sees the body.
@@ -449,6 +455,7 @@ async function handleGeminiGenerateContentRequest(
     }
 
     try {
+        logPipelineStage(activeLogger, requestId, 'upstream-request', fullTargetUrl, upstreamBodyGeminiGen);
         let response = await fetch(fullTargetUrl, {
             method: 'POST',
             headers: geminiHeaders,
@@ -552,9 +559,11 @@ async function handleGeminiNonStreamingResponse(
     try {
         const responseText = await response.text();
         logger.debug(requestId, 'Gemini response received');
+        logPipelineStage(logger, requestId, 'upstream-response', response.url || '(upstream)', responseText);
 
         if (endpointType === 'native-gemini') {
             // Native Gemini format - return as-is
+            logPipelineStage(logger, requestId, 'outbound', ':generateContent (native)', responseText);
             return new Response(responseText, {
                 status: response.status,
                 headers: {
@@ -570,6 +579,7 @@ async function handleGeminiNonStreamingResponse(
                 model,
                 requestId
             );
+            logPipelineStage(logger, requestId, 'outbound', '/v1/messages', claudeResponse);
             return new Response(JSON.stringify(claudeResponse), {
                 status: 200,
                 headers: {
@@ -580,9 +590,10 @@ async function handleGeminiNonStreamingResponse(
         } else {
             // Parse native Gemini generateContent response
             const geminiResponse = JSON.parse(responseText);
-            
+
             // Convert to Claude format
             const claudeResponse = convertGeminiGenerateContentToClaude(geminiResponse, model, requestId);
+            logPipelineStage(logger, requestId, 'outbound', '/v1/messages (via generateContent)', claudeResponse);
 
             return new Response(JSON.stringify(claudeResponse), {
                 status: 200,
@@ -642,7 +653,7 @@ async function handleGeminiStreamingResponse(
                             if (line.startsWith('data: ')) {
                                 const data = line.substring(6);
                                 if (data.trim() !== '[DONE]') {
-                                    logger.debug(requestId, `Gemini SSE chunk: ${data}`);
+                                    logPipelineStage(logger, requestId, 'upstream-response', response.url || '(upstream SSE)', data);
                                 }
                             }
                         }
@@ -657,10 +668,39 @@ async function handleGeminiStreamingResponse(
         // Start logging in background
         logRawChunks();
 
-        // Create transformed stream from stream1
+        // Create transformed stream from stream1; tee again so the outbound
+        // events sent to the client are also logged at trace level.
         const transformerObj = transformer as any;
-        const transformedStream = stream1
-            .pipeThrough(new TransformStream(transformerObj));
+        const [outStream1, outStream2] = stream1
+            .pipeThrough(new TransformStream(transformerObj))
+            .tee();
+        (async () => {
+            try {
+                const outReader = outStream2.getReader();
+                const outDecoder = new TextDecoder();
+                let outBuffer = '';
+                while (true) {
+                    const { done, value } = await outReader.read();
+                    if (done) break;
+                    outBuffer += outDecoder.decode(value, { stream: true });
+                    const lines = outBuffer.split('\n');
+                    if (lines.length > 1) {
+                        for (const line of lines.slice(0, -1)) {
+                            if (line.startsWith('data: ')) {
+                                const data = line.substring(6);
+                                if (data.trim() !== '[DONE]') {
+                                    logPipelineStage(logger, requestId, 'outbound', 'stream', data);
+                                }
+                            }
+                        }
+                        outBuffer = lines[lines.length - 1] || '';
+                    }
+                }
+            } catch {
+                // best-effort debug logging only
+            }
+        })();
+        const transformedStream = outStream1;
 
         return new Response(transformedStream, {
             status: 200,

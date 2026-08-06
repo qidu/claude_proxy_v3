@@ -6,6 +6,7 @@
  * Logger interface
  */
 export interface Logger {
+    trace(requestId: string, message: string): void;
     debug(requestId: string, message: string): void;
     info(requestId: string, message: string): void;
     warn(requestId: string, message: string): void;

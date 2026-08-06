@@ -4,7 +4,7 @@
  */
 
 import { Env, Logger } from '../types/shared.js';
-import { createLogger } from '../utils/logger.js';
+import { createLogger, logPipelineStage } from '../utils/logger.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { isSdkUrl, handleSdkAnthropicRequest } from '../utils/sdk-handler.js';
 import { addForwardedHeaders, sanitizeUpstreamResponseHeaders } from '../utils/routing.js';
@@ -33,7 +33,8 @@ export async function handleClaudeRequest(
     const requestBody = isSdkUrl(targetUrl) ? await request.clone().json() as Record<string, unknown> : await request.json() as Record<string, unknown>;
     // Parse request body
     //const requestBody = await request.json() as Record<string, unknown>;
-    
+    logPipelineStage(activeLogger, requestId, 'inbound', '/v1/messages (native)', requestBody);
+
     const isStreaming = requestBody.stream === true;
 
     // Use modelId (which may be an alias) if provided
@@ -128,6 +129,7 @@ export async function handleClaudeRequest(
 
     // Pass through to native Claude API
     activeLogger.debug(requestId, `Sending to upstream: ${JSON.stringify(upstreamBody).substring(0, 500)}`);
+    logPipelineStage(activeLogger, requestId, 'upstream-request', targetUrl, upstreamBody);
     let response = await fetch(targetUrl, {
         method: 'POST',
         headers: {
@@ -170,6 +172,10 @@ export async function handleClaudeRequest(
     const isEventStream = contentType.includes('text/event-stream');
     const accountingModel = modelId || (typeof requestBody.model === 'string' ? requestBody.model : undefined);
 
+    if (isEventStream && response.body) {
+        activeLogger.debug(requestId, `[UPSTREAM-RESP] ${targetUrl}: <streaming SSE, pass-through — see accompanying SSE chunk logs if enabled>`);
+    }
+
     if (isEventStream && response.body && accountingModel) {
         // Tee the stream: one branch goes through the usage-tracking transform
         // (which records tokens on flush), the other is returned to the client
@@ -194,22 +200,27 @@ export async function handleClaudeRequest(
 
     // Non-streaming JSON response: read a clone of the body to extract usage
     // and tool names; the original response.body is returned to the client.
-    if (response.body && accountingModel) {
+    if (response.body) {
         const cloned = response.clone();
         try {
             const text = await cloned.text();
-            try {
-                const payload = JSON.parse(text);
-                const usage = extractUsageFromResponsePayload(payload);
-                if (usage) {
-                    recordModelUsage(accountingModel, usage);
+            logPipelineStage(activeLogger, requestId, 'upstream-response', targetUrl, text);
+            // Native pass-through: outbound body to the client is identical to upstream response body.
+            logPipelineStage(activeLogger, requestId, 'outbound', '/v1/messages (native)', text);
+            if (accountingModel) {
+                try {
+                    const payload = JSON.parse(text);
+                    const usage = extractUsageFromResponsePayload(payload);
+                    if (usage) {
+                        recordModelUsage(accountingModel, usage);
+                    }
+                    const toolNames = extractToolNamesFromResponsePayload(payload);
+                    if (toolNames.length > 0 && !(toolNames.length === 1 && toolNames[0] === 'none')) {
+                        recordUpstreamResponseToolNames(toolNames);
+                    }
+                } catch {
+                    // body wasn't JSON; nothing to extract
                 }
-                const toolNames = extractToolNamesFromResponsePayload(payload);
-                if (toolNames.length > 0 && !(toolNames.length === 1 && toolNames[0] === 'none')) {
-                    recordUpstreamResponseToolNames(toolNames);
-                }
-            } catch {
-                // body wasn't JSON; nothing to extract
             }
         } catch {
             // failed to read body; nothing to do
