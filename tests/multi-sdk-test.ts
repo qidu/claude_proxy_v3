@@ -121,6 +121,29 @@ function loadPrompts(): Prompt[] {
 
 const PROMPTS = loadPrompts();
 
+// Unmask Vercel AI SDK errors. APICallError wraps the real cause in `.cause`
+// (e.g. "Failed to process successful response" / "Invalid JSON response")
+// and carries `responseBody` / `url` — surface them so the underlying failure
+// is visible instead of the generic wrapper message.
+function describeError(e: any): string {
+  if (!(e instanceof Error)) return String(e);
+  const parts: string[] = [e.message];
+  const anyE = e as any;
+  if (anyE.cause instanceof Error && anyE.cause !== e) {
+    parts.push(`cause: ${anyE.cause.message}`);
+    const deepCause = (anyE.cause as any).cause;
+    if (deepCause instanceof Error && deepCause !== anyE.cause) {
+      parts.push(`deep cause: ${deepCause.message}`);
+    }
+  }
+  if (typeof anyE.responseBody === "string" && anyE.responseBody.length > 0) {
+    parts.push(`responseBody: ${anyE.responseBody.slice(0, 1000)}`);
+  }
+  if (typeof anyE.url === "string") parts.push(`url: ${anyE.url}`);
+  if (typeof anyE.statusCode === "number") parts.push(`status: ${anyE.statusCode}`);
+  return parts.join("\n  ");
+}
+
 // ===========================================================================
 // SDK 1 — Vercel AI SDK  (ai + @ai-sdk/anthropic)
 //
@@ -466,7 +489,7 @@ async function main() {
         try {
           await runVercelFeature(model, feature);
         } catch (e: any) {
-          console.error(`Feature ${feature} failed for ${model}:`, e?.message ?? e);
+          console.error(`Feature ${feature} failed for ${model}:\n  ${describeError(e)}`);
         }
       }
     }
@@ -505,7 +528,7 @@ async function main() {
           await sdk.run(model, p.prompt);
         } catch (e: any) {
           // Per-SDK failures are reported, not swallowed; loop continues (rule 8).
-          console.error(`SDK ${sdk.name} failed for ${model} on ${p.id}:`, e?.message ?? e);
+          console.error(`SDK ${sdk.name} failed for ${model} on ${p.id}:\n  ${describeError(e)}`);
         }
       }
     }
