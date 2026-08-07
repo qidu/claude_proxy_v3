@@ -18,6 +18,7 @@ import { convertCompletionsToResponses, convertCompletionsToCompactedResponse } 
 import { getConversation, saveConversation, normalizeInputToItems } from '../utils/conversation-store.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
 import { handleGeminiRequestForMessages } from './gemini.js';
+import { completionsToClaudeBody } from './openai.js';
 
 /**
  * Short-lived store: tool call ID → reasoning_content string.
@@ -101,7 +102,29 @@ export async function handleResponsesRequest(
 /**
  * Convert a Chat Completions body to Claude Messages body.
  * Extracts the system message from the messages array and maps the rest.
+ *
+ * NOTE: Kept for reference only — the call sites in `handleAsAnthropicMessages`
+ * and `handleAsGemini` now reuse the more complete `completionsToClaudeBody`
+ * imported from `./openai.js`. That version additionally handles consecutive
+ * tool-result grouping, `reasoning_content` → `thinking` blocks, and array
+ * `content` with `image_url` parts. This local copy is intentionally retained
+ * as a reference for the simpler shape and as a fallback if a future refactor
+ * re-decouples the responses handler from openai.ts. Do not add new call sites
+ * here — use `completionsToClaudeBody` from `./openai.js` instead.
+ *
+ * Historical callers (both internal to this file, both now using the openai.ts
+ * version instead):
+ *
+ *   - handleAsAnthropicMessages  — `/v1/responses` → `anthropic-messages` upstream.
+ *     Chain: Responses `input` → convertResponsesToChatCompletions → Completions
+ *     `messages` → completionsBodyToClaudeBody → Claude body → fetch upstream.
+ *
+ *   - handleAsGemini             — `/v1/responses` → `gemini-generatecontent` /
+ *     `gemini-interactions`. Same chain; handleGeminiRequestForMessages accepts
+ *     Claude-format input, so the body still goes through Completions→Claude
+ *     before being passed in.
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function completionsBodyToClaudeBody(completions: OpenAIRequest, model: string): Record<string, unknown> {
   const messages = completions.messages || [];
   const systemMsg = messages.find(m => m.role === 'system');
@@ -458,7 +481,7 @@ async function handleAsAnthropicMessages(
   upstreamMode?: string,
 ): Promise<Response> {
   const completionsRequest = convertResponsesToChatCompletions(requestBody, model);
-  let claudeBody: Record<string, unknown> = completionsBodyToClaudeBody(completionsRequest, model);
+  let claudeBody: Record<string, unknown> = await completionsToClaudeBody(completionsRequest as unknown as Record<string, unknown>, model);
 
   // before_upstream: apply declared transforms to the upstream-format body.
   // Required for anthropic-messages routes so per-model quirks (e.g. inject
@@ -537,7 +560,7 @@ async function handleAsGemini(
   upstreamMode?: string
 ): Promise<Response> {
   const completionsRequest = convertResponsesToChatCompletions(requestBody, model);
-  const claudeBody = completionsBodyToClaudeBody(completionsRequest, model);
+  const claudeBody = await completionsToClaudeBody(completionsRequest as unknown as Record<string, unknown>, model);
 
   logger.debug(requestId, `Responses->${upstreamMode}: ${JSON.stringify(claudeBody).substring(0, 500)}`);
 

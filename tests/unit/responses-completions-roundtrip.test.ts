@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { convertCompletionsToResponses, convertCompletionsToCompactedResponse } from '../../src/converters/completions-to-responses.js';
 import { convertResponsesToChatCompletions, convertInputItemsToMessages } from '../../src/converters/responses-to-completions.js';
+import { completionsToClaudeBody } from '../../src/handlers/openai.js';
 import type { OpenAIResponse } from '../../src/types/openai.js';
 
 /**
@@ -245,6 +246,127 @@ describe('convertResponsesToChatCompletions', () => {
 
     assert.deepEqual(out.thinking, { enabled: true, budget_tokens: 1024 });
     assert.equal(out.reasoning_effort, 'high');
+  });
+
+  it('preserves input_image parts as image_url array content', () => {
+    const out = convertResponsesToChatCompletions({
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'look' },
+          { type: 'input_image', image_url: 'https://example.com/x.png' },
+        ],
+      }],
+    }, 'model');
+
+    assert.equal(out.messages.length, 1);
+    const content = out.messages[0].content as any[];
+    assert.ok(Array.isArray(content), 'content should be array when image present');
+    assert.deepEqual(content, [
+      { type: 'text', text: 'look' },
+      { type: 'image_url', image_url: { url: 'https://example.com/x.png' } },
+    ]);
+  });
+
+  it('normalizes input_image object-form image_url to {url, detail?}', () => {
+    const out = convertResponsesToChatCompletions({
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [
+          { type: 'input_image', image_url: { url: 'https://example.com/x.png', detail: 'high' } },
+        ],
+      }],
+    }, 'model');
+
+    const content = out.messages[0].content as any[];
+    assert.deepEqual(content, [
+      { type: 'image_url', image_url: { url: 'https://example.com/x.png', detail: 'high' } },
+    ]);
+  });
+
+  it('collapses text-only content back to a string when no image present', () => {
+    const out = convertResponsesToChatCompletions({
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'line one' },
+          { type: 'input_text', text: 'line two' },
+        ],
+      }],
+    }, 'model');
+
+    // Text-only stays a string (preserves wire shape; regression guard).
+    assert.equal(typeof out.messages[0].content, 'string');
+    assert.equal(out.messages[0].content, 'line one\nline two');
+  });
+});
+
+// ─── /v1/responses → Claude chain (image preservation) ─────────────────────
+
+describe('Responses → Claude chain (image preservation)', () => {
+  it('end-to-end: input_image -> image_url -> Claude image block', async () => {
+    const completionsRequest = convertResponsesToChatCompletions({
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'see' },
+          { type: 'input_image', image_url: 'data:image/png;base64,QUJD' },
+        ],
+      }],
+    }, 'm');
+
+    const claudeBody = await completionsToClaudeBody(
+      completionsRequest as unknown as Record<string, unknown>,
+      'm',
+    );
+
+    const msgs = claudeBody.messages as any[];
+    assert.equal(msgs.length, 1);
+    assert.deepEqual(msgs[0].content, [
+      { type: 'text', text: 'see' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'QUJD' } },
+    ]);
+  });
+
+  it('end-to-end: http image_url routes through fetchImageAsInlineData', async () => {
+    const realFetch = globalThis.fetch;
+    const { setImageEncodeConfig, getImageEncodeConfig } = await import('../../src/utils/image-fetch.js');
+    const prior = getImageEncodeConfig();
+    setImageEncodeConfig({ url: 'http://localhost:34567', timeoutMs: 5000 });
+    globalThis.fetch = (async (url: any) => new Response(
+      JSON.stringify({ mime_type: 'image/jpeg', data: 'aGVsbG8=' }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )) as typeof fetch;
+    try {
+      const completionsRequest = convertResponsesToChatCompletions({
+        input: [{
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'see' },
+            { type: 'input_image', image_url: 'http://example.com/cat.jpg' },
+          ],
+        }],
+      }, 'm');
+
+      const claudeBody = await completionsToClaudeBody(
+        completionsRequest as unknown as Record<string, unknown>,
+        'm',
+      );
+
+      const msgs = claudeBody.messages as any[];
+      assert.deepEqual(msgs[0].content, [
+        { type: 'text', text: 'see' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'aGVsbG8=' } },
+      ]);
+    } finally {
+      globalThis.fetch = realFetch;
+      setImageEncodeConfig(prior);
+    }
   });
 });
 

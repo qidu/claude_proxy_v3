@@ -2,7 +2,7 @@
  * Converter: OpenAI Responses API format to Chat Completions format
  */
 
-import { OpenAIRequest, OpenAIMessage, OpenAIToolCall } from '../types/openai.js';
+import { OpenAIRequest, OpenAIMessage, OpenAIToolCall, OpenAIContent, OpenAIContentPart } from '../types/openai.js';
 import { stringify } from '../utils/stringify.js';
 
 /**
@@ -316,7 +316,7 @@ function convertInputItemToMessages(item: Record<string, unknown>, pendingReason
     } else if (content) {
       messages.push({
         role: convertRole(role),
-        content: convertContentToString(content),
+        content: convertResponsesContentToCompletions(content),
       });
     }
   } else if (type === 'function_call') {
@@ -372,30 +372,62 @@ function convertRole(role: string): OpenAIMessage['role'] {
 /**
  * Convert content to string representation for simple message format
  */
-function convertContentToString(content: unknown): string {
+/**
+ * Convert a Responses-API content value (string or array of `input_text` /
+ * `input_image` / `input_file` parts) into the Chat Completions `content`
+ * shape.
+ *
+ * - String content returns as-is.
+ * - Array content without any `input_image` parts collapses to a joined text
+ *   string (preserves the existing wire shape and avoids unnecessarily
+ *   switching to array-form `content`).
+ * - Array content containing one or more `input_image` parts returns an
+ *   `OpenAIContentPart[]` mixing `{type:'text'}` and `{type:'image_url'}`.
+ *   The Responses `image_url` (string or `{url, detail}` object) is normalized
+ *   to the Completions object form `{url, detail?}`.
+ * - `input_file` parts still emit a `[File: ...]` text placeholder (no
+ *   Completions-native file part exists).
+ *
+ * Note: callers that route through `completionsToClaudeBody` (handlers/openai.ts)
+ * will further convert `image_url` parts into Claude `image` blocks (with
+ * server-side fetch for http URLs).
+ */
+function convertResponsesContentToCompletions(content: unknown): OpenAIContent {
   if (typeof content === 'string') {
     return content;
   }
 
-  if (Array.isArray(content)) {
-    // Array of content parts - extract text
-    const texts: string[] = [];
-    for (const part of content) {
-      if (typeof part === 'object' && part !== null) {
-        const partObj = part as Record<string, unknown>;
-        if (partObj.type === 'input_text') {
-          texts.push(partObj.text as string);
-        } else if (partObj.type === 'input_image') {
-          // Images can't be represented as simple strings in chat completions
-          // Return a placeholder
-          texts.push('[Image input]');
-        } else if (partObj.type === 'input_file') {
-          texts.push(`[File: ${(partObj.filename as string) || 'unknown'}]`);
-        }
-      }
-    }
-    return texts.join('\n');
+  if (!Array.isArray(content)) {
+    return stringify(content);
   }
 
-  return stringify(content);
+  const parts: OpenAIContentPart[] = [];
+  let hasImage = false;
+  for (const part of content) {
+    if (typeof part !== 'object' || part === null) continue;
+    const partObj = part as Record<string, unknown>;
+    if (partObj.type === 'input_text') {
+      parts.push({ type: 'text', text: (partObj.text as string) ?? '' });
+    } else if (partObj.type === 'input_image') {
+      hasImage = true;
+      // Responses accepts image_url as either a string or {url, detail?} object.
+      // Completions requires the object form — normalize.
+      const url = partObj.image_url as unknown;
+      const normalized = typeof url === 'string'
+        ? { url }
+        : (url as { url: string; detail?: 'low' | 'high' | 'auto' }) ?? { url: '' };
+      parts.push({ type: 'image_url', image_url: normalized });
+    } else if (partObj.type === 'input_file') {
+      parts.push({ type: 'text', text: `[File: ${(partObj.filename as string) || 'unknown'}]` });
+    }
+  }
+
+  if (!hasImage) {
+    // Collapse text-only content to a string (matches prior wire shape).
+    return parts
+      .map(p => (p.type === 'text' ? p.text : ''))
+      .filter(t => t !== '')
+      .join('\n');
+  }
+  return parts;
 }

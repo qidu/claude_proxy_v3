@@ -7,6 +7,40 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Add: `/v1/responses` → `anthropic-messages` / `gemini-generatecontent` image preservation
+
+`/v1/responses` clients sending `input_image` parts previously lost them on every
+non-passthrough route — the chain routed through `convertResponsesToChatCompletions`
+which emitted a `[Image input]` placeholder string, then a local
+`completionsBodyToClaudeBody` copy in `responses.ts` that itself dropped array
+content. Both gaps are closed:
+
+- **`src/converters/responses-to-completions.ts`** — `convertContentToString`
+  renamed to `convertResponsesContentToCompletionsContent`. It now returns
+  Chat Completions `image_url` parts (object form `{url, detail?}`) for each
+  Responses `input_image` part, instead of the `[Image input]` placeholder.
+  Text-only content still collapses to a string (wire shape preserved).
+- **`src/handlers/responses.ts`** — `handleAsAnthropicMessages` and
+  `handleAsGemini` now reuse `completionsToClaudeBody` from `./openai.js`
+  (awaited, async). The previous local `completionsBodyToClaudeBody` is kept
+  for reference with a deprecation comment — do not add new call sites.
+
+This reuse also fixes three latent bugs on these routes that the local copy had
+fallen behind on: consecutive `tool` messages are now grouped into a single
+user turn (Claude requirement), `reasoning_content` is now preserved as
+`thinking` blocks, and `image_url` parts become Claude `image` blocks (data:
+URI decoded in-process; http(s) fetched via the SSRF-guarded
+`fetchImageAsInlineData` and optional `[fetch] image_encode` sidecar).
+
+**Files**: `src/converters/responses-to-completions.ts` (renamed helper +
+image preservation), `src/handlers/responses.ts` (reuse + deprecated local
+copy retained with comments).
+
+**Tests**: 5 new in `tests/unit/responses-completions-roundtrip.test.ts` —
+data-URI input_image end-to-end into Claude `image` block, http input_image
+through the sidecar fetch, text-only collapse (regression), object-form
+`{url, detail}` normalization, image_url preserved as array content.
+
 ### Add: OpenAI `image_url` → Responses `input_image` (Completions → openai-responses)
 
 `completionsToResponsesBody` (`src/handlers/openai.ts`) now forwards `image_url`
