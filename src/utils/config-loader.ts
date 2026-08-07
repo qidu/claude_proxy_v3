@@ -10,6 +10,7 @@ import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { isInternalHost } from './routing.js';
 import { getPrivacyFilterConfig } from './privacy-filter.js';
+import { resolveImageEncodeConfig, setImageEncodeConfig } from './image-fetch.js';
 
 // Check if we're running in Node.js environment
 const isNodeEnvironment = (typeof process !== 'undefined' && process.versions?.node) ||
@@ -75,6 +76,19 @@ export interface ProxyConfig {
     whitelist_add?: string[];
     whitelist_remove?: string[];
     whitelist_file?: string;
+  };
+  /**
+   * Image-encode sidecar for OpenAI image_url -> Gemini inline_data
+   * conversion. When `image_encode` is set (or `IMAGE_ENCODE_URL` env var),
+   * http(s) image URLs are POSTed to `{image_encode}/encode` with body
+   * `{"url": "..."}` and the sidecar returns `{"mime_type","data"}` with
+   * base64-encoded bytes. The sidecar must be on localhost or a private/LAN
+   * host (validated against `isInternalHost`). When unset, the proxy does
+   * the fetch + base64 in-process with its own SSRF guard.
+   */
+  fetch?: {
+    image_encode?: string;
+    timeout_ms?: number;
   };
 }
 
@@ -2567,6 +2581,17 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
           ? `url=${startupPrivacy.url}`
           : `entropyThreshold=${startupPrivacy.entropyThreshold}`;
         console.log(`[INFO] Privacy filter active: mode=${startupPrivacy.mode} ${modeDetail}`);
+      }
+    }
+
+    // Image-encode sidecar resolution (once, at startup). When configured,
+    // OpenAI image_url -> Gemini inline_data http(s) fetches are delegated to
+    // the sidecar; otherwise they happen in-process with the SSRF guard.
+    {
+      const startupImageEncode = resolveImageEncodeConfig(env, cleanedConfig.fetch);
+      setImageEncodeConfig(startupImageEncode);
+      if (startupImageEncode) {
+        console.log(`[INFO] Image-encode sidecar active: url=${startupImageEncode.url} timeoutMs=${startupImageEncode.timeoutMs}`);
       }
     }
 

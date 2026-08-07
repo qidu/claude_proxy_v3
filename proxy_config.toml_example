@@ -465,4 +465,27 @@ openai-responses   = ["max_tokens_rename"]
 # whitelist_add = []          # additional hex tokens to skip (lowercased)
 # whitelist_remove = []       # tokens to remove from the built-in whitelist
 # Node-only: one hex token per line, `#` starts a comment
-# whitelist_file = ""         
+# whitelist_file = ""
+
+# -----------------------------------------------------------------------------
+# Image-encode sidecar (optional).
+#
+# When set, OpenAI image_url -> Gemini inline_data conversion delegates the
+# http(s) fetch + base64 encode to this sidecar instead of doing it in-process.
+# The sidecar receives POST {image_encode}/encode with body {"url": "..."} and
+# returns {"mime_type": "...", "data": "<base64>"}.
+#
+# The sidecar must be reachable on localhost or a private/LAN host (validated
+# via isInternalHost). The image URL's own SSRF policy is the sidecar's
+# responsibility — the proxy skips its in-process isInternalHost check on the
+# image URL when a sidecar is configured.
+#
+# When unset, the proxy does the fetch + base64 in-process with its own SSRF
+# guard (loopback / RFC1918 / link-local / mDNS blocked) and a 20 MiB byte cap.
+#
+# Env vars (override toml): IMAGE_ENCODE_URL, IMAGE_ENCODE_TIMEOUT_MS.
+#
+# [fetch]
+# image_encode = "localhost:34567"   # shorthand; "http://localhost:34567" also accepted
+# timeout_ms = 40000                 # per-call timeout
+

@@ -1,17 +1,28 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { fetchImageAsInlineData } from '../../src/utils/image-fetch.js';
+import {
+  fetchImageAsInlineData,
+  resolveImageEncodeConfig,
+  setImageEncodeConfig,
+  getImageEncodeConfig,
+} from '../../src/utils/image-fetch.js';
+import type { Env } from '../../src/types/shared.js';
 
 /**
  * Exercises the image fetcher: SSRF guard rejects private/loopback hosts,
  * success path returns base64 + mime from a stubbed fetch, oversized content
- * is rejected.
+ * is rejected, and the sidecar delegation path POSTs to {sidecar}/encode.
  */
 describe('fetchImageAsInlineData', () => {
   const realFetch = globalThis.fetch;
+  const priorSidecar = getImageEncodeConfig();
 
-  after(() => { globalThis.fetch = realFetch; });
+  before(() => { setImageEncodeConfig(null); });
+  after(() => {
+    globalThis.fetch = realFetch;
+    setImageEncodeConfig(priorSidecar);
+  });
 
   it('blocks loopback IPv4 hosts (SSRF guard)', async () => {
     globalThis.fetch = realFetch; // not used; guard runs before fetch
@@ -113,3 +124,123 @@ describe('fetchImageAsInlineData', () => {
     );
   });
 });
+
+describe('fetchImageAsInlineData — sidecar delegation', () => {
+  const realFetch = globalThis.fetch;
+  const priorSidecar = getImageEncodeConfig();
+
+  before(() => setImageEncodeConfig({ url: 'http://localhost:34567', timeoutMs: 5000 }));
+  after(() => {
+    globalThis.fetch = realFetch;
+    setImageEncodeConfig(priorSidecar);
+  });
+
+  it('POSTs {"url"} to {sidecar}/encode and returns mime+data from response', async () => {
+    let capturedUrl = '';
+    let capturedBody: any;
+    globalThis.fetch = (async (url: any, init: any) => {
+      capturedUrl = String(url);
+      capturedBody = JSON.parse(init.body);
+      return new Response(JSON.stringify({ mime_type: 'image/png', data: 'U0dW' }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    // Note: with sidecar active, even loopback image URLs are allowed —
+    // the sidecar owns its own SSRF policy.
+    const out = await fetchImageAsInlineData('http://127.0.0.1/some-image.png');
+    assert.equal(capturedUrl, 'http://localhost:34567/encode');
+    assert.deepEqual(capturedBody, { url: 'http://127.0.0.1/some-image.png' });
+    assert.equal(out.mime_type, 'image/png');
+    assert.equal(out.data, 'U0dW');
+  });
+
+  it('throws when sidecar returns non-OK status', async () => {
+    globalThis.fetch = (async () => new Response('{"err":"nope"}', {
+      status: 502, statusText: 'Bad Gateway', headers: { 'content-type': 'application/json' },
+    })) as typeof fetch;
+    await assert.rejects(
+      () => fetchImageAsInlineData('https://example.com/x.png'),
+      /image_encode sidecar returned 502/,
+    );
+  });
+
+  it('throws when sidecar response is missing base64 data', async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ mime_type: 'image/png' }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    })) as typeof fetch;
+    await assert.rejects(
+      () => fetchImageAsInlineData('https://example.com/x.png'),
+      /no base64 data/,
+    );
+  });
+
+  it('throws when sidecar returns non-JSON', async () => {
+    globalThis.fetch = (async () => new Response('not json', {
+      status: 200, headers: { 'content-type': 'text/plain' },
+    })) as typeof fetch;
+    await assert.rejects(
+      () => fetchImageAsInlineData('https://example.com/x.png'),
+      /non-JSON|image_encode sidecar/,
+    );
+  });
+});
+
+describe('resolveImageEncodeConfig', () => {
+  const priorSidecar = getImageEncodeConfig();
+  after(() => setImageEncodeConfig(priorSidecar));
+
+  it('returns null when neither env nor toml is set', () => {
+    assert.equal(resolveImageEncodeConfig(undefined, undefined), null);
+    assert.equal(resolveImageEncodeConfig({} as Env, { image_encode: '' }), null);
+  });
+
+  it('accepts host:port shorthand (prepends http://)', () => {
+    const c = resolveImageEncodeConfig(undefined, { image_encode: 'localhost:34567' });
+    assert.equal(c?.url, 'http://localhost:34567');
+    assert.equal(c?.timeoutMs, 40000);
+  });
+
+  it('strips trailing slashes from the sidecar URL', () => {
+    const c = resolveImageEncodeConfig(undefined, { image_encode: 'http://localhost:34567///' });
+    assert.equal(c?.url, 'http://localhost:34567');
+  });
+
+  it('env var wins over toml', () => {
+    const c = resolveImageEncodeConfig(
+      { IMAGE_ENCODE_URL: 'http://127.0.0.1:9999' } as Env,
+      { image_encode: 'localhost:34567' },
+    );
+    assert.equal(c?.url, 'http://127.0.0.1:9999');
+  });
+
+  it('honors IMAGE_ENCODE_TIMEOUT_MS / timeout_ms', () => {
+    const c = resolveImageEncodeConfig(
+      { IMAGE_ENCODE_TIMEOUT_MS: '1234' } as Env,
+      { image_encode: 'localhost:34567' },
+    );
+    assert.equal(c?.timeoutMs, 1234);
+  });
+
+  it('rejects non-local sidecar hosts', () => {
+    assert.throws(
+      () => resolveImageEncodeConfig(undefined, { image_encode: 'https://example.com' }),
+      /localhost|private\/LAN/,
+    );
+  });
+
+  it('rejects non-http protocols', () => {
+    assert.throws(
+      () => resolveImageEncodeConfig(undefined, { image_encode: 'ftp://localhost' }),
+      /http or https/,
+    );
+  });
+
+  it('accepts LAN private hosts (10.x / 192.168.x)', () => {
+    assert.equal(
+      resolveImageEncodeConfig(undefined, { image_encode: 'http://10.0.0.5:34567' })?.url,
+      'http://10.0.0.5:34567',
+    );
+  });
+});
+

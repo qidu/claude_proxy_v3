@@ -7,6 +7,45 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Add: optional image-encode sidecar for OpenAI `image_url` → Gemini `inline_data`
+
+The Direction B conversion (commit 71e0a4c) now supports delegating the http(s)
+image fetch + base64 encode to an external sidecar, as an alternative to the
+default in-process fetcher. Useful when you want the proxy worker to stay
+CPU-light (no in-process image download + base64) or want to centralize SSRF
+policy / image fetching in a dedicated service.
+
+Configuration (toml):
+```toml
+[fetch]
+image_encode = "localhost:34567"   # shorthand; "http://localhost:34567" also accepted
+timeout_ms = 40000                 # per-call timeout (optional, default 40000)
+```
+Env-var overrides: `IMAGE_ENCODE_URL`, `IMAGE_ENCODE_TIMEOUT_MS`.
+
+**Sidecar contract**: `POST {image_encode}/encode` with body `{"url": "..."}`.
+Response: `{"mime_type": "...", "data": "<base64>"}`. Any non-OK status,
+non-JSON body, or missing `data` field is treated as a hard failure (Fail
+Loud — no placeholder).
+
+**Validation**: the sidecar itself must be reachable on localhost or a
+private/LAN host (validated via `isInternalHost` at startup). The image URL's
+own SSRF policy is the sidecar's responsibility — when a sidecar is
+configured, the proxy skips its in-process `isInternalHost` check on the
+image URL. `data:` URIs are still decoded in-process (no sidecar call) since
+they carry no network fetch.
+
+**Files**: `src/utils/image-fetch.ts` (new `resolveImageEncodeConfig`,
+`setImageEncodeConfig`, `getImageEncodeConfig`, `fetchImageViaSidecar`),
+`src/utils/config-loader.ts` (new `[fetch]` section + startup wiring),
+`src/types/shared.ts` (new env vars), `proxy_config.toml_example`
+(documented example).
+
+**Tests**: 12 new in `tests/unit/image-fetch.test.ts` covering sidecar
+delegation (success, non-OK status, missing data, non-JSON) and the resolver
+(null, shorthand, trailing-slash strip, env precedence, timeout, non-local
+rejection, non-http rejection, LAN-host acceptance).
+
 ### Add: bidirectional OpenAI `image_url` ↔ Gemini `inline_data` conversion
 
 Two previously-silent image-drop gaps are closed. Image parts now flow across

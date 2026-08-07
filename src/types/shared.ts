@@ -154,6 +154,21 @@ export interface Env {
     PRIVACY_FILTER_URL?: string;
 
     /**
+     * Base URL of the image-encode sidecar, e.g. "http://localhost:34567".
+     * When set, OpenAI image_url -> Gemini inline_data conversion delegates
+     * the URL fetch + base64 encode to this sidecar instead of doing it
+     * in-process. Equivalent to the toml `[fetch] image_encode` key; env var
+     * wins. The sidecar must be reachable on localhost / a private/LAN host.
+     */
+    IMAGE_ENCODE_URL?: string;
+
+    /**
+     * Per-call timeout in milliseconds for the image-encode sidecar.
+     * Default: 40000.
+     */
+    IMAGE_ENCODE_TIMEOUT_MS?: string;
+
+    /**
      * Per-call timeout in milliseconds for sidecar requests. Default: 30000.
      */
     PRIVACY_FILTER_TIMEOUT_MS?: string;
