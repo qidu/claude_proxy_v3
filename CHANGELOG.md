@@ -42,12 +42,32 @@ field names are accepted on input. Assistant turns that also carry
 - URL build fix at `src/index.ts:1186` for DEV_PASS_THROUGH mode so a
   `gemini-generatecontent` route resolves to `v1beta/models/<model>:generateContent`.
 
-**Known limitation**: response-side conversion chains
-`convertGeminiGenerateContentToClaude` → `claudeJsonToSyntheticCompletions`,
-and `convertGeminiGenerateContentToClaude` currently extracts text parts only.
-Tool-call and thinking parts of a Gemini response are dropped. Tracked as a
-follow-up. (Streaming converter handles text and finishReason; tool-call
-streaming from a Gemini upstream is also out of scope for this change.)
+**Known limitations on the OpenAI-client → Gemini-upstream response path**:
+
+1. **Tool-call and thinking parts of a Gemini response are dropped.**
+   `convertGeminiGenerateContentToClaude` (`src/converters/gemini-to-claude.ts:191-203`)
+   extracts `text` parts only. The streaming transformer handles text deltas
+   and `finishReason`, but not `functionCall` or `thought` parts. Tracked as a
+   follow-up — extending that converter would let tool-calls round-trip into
+   OpenAI `tool_calls` and thinking into `reasoning_content`.
+
+2. **Model-generated image output is not carryable to an OpenAI client.**
+   This is a hard limit imposed by the target response schemas, not a missing
+   converter:
+   - The Anthropic API spec restricts `image` content blocks to **user**
+     (input) messages — an assistant message carrying an `image` block is
+     rejected by a real Anthropic-compatible upstream. The proxy's local
+     `ClaudeContentBlock` type permits it structurally, but the spec does not.
+   - The OpenAI Chat Completions response schema has no image-output content
+     type at all (`choices[].message.content` is text, or an array of
+     `text`/`image_url` parts where `image_url` is also input-only).
+   So a Gemini model that returns `inlineData` (e.g. an image-generation
+   model) cannot deliver those bytes to a `/v1/chat/completions` client
+   through this cross-mode route, regardless of how the converters are
+   extended. Model-generated images only reach clients through native Gemini
+   passthrough (`:generateContent`/`/v1/interactions` client →
+   `gemini-generatecontent`/`gemini-interactions` upstream), where
+   `inlineData` passes through unchanged.
 
 **Tests**: `tests/unit/gemini-to-openai-image.test.ts`,
 `tests/unit/completions-to-gemini.test.ts`,
