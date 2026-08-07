@@ -7,6 +7,35 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: config sections losting on dashboard/TUI save
+
+Four bugs in `src/utils/config-loader.ts` caused silent data loss when the
+dashboard or TUI wrote the config back to disk:
+
+- **`[privacy_filter]` dropped by serializer.** `serializeProxyConfigToml` had
+  no branch for `config.privacy_filter`, so every setting (`filter_mode`,
+  `filter_url`, `timeout_ms`, `max_chars`, `entropy_threshold`, `hash_min_len`,
+  `whitelist_add`, `whitelist_remove`, `whitelist_file`) was silently discarded
+  on save. Fixed by adding a `[privacy_filter]` emit block.
+
+- **`[fetch]` dropped by both parser and serializer.** `parseSimpleToml` had no
+  section-header branch for `[fetch]`, so `image_encode` and `timeout_ms` were
+  never loaded into `config.fetch`. `serializeProxyConfigToml` likewise had no
+  emit block. Fixed both. Also added `hash_min_len` to the `ProxyConfig.privacy_filter`
+  interface (it was parsed but the field was missing from the type).
+
+- **Transform `headers.set` / `headers.remove` lost on round-trip.** The
+  serializer emitted `before_upstream.headers.set = {...}` and
+  `before_upstream.headers.remove = [...]` correctly, but `parseSimpleToml`
+  had no matching parse paths, so they were dropped on reload. Fixed by adding
+  an inline-object parser for `<hook>.headers.set` and a `headers.remove` branch
+  in the existing array handler.
+
+- **`set`/`default` transform ops coerced non-string values to strings.**
+  `serializeTransformOp` called `String(op.value)` before `JSON.stringify` for
+  `set` and `default` ops, turning `value = 0` into `value = "0"`. Fixed by
+  removing the premature `String()` coercion.
+
 ### Fix: TUI `cached` / `wrote` token columns now record all upstream usage shapes
 
 The TUI/dashboard stats pipeline previously only recognized the Claude usage

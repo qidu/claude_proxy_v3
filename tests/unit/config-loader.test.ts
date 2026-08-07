@@ -20,6 +20,7 @@ import {
   formatTokenLimit,
   normalizeHookAlias,
   parseSimpleToml,
+  serializeProxyConfigToml,
   validateTransformSet,
   validateAllTransforms,
   validateProxyConfig,
@@ -1186,5 +1187,165 @@ describe('applyDashboardConfigUpdate per-model mode', () => {
     const payload = toDashboardConfigPayload(cfg);
     const entry = (payload.models.free as Record<string, unknown>)['glm-5.2-a'] as string[];
     assert.deepEqual(entry, ['glm-5.2', 'https://override.example', 'anthropic-messages']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// serializeProxyConfigToml — save round-trip (dashboard/TUI data-loss regressions)
+// ---------------------------------------------------------------------------
+// When the dashboard or TUI saves an edited config, the in-memory ProxyConfig
+// is serialized back to TOML by serializeProxyConfigToml and re-parsed by
+// parseSimpleToml. Any section/field the serializer omits — or that the parser
+// cannot read back — is silently dropped on save. These tests lock in a full
+// parse → serialize → parse round-trip for the sections that previously leaked:
+// [privacy_filter], [fetch], and transform hook headers.set / headers.remove.
+
+describe('serializeProxyConfigToml save round-trip', () => {
+  it('preserves [privacy_filter] across a full parse→serialize→parse cycle', () => {
+    const original = `
+[privacy_filter]
+filter_mode = "local"
+filter_url = "http://localhost:9500"
+timeout_ms = 40000
+max_chars = 1024000
+entropy_threshold = 3.5
+hash_min_len = 8
+whitelist_add = ["deadbeef", "cafef00d"]
+whitelist_remove = ["abadidea"]
+whitelist_file = "/etc/whitelist.txt"
+`;
+    const parsed = parseSimpleToml(original);
+    const roundTripped = parseSimpleToml(serializeProxyConfigToml(parsed));
+    assert.deepEqual(roundTripped.privacy_filter, {
+      filter_mode: 'local',
+      filter_url: 'http://localhost:9500',
+      timeout_ms: 40000,
+      max_chars: 1024000,
+      entropy_threshold: 3.5,
+      hash_min_len: 8,
+      whitelist_add: ['deadbeef', 'cafef00d'],
+      whitelist_remove: ['abadidea'],
+      whitelist_file: '/etc/whitelist.txt',
+    });
+  });
+
+  it('preserves [fetch] image_encode + timeout_ms across parse→serialize→parse', () => {
+    const original = `
+[fetch]
+image_encode = "localhost:34567"
+timeout_ms = 40000
+`;
+    const parsed = parseSimpleToml(original);
+    // Parser must load [fetch] in the first place (previously it had no branch).
+    assert.deepEqual(parsed.fetch, { image_encode: 'localhost:34567', timeout_ms: 40000 });
+    const roundTripped = parseSimpleToml(serializeProxyConfigToml(parsed));
+    assert.deepEqual(roundTripped.fetch, { image_encode: 'localhost:34567', timeout_ms: 40000 });
+  });
+
+  it('preserves transform headers.set and headers.remove across parse→serialize→parse', () => {
+    const original = `
+[transforms.add_upstream_header]
+schema = "openai-completions"
+before_upstream.headers.set = {"X-Custom-Auth" = "token-abc", "X-Extra" = "v2"}
+before_upstream.headers.remove = ["x-stainless-os", "x-stainless-arch"]
+`;
+    const parsed = parseSimpleToml(original);
+    const set = parsed.transforms?.add_upstream_header as TransformSet;
+    // Parser must read the headers back (previously dropped on reload).
+    assert.deepEqual(set.before_upstream?.headers?.set, {
+      'X-Custom-Auth': 'token-abc',
+      'X-Extra': 'v2',
+    });
+    assert.deepEqual(set.before_upstream?.headers?.remove, ['x-stainless-os', 'x-stainless-arch']);
+
+    const roundTripped = parseSimpleToml(serializeProxyConfigToml(parsed));
+    const rtSet = roundTripped.transforms?.add_upstream_header as TransformSet;
+    assert.deepEqual(rtSet.before_upstream?.headers?.set, {
+      'X-Custom-Auth': 'token-abc',
+      'X-Extra': 'v2',
+    });
+    assert.deepEqual(rtSet.before_upstream?.headers?.remove, ['x-stainless-os', 'x-stainless-arch']);
+  });
+
+  it('serializes set/default op numeric + boolean values without string coercion', () => {
+    const cfg: ProxyConfig = {
+      transforms: {
+        coerce: {
+          name: 'coerce',
+          schema: 'openai-completions',
+          before_upstream: {
+            ops: [
+              { op: 'set', path: 'max_tokens', value: 4096 },
+              { op: 'default', path: 'stream', value: false },
+            ],
+          },
+        },
+      },
+    };
+    const toml = serializeProxyConfigToml(cfg);
+    // Values must appear as bare TOML scalars, not quoted strings.
+    assert.match(toml, /value = 4096\b/);
+    assert.match(toml, /value = false\b/);
+    assert.doesNotMatch(toml, /value = "4096"/);
+    assert.doesNotMatch(toml, /value = "false"/);
+  });
+
+  it('preserves [general] across parse→serialize→parse (string, boolean, numeric fields)', () => {
+    const original = `
+[general]
+auth_url = "https://auth.example.com/validate"
+auth_with_model = true
+auth_passthrough_with = "user_key"
+budget_to_effort_low = 32768
+budget_to_effort_medium = 65536
+budget_to_effort_high = 128000
+global_token_limit = "700M 1w"
+`;
+    const parsed = parseSimpleToml(original);
+    // Parser must store every field (uses generic `as any` assignment).
+    assert.equal(parsed.general?.auth_url, 'https://auth.example.com/validate');
+    assert.equal(parsed.general?.auth_with_model, true);
+    assert.equal(parsed.general?.auth_passthrough_with, 'user_key');
+    assert.equal(parsed.general?.budget_to_effort_low, 32768);
+    assert.equal(parsed.general?.budget_to_effort_medium, 65536);
+    assert.equal(parsed.general?.budget_to_effort_high, 128000);
+    assert.equal(parsed.general?.global_token_limit, '700M 1w');
+
+    const roundTripped = parseSimpleToml(serializeProxyConfigToml(parsed));
+    assert.deepEqual(roundTripped.general, {
+      auth_url: 'https://auth.example.com/validate',
+      auth_with_model: true,
+      auth_passthrough_with: 'user_key',
+      budget_to_effort_low: 32768,
+      budget_to_effort_medium: 65536,
+      budget_to_effort_high: 128000,
+      global_token_limit: '700M 1w',
+    });
+  });
+
+  it('preserves [default_upstream] across parse→serialize→parse', () => {
+    const original = `
+[default_upstream]
+upstream_mode = "openai-completions"
+default_base_url = "https://api.qnaigc.com"
+default_api_key = "sk-56db1e204bf459"
+budget_to_effort_low = 4000
+budget_to_effort_high = 20000
+`;
+    const parsed = parseSimpleToml(original);
+    assert.equal(parsed.default_upstream?.upstream_mode, 'openai-completions');
+    assert.equal(parsed.default_upstream?.default_base_url, 'https://api.qnaigc.com');
+    assert.equal(parsed.default_upstream?.default_api_key, 'sk-56db1e204bf459');
+    assert.equal(parsed.default_upstream?.budget_to_effort_low, 4000);
+    assert.equal(parsed.default_upstream?.budget_to_effort_high, 20000);
+
+    const roundTripped = parseSimpleToml(serializeProxyConfigToml(parsed));
+    assert.deepEqual(roundTripped.default_upstream, {
+      upstream_mode: 'openai-completions',
+      default_base_url: 'https://api.qnaigc.com',
+      default_api_key: 'sk-56db1e204bf459',
+      budget_to_effort_low: 4000,
+      budget_to_effort_high: 20000,
+    });
   });
 });

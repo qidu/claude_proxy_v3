@@ -73,6 +73,7 @@ export interface ProxyConfig {
     timeout_ms?: number;
     max_chars?: number;
     entropy_threshold?: number;
+    hash_min_len?: number;
     whitelist_add?: string[];
     whitelist_remove?: string[];
     whitelist_file?: string;
@@ -2247,9 +2248,9 @@ function serializeTransformOp(op: TransformOp): string {
     case 'rename':
       return `{op = "rename", path = ${JSON.stringify(op.path)}, to = ${JSON.stringify(op.to)}}`;
     case 'set':
-      return `{op = "set", path = ${JSON.stringify(op.path)}, value = ${JSON.stringify(String(op.value))}}`;
+      return `{op = "set", path = ${JSON.stringify(op.path)}, value = ${JSON.stringify(op.value)}}`;
     case 'default':
-      return `{op = "default", path = ${JSON.stringify(op.path)}, value = ${JSON.stringify(String(op.value))}}`;
+      return `{op = "default", path = ${JSON.stringify(op.path)}, value = ${JSON.stringify(op.value)}}`;
     case 'remove':
       return `{op = "remove", path = ${JSON.stringify(op.path)}}`;
     case 'map_value': {
@@ -2390,6 +2391,29 @@ export function serializeProxyConfigToml(config: ProxyConfig): string {
       }
       lines.push('');
     }
+  }
+
+  if (config.privacy_filter) {
+    const pf = config.privacy_filter;
+    lines.push('[privacy_filter]');
+    if (pf.filter_mode !== undefined) lines.push(`filter_mode = ${JSON.stringify(pf.filter_mode)}`);
+    if (pf.filter_url !== undefined) lines.push(`filter_url = ${JSON.stringify(pf.filter_url)}`);
+    if (pf.timeout_ms !== undefined) lines.push(`timeout_ms = ${pf.timeout_ms}`);
+    if (pf.max_chars !== undefined) lines.push(`max_chars = ${pf.max_chars}`);
+    if (pf.entropy_threshold !== undefined) lines.push(`entropy_threshold = ${pf.entropy_threshold}`);
+    if (pf.hash_min_len !== undefined) lines.push(`hash_min_len = ${pf.hash_min_len}`);
+    if (pf.whitelist_add?.length) lines.push(`whitelist_add = [${pf.whitelist_add.map((s) => JSON.stringify(s)).join(', ')}]`);
+    if (pf.whitelist_remove?.length) lines.push(`whitelist_remove = [${pf.whitelist_remove.map((s) => JSON.stringify(s)).join(', ')}]`);
+    if (pf.whitelist_file !== undefined) lines.push(`whitelist_file = ${JSON.stringify(pf.whitelist_file)}`);
+    lines.push('');
+  }
+
+  if (config.fetch) {
+    const fe = config.fetch;
+    lines.push('[fetch]');
+    if (fe.image_encode !== undefined) lines.push(`image_encode = ${JSON.stringify(fe.image_encode)}`);
+    if (fe.timeout_ms !== undefined) lines.push(`timeout_ms = ${fe.timeout_ms}`);
+    lines.push('');
   }
 
   return lines.join('\n').replace(/\n$/, '');
@@ -2687,6 +2711,10 @@ export function parseSimpleToml(content: string): ProxyConfig {
         currentSection = 'privacy_filter';
         currentCategory = null;
         config.privacy_filter = {};
+      } else if (parts[0] === 'fetch') {
+        currentSection = 'fetch';
+        currentCategory = null;
+        config.fetch = {};
       } else if (parts[0] === 'transforms' && parts[1]) {
         currentSection = 'transforms';
         currentCategory = parts[1];
@@ -2743,6 +2771,10 @@ export function parseSimpleToml(content: string): ProxyConfig {
         // numeric thresholds are coerced in the unquoted branch below.
         if (cleanKey === 'filter_mode' || cleanKey === 'filter_url' || cleanKey === 'whitelist_file') {
           (config.privacy_filter as any)[cleanKey] = value;
+        }
+      } else if (currentSection === 'fetch' && config.fetch) {
+        if (cleanKey === 'image_encode') {
+          config.fetch.image_encode = value;
         }
       } else if (currentSection === 'transforms' && currentCategory && config.transforms) {
         const set = config.transforms[currentCategory];
@@ -2833,6 +2865,37 @@ export function parseSimpleToml(content: string): ProxyConfig {
         set.anthropic_beta_map = map;
         continue;
       }
+
+      // Handle transforms headers.set inline object: before_upstream.headers.set = {"X-Foo" = "bar"}
+      const headersSetMatch = trimmedNoComment.match(/^([\w]+)\.headers\.set\s*=\s*(\{.*\})$/);
+      if (headersSetMatch) {
+        const rawHook = headersSetMatch[1];
+        if (HOOK_KEYS.has(rawHook)) {
+          const set = config.transforms[currentCategory];
+          const hookPart = normalizeHookAlias(rawHook) as HookKey;
+          if (!set[hookPart]) set[hookPart] = {} as TransformHookSlot;
+          const slot = set[hookPart] as TransformHookSlot;
+          if (!slot.headers) slot.headers = {};
+          const tableBody = headersSetMatch[2].slice(1, -1);
+          const headerMap: Record<string, string> = {};
+          const parts: string[] = [];
+          let buf = '';
+          let inQuote = false;
+          for (let ci = 0; ci < tableBody.length; ci++) {
+            const ch = tableBody[ci];
+            if (ch === '"') inQuote = !inQuote;
+            if (ch === ',' && !inQuote) { parts.push(buf); buf = ''; }
+            else buf += ch;
+          }
+          if (buf.trim()) parts.push(buf);
+          for (const part of parts) {
+            const kv = part.trim().match(/^"([^"]+)"\s*=\s*"([^"]*)"$/);
+            if (kv) headerMap[kv[1]] = kv[2];
+          }
+          slot.headers.set = headerMap;
+          continue;
+        }
+      }
     }
 
     // Handle composite inline object values: "alias" = {"m1": {...}, "m2": {...}}
@@ -2877,6 +2940,11 @@ export function parseSimpleToml(content: string): ProxyConfig {
               slot.builtins = rawArr
                 .replace(/^\[/, '').replace(/\]$/, '')
                 .split(',').map(s => s.trim().replace(/^"|"$/g, '')).filter(Boolean) as BuiltinName[];
+            } else if (fieldPart === 'headers.remove') {
+              if (!slot.headers) slot.headers = {};
+              slot.headers.remove = rawArr
+                .replace(/^\[/, '').replace(/\]$/, '')
+                .split(',').map(s => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
             }
           }
         }
@@ -2971,6 +3039,12 @@ export function parseSimpleToml(content: string): ProxyConfig {
           if (cleanKey === 'filter_mode' || cleanKey === 'filter_url' || cleanKey === 'whitelist_file') {
             (config.privacy_filter as any)[cleanKey] = cleanValueAny;
           }
+        }
+      } else if (currentSection === 'fetch' && config.fetch) {
+        if (cleanKey === 'timeout_ms' && typeof cleanValueAny === 'number') {
+          config.fetch.timeout_ms = cleanValueAny;
+        } else if (cleanKey === 'image_encode' && typeof cleanValueAny === 'string') {
+          config.fetch.image_encode = cleanValueAny;
         }
       }
       continue;
