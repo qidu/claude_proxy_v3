@@ -352,7 +352,8 @@ Notes:
 
 ### Image input/output across format boundaries
 
-**Wire shapes the proxy produces.** In every supported direction, image bytes travel **inline in the request body** — never as a URL the proxy hosts. The proxy never uploads images to external storage and never exposes an image-serving endpoint.
+**Wire shapes the proxy produces.** In every supported direction, image bytes travel **inline in the request body** — The proxy does NOT upload images to external storage and does NOT expose any image-serving endpoint.
+- The '[fetch] image_encode' sidecard for processing the images fetching and base64 encoding of image_url from `/v1/chat/completions` asynchronously outside the proxy.
 
 | Target upstream | Wire shape emitted | What's in it |
 |---|---|---|
@@ -360,17 +361,26 @@ Notes:
 | OpenAI (`openai-completions` / `openai-responses`) | `image_url: {url: "data:<mime>;base64,<base64>"}` | A **data URI** — the base64 bytes are inside the URL string itself |
 | Claude (`anthropic-messages`) | `image: {source: {type: "base64", media_type, data}}` | Raw base64 string in a JSON field |
 
-The OpenAI `image_url` field looks like a URL but is a `data:` URI — the bytes are encoded inside the string after the comma. The upstream parses it server-side; no second network fetch is needed.
+This row describes only what the proxy **emits to an OpenAI upstream when source bytes are inline** (Gemini `inline_data`, Claude base64, or a caller-supplied `data:` URI). In that direction the proxy always produces a `data:` URI — the field is named `image_url` but the bytes live inside the string after the comma, and the upstream parses it server-side with no second network fetch. It is **not** a constraint on what callers can send: OpenAI's schema also accepts a real `https://...` URL in `image_url.url`. When a caller does send an HTTP URL, see the **Source-shape handling** table below for the per-route behavior (some routes fetch+inline the bytes, others pass the URL through unchanged).
 
 **Source-shape handling.**
 
-| Source shape | What the proxy does | Result |
+| Source shape | What happens | Result |
 |---|---|---|
-| Client sent `data:` URI | Decode synchronously in-process | Bytes embedded inline in the upstream request |
-| Client sent `https://...` URL | Proxy (or sidecar) **downloads** the image, base64-encodes it | Bytes embedded inline — the original URL is *discarded* |
-| Client sent raw base64 (Gemini `inline_data` / Claude `image`) | Pass through / re-wrap into target shape | Bytes embedded inline |
+| Client sent `data:` URI | Decoded synchronously in-process | Bytes embedded inline in the upstream request |
+| Client sent raw base64 (Gemini `inline_data` / Claude `image`) | Passed through / re-wrapped into target shape | Bytes embedded inline |
+| Client sent `https://...` URL | **Fetched and base64-encoded, then the URL is discarded** (see *who fetches HTTP URLs* below) | Bytes embedded inline — except on the OpenAI → OpenAI Responses route, where the URL is passed through unchanged |
 
-The only http URL ever involved is the *input* URL the client sent. The proxy/sidecar fetches it (SSRF guard blocks loopback / RFC1918 / link-local / mDNS; 20 MiB byte cap), then discards the URL and ships the bytes inline to the upstream. The `[fetch] image_encode` sidecar does the same fetch+base64 and returns `{mime_type, data}` — it also doesn't host anything.
+**Fetch+base64 only runs for real HTTP(S) URLs** — `data:` URIs are decoded, raw base64 is re-wrapped, neither hits the network.
+
+**Who fetches HTTP URLs** (only relevant when the caller actually sent an `https://...` URL):
+
+- **OpenAI → OpenAI Responses route**: nobody. The proxy passes `image_url: {url, detail?}` through unchanged and the OpenAI Responses upstream fetches the URL itself. No in-proxy SSRF guard, no sidecar.
+- **Every other route that needs inline bytes** (OpenAI → Gemini, OpenAI → Claude, Responses → Claude/Gemini): the work is done by whichever of these is configured:
+  - **No sidecar configured** (default) → the **proxy fetches in-process**, with its own SSRF guard (loopback / RFC1918 / link-local / mDNS blocked via `isInternalHost`; 20 MiB byte cap; `ALLOWED_HOSTS` does **not** apply to image URLs).
+  - **`[fetch] image_encode` (or `IMAGE_ENCODE_URL`) configured** → the proxy delegates to the **sidecar** via `POST {url}/encode` with `{"url":"..."}`; the sidecar returns `{"mime_type","data"}`. The sidecar must be on localhost / private LAN and applies its own SSRF policy. The sidecar is **opt-in**.
+
+The only HTTP URL ever involved is the *input* URL the client sent; neither proxy nor sidecar hosts or re-serves images.
 
 Image **input** is converted across the OpenAI ↔ Gemini boundary in both directions:
 
