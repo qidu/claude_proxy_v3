@@ -12,6 +12,8 @@ import { recordResponseStatusCodeFromUpstream } from '../utils/dashboard-stats.j
 import { validateOpenAICompletionsRequest } from '../utils/validation.js';
 import { ValidationError } from '../utils/errors.js';
 import { completionsToResponsesBody, completionsToClaudeBody, claudeJsonToSyntheticCompletions } from './openai.js';
+import { convertCompletionsToGeminiGenerateContentBody } from '../converters/claude-to-gemini.js';
+import { convertGeminiGenerateContentToClaude } from '../converters/gemini-to-claude.js';
 import { runHook, applyAfterUpstream, type HookContext } from '../utils/request-transform.js';
 import type { ModelRouteConfig } from '../utils/config-loader.js';
 
@@ -275,6 +277,155 @@ export async function handleChatCompletionsPassthrough(
       statusText: responsesUpstreamResponse.statusText,
       headers: responseHeaders,
     });
+  }
+
+  // When the upstream is gemini-generatecontent, convert the OpenAI completions
+  // body to a Gemini generateContent body, forward it, then convert the native
+  // Gemini response back to OpenAI completions JSON. Non-streaming only in
+  // Phase 2; streaming lands in Phase 3.
+  if (upstreamMode === 'gemini-generatecontent') {
+    const model = (parsedBody.model as string || modelId || 'unknown');
+
+    const geminiBody = await convertCompletionsToGeminiGenerateContentBody(parsedBody, model);
+    logger.debug(requestId, `${path} converted to gemini-generatecontent body`);
+
+    const geminiHeaders: Record<string, string> = { ...authHeaders };
+    // Gemini native API uses x-goog-api-key. If the request came in with
+    // Authorization: Bearer, repack the key into x-goog-api-key.
+    if (geminiHeaders['Authorization'] && !geminiHeaders['x-goog-api-key']) {
+      geminiHeaders['x-goog-api-key'] = geminiHeaders['Authorization'].replace(/^Bearer\s+/i, '');
+      delete geminiHeaders['Authorization'];
+    }
+
+    // For streaming, switch :generateContent -> :streamGenerateContent?alt=sse
+    // (matches src/handlers/gemini.ts constructGeminiUrl convention).
+    let geminiTargetUrl = targetUrl;
+    if (isStreaming) {
+      geminiTargetUrl = targetUrl.replace(/:generateContent(\?|$)/, ':streamGenerateContent$1');
+      if (!geminiTargetUrl.includes(':streamGenerateContent')) {
+        // Fallback: target didn't end in :generateContent — append the action.
+        geminiTargetUrl = `${targetUrl.replace(/:generateContent$/, '')}:streamGenerateContent`;
+      }
+      if (!geminiTargetUrl.includes('alt=sse')) {
+        geminiTargetUrl += (geminiTargetUrl.includes('?') ? '&' : '?') + 'alt=sse';
+      }
+    }
+
+    logPipelineStage(logger, requestId, 'upstream-request', geminiTargetUrl, geminiBody);
+    const geminiFetchHeaders = {
+      'Content-Type': 'application/json',
+      ...addForwardedHeaders(geminiHeaders, request),
+    };
+    logPipelineHeaders(logger, requestId, 'upstream-request', geminiTargetUrl, geminiFetchHeaders);
+    let geminiUpstreamResponse = await fetch(geminiTargetUrl, {
+      method: 'POST',
+      headers: geminiFetchHeaders,
+      body: JSON.stringify(geminiBody),
+      signal: createUpstreamAbortSignal(getUpstreamBodyTimeoutMs(env as Record<string, unknown>)),
+    });
+
+    if (route) {
+      geminiUpstreamResponse = await applyAfterUpstream(geminiUpstreamResponse, {
+        hook: 'after_upstream', route, upstreamMode: 'gemini-generatecontent',
+        clientModel: model, requestId, streaming: isStreaming, logger,
+      });
+    }
+
+    logPipelineHeaders(logger, requestId, 'upstream-response', geminiTargetUrl, geminiUpstreamResponse.headers);
+    recordResponseStatusCodeFromUpstream(geminiUpstreamResponse.status);
+    logger.debug(requestId, `${path} resp: status=${geminiUpstreamResponse.status} stream=${isStreaming}`);
+
+    if (!geminiUpstreamResponse.ok) {
+      const errText = await geminiUpstreamResponse.text();
+      return new Response(errText, {
+        status: geminiUpstreamResponse.status,
+        headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+      });
+    }
+
+    if (isStreaming) {
+      // Gemini SSE -> OpenAI chat.completion.chunk SSE. Each Gemini chunk is a
+      // complete generateContent-style object with candidates[].content.parts[];
+      // we extract the text delta per chunk.
+      const { readable, writable } = new TransformStream();
+      const writer = writable.getWriter();
+      const encoder = new TextEncoder();
+      (async () => {
+        try {
+          const reader = geminiUpstreamResponse.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const rawChunk = decoder.decode(value, { stream: true });
+            logPipelineStage(logger, requestId, 'upstream-response', geminiUpstreamResponse.url || geminiTargetUrl, rawChunk);
+            buffer += rawChunk;
+            const events = buffer.split('\n\n');
+            buffer = events.pop() || '';
+            for (const event of events) {
+              if (!event.trim()) continue;
+              const dataLine = event.split('\n').find(l => l.startsWith('data: '));
+              if (!dataLine) continue;
+              const data = dataLine.slice(6).trim();
+              if (!data) continue;
+              try {
+                const parsed = JSON.parse(data) as Record<string, unknown>;
+                const candidates = parsed.candidates as Array<Record<string, unknown>> | undefined;
+                const parts = (candidates?.[0]?.content as Record<string, unknown> | undefined)?.parts as Array<Record<string, unknown>> | undefined;
+                const text = (parts ?? []).filter(p => typeof p.text === 'string' && !(p.thought === true)).map(p => p.text).join('');
+                if (text) {
+                  const chunk = {
+                    id: `chatcmpl_${Date.now()}`, object: 'chat.completion.chunk',
+                    created: Math.floor(Date.now() / 1000), model,
+                    choices: [{ index: 0, delta: { role: 'assistant', content: text }, finish_reason: null }],
+                  };
+                  logPipelineStage(logger, requestId, 'outbound', path, chunk);
+                  await writer.write(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+                }
+                const finishReason = candidates?.[0]?.finishReason as string | undefined;
+                if (finishReason && finishReason !== 'FINISH_REASON_UNSPECIFIED') {
+                  const mapped = finishReason === 'STOP' ? 'stop'
+                    : finishReason === 'MAX_TOKENS' ? 'length'
+                    : finishReason === 'SAFETY' || finishReason === 'RECITATION' ? 'content_filter'
+                    : 'stop';
+                  const chunk = {
+                    id: `chatcmpl_${Date.now()}`, object: 'chat.completion.chunk',
+                    created: Math.floor(Date.now() / 1000), model,
+                    choices: [{ index: 0, delta: {}, finish_reason: mapped }],
+                  };
+                  logPipelineStage(logger, requestId, 'outbound', path, chunk);
+                  await writer.write(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+                }
+              } catch { /* skip unparseable events */ }
+            }
+          }
+          await writer.write(encoder.encode('data: [DONE]\n\n'));
+          await writer.close();
+        } catch (e) {
+          logger.error(requestId, `${path} gemini-generatecontent streaming error: ${(e as Error).message}`);
+          await writer.abort();
+        }
+      })();
+      const streamOutHeaders = { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'x-request-id': requestId };
+      logPipelineHeaders(logger, requestId, 'outbound', path, streamOutHeaders);
+      return new Response(readable, { headers: streamOutHeaders });
+    }
+
+    // Native Gemini JSON -> Claude -> OpenAI completions JSON. Reuses the
+    // existing chain also used by forwardCompletionsAsAnthropicMessages.
+    // Known limitation: convertGeminiGenerateContentToClaude only extracts
+    // text parts today; tool/thought response parts are dropped. Tracked
+    // as a follow-up.
+    const geminiJsonText = await geminiUpstreamResponse.text();
+    logPipelineStage(logger, requestId, 'upstream-response', geminiUpstreamResponse.url || geminiTargetUrl, geminiJsonText);
+    const geminiJson = JSON.parse(geminiJsonText) as Record<string, unknown>;
+    const claudeJson = convertGeminiGenerateContentToClaude(geminiJson, model, requestId) as unknown as Record<string, unknown>;
+    const completions = claudeJsonToSyntheticCompletions(claudeJson, model);
+    logPipelineStage(logger, requestId, 'outbound', path, completions);
+    const geminiOutHeaders = { 'Content-Type': 'application/json', 'x-request-id': requestId };
+    logPipelineHeaders(logger, requestId, 'outbound', path, geminiOutHeaders);
+    return new Response(JSON.stringify(completions), { status: 200, headers: geminiOutHeaders });
   }
 
   logPipelineStage(logger, requestId, 'upstream-request', targetUrl, parsedBody);

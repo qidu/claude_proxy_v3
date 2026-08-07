@@ -98,7 +98,7 @@ function normalizeGeminiSchema(schema: any): any {
 /**
  * Convert Gemini generateContent request to OpenAI format
  */
-function convertGeminiGenerateContentToOpenAI(geminiRequest: Record<string, unknown>): Record<string, unknown> {
+export function convertGeminiGenerateContentToOpenAI(geminiRequest: Record<string, unknown>): Record<string, unknown> {
   const model = (geminiRequest.model as string) || 'gemini-no-id-at-proxy';
 
   // Handle contents format
@@ -169,7 +169,34 @@ function convertGeminiGenerateContentToOpenAI(geminiRequest: Record<string, unkn
         }
         lastToolCalls = [];
       } else {
-        const msg: Record<string, unknown> = { role, content: textContent };
+        // Collect image parts. Gemini SDK accepts both snake_case
+        // (inline_data.mime_type) and camelCase (inlineData.mimeType); emit
+        // them as OpenAI image_url data-URI parts. When a turn has any image
+        // part, content becomes an array mixing text and image_url parts
+        // (matching src/converters/claude-to-openai.ts:54-60).
+        const imageParts = parts
+          .map((p: any) => {
+            const inline = p.inline_data ?? p.inlineData;
+            if (!inline) return null;
+            const mime = inline.mime_type ?? inline.mimeType;
+            const data = inline.data;
+            if (typeof data !== 'string' || data === '') return null;
+            return {
+              type: 'image_url' as const,
+              image_url: { url: `data:${mime || 'image/jpeg'};base64,${data}` },
+            };
+          })
+          .filter((p: any): p is { type: 'image_url'; image_url: { url: string } } => p !== null);
+
+        let msg: Record<string, unknown>;
+        if (imageParts.length === 0) {
+          msg = { role, content: textContent };
+        } else {
+          const contentArr: Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> = [];
+          if (textContent) contentArr.push({ type: 'text', text: textContent });
+          for (const ip of imageParts) contentArr.push(ip);
+          msg = { role, content: contentArr };
+        }
         if (thinkingContent) msg.reasoning_content = thinkingContent;
         messages.push(msg);
       }

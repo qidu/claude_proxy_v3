@@ -1183,9 +1183,21 @@ export default {
               const fixedRoute = parseFixedRoute(path, proxyConfig, env);
 
               if (modelRoute && modelRoute.targetUrl) {
-                const upstreamPath = modelRoute.upstreamMode === 'openai-responses' ? 'v1/responses'
-                  : modelRoute.upstreamMode === 'anthropic-messages' ? 'v1/messages'
-                  : 'v1/chat/completions';
+                let upstreamPath: string;
+                if (modelRoute.upstreamMode === 'openai-responses') {
+                  upstreamPath = 'v1/responses';
+                } else if (modelRoute.upstreamMode === 'anthropic-messages') {
+                  upstreamPath = 'v1/messages';
+                } else if (modelRoute.upstreamMode === 'gemini-generatecontent'
+                    || modelRoute.upstreamMode === 'gemini-interactions') {
+                  // Gemini generateContent URL embeds the target model id and the
+                  // action. The chat-completions handler handles non-streaming
+                  // (:generateContent); streaming lands in Phase 3.
+                  const targetModel = modelRoute.modelAlias || modelName || 'gemini-no-id-at-proxy';
+                  upstreamPath = `v1beta/models/${encodeURIComponent(targetModel)}:generateContent`;
+                } else {
+                  upstreamPath = 'v1/chat/completions';
+                }
                 targetUrl = buildUpstreamUrl(modelRoute.targetUrl, upstreamPath);
                 upstreamMode = modelRoute.upstreamMode || fixedRoute.upstreamMode;
               } else {

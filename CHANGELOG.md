@@ -7,6 +7,53 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Add: bidirectional OpenAI `image_url` ↔ Gemini `inline_data` conversion
+
+Two previously-silent image-drop gaps are closed. Image parts now flow across
+the OpenAI ↔ Gemini format boundary in both directions.
+
+**Direction A — Gemini → OpenAI** (existing route, surgical):
+`convertGeminiGenerateContentToOpenAI` in `src/handlers/openai.ts` now emits
+OpenAI `image_url` (data-URI) parts from Gemini `inline_data`/`inlineData`
+parts. Used when a Gemini SDK client sends `generateContent` with images and
+the route targets an OpenAI-compatible upstream. When a turn has image parts
+its `content` becomes an array mixing text and `image_url` parts; text-only
+turns keep string `content` (unchanged). Both snake_case and camelCase Gemini
+field names are accepted on input. Assistant turns that also carry
+`tool_calls` stay text-only — OpenAI does not support `image_url` on a
+`tool_calls` turn.
+
+**Direction B — OpenAI → Gemini** (new cross-mode route):
+`/v1/chat/completions` requests with `image_url` blocks routed to a
+`gemini-generatecontent` upstream now work end-to-end. New components:
+- `convertCompletionsToGeminiGenerateContentBody` in
+  `src/converters/claude-to-gemini.ts` — converts OpenAI Completions body to
+  Gemini `generateContent` body (system → `systemInstruction`, images →
+  `inline_data`, tools → `functionDeclarations`, tool_calls → `functionCall`).
+- `forwardCompletionsAsGeminiGenerateContent` branch in
+  `src/handlers/chat-completions.ts` — non-streaming + streaming. Streaming
+  switches the URL to `:streamGenerateContent?alt=sse` and converts Gemini SSE
+  chunks to OpenAI `chat.completion.chunk` SSE inline.
+- `fetchImageAsInlineData` in `src/utils/image-fetch.ts` — server-side image
+  fetch for http(s) `image_url` values, with an SSRF guard that blocks
+  loopback / RFC1918 / link-local / mDNS hosts (reuses `isInternalHost`) and a
+  20 MiB byte cap. `data:` URIs decode synchronously; http(s) URLs are fetched
+  and base64-encoded.
+- URL build fix at `src/index.ts:1186` for DEV_PASS_THROUGH mode so a
+  `gemini-generatecontent` route resolves to `v1beta/models/<model>:generateContent`.
+
+**Known limitation**: response-side conversion chains
+`convertGeminiGenerateContentToClaude` → `claudeJsonToSyntheticCompletions`,
+and `convertGeminiGenerateContentToClaude` currently extracts text parts only.
+Tool-call and thinking parts of a Gemini response are dropped. Tracked as a
+follow-up. (Streaming converter handles text and finishReason; tool-call
+streaming from a Gemini upstream is also out of scope for this change.)
+
+**Tests**: `tests/unit/gemini-to-openai-image.test.ts`,
+`tests/unit/completions-to-gemini.test.ts`,
+`tests/unit/image-fetch.test.ts`,
+`tests/unit/chat-completions-gemini-streaming.test.ts` (20 new tests).
+
 ### Add: full-pipeline request/response header tracing (`LOG_LEVEL=trace`)
 
 Extended the trace logs added above to also emit the request/response headers at
