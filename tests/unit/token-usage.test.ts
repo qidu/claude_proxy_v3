@@ -6,7 +6,7 @@ import { createGeminiStreamTransformer } from '../../src/converters/gemini-strea
 import { extractTokenCounts } from '../../src/converters/openai-to-claude.js';
 import { countClaudeRequestTokens } from '../../src/utils/token-counting.js';
 import { handleMessagesRequest } from '../../src/handlers/messages.js';
-import { createUsageTrackingTransformStream } from '../../src/utils/dashboard-stats.js';
+import { createUsageTrackingTransformStream, extractUsageFromResponsePayload } from '../../src/utils/dashboard-stats.js';
 import { buildModelUsageRecordPayload, recordModelUsageToRemote } from '../../src/utils/model-usage-recorder.js';
 
 async function streamToText(stream: ReadableStream<Uint8Array>): Promise<string> {
@@ -219,7 +219,166 @@ describe('cache token mapping', () => {
     assert.equal(usage.output_tokens, 10);
     assert.equal(usage.cache_read_input_tokens, 6);
   });
+
+  it('maps chat-completions prompt_tokens_details.cached_tokens (OpenAI/GLM shape)', async () => {
+    const usage = await extractTokenCounts({
+      prompt_tokens: 128,
+      completion_tokens: 10,
+      total_tokens: 138,
+      prompt_tokens_details: { cached_tokens: 64 },
+      completion_tokens_details: { reasoning_tokens: 9 },
+    });
+
+    assert.equal(usage.input_tokens, 128);
+    assert.equal(usage.output_tokens, 10);
+    assert.equal(usage.cache_read_input_tokens, 64);
+  });
+
+  it('maps OpenRouter prompt_cache_hit_tokens / prompt_cache_miss_tokens', async () => {
+    const usage = await extractTokenCounts({
+      prompt_tokens: 200,
+      completion_tokens: 5,
+      total_tokens: 205,
+      prompt_cache_hit_tokens: 150,
+      prompt_cache_miss_tokens: 50,
+    });
+
+    assert.equal(usage.input_tokens, 200);
+    assert.equal(usage.cache_read_input_tokens, 150);
+    assert.equal(usage.cache_creation_input_tokens, 50);
+  });
+
+  it('prefers prompt_cache_hit_tokens over prompt_tokens_details.cached_tokens', async () => {
+    // Both fields present — OpenRouter shorthand wins per the fallback chain.
+    const usage = await extractTokenCounts({
+      prompt_tokens: 100,
+      completion_tokens: 1,
+      prompt_cache_hit_tokens: 30,
+      prompt_tokens_details: { cached_tokens: 99 },
+    });
+
+    assert.equal(usage.cache_read_input_tokens, 30);
+  });
 });
+
+describe('extractUsageFromResponsePayload (non-streaming stats extraction)', () => {
+  it('reads Claude shape (cache_read_input_tokens / cache_creation_input_tokens)', () => {
+    const stats = extractUsageFromResponsePayload({
+      usage: {
+        input_tokens: 14,
+        output_tokens: 3,
+        cache_read_input_tokens: 7,
+        cache_creation_input_tokens: 4,
+      },
+    });
+
+    assert.deepEqual(stats, {
+      input_tokens: 14,
+      cached_tokens: 7,
+      cache_written_tokens: 4,
+      output_tokens: 3,
+      total_tokens: 28, // 14 + 7 + 4 + 3
+    });
+  });
+
+  it('reads chat-completions shape (prompt_tokens_details.cached_tokens)', () => {
+    const stats = extractUsageFromResponsePayload({
+      usage: {
+        prompt_tokens: 128,
+        completion_tokens: 10,
+        total_tokens: 138,
+        prompt_tokens_details: { cached_tokens: 64 },
+        completion_tokens_details: { reasoning_tokens: 9 },
+      },
+    });
+
+    assert.equal(stats?.input_tokens, 128);
+    assert.equal(stats?.cached_tokens, 64);
+    assert.equal(stats?.cache_written_tokens, 0);
+    assert.equal(stats?.output_tokens, 10);
+    assert.equal(stats?.total_tokens, 138);
+  });
+
+  it('reads OpenRouter shape (prompt_cache_hit_tokens / prompt_cache_miss_tokens)', () => {
+    const stats = extractUsageFromResponsePayload({
+      usage: {
+        prompt_tokens: 200,
+        completion_tokens: 5,
+        total_tokens: 205,
+        prompt_cache_hit_tokens: 150,
+        prompt_cache_miss_tokens: 50,
+      },
+    });
+
+    assert.equal(stats?.cached_tokens, 150);
+    assert.equal(stats?.cache_written_tokens, 50);
+  });
+
+  it('reads Responses shape (input_tokens_details.cached_tokens)', () => {
+    const stats = extractUsageFromResponsePayload({
+      usage: {
+        input_tokens: 40,
+        output_tokens: 8,
+        total_tokens: 48,
+        input_tokens_details: { cached_tokens: 12 },
+        output_tokens_details: { reasoning_tokens: 4 },
+      },
+    });
+
+    assert.equal(stats?.input_tokens, 40);
+    assert.equal(stats?.cached_tokens, 12);
+    assert.equal(stats?.output_tokens, 8);
+    assert.equal(stats?.total_tokens, 48);
+  });
+
+  it('reads Gemini usageMetadata shape (no cache fields)', () => {
+    const stats = extractUsageFromResponsePayload({
+      usageMetadata: {
+        promptTokenCount: 33,
+        candidatesTokenCount: 11,
+        totalTokenCount: 44,
+      },
+    });
+
+    assert.deepEqual(stats, {
+      input_tokens: 33,
+      cached_tokens: 0,
+      cache_written_tokens: 0,
+      output_tokens: 11,
+      total_tokens: 44,
+    });
+  });
+
+  it('returns undefined when no usage can be parsed', () => {
+    assert.equal(extractUsageFromResponsePayload({ foo: 'bar' }), undefined);
+    assert.equal(extractUsageFromResponsePayload({ usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } }), undefined);
+  });
+});
+
+describe('Responses-SSE streaming usage', () => {
+  it('captures usage from event: response.completed', async () => {
+    let captured: any;
+    const input = sseStream([
+      'event: response.created',
+      'data: {"type":"response.created","response":{"id":"r1"}}',
+      '',
+      'event: response.completed',
+      'data: {"type":"response.completed","response":{"id":"r1","status":"completed","usage":{"input_tokens":40,"output_tokens":8,"total_tokens":48,"input_tokens_details":{"cached_tokens":12}}}}',
+      '',
+      '',
+    ].join('\n'));
+
+    await streamToText(input.pipeThrough(createUsageTrackingTransformStream('gpt-resp-test', undefined, usage => {
+      captured = usage;
+    })));
+
+    assert.equal(captured.input_tokens, 40);
+    assert.equal(captured.cached_tokens, 12);
+    assert.equal(captured.output_tokens, 8);
+    assert.equal(captured.total_tokens, 48);
+  });
+});
+
 
 describe('local token counting for non-text content', () => {
   it('counts tool_result content instead of skipping it', () => {

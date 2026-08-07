@@ -7,6 +7,67 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: TUI `cached` / `wrote` token columns now record all upstream usage shapes
+
+The TUI/dashboard stats pipeline previously only recognized the Claude usage
+shape (`cache_read_input_tokens` / `cache_creation_input_tokens`) and the
+Responses-API shape (`input_tokens_details.cached_tokens`). Cache fields used by
+other upstream shapes were silently dropped, so `cached`/`wrote` showed 0 even
+when the upstream reported non-zero values. In several configurations streaming
+responses recorded nothing at all.
+
+Fixed locations (all in `src/utils/dashboard-stats.ts` unless noted):
+
+- **`extractUsageFromResponsePayload` (non-streaming JSON responses).** The
+  `cached` fallback chain is now `cache_read_input_tokens` (Claude) →
+  `prompt_cache_hit_tokens` (OpenRouter) → `prompt_tokens_details.cached_tokens`
+  (chat-completions / OpenAI / GLM) → `input_tokens_details.cached_tokens`
+  (Responses). `wrote` now also falls back to `prompt_cache_miss_tokens`
+  (chat-completions) in addition to `cache_creation_input_tokens` (Claude).
+- **OpenAI-SSE streaming branch of `createUsageTrackingTransformStream`.** Same
+  fallback chain applied; previously only `prompt_tokens` / `completion_tokens`
+  / `total_tokens` were read, so cache fields from chat-completions SSE were
+  dropped.
+- **Responses-SSE streaming branch (new).** `event: response.completed` and
+  `response.in_progress` frames were previously unmatched by either SSE branch
+  (they have an `event:` line, so the OpenAI-SSE branch was skipped, but the
+  Claude-SSE branch only matched `message_start` / `message_delta`). Streaming
+  `/v1/responses` — both Responses-shaped upstream passthrough and the
+  Claude→Responses / Completions→Responses conversion paths — recorded zero
+  usage. The parser now reads `data.response.usage` (`input_tokens`,
+  `output_tokens`, `total_tokens`, `input_tokens_details.cached_tokens`) for
+  those event types.
+- **`extractTokenCounts` in `src/converters/openai-to-claude.ts`.** When
+  `/v1/messages` is routed to a chat-completions upstream, stats are extracted
+  from the converted Claude-shape client response, so the converter must carry
+  the cache field through. It previously mapped
+  `prompt_cache_hit_tokens` / `input_tokens_details.cached_tokens` but not
+  `prompt_tokens_details.cached_tokens`, dropping cache hits to `undefined` on
+  this common path. Now uses the same fallback chain as
+  `extractUsageFromResponsePayload`.
+- **`??` short-circuit fix in `extractUsageFromResponsePayload`.** The
+  multi-shape fallback chain originally returned a literal `0` from the
+  `prompt_tokens_details` ternary when that field was absent — and since `??`
+  does not fall through on `0`, a Responses payload with only
+  `input_tokens_details.cached_tokens` resolved to `0` instead of the actual
+  value. Caught by a regression test; both ternaries now return `undefined`
+  when their nested field is absent so the chain falls through correctly.
+
+**Verification:** `glm-5.2-comp` (chat-completions upstream) with a warm GLM
+prompt cache now records `cached += 64` per request, matching the upstream
+`prompt_tokens_details.cached_tokens: 64` exactly. `in`, `out`, `total` were
+already correct and remain so. `glm-5.2-anth` (anthropic-messages upstream) was
+already correct via `cache_read_input_tokens`.
+
+**Known limitations (unchanged, spec-driven):**
+- `/v1/responses` exposes no cache-write field in its usage spec, so `wrote`
+  stays 0 for that API.
+- `completion_tokens_details.reasoning_tokens` / `output_tokens_details.
+  reasoning_tokens` remain bundled inside `out` — not surfaced as a separate
+  column.
+
+### Add: `/v1/interactions` (Gemini) → `openai-completions` image preservation
+
 ### Add: `/v1/interactions` (Gemini) → `openai-completions` image preservation
 
 `convertGeminiInteractionsToOpenAI` (`src/handlers/openai.ts`) previously

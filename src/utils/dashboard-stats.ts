@@ -1153,13 +1153,18 @@ export function extractUsageFromResponsePayload(payload: unknown): UsageStats | 
 
     const cached_tokens = toSafeNumber(
       usageRecord.cache_read_input_tokens ??
+      usageRecord.prompt_cache_hit_tokens ??
+      (usageRecord.prompt_tokens_details && typeof usageRecord.prompt_tokens_details === 'object'
+        ? (usageRecord.prompt_tokens_details as Record<string, unknown>).cached_tokens
+        : undefined) ??
       (usageRecord.input_tokens_details && typeof usageRecord.input_tokens_details === 'object'
         ? (usageRecord.input_tokens_details as Record<string, unknown>).cached_tokens
-        : 0)
+        : undefined)
     );
 
     const cache_written_tokens = toSafeNumber(
-      usageRecord.cache_creation_input_tokens
+      usageRecord.cache_creation_input_tokens ??
+      usageRecord.prompt_cache_miss_tokens
     );
 
     const output_tokens = toSafeNumber(
@@ -1418,6 +1423,30 @@ export function createUsageTrackingTransformStream(
                 foundUsage = true;
               }
               if (inputTokens > 0 || outputTokens > 0) setLiveTokens(inputTokens, outputTokens);
+            } else if (
+              (eventType === 'response.completed' || eventType === 'response.in_progress') &&
+              data.response?.usage
+            ) {
+              // Responses API SSE — usage lives under data.response.usage
+              const usage = data.response.usage;
+              if (typeof usage.input_tokens === 'number') {
+                inputTokens = usage.input_tokens;
+                foundUsage = true;
+              }
+              if (typeof usage.output_tokens === 'number') {
+                outputTokens = usage.output_tokens;
+                foundUsage = true;
+              }
+              if (typeof usage.total_tokens === 'number') {
+                totalTokens = usage.total_tokens;
+                foundUsage = true;
+              }
+              const details = usage.input_tokens_details;
+              if (details && typeof details === 'object' && typeof details.cached_tokens === 'number') {
+                cachedTokens = details.cached_tokens;
+                foundUsage = true;
+              }
+              if (inputTokens > 0 || outputTokens > 0) setLiveTokens(inputTokens, outputTokens);
             }
           } catch {
             // Not JSON data, skip
@@ -1435,10 +1464,23 @@ export function createUsageTrackingTransformStream(
               const pt = toSafeNumber(usage.prompt_tokens);
               const ct = toSafeNumber(usage.completion_tokens);
               const tt = toSafeNumber(usage.total_tokens);
+              const pch = toSafeNumber(usage.prompt_cache_hit_tokens);
+              const pcm = toSafeNumber(usage.prompt_cache_miss_tokens);
+              const ptd = usage.prompt_tokens_details;
+              const ptdCached = ptd && typeof ptd === 'object'
+                ? toSafeNumber((ptd as Record<string, unknown>).cached_tokens)
+                : 0;
+              const itd = usage.input_tokens_details;
+              const itdCached = itd && typeof itd === 'object'
+                ? toSafeNumber((itd as Record<string, unknown>).cached_tokens)
+                : 0;
               if (pt > 0 || ct > 0) {
                 inputTokens = pt;
                 outputTokens = ct;
                 totalTokens = tt;
+                const cached = pch || ptdCached || itdCached;
+                if (cached > 0) cachedTokens = cached;
+                if (pcm > 0) cacheWrittenTokens = pcm;
                 foundUsage = true;
                 setLiveTokens(inputTokens, outputTokens);
               }

@@ -63,7 +63,9 @@ export async function extractTokenCounts(
     // QNAIGC non-standard format: input, output
     const inputTokens = usage.prompt_tokens ?? usage.input;
     const outputTokens = usage.completion_tokens ?? usage.output;
-    const cacheReadTokens = usage.prompt_cache_hit_tokens ?? usage.input_tokens_details?.cached_tokens;
+    const cacheReadTokens = usage.prompt_cache_hit_tokens
+        ?? usage.prompt_tokens_details?.cached_tokens
+        ?? usage.input_tokens_details?.cached_tokens;
     const cacheCreationTokens = usage.prompt_cache_miss_tokens;
 
     // If local token counting is enabled and upstream returned 0 or undefined, use local counting
