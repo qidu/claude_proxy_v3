@@ -323,8 +323,11 @@ function mapClaudeImageMimeToGemini(
  * Decode a data: URI into mime_type + base64 data. Throws on malformed input
  * (Rule #8 — Fail Loud) so the upstream receives an honest error rather than a
  * silently corrupted image part.
+ *
+ * Exported for reuse by `completionsToClaudeBody` (handlers/openai.ts) which
+ * converts OpenAI `image_url` parts into Claude `image` blocks.
  */
-function decodeDataUri(url: string): { mime_type: string; data: string } {
+export function decodeDataUri(url: string): { mime_type: string; data: string } {
     const m = url.match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
     if (!m) {
         throw new Error(`Malformed image_url data URI: ${url.slice(0, 60)}`);

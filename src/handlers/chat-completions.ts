@@ -80,7 +80,7 @@ export async function handleChatCompletionsPassthrough(
     // Use the model name from the (already alias-rewritten) request body, falling back to modelId.
     // modelId carries the original alias name; parsedBody.model carries the rewritten target name.
     const model = (parsedBody.model as string || modelId || 'unknown');
-    const claudeBody = completionsToClaudeBody(parsedBody, model);
+    const claudeBody = await completionsToClaudeBody(parsedBody, model);
     logger.debug(requestId, `${path} converted to anthropic-messages body`);
     logPipelineStage(logger, requestId, 'upstream-request', targetUrl, claudeBody);
 

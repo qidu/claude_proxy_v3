@@ -12,7 +12,7 @@
  * Run with: npx tsx --test tests/unit/handlers.test.ts
  */
 
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
@@ -27,8 +27,8 @@ import { isGeminiRequest } from '../../src/handlers/gemini.js';
 // ---------------------------------------------------------------------------
 
 describe('completionsToClaudeBody', () => {
-  it('converts a basic user message', () => {
-    const body = completionsToClaudeBody({
+  it('converts a basic user message', async () => {
+    const body = await completionsToClaudeBody({
       model: 'gpt-4',
       messages: [{ role: 'user', content: 'hi' }],
       max_tokens: 100,
@@ -39,15 +39,15 @@ describe('completionsToClaudeBody', () => {
     assert.deepEqual(body.messages, [{ role: 'user', content: 'hi' }]);
   });
 
-  it('defaults max_tokens to 4096 when missing', () => {
-    const body = completionsToClaudeBody({
+  it('defaults max_tokens to 4096 when missing', async () => {
+    const body = await completionsToClaudeBody({
       messages: [{ role: 'user', content: 'hi' }],
     } as any, 'm');
     assert.equal(body.max_tokens, 4096);
   });
 
-  it('extracts the system message into top-level system field', () => {
-    const body = completionsToClaudeBody({
+  it('extracts the system message into top-level system field', async () => {
+    const body = await completionsToClaudeBody({
       messages: [
         { role: 'system', content: 'be brief' },
         { role: 'user', content: 'q' },
@@ -58,8 +58,8 @@ describe('completionsToClaudeBody', () => {
     assert.equal((body.messages as any[])[0].role, 'user');
   });
 
-  it('maps tool_calls + tool results into Claude tool_use / tool_result blocks', () => {
-    const body = completionsToClaudeBody({
+  it('maps tool_calls + tool results into Claude tool_use / tool_result blocks', async () => {
+    const body = await completionsToClaudeBody({
       messages: [
         { role: 'user', content: 'do thing' },
         {
@@ -87,8 +87,8 @@ describe('completionsToClaudeBody', () => {
     });
   });
 
-  it('groups consecutive tool messages into a single user message', () => {
-    const body = completionsToClaudeBody({
+  it('groups consecutive tool messages into a single user message', async () => {
+    const body = await completionsToClaudeBody({
       messages: [
         {
           role: 'assistant', content: '',
@@ -109,8 +109,8 @@ describe('completionsToClaudeBody', () => {
     assert.equal(msgs[1].content.length, 2);
   });
 
-  it('preserves reasoning_content as a thinking block on assistant turns', () => {
-    const body = completionsToClaudeBody({
+  it('preserves reasoning_content as a thinking block on assistant turns', async () => {
+    const body = await completionsToClaudeBody({
       messages: [{
         role: 'assistant', content: 'answer',
         reasoning_content: 'pondering',
@@ -124,8 +124,8 @@ describe('completionsToClaudeBody', () => {
     ]);
   });
 
-  it('maps OpenAI tools array to Claude tools', () => {
-    const body = completionsToClaudeBody({
+  it('maps OpenAI tools array to Claude tools', async () => {
+    const body = await completionsToClaudeBody({
       messages: [{ role: 'user', content: 'x' }],
       tools: [{
         type: 'function',
@@ -139,20 +139,20 @@ describe('completionsToClaudeBody', () => {
     }]);
   });
 
-  it('maps stop (string or array) to stop_sequences', () => {
-    const a = completionsToClaudeBody({
+  it('maps stop (string or array) to stop_sequences', async () => {
+    const a = await completionsToClaudeBody({
       messages: [{ role: 'user', content: 'x' }], stop: 'END',
     } as any, 'm');
     assert.deepEqual(a.stop_sequences, ['END']);
 
-    const b = completionsToClaudeBody({
+    const b = await completionsToClaudeBody({
       messages: [{ role: 'user', content: 'x' }], stop: ['A', 'B'],
     } as any, 'm');
     assert.deepEqual(b.stop_sequences, ['A', 'B']);
   });
 
-  it('forwards temperature and top_p when present', () => {
-    const body = completionsToClaudeBody({
+  it('forwards temperature and top_p when present', async () => {
+    const body = await completionsToClaudeBody({
       messages: [{ role: 'user', content: 'x' }],
       temperature: 0.5, top_p: 0.9,
     } as any, 'm');
@@ -160,8 +160,8 @@ describe('completionsToClaudeBody', () => {
     assert.equal(body.top_p, 0.9);
   });
 
-  it('parses tool_call arguments JSON; invalid falls back gracefully', () => {
-    const body = completionsToClaudeBody({
+  it('parses tool_call arguments JSON; invalid falls back gracefully', async () => {
+    const body = await completionsToClaudeBody({
       messages: [{
         role: 'assistant', content: '',
         tool_calls: [{
@@ -176,8 +176,123 @@ describe('completionsToClaudeBody', () => {
 });
 
 // ---------------------------------------------------------------------------
-// completionsToResponsesBody
+// completionsToClaudeBody — image_url -> Claude image blocks
 // ---------------------------------------------------------------------------
+
+describe('completionsToClaudeBody — image conversion', () => {
+  const realFetch = globalThis.fetch;
+
+  after(() => { globalThis.fetch = realFetch; });
+
+  it('decodes data: URI image_url into a Claude image block', async () => {
+    const body = await completionsToClaudeBody({
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'look at this' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,QUJD' } },
+        ],
+      }],
+    } as any, 'm');
+    const m = (body.messages as any[])[0];
+    assert.equal(m.role, 'user');
+    assert.deepEqual(m.content, [
+      { type: 'text', text: 'look at this' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'QUJD' } },
+    ]);
+  });
+
+  it('collapses a text-only array back to a string (preserves wire shape)', async () => {
+    const body = await completionsToClaudeBody({
+      messages: [{
+        role: 'user',
+        content: [{ type: 'text', text: 'hello' }],
+      }],
+    } as any, 'm');
+    assert.deepEqual((body.messages as any[])[0], { role: 'user', content: 'hello' });
+  });
+
+  it('fetches http image_url via fetchImageAsInlineData (SSRF-guarded)', async () => {
+    let capturedUrl = '';
+    globalThis.fetch = (async (url: any) => {
+      capturedUrl = String(url);
+      return new Response(JSON.stringify({ mime_type: 'image/jpeg', data: 'aGVsbG8=' }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    // Use the sidecar path so SSRF guard on the image host is bypassed.
+    const { setImageEncodeConfig } = await import('../../src/utils/image-fetch.js');
+    const prior = (await import('../../src/utils/image-fetch.js')).getImageEncodeConfig();
+    setImageEncodeConfig({ url: 'http://localhost:34567', timeoutMs: 5000 });
+    try {
+      const body = await completionsToClaudeBody({
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'see' },
+            { type: 'image_url', image_url: { url: 'http://example.com/cat.jpg' } },
+          ],
+        }],
+      } as any, 'm');
+      assert.equal(capturedUrl, 'http://localhost:34567/encode');
+      const m = (body.messages as any[])[0];
+      assert.deepEqual(m.content, [
+        { type: 'text', text: 'see' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'aGVsbG8=' } },
+      ]);
+    } finally {
+      setImageEncodeConfig(prior);
+    }
+  });
+
+  it('emits thinking + text + image blocks in order on a thinking turn', async () => {
+    const body = await completionsToClaudeBody({
+      messages: [{
+        role: 'assistant',
+        reasoning_content: 'pondering',
+        content: [
+          { type: 'text', text: 'see this' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,QUJD' } },
+        ],
+      }],
+    } as any, 'm');
+    const m = (body.messages as any[])[0];
+    assert.deepEqual(m.content, [
+      { type: 'thinking', thinking: 'pondering' },
+      { type: 'text', text: 'see this' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'QUJD' } },
+    ]);
+  });
+
+  it('throws on a malformed data: URI (Fail Loud)', async () => {
+    await assert.rejects(
+      () => completionsToClaudeBody({
+        messages: [{
+          role: 'user',
+          content: [{ type: 'image_url', image_url: { url: 'data:not-a-valid-uri' } }],
+        }],
+      } as any, 'm'),
+      /Malformed image_url data URI/i,
+    );
+  });
+
+  it('skips empty/missing image_url.url without throwing', async () => {
+    const body = await completionsToClaudeBody({
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'only text survives' },
+          { type: 'image_url', image_url: { url: '' } },
+        ],
+      }],
+    } as any, 'm');
+    // No image block emitted; text-only collapses back to string.
+    assert.deepEqual((body.messages as any[])[0], {
+      role: 'user', content: 'only text survives',
+    });
+  });
+});
+
 
 describe('completionsToResponsesBody', () => {
   it('builds a responses body with model + input + stream', () => {

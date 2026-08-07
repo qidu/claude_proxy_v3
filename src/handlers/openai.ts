@@ -12,6 +12,8 @@ import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fe
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
 import { handleTargetApiError } from '../utils/errors.js';
 import { OpenAIContent, OpenAIMessage } from '../types/openai.js';
+import { decodeDataUri } from '../converters/claude-to-gemini.js';
+import { fetchImageAsInlineData } from '../utils/image-fetch.js';
 
 /**
  * Check if request is in Gemini Interactions format
@@ -492,11 +494,61 @@ async function handleCrossModeStreamingResponse(
 }
 
 /**
+ * Convert an OpenAI message `content` value into the Claude representation:
+ *   - string content returns as a string (preserves the common simple case).
+ *   - array content with only text parts collapses to a joined string
+ *     (matches prior behavior and keeps the wire shape minimal).
+ *   - array content containing any `image_url` part returns Claude content
+ *     blocks (`{type:'text'}` / `{type:'image', source:{type:'base64', ...}}`).
+ *
+ * `image_url` URLs are decoded via `decodeDataUri` for `data:` URIs and
+ * `fetchImageAsInlineData` for http(s) (SSRF-guarded). Throws on any fetch /
+ * decode failure (Rule #8 — Fail Loud, no placeholder image).
+ */
+async function openAIContentToClaudeStringOrBlocks(
+  content: OpenAIContent | unknown,
+): Promise<string | unknown[]> {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+
+  const blocks: Array<{ type: string; [k: string]: unknown }> = [];
+  for (const part of content as Array<Record<string, unknown>>) {
+    const pType = part.type;
+    if (pType === 'text') {
+      const text = part.text as string | undefined;
+      if (typeof text === 'string' && text !== '') blocks.push({ type: 'text', text });
+    } else if (pType === 'image_url') {
+      const url = (part.image_url as Record<string, unknown> | undefined)?.url as string;
+      if (typeof url !== 'string' || url === '') continue;
+      const img = url.startsWith('data:')
+        ? decodeDataUri(url)
+        : await fetchImageAsInlineData(url);
+      blocks.push({
+        type: 'image',
+        source: { type: 'base64', media_type: img.mime_type, data: img.data },
+      });
+    }
+    // Unknown part types (e.g. thinking) are skipped here — handled by caller.
+  }
+
+  // Collapse text-only arrays back to a string (matches prior wire shape).
+  if (blocks.length === 0) return '';
+  if (blocks.every(b => b.type === 'text')) {
+    return (blocks as unknown as Array<{ text: string }>).map(b => b.text).join('');
+  }
+  return blocks;
+}
+
+/**
  * Convert an OpenAI Chat Completions body (model, messages, max_tokens, ...) to a
  * Claude Messages body. Used to route Gemini endpoints (interactions/generateContent)
  * through an anthropic-messages upstream.
+ *
+ * Async because array-form `content` with `image_url` parts pointing at http(s)
+ * URLs requires a server-side fetch (SSRF-guarded; see `fetchImageAsInlineData`).
+ * `data:` URIs are decoded synchronously via `decodeDataUri`.
  */
-export function completionsToClaudeBody(completions: Record<string, unknown>, model: string): Record<string, unknown> {
+export async function completionsToClaudeBody(completions: Record<string, unknown>, model: string): Promise<Record<string, unknown>> {
   const messages = (completions.messages as OpenAIMessage[]) || [];
   const systemMsg = messages.find(m => m.role === 'system');
   const otherMessages = messages.filter(m => m.role !== 'system');
@@ -535,10 +587,16 @@ export function completionsToClaudeBody(completions: Record<string, unknown>, mo
       claudeMessages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: m.tool_call_id, content: m.content ?? '' }] });
       i++;
     } else if (thinking) {
-      claudeMessages.push({ role: m.role, content: [{ type: 'thinking', thinking }, { type: 'text', text: m.content ?? '' }] });
+      // Thinking turn: emit a `thinking` block followed by text/image blocks.
+      const textOrBlocks = await openAIContentToClaudeStringOrBlocks(m.content);
+      const blocks = typeof textOrBlocks === 'string'
+        ? [{ type: 'text', text: textOrBlocks }]
+        : textOrBlocks;
+      claudeMessages.push({ role: m.role, content: [{ type: 'thinking', thinking }, ...blocks] });
       i++;
     } else {
-      claudeMessages.push({ role: m.role, content: m.content ?? '' });
+      const content = await openAIContentToClaudeStringOrBlocks(m.content);
+      claudeMessages.push({ role: m.role, content });
       i++;
     }
   }
@@ -667,7 +725,7 @@ async function forwardCompletionsAsAnthropicMessages(
   originalRequest: Request,
   env?: Env,
 ): Promise<Response> {
-  const claudeBody = completionsToClaudeBody(openaiRequest, model);
+  const claudeBody = await completionsToClaudeBody(openaiRequest, model);
 
   // DeepSeek's anthropic-compatible endpoint REQUIRES a `content[].thinking`
   // block on any assistant turn that carried tool_use in thinking mode — a turn

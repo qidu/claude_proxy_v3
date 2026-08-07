@@ -7,6 +7,40 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Add: OpenAI `image_url` → Claude `image` block conversion (Completions → anthropic-messages)
+
+`completionsToClaudeBody` (`src/handlers/openai.ts`) now converts `image_url`
+parts into Claude `image` blocks (`{type:'image', source:{type:'base64',
+media_type, data}}`). Closes the most common cross-mode gap: an OpenAI SDK
+client sending `image_url` to `/v1/chat/completions` or `/v1/interactions`
+routed to an `anthropic-messages` upstream previously lost images silently —
+the converter read only `m.content ?? ''` and dropped array content.
+
+- `data:` URI images are decoded in-process via the shared `decodeDataUri`
+  helper (now exported from `src/converters/claude-to-gemini.ts`).
+- http(s) image URLs are fetched via the existing SSRF-guarded
+  `fetchImageAsInlineData` (and respect the optional `[fetch] image_encode`
+  sidecar configuration).
+- Text-only arrays still collapse to a string (preserves prior wire shape and
+  existing tests; no behavior change for non-image requests).
+- The `function` is now `async`; both call sites
+  (`forwardCompletionsAsAnthropicMessages` in `openai.ts`, and
+  `handleChatCompletionsPassthrough` in `chat-completions.ts`) `await` it.
+
+**Known limitation**: Anthropic's Messages API restricts `image` blocks to
+`user` role messages per spec. The proxy emits image blocks for any role
+containing `image_url` (matches how `convertClaudeToGeminiRequest` and
+`convertClaudeContentToOpenAI` already handle images cross-role); if Claude
+rejects assistant-role images, that is the upstream's spec enforcement.
+
+**Files**: `src/handlers/openai.ts` (helper `openAIContentToClaudeStringOrBlocks`,
+async `completionsToClaudeBody`), `src/converters/claude-to-gemini.ts` (exported
+`decodeDataUri`), `src/handlers/chat-completions.ts` (await call site).
+
+**Tests**: 6 new in `tests/unit/handlers.test.ts` — data-URI decode, http→sidecar
+fetch, text-only array collapse, thinking + image ordering, malformed data-URI
+throws (Fail Loud), empty url skip.
+
 ### Add: optional image-encode sidecar for OpenAI `image_url` → Gemini `inline_data`
 
 The Direction B conversion (commit 71e0a4c) now supports delegating the http(s)
