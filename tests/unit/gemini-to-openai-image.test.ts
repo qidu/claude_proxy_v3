@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { convertGeminiGenerateContentToOpenAI } from '../../src/handlers/openai.js';
+import { convertGeminiGenerateContentToOpenAI, convertGeminiInteractionsToOpenAI } from '../../src/handlers/openai.js';
 
 /**
  * Coverage for image-part handling in the Gemini generateContent request ->
@@ -90,5 +90,87 @@ describe('convertGeminiGenerateContentToOpenAI — image parts', () => {
     };
     const out = convertGeminiGenerateContentToOpenAI(req) as any;
     assert.equal(out.messages[0].content, 'plain');
+  });
+});
+
+describe('convertGeminiInteractionsToOpenAI — image parts', () => {
+  it('preserves inline_data as image_url in the contents format branch', () => {
+    const req = {
+      model: 'gemini',
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: 'look' },
+            { inline_data: { mime_type: 'image/png', data: 'ABC' } },
+          ],
+        },
+      ],
+    };
+    const out = convertGeminiInteractionsToOpenAI(req) as any;
+    assert.equal(out.messages.length, 1);
+    assert.deepEqual(out.messages[0].content, [
+      { type: 'text', text: 'look' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,ABC' } },
+    ]);
+  });
+
+  it('accepts camelCase inlineData in the contents format branch', () => {
+    const req = {
+      contents: [{
+        role: 'user',
+        parts: [{ inlineData: { mimeType: 'image/jpeg', data: 'aGVsbG8=' } }],
+      }],
+    };
+    const out = convertGeminiInteractionsToOpenAI(req) as any;
+    assert.deepEqual(out.messages[0].content, [
+      { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,aGVsbG8=' } },
+    ]);
+  });
+
+  it('preserves inline_data in the array-of-turns input branch', () => {
+    const req = {
+      model: 'gemini',
+      input: [
+        {
+          role: 'user',
+          content: [
+            { text: 'see' },
+            { inline_data: { mime_type: 'image/png', data: 'QUJD' } },
+          ],
+        },
+      ],
+    };
+    const out = convertGeminiInteractionsToOpenAI(req) as any;
+    assert.deepEqual(out.messages[0].content, [
+      { type: 'text', text: 'see' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,QUJD' } },
+    ]);
+  });
+
+  it('collapses text-only parts to a string (preserves wire shape)', () => {
+    const req = {
+      contents: [{
+        role: 'user',
+        parts: [{ text: 'hello' }, { text: 'world' }],
+      }],
+    };
+    const out = convertGeminiInteractionsToOpenAI(req) as any;
+    assert.equal(typeof out.messages[0].content, 'string');
+    assert.equal(out.messages[0].content, 'helloworld');
+  });
+
+  it('preserves string content in the array-of-turns branch (TC203 regression)', () => {
+    const req = {
+      input: [
+        { role: 'user', content: 'My name is Bob' },
+        { role: 'model', content: 'Hello Bob!' },
+      ],
+    };
+    const out = convertGeminiInteractionsToOpenAI(req) as any;
+    assert.equal(out.messages[0].content, 'My name is Bob');
+    assert.equal(out.messages[0].role, 'user');
+    assert.equal(out.messages[1].role, 'assistant');
+    assert.equal(out.messages[1].content, 'Hello Bob!');
   });
 });

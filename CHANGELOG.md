@@ -7,6 +7,44 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Add: `/v1/interactions` (Gemini) → `openai-completions` image preservation
+
+`convertGeminiInteractionsToOpenAI` (`src/handlers/openai.ts`) previously
+extracted only text from each turn's parts, silently dropping `inline_data` /
+`inlineData` image parts. This affected any `/v1/interactions` client (Gemini
+Interactions SDK shape) routed to an `openai-completions` upstream — image
+inputs were lost.
+
+Two sub-paths are fixed using a new shared helper `geminiPartsToOpenAIContent`:
+
+- **Contents-format branch** (Gemini generateContent shape): each `parts` array
+  is converted via the helper, emitting OpenAI `image_url` data-URI parts for
+  any `inline_data` / `inlineData`. Text-only content still collapses to a
+  joined string (wire shape preserved).
+- **Array-of-turns `input` branch** (TC203-style): string content preserved
+  unchanged; array content (Gemini parts shape) routed through the helper.
+- Both snake_case (`inline_data.mime_type`) and camelCase (`inlineData.mimeType`)
+  accepted.
+- `thought:true` text parts are skipped (thinking markers; not part of content
+  body in this direction).
+
+**Known limitation (left as-is):** `convertGeminiGenerateContentToOpenAI`
+still drops `inline_data` parts on the `funcCallParts` branch — i.e. a Gemini
+model turn that emits both a `functionCall` *and* an image in the same turn.
+This is a rare edge case (image-generation-with-tools models), and OpenAI's
+spec does not define assistant `tool_calls` turns with array image content.
+See README "Image input/output across format boundaries" for the limitation
+listing.
+
+**Files**: `src/handlers/openai.ts` (new `geminiPartsToOpenAIContent` helper,
+updated both branches of `convertGeminiInteractionsToOpenAI`, exported that
+function for testability).
+
+**Tests**: 5 new in `tests/unit/gemini-to-openai-image.test.ts` —
+snake_case `inline_data`, camelCase `inlineData`, array-of-turns image
+preservation, text-only collapse (regression), TC203 string content
+(regression).
+
 ### Add: `/v1/responses` → `anthropic-messages` / `gemini-generatecontent` image preservation
 
 `/v1/responses` clients sending `input_image` parts previously lost them on every

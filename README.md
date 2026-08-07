@@ -352,6 +352,26 @@ Notes:
 
 ### Image input/output across format boundaries
 
+**Wire shapes the proxy produces.** In every supported direction, image bytes travel **inline in the request body** — never as a URL the proxy hosts. The proxy never uploads images to external storage and never exposes an image-serving endpoint.
+
+| Target upstream | Wire shape emitted | What's in it |
+|---|---|---|
+| Gemini (`gemini-generatecontent`) | `inline_data: {mime_type, data: "<base64>"}` | Raw base64 string in a JSON field |
+| OpenAI (`openai-completions` / `openai-responses`) | `image_url: {url: "data:<mime>;base64,<base64>"}` | A **data URI** — the base64 bytes are inside the URL string itself |
+| Claude (`anthropic-messages`) | `image: {source: {type: "base64", media_type, data}}` | Raw base64 string in a JSON field |
+
+The OpenAI `image_url` field looks like a URL but is a `data:` URI — the bytes are encoded inside the string after the comma. The upstream parses it server-side; no second network fetch is needed.
+
+**Source-shape handling.**
+
+| Source shape | What the proxy does | Result |
+|---|---|---|
+| Client sent `data:` URI | Decode synchronously in-process | Bytes embedded inline in the upstream request |
+| Client sent `https://...` URL | Proxy (or sidecar) **downloads** the image, base64-encodes it | Bytes embedded inline — the original URL is *discarded* |
+| Client sent raw base64 (Gemini `inline_data` / Claude `image`) | Pass through / re-wrap into target shape | Bytes embedded inline |
+
+The only http URL ever involved is the *input* URL the client sent. The proxy/sidecar fetches it (SSRF guard blocks loopback / RFC1918 / link-local / mDNS; 20 MiB byte cap), then discards the URL and ships the bytes inline to the upstream. The `[fetch] image_encode` sidecar does the same fetch+base64 and returns `{mime_type, data}` — it also doesn't host anything.
+
 Image **input** is converted across the OpenAI ↔ Gemini boundary in both directions:
 
 - **Gemini → OpenAI** (Gemini SDK client → OpenAI-compatible upstream): each Gemini `inline_data`/`inlineData` request part becomes an OpenAI `image_url` data-URI part. Both snake_case and camelCase Gemini field names are accepted.
@@ -368,6 +388,8 @@ Image **output** from a Gemini model (e.g. `inlineData` returned by an image-gen
 Model-generated images only reach clients through **native Gemini passthrough** — a `:generateContent` / `/v1/interactions` client routed to a `gemini-generatecontent` / `gemini-interactions` upstream — where `inlineData` passes through unchanged.
 
 On the cross-mode `/v1/chat/completions` → `gemini-generatecontent` response path specifically, tool-call and thinking parts of a Gemini response are also dropped today (the response-side `convertGeminiGenerateContentToClaude` extracts text only). Extending that converter would let tool-calls round-trip into OpenAI `tool_calls` and thinking into `reasoning_content`; image output would still be blocked by the schema limits above.
+
+**Known limitation — Gemini `generateContent` → OpenAI with mixed `functionCall` + `inline_data` in one turn:** `convertGeminiGenerateContentToOpenAI` (in `src/handlers/openai.ts`) drops `inline_data` parts when a Gemini model turn contains both a `functionCall` *and* an image in the same turn — only the `tool_calls` and text are emitted. This is an intentional trade-off: it's a rare edge case (image-generation-with-tools models that emit a tool call and an image together), and OpenAI's Chat Completions spec does not define assistant `tool_calls` turns that also carry array-form image content, so emitting such a turn would risk upstream rejection. Text-only turns and image+text turns (no tool calls) on this route are unaffected.
 
 ### OpenAI prompt caching fields
 

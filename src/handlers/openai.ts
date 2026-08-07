@@ -23,11 +23,57 @@ function isGeminiInteractionsRequest(body: Record<string, unknown>): boolean {
 }
 
 /**
+ * Convert Gemini parts into an OpenAI Completions `content` value:
+ *   - text-only parts collapse to a joined string (preserves wire shape).
+ *   - any `inline_data` / `inlineData` part present → returns an array
+ *     mixing `{type:'text'}` and `{type:'image_url'}` parts (data-URI form).
+ *     Both snake_case (`inline_data.mime_type`) and camelCase
+ *     (`inlineData.mimeType`) accepted.
+ *   - `thought:true` text parts are skipped (thinking markers; not part of
+ *     content body in this direction).
+ * Returns '' for an empty / unrecognized parts list.
+ *
+ * Used by `convertGeminiInteractionsToOpenAI` (Interactions-API client →
+ * openai-completions upstream). `convertGeminiGenerateContentToOpenAI` keeps
+ * its own inline copy (lines 173-204) because the image extraction there
+ * interleaves with the funcCallParts / funcRespParts / thinkingContent
+ * branching.
+ */
+function geminiPartsToOpenAIContent(
+  parts: any[] | undefined,
+): string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> {
+  if (!Array.isArray(parts)) return '';
+  const textParts: string[] = [];
+  const imageParts: Array<{ type: 'image_url'; image_url: { url: string } }> = [];
+  for (const p of parts as any[]) {
+    if (p && typeof p.text === 'string' && !p.thought) {
+      textParts.push(p.text);
+    }
+    const inline = p?.inline_data ?? p?.inlineData;
+    if (inline && typeof inline.data === 'string' && inline.data !== '') {
+      const mime = inline.mime_type ?? inline.mimeType;
+      imageParts.push({
+        type: 'image_url',
+        image_url: { url: `data:${mime || 'image/jpeg'};base64,${inline.data}` },
+      });
+    }
+  }
+  if (imageParts.length === 0) {
+    return textParts.join('');
+  }
+  const out: Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> = [];
+  const text = textParts.join('');
+  if (text !== '') out.push({ type: 'text', text });
+  out.push(...imageParts);
+  return out;
+}
+
+/**
  * Convert Gemini Interactions request to OpenAI format
  */
-function convertGeminiInteractionsToOpenAI(geminiRequest: Record<string, unknown>): Record<string, unknown> {
+export function convertGeminiInteractionsToOpenAI(geminiRequest: Record<string, unknown>): Record<string, unknown> {
   const model = (geminiRequest.model as string) || 'gemini-no-id-at-proxy';
-  
+
   // Handle input.messages format (Interactions API)
   if (geminiRequest.input && typeof geminiRequest.input === 'object') {
     const input = geminiRequest.input as Record<string, unknown>;
@@ -39,14 +85,20 @@ function convertGeminiInteractionsToOpenAI(geminiRequest: Record<string, unknown
       };
     }
   }
-  
-  // Handle input as array-of-turns (TC203: [{role, content}, ...])
+
+  // Handle input as array-of-turns (TC203: [{role, content}, ...]).
+  // String content is preserved; array content (Gemini parts shape) is
+  // routed through geminiPartsToOpenAIContent so inline_data images survive.
   if (Array.isArray(geminiRequest.input)) {
     return {
       model,
       messages: (geminiRequest.input as any[]).map((turn: any) => ({
         role: turn.role === 'model' ? 'assistant' : turn.role,
-        content: typeof turn.content === 'string' ? turn.content : String(turn.content),
+        content: typeof turn.content === 'string'
+          ? turn.content
+          : Array.isArray(turn.content)
+            ? geminiPartsToOpenAIContent(turn.content)
+            : String(turn.content ?? ''),
       })),
       stream: geminiRequest.stream || false,
     };
@@ -60,21 +112,22 @@ function convertGeminiInteractionsToOpenAI(geminiRequest: Record<string, unknown
       stream: geminiRequest.stream || false,
     };
   }
-  
-  // Handle contents format
+
+  // Handle contents format (Gemini generateContent shape).
+  // Each content's parts → OpenAI content via geminiPartsToOpenAIContent.
   if (Array.isArray(geminiRequest.contents)) {
-    const messages = geminiRequest.contents.map((content: any) => ({
+    const messages = (geminiRequest.contents as any[]).map((content: any) => ({
       role: content.role === 'model' ? 'assistant' : content.role,
-      content: content.parts?.map((p: any) => p.text).join('') || '',
+      content: geminiPartsToOpenAIContent(content.parts),
     }));
-    
+
     return {
       model,
       messages,
       stream: geminiRequest.stream || false,
     };
   }
-  
+
   throw new Error('Invalid Gemini Interactions request format');
 }
 
