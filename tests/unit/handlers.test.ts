@@ -400,6 +400,57 @@ describe('completionsToResponsesBody', () => {
     assert.equal(input[1].type, 'message');
     assert.equal(input[1].content[0].type, 'output_text');
   });
+
+  it('forwards image_url parts as input_image with URL passthrough', () => {
+    const body = completionsToResponsesBody({
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'look' },
+          { type: 'image_url', image_url: { url: 'https://example.com/cat.png', detail: 'high' } },
+        ],
+      }],
+    } as any, 'm');
+    const input = body.input as any[];
+    assert.equal(input.length, 1);
+    assert.equal(input[0].type, 'message');
+    assert.deepEqual(input[0].content, [
+      { type: 'input_text', text: 'look' },
+      { type: 'input_image', image_url: { url: 'https://example.com/cat.png', detail: 'high' } },
+    ]);
+  });
+
+  it('forwards a data: URI image_url as input_image unchanged', () => {
+    const body = completionsToResponsesBody({
+      messages: [{
+        role: 'user',
+        content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,QUJD' } }],
+      }],
+    } as any, 'm');
+    const input = body.input as any[];
+    assert.deepEqual(input[0].content, [
+      { type: 'input_image', image_url: { url: 'data:image/png;base64,QUJD' } },
+    ]);
+  });
+
+  it('assistant with image content emits output_text + input_image parts', () => {
+    // Mirrors messages.ts behavior: image_url is always forwarded as input_image
+    // regardless of role; text uses the role-appropriate type.
+    const body = completionsToResponsesBody({
+      messages: [{
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'note' },
+          { type: 'image_url', image_url: { url: 'https://example.com/x.jpg' } },
+        ],
+      }],
+    } as any, 'm');
+    const input = body.input as any[];
+    assert.deepEqual(input[0].content, [
+      { type: 'output_text', text: 'note' },
+      { type: 'input_image', image_url: { url: 'https://example.com/x.jpg' } },
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

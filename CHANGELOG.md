@@ -7,6 +7,32 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Add: OpenAI `image_url` → Responses `input_image` (Completions → openai-responses)
+
+`completionsToResponsesBody` (`src/handlers/openai.ts`) now forwards `image_url`
+content parts as Responses API `input_image` parts. Closes the gap where an
+OpenAI SDK client sending `image_url` to `/v1/chat/completions` or
+`/v1/interactions` routed to an `openai-responses` upstream silently lost images
+(the old converter used `openAIContentToText`, which filtered to text only).
+
+Unlike the Gemini and Claude directions, no in-proxy image fetch is needed: the
+Responses API accepts image URLs natively, so the `image_url` object
+(`{url, detail?}`) is passed through unchanged. This mirrors the existing
+Claude → Responses pattern in `src/handlers/messages.ts:151`.
+
+- Text-only array content still emits a single `input_text`/`output_text` part
+  (no behavior change for non-image requests; existing tests pass unchanged).
+- `image_url` parts are always emitted as `input_image` regardless of message
+  role (matches `messages.ts`); text parts use the role-appropriate
+  `input_text` / `output_text`.
+
+**Files**: `src/handlers/openai.ts` (new `openAIContentToResponsesParts`
+helper, updated regular-message branch in `completionsToResponsesBody`).
+
+**Tests**: 3 new in `tests/unit/handlers.test.ts` — URL passthrough (with
+`detail`), data: URI passthrough, assistant role mixing `output_text` +
+`input_image`.
+
 ### Add: OpenAI `image_url` → Claude `image` block conversion (Completions → anthropic-messages)
 
 `completionsToClaudeBody` (`src/handlers/openai.ts`) now converts `image_url`

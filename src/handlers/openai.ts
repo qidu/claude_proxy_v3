@@ -254,6 +254,38 @@ function openAIContentToText(content: OpenAIContent | null | undefined): string 
     .join('');
 }
 
+/**
+ * Convert an OpenAI Chat Completions message `content` into Responses API
+ * content parts (`input_text` / `output_text` / `input_image`). Used by
+ * `completionsToResponsesBody` to route Completions clients through an
+ * `openai-responses` upstream.
+ *
+ * `image_url` parts are forwarded as `input_image` with the URL object passed
+ * through unchanged (the Responses upstream performs its own fetch — no
+ * in-proxy SSRF-guarded fetch is needed). Matches the pattern used in
+ * `src/handlers/messages.ts:151` for Claude → Responses image forwarding.
+ */
+function openAIContentToResponsesParts(
+  content: OpenAIContent | null | undefined,
+  textType: 'input_text' | 'output_text',
+): Array<Record<string, unknown>> {
+  const parts: Array<Record<string, unknown>> = [];
+  if (typeof content === 'string') {
+    parts.push({ type: textType, text: content });
+    return parts;
+  }
+  if (!Array.isArray(content)) return parts;
+  for (const part of content) {
+    if (part.type === 'text') {
+      parts.push({ type: textType, text: part.text });
+    } else if (part.type === 'image_url') {
+      parts.push({ type: 'input_image', image_url: part.image_url });
+    }
+    // Unknown part types (e.g. thinking) are skipped here.
+  }
+  return parts;
+}
+
 function parseJsonObject(value: unknown): Record<string, unknown> {
   if (value && typeof value === 'object') return value as Record<string, unknown>;
   if (typeof value !== 'string' || value === '') return {};
@@ -675,10 +707,11 @@ export function completionsToResponsesBody(completions: Record<string, unknown>,
     // Prior assistant turns replayed as input must use `output_text` (mirrors what
     // the upstream originally emitted); user turns use `input_text`.
     const textType = msg.role === 'assistant' ? 'output_text' : 'input_text';
+    const contentParts = openAIContentToResponsesParts(msg.content, textType);
     input.push({
       type: 'message',
       role: msg.role,
-      content: [{ type: textType, text: openAIContentToText(msg.content) }],
+      content: contentParts.length > 0 ? contentParts : [{ type: textType, text: '' }],
     });
   }
 
