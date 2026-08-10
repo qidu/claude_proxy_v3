@@ -1,53 +1,71 @@
 # Model Proxy v3
 
-One proxy, three API schemas. Talk to **Claude**, **Gemini**, and **OpenAI-compatible**
-models through a single endpoint, no matter which API format your client speaks.
+One proxy, five API schemas. Talk to **Claude**, **Gemini**, **OpenAI Responses**,
+and **OpenAI Chat Completions** models through a single endpoint, no matter which
+API format your client speaks.
 
-The proxy accepts requests in the Claude, Gemini, or OpenAI Responses format,
-converts them for whatever upstream provider you've configured, and converts the
-response back. It also handles model aliasing, routing, fallback, and basic usage
-accounting out of the box.
+The proxy accepts requests in the Claude Messages, Gemini (GenerateContent /
+Interactions), OpenAI Responses and Chat Completions format, converts them
+for whatever upstream provider you've configured, and converts the response back.
+On top of translation it handles exact / wildcard / catch-all model routing,
+composite aliases (weighted, primary+fallback, fusion fan-out, planner→executor
+coordinator), schedule-based timetable routing, per-model request/response
+transform hooks, global and per-alias token limits, privacy / compression
+sidecars, and a web + terminal dashboard for per-model, per-tool, and per-agent
+usage stats and some configs modification.
 
 ```
-                  Claude / Gemini / OpenAI SDK
+       Claude / Gemini / OpenAI Responses / Chat Completions
                                │
                                ▼
-                        ┌─────────────┐
-    sidecar plugins <-  │ Model Proxy │   ←  routes by model id or wildcard
-                        └─────────────┘
+                        ┌─────────────┐     privacy-filter
+     sidecar plugins <- │ Model Proxy │ ->  compression
+                        └─────────────┘     image-encode
                                │
-                  ┌────────────┼────────────┐
-                  ▼            ▼            ▼
-             Anthropic     Gemini      OpenAI-Compatible
-             upstream     upstream     upstream(s)
+        ┌──────────────┬───────┴───────┬──────────────┐
+        ▼              ▼               ▼              ▼
+   Anthropic        Gemini      OpenAI-Compat    OpenAI-Resp
+   Messages    GenContent /      / Chat         / Responses
+                Interactions     upstream(s)     upstream(s)
+                upstream
 ```
 
 ## Features
 
-- **Four API formats in, any provider out** — accept requests in any of these schemas:
+- **Five API formats in, any provider out** — accept requests in any of these schemas:
   - `/v1/messages` — Claude Messages API
-  - `/v1beta/models/{model}:generateContent` — Gemini GenerateContent API
+  - `/v1beta/models/{model}:generateContent` (+ `:streamGenerateContent`, `:countTokens`) — Gemini GenerateContent API
   - `/v1/interactions` — Gemini Interactions API
   - `/v1/responses` — OpenAI Responses API
+  - `/v1/chat/completions` — OpenAI Chat Completions API (enabled via `DEV_PASS_THROUGH=true`)
+- **Embeddings** — `/v1/embeddings` proxied to an OpenAI-compatible upstream.
 - **Model-based routing** — route each model name to its own upstream URL, API key,
   and protocol via a simple TOML config. Exact model keys are supported in every
   `[models.*]` category; provider wildcards (`claude-*`) and the final catch-all
   (`*`) are scoped as described in [Model Routing](#model-routing).
-- **Composite aliases** — group several models under one name with weighted random,
-  primary/fallback, or automatic retry-on-failure routing.
-- **Fusion mode** — fan one request out to multiple models in parallel, then have a
-  "synth" model write the final answer.
+- **Composite aliases** — group several models under one name with weighted-random,
+  primary/fallback (with runtime share decay on failure), fusion fan-out, or a
+  planner→executor coordinator that hands off once a trigger tool appears.
 - **Schedule aliases** — timetable-based routing: pick which model (or composite)
   serves a request based on server-local hour-of-day and day-of-week, with a
   fallback target for any time outside the configured windows.
+- **Transform hooks** — per-model / per-upstream request and response rewriting via
+  five lifecycle hooks (`request_ingress`, `before_conversion`, `before_upstream`,
+  `after_upstream`, `response_egress`), with Tier-1 field ops (rename / set / default
+  / remove / map_value) and Tier-2 builtins for cross-message fixes. See
+  [Configuration Reference](#configuration-reference).
 - **Extended thinking / reasoning** — Claude-style thinking blocks, with conversion to
-  OpenAI `reasoning_effort` for upstreams that need it.
-- **Usage accounting** — per-model token and request stats, viewable in a web dashboard
-  or a live terminal UI.
+  OpenAI `reasoning_effort` for upstreams that need it. Handles tag-based
+  (`<think>...</think>`) and `reasoning_content` extraction, including streaming and
+  cross-chunk tool-call fragment stitching.
+- **Usage accounting** — per-model token and request stats, plus per-tool and
+  per-agent stats (request/response counts, payload size, block counts), viewable
+  in a web dashboard or a live terminal UI.
 - **Token limits** — global and per-alias token caps over a configurable window (sliding `Nh`/`Nd` or calendar `1w`/`1m`). Returns HTTP 413 when exceeded.
-- **Sidecars** — optional privacy-filter and compression sidecars for redacting or
-  shrinking request payloads before they reach the upstream.
-- **Runs anywhere** — Node.js server, Docker, PM2, or Cloudflare Workers.
+- **Sidecars** — optional privacy-filter (sidecar or local hash-only mode),
+  compression, and image-encode sidecars for redacting, shrinking, or fetching
+  request payloads before they reach the upstream.
+- **Runs anywhere** — Node.js server or Docker.
 
 ## Quick Start
 
@@ -946,19 +964,8 @@ docker build -t model-proxy-v3 .
 docker run --network host -p 8788:8788 -v $(pwd)/proxy_config.toml:/app/proxy_config.toml -e DEV_PASS_THROUGH=true -e LOG_LEVEL=info model-proxy-v3
 ```
 
-**PM2** (multiple workers)
-
-```bash
-npm run build
-pm2 start dist/server.js -i 4
-```
-
-**Cloudflare Workers**
-
-```bash
-npm run dev       # local
-npm run deploy    # publish
-```
+For higher throughput, run several containers behind an nginx reverse proxy that load-balances across them.
+Refer to docs/nginx_conf/ for nginx configuration examples.
 
 ### Node response compression headers
 
@@ -979,7 +986,7 @@ fail to read the response body.
 
 Most users only need `proxy_config.toml`. Optional environment variables tune behavior.
 On the Node server (`npm run server` / `dist/server.js`) these come from the process
-environment; on Cloudflare Workers they come from `[vars]` in `wrangler.toml`.
+environment.
 
 **`[general]` config fields**
 
@@ -1196,6 +1203,7 @@ is rewritten before the upstream fetch to append a placeholder `tool_result`:
 | `TUI` | unset | `true` launches the terminal dashboard + enables stat persistence |
 | `DUMP` | unset | `true` enables token-log persistence without the TUI |
 | `DEV_MODE` | unset | `true` enables development behaviors |
+| `VERSION` | unset | Build identifier (commit id, tag, or branch) surfaced in the `/health` response. Set via the Docker `--build-arg VERSION=...` / `-e VERSION=...`, or `[vars]` in `wrangler.toml`. |
 
 **Config source**
 
