@@ -15,19 +15,19 @@ sidecars, and a web + terminal dashboard for per-model, per-tool, and per-agent
 usage stats and some configs modification.
 
 ```
-       Claude / Gemini / OpenAI Responses / Chat Completions
+ Claude / Gemini genContent & interactions / OpenAI Responses & Chat Completions
                                │
-                               ▼
-                        ┌─────────────┐     privacy-filter
-     sidecar plugins <- │ Model Proxy │ ->  compression
-                        └─────────────┘     image-encode
-                               │
+                               ▼            privacy-filter
+                        ┌─────────────┐     compression
+     sidecar plugins <- │ Model Proxy │ ->  image-fetch & encoding
+                        └─────────────┘     auth & usage stats
+                               │ 
         ┌──────────────┬───────┴───────┬──────────────┐
         ▼              ▼               ▼              ▼
-   Anthropic        Gemini      OpenAI-Compat    OpenAI-Resp
-   Messages    GenContent /      / Chat         / Responses
-                Interactions     upstream(s)     upstream(s)
-                upstream
+   Anthropic        Gemini         OpenAI Chat      OpenAI
+   Messages       GenContent &     Completions      Responses
+                  Interactions     upstream         upstream
+                  upstream
 ```
 
 ## Features
