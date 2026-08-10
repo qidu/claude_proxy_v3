@@ -1118,8 +1118,8 @@ class DashboardView implements Component {
 
     const keysDetected = snap.privacyKeysDetected ?? 0;
     if (keysDetected > 0) {
-      const keysLabel = dim('keys: ') + fmt(keysDetected);
-      lines.push(alignRight(keysLabel, tokenPanelWidth));
+      const keysLabel = dim('filtered Keys: ') + fmt(keysDetected);
+      lines.push(alignRight(keysLabel, tokenPanelWidth - 1));
     }
     else {
       lines.push('');

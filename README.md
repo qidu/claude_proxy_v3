@@ -251,8 +251,9 @@ TUI=true npm run server
 
 You get a live view of configured models, token usage, response times, and tool stats.
 Press `c` to edit composite aliases, `s` to edit schedule aliases, `t` to send a test
-request, `r` to reload config, `Ctrl+C` to quit. A web dashboard is also available at
-`GET /dashboard`.
+request, `r` to reload config, `l` to edit the global token limit, `d` to open the
+statistics overlay, `p` to open the tools blocklist overlay, `Ctrl+U` to dump usage to
+JSONL now, `Ctrl+C` to quit. A web dashboard is also available at `GET /dashboard`.
 
 When `TUI=true` or `DUMP=true` is set, token stats are appended to
 `model_proxy_tokens.jsonl` in the working directory. Each line is one JSON dump:
@@ -321,11 +322,17 @@ On startup, the proxy avoids double-counting persisted stats as follows:
 | `POST /v1/messages` | Claude Messages API |
 | `POST /v1/messages/count_tokens` | Count tokens (Claude/OpenAI format) |
 | `POST /v1/responses` | OpenAI Responses API |
+| `POST /v1/responses/input_tokens` | Count input tokens for a Responses request (forwarded to `/v1/responses/input_tokens` under `openai-responses`, or bridged through Chat Completions token counting under other modes) |
+| `POST /v1/responses/compact` | Compact a Responses conversation (forwarded to `/v1/responses/compact` under `openai-responses`, or bridged through Chat Completions under other modes) |
 | `POST /v1beta/models/{model}:generateContent` | Gemini content (also `:streamGenerateContent`, `:countTokens`) |
 | `POST /v1/interactions` | Gemini Interactions API |
 | `POST /v1/embeddings` | Embeddings (proxied to an OpenAI-compatible upstream) |
 | `GET /v1/models` | List available models (no auth required) |
 | `GET /dashboard` | Web dashboard for config + stats |
+| `GET /config-reload` | Reload config from `PROXY_CONFIG_URL`. Only meaningful when a remote config URL is set; returns `400`/`500` otherwise. Clears the config cache and re-fetches. |
+| `GET /health` (also `GET /`) | Health check. Probes the resolved default-category / `[default_upstream]` upstream `/v1/models`; returns `{status:"ok", models, cached, version}` on success or `404` when no models are reachable. No auth required. |
+| `GET /favicon.ico` | Returns `204 No Content` (browser plumbing). |
+| `/{protocol}/{host}/...` dynamic route | Per-request upstream override. See [Dynamic routing](#dynamic-routing) below. |
 
 A Gemini `/v1/models/{model}:...` variant exists for each `/v1beta/models/{model}:...`
 endpoint. `:countTokens` is supported too: native Gemini routes forward to Gemini
@@ -340,7 +347,7 @@ The mode is selected by the route's `defaultMode` / model config:
 
 | Client endpoint | `anthropic-messages` | `openai-completions` | `openai-responses` | `gemini-generatecontent` | `gemini-interactions` |
 |---|---|---|---|---|---|
-| `POST /v1/messages` | **Native passthrough** to `/v1/messages`; request stays Claude Messages format end-to-end. | **Direct transform**: Claude Messages → Chat Completions → Claude Messages. If input is already OpenAI-shaped, it can pass through. | **Direct transform**: Claude/OpenAI-chat-shaped request → Responses `input` → Claude Messages. Basic tools and streaming are supported; `max_tokens` is rewritten to `max_completion_tokens`. | **Direct transform**: Claude Messages → Gemini generateContent → Claude Messages. | **Direct transform**: Claude Messages → Gemini Interactions/generateContent-compatible upstream → Claude Messages. |
+| `POST /v1/messages` | **Native passthrough** to `/v1/messages`; request stays Claude Messages format end-to-end. | **Direct transform**: Claude Messages → Chat Completions → Claude Messages. If input is already OpenAI-shaped, it can pass through. | **Indirect transform via `openai-completions`**: Claude Messages → Chat Completions → Responses `input` → Claude Messages. Basic tools and streaming are supported; `max_tokens` is rewritten to `max_output_tokens`. | **Direct transform**: Claude Messages → Gemini generateContent → Claude Messages. | **Direct transform**: Claude Messages → Gemini Interactions/generateContent-compatible upstream → Claude Messages. |
 | `POST /v1/responses` | **Direct transform**: Responses `input`/`instructions` → Claude Messages → Responses. Text and tool-use are supported for non-streaming and streaming. | **Direct transform**: Responses → Chat Completions → Responses. For `api.qnaigc.com`, keeps legacy `max_tokens`; otherwise uses `max_completion_tokens`. | **Native passthrough** to `/v1/responses`. | **Direct transform via Claude Messages**: Responses → Claude Messages → Gemini generateContent → Claude Messages → Responses. | **Direct transform via Claude Messages**: Responses → Claude Messages → Gemini Interactions/generateContent → Claude Messages → Responses. |
 | `POST /v1/chat/completions` | **Convert passthrough** only when `DEV_PASS_THROUGH=true`; Chat Completions body is converted to Claude Messages format and forwarded to `/v1/messages`; response (streaming and non-streaming) is converted back to OpenAI completions format. Tool schema types are lowercased; `content: ""` on assistant messages with `tool_calls` is normalized to `null`; consecutive tool messages are grouped into one user turn. | **Native passthrough** only when `DEV_PASS_THROUGH=true`; otherwise rejected. Uses the resolved per-model route; composite aliases and `target`-mapped model ids are resolved and the `model` field in the forwarded body is rewritten to the target model id. | **Transform passthrough** only when `DEV_PASS_THROUGH=true`; Chat Completions body is converted to Responses `input` and forwarded to `/v1/responses` using the resolved per-model route. | **Transform passthrough** only when `DEV_PASS_THROUGH=true`; Chat Completions body (including `image_url` blocks) is converted to Gemini `generateContent` body (`inline_data` for data-URI images; http(s) image URLs are fetched server-side with an SSRF guard) and forwarded to `:generateContent` / `:streamGenerateContent?alt=sse`. Text deltas and `finishReason` round-trip; tool-call/thinking response parts and any model-generated image output are dropped (response schemas for Claude Messages and OpenAI Completions do not carry image output — see [image I/O notes](#image-inputoutput-across-format-boundaries)). | Same as `gemini-generatecontent`; not separately wired today. |
 | `POST /v1beta/models/{model}:generateContent` / `:streamGenerateContent` | **Indirect transform via `openai-completions`**: generateContent → Chat Completions → Claude Messages → generateContent. Forwards upstream to `/v1/messages`; text, tool calls, and streaming text deltas return as Gemini `candidates[].content.parts`; tool calls become `functionCall` parts. | **Direct transform**: generateContent → Chat Completions → generateContent. Forwards upstream to `/v1/chat/completions`. | **Indirect transform via `openai-completions`**: generateContent → Chat Completions → Responses `input` → generateContent. Forwards upstream to `/v1/responses`; `system`/`developer` messages become Responses `instructions`; content-part arrays are normalized to text. | **Native passthrough** to `:generateContent` / `:streamGenerateContent` using the configured Gemini API version. | **Native Gemini-family route**; forwards to Gemini generateContent/stream endpoint using Interactions-compatible mode. |
@@ -352,8 +359,27 @@ Notes:
 - **Native passthrough** means the client endpoint and upstream API family already match, so the request body is not converted to another provider's format.
 - **Direct transform** means the proxy converts directly between the client endpoint format and the selected upstream family, then converts the response directly back to the client endpoint shape.
 - **Direct transform via Claude Messages** means Responses uses Claude Messages as its internal bridge before calling Gemini; it does not go through `openai-completions`.
-- **Indirect transform via `openai-completions`** means Gemini endpoint input first becomes OpenAI Chat Completions, then becomes Claude Messages or OpenAI Responses. This reuses the Chat Completions middle mode while preserving the original Gemini endpoint response shape.
+- **Indirect transform via `openai-completions`** means the request body is routed through OpenAI Chat Completions as an intermediate shape before reaching the target upstream family. This covers two cases: (a) Gemini endpoint input becomes Chat Completions, then becomes Claude Messages or OpenAI Responses; (b) `/v1/messages` routed to an `openai-responses` upstream becomes Chat Completions, then Responses `input`. This reuses the Chat Completions middle mode for code reuse while preserving the original client endpoint response shape.
 - Direct transforms are preferred long-term for endpoint fidelity. The current `/v1/interactions` → `anthropic-messages` / `openai-responses` routes use the indirect `openai-completions` bridge for code reuse; see [Routing transform review](./docs/routing-review.md) for tradeoffs and recommendations.
+
+### Dynamic routing
+
+In addition to the fixed endpoints above, the proxy accepts **per-request dynamic routes** of the
+form `/{protocol}/{host}/{path_prefix}/{model_id?}/{claude_endpoint}`, e.g.
+`/https/api.qnaigc.com/openai/v1/models/deepseek-v3.1/v1/messages`. The first path segment after
+the leading slash is the protocol (`http` or `https`); the next is the upstream host; the proxy
+then walks the remaining segments to find the boundary between the upstream API path prefix, an
+optional model id, and the trailing Claude-style endpoint (`v1/messages`, `v1/models`,
+`v1/messages/count_tokens`, etc.).
+
+- **No body conversion.** Dynamic routes are passthrough: the body is forwarded to the resolved
+  upstream URL verbatim, and auth headers (`Authorization` / `x-api-key` / `x-goog-api-key`) are
+  forwarded as-is from the caller. The proxy does **not** perform a local credential check.
+- **SSRF guard.** The parsed host is checked against `ALLOWED_HOSTS` (env, default
+  `127.0.0.1,localhost`) plus any host derived from `[models.*]` / `[default_upstream]` config
+  (`getAllowedHostsFromConfig`). Requests for hosts outside that allowlist are rejected with `403`.
+- **Use case.** Lets a single proxy instance fan out to many config-approved upstreams without a
+  `[models.*]` entry per target — useful for ad-hoc probing during development.
 
 ### Image input/output across format boundaries
 
@@ -1006,10 +1032,13 @@ In the positional form, every element is optional from the right — a 3-element
 transforms. An empty element (`""`) falls back to the section/default value for that slot.
 The `transforms` field (index 4) is always a comma-separated string of named set names.
 
-**Default transforms** — the proxy ships with `max_tokens_rename` wired as a mode-level
-default for `openai-completions` and `openai-responses` via `[transform_defaults]`. This
-renames `max_tokens` → `max_completion_tokens` automatically for every route on those modes,
-which is required by most modern OpenAI-compatible upstreams (DeepSeek, MiniMax, etc.).
+**Default transforms** — the example config (`proxy_config.toml_example`) ships a
+`[transform_defaults]` block that wires `max_tokens_rename` as a mode-level default for
+`openai-completions` and `openai-responses`. This renames `max_tokens` →
+`max_completion_tokens` automatically for every route on those modes, which is required by
+most modern OpenAI-compatible upstreams (DeepSeek, MiniMax, etc.). There is **no code-level
+default** — the wiring only takes effect when your `proxy_config.toml` contains the
+`[transform_defaults]` block (copy it from the example file).
 To opt a specific model entry out, attach `transforms = "no_max_completion_tokens"` to that
 entry (renames `max_completion_tokens` back to `max_tokens`).
 
@@ -1043,6 +1072,8 @@ Paths: bare field name for top-level (`max_tokens`); `messages[].field` for all 
 | `lowercase_tool_schema_types` | Recursively lowercases every `type` value in `tools[].function.parameters` / `tools[].input_schema`. Required for strict upstreams (e.g. DeepSeek) when the client sends uppercase `"STRING"`. |
 | `recover_tool_message_name` | Backfills missing `name` on `role:"tool"` messages by looking up the matching `tool_call_id` in the preceding assistant turn's `tool_calls`. |
 | `inject_missing_tool_results` | Synthesizes placeholder `tool_result` blocks for any `tool_use.id` that has no matching `tool_result` in the next user message, and appends a consolidated `user(tool_result)` message when an assistant `tool_use` is the **last** message in the array (e.g. when Codex replays the model's prior `function_call` as its final input item). Also merges consecutive per-call `tool` messages into one user message and reorders text-only assistant turns after the `tool_result`. Required by DeepSeek's Anthropic-format endpoint, which rejects trailing or unmatched `tool_use` with `tool_use ids were found without tool_result blocks immediately after`. |
+| `ensure_tool_config_cache_ttl` | Translates the Anthropic-native `system[]` block-level `cache_control` (e.g. `{type:"ephemeral", ttl?:"1h"}`) into the LiteLLM/Bedrock-bridge convention `cache_control_injection_points: [{location:"tool_config", control:{...}}]`. Reads the first usable `cache_control` from a `system` content-block array (plain-string `system` is ignored), appends a `{location:"tool_config"}` entry unless one already exists (caller-provided entries win), and rebuilds body key order so the injection-points field lands after `tools`. Use when forwarding to an upstream that expects the Bedrock-style injection shape. |
+| `filter_anthropic_beta` | Filters and optionally renames entries in the `anthropic-beta` request header using the owning set's `anthropic_beta_map` (a `[name → mapped_name \| null]` table, mirroring LiteLLM's `anthropic_beta_headers_config.json` semantics). Input is the real Claude-Code comma-separated form (`a,b,c`), not the JSON-array form `beta-features.ts` handles. For each entry: not in map → drop; mapped to `null`/`""` → drop; mapped to a non-empty string → emit the mapped name. Requires an `anthropic_beta_map` field on the transform set; without one the header passes through unchanged. |
 
 **Worked example — DeepSeek's Anthropic endpoint rejecting uppercase tool-schema types**
 
@@ -1186,9 +1217,15 @@ entry can set `base_url = "sdk://chatjimmy.ai/api"` and keep the appropriate
 | `TIKTOKEN_MODEL` | unset | tiktoken encoding to use, e.g. `o200k_base` |
 | `UPSTREAM_BODY_TIMEOUT_MS` | `600000` | Upstream body timeout (also judge/synth timeout in fusion) |
 | `MODELS_CACHE_TTL` | unset | Seconds to cache the upstream `/v1/models` list |
-| `JSON_STRINGIFY_METHOD` | `json` | Serialization method for outgoing bodies |
+| `GEMINI_API_VERSION` | `v1beta` | Gemini API version segment used in upstream URLs (e.g. `/v1beta/models/...:generateContent`). Also accepts `v1` for the GA endpoint shape. |
+| `MESSAGES_UPSTREAM_MODE` | `openai-completions` | Default `upstream_mode` for `POST /v1/messages` when neither the model entry nor section sets one. `native` = forward Claude Messages verbatim to `/v1/messages`; `openai-completions` = convert Claude ↔ Chat Completions. |
+| `INTERACTIONS_UPSTREAM_MODE` | `native` | Default `upstream_mode` for `POST /v1/interactions`. `native` = forward to the Gemini-family Interactions endpoint; `openai-completions` = indirect transform via Chat Completions. |
+| `GENERATE_CONTENT_UPSTREAM_MODE` | `native` | Default `upstream_mode` for `POST /v1beta/models/{model}:generateContent` (+ `:streamGenerateContent`, `:countTokens`). `native` = forward to Gemini; `openai-completions` = indirect transform via Chat Completions. |
+| `JSON_STRINGIFY_METHOD` | `json` | Serialization method for outgoing bodies. Accepted: `json` (default, native `JSON.stringify`), `safe-stable` ([safe-stable-stringify](https://www.npmjs.com/package/safe-stable-stringify), deterministic key order), `fast-safe` ([fast-safe-stringify](https://www.npmjs.com/package/fast-safe-stringify), cycle-safe). |
 | `DEV_PASS_THROUGH` | `false` | `true` enables `/v1/chat/completions`. The proxy resolves the request model first; `openai-completions` routes forward the Chat Completions body as-is, while `openai-responses` routes convert it to Responses format and forward to `/v1/responses`, and `anthropic-messages` routes convert the body to Claude Messages format and forward to `/v1/messages`. Before forwarding, the configured transform sets are applied (see `[transforms.*]` below). **Notice:** the caller's `Authorization` / `x-api-key` / `x-goog-api-key` is forwarded to the upstream as-is — the proxy does **not** perform a local credential check, so the upstream directly authenticates the request. A valid upstream key returns 200; an invalid one returns the upstream's 401. Do not use in production. |
+| `DEV_NO_KEY` | `false` | `true` (or `1`) skips the auth-header presence check on non-exempt model API paths. Only the presence check is disabled — `auth_url` still applies, and `/v1/models` plus dashboard/admin paths remain exempt regardless. Intended for local development behind another gateway that has already authenticated the caller. |
 | `CONVERSATION` | unset | `true` enables experimental in-process stateful conversation cache |
+| `CONVERSATION_MAX_ENTRIES` | `10000` | Cap on the in-process conversation cache size (entries per instance). Only meaningful when `CONVERSATION=true`. Eviction is lazy + opportunistic; no cross-process sharing. |
 | `IMAGE_BLOCK_DATA_MAX_SIZE` | `10485760` | Max inline image bytes accepted |
 | `ALLOWED_HOSTS` | `127.0.0.1,localhost` | SSRF allowlist for dynamic per-request upstream hosts |
 
@@ -1223,13 +1260,13 @@ whitelist_remove = []         # built-in whitelist tokens to remove (so they get
 
 The `hash_min_len` and `entropy_threshold` knobs are also accepted by the Python sidecar via `--hash-min-len` and `--entropy-threshold` CLI flags (see [`submodules/privacy-filter/README.md`](./submodules/privacy-filter/README.md)).
 
-> **Note — "Keys filtered" counter:** whenever the privacy filter redacts one or more
+> **Note — "filtered Keys" counter:** whenever the privacy filter redacts one or more
 > spans from a request, the proxy increments an in-process cumulative counter.
 > The total is shown in two places:
-> - **TUI** — a `keys filtered: N` line appears above the *Custom Models* section,
+> - **TUI** — a `filtered Keys: N` line appears above the *Custom Models* section,
 >   right-aligned to the Tokens Panel width. The line is hidden while the count is zero.
 > - **Dashboard** — the *Request Statistic* card contains a *Privacy Filter* sub-table
->   with a "Keys filtered (total)" row, refreshed every 10 seconds alongside other stats.
+>   with a "filtered Keys (total)" row, refreshed every 10 seconds alongside other stats.
 >
 > The counter is runtime-only and resets to zero when the proxy process restarts.
 > Each redacted span (one `⟦HASH:n⟧` sentinel) counts as one key, so a single request
@@ -1246,6 +1283,13 @@ The `hash_min_len` and `entropy_threshold` knobs are also accepted by the Python
 | `KOMPRESS_MAX_CHARS` | `1024000` | Skip compression above this total text size |
 | `KOMPRESS_KEEP_RATIO` | `0.5` | Fraction of tokens to keep (lower = more aggressive) |
 | `KOMPRESS_MIN_CHARS` | `200` | Skip fragments shorter than this |
+
+**Image-encode sidecar** (inert unless `IMAGE_ENCODE_URL` is set)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `IMAGE_ENCODE_URL` | unset | Sidecar base URL for fetching + base64-encoding caller-supplied image URLs. Unset = in-process fetch. Must be localhost / private LAN. |
+| `IMAGE_ENCODE_TIMEOUT_MS` | `40000` | Per-call timeout to the image-encode sidecar (distinct from `PRIVACY_FILTER_TIMEOUT_MS` / `KOMPRESS_TIMEOUT_MS`). |
 
 The full list (including the Consul-backed config and hardcoded upstream-mode defaults)
 is documented in [`docs/README_DETAILS.md`](./docs/README_DETAILS.md).

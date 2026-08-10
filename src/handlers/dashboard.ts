@@ -638,7 +638,7 @@ export function handleDashboardPage(env: Env): Response {
         <h3>Privacy Filter</h3>
         <table>
           <thead><tr><th>Metric</th><th class="num">Count</th></tr></thead>
-          <tbody><tr><td>Keys filtered (total)</td><td class="num" id="privacyKeysDetected">0</td></tr></tbody>
+          <tbody><tr><td>filtered Keys (total)</td><td class="num" id="privacyKeysDetected">0</td></tr></tbody>
         </table>
       </div>
 
