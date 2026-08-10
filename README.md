@@ -44,7 +44,7 @@ accounting out of the box.
   OpenAI `reasoning_effort` for upstreams that need it.
 - **Usage accounting** — per-model token and request stats, viewable in a web dashboard
   or a live terminal UI.
-- **Token limits** — global and per-alias rolling-window caps that return HTTP 429 when hit.
+- **Token limits** — global and per-alias token caps over a configurable window (sliding `Nh`/`Nd` or calendar `1w`/`1m`). Returns HTTP 413 when exceeded.
 - **Sidecars** — optional privacy-filter and compression sidecars for redacting or
   shrinking request payloads before they reach the upstream.
 - **Runs anywhere** — Node.js server, Docker, PM2, or Cloudflare Workers.
@@ -296,11 +296,16 @@ Fields:
   names are mapped to short ids and each sequence stores `{ts, values, id}` in Unix
   seconds. Older files with `heatmapEvents: [{timestamp, values, model}]` are still
   accepted.
-- `compositeLimitWindows`: optional persisted per-alias rolling-window state, written
-  by day-rollover/full-snapshot dumps.
+- `compositeAliasStates`: optional persisted per-alias token-limit event log,
+  written by day-rollover/full-snapshot dumps. Each alias entry stores
+  `{limit, duration, events: [{ts, tokens}]}`; events are kept in Unix seconds
+  and pruned to the 31-day retention bound on load. Legacy rows using the older
+  `compositeLimitWindows` shape (accumulator-based) are still accepted but
+  restore with an empty event log since an accumulator cannot be reconstructed
+  into per-event history.
 
 On startup, the proxy avoids double-counting persisted stats as follows:
-- `modelStats`, `toolStats`, and `compositeLimitWindows` are loaded only from the
+- `modelStats`, `toolStats`, and `compositeAliasStates` are loaded only from the
   latest dump for each retained date because they are cumulative snapshots.
 - `modelStats` from those latest per-day dumps are summed across days to rebuild the
   all-time dashboard totals.
@@ -436,7 +441,7 @@ loopback-only behavior.
 |---|---|
 | `GET /dashboard/api/config` | Read current config snapshot; `?reload=1` re-reads the TOML file |
 | `PUT /dashboard/api/config` | Replace the whole config snapshot (also auto-saves the TOML) |
-| `POST /dashboard/api/global-token-limit` | Set / update the global rolling-window token cap |
+| `POST /dashboard/api/global-token-limit` | Set / update the global token cap (sliding or calendar window) |
 | `POST /dashboard/api/schedule/alias` | Add a new `[schedule]` alias (body: `{alias: string}`) |
 | `DELETE /dashboard/api/schedule/alias/:alias` | Remove a `[schedule]` alias |
 | `POST /dashboard/api/schedule/alias/:alias/target` | Upsert a target's window list (body: `{target, windows}`) |
@@ -605,7 +610,7 @@ Group multiple models under one name in a `[composite]` section:
   | ≥1 | 0 | `fallback` | The first `primary` target in config order wins; other targets are unused at the routing step (they still participate in weighted pick after a primary decay). |
   | 0 | ≥1 | `fallback` | Lowest `fallback` number wins; ties broken by config order. |
   | ≥1 | ≥1 | `fallback` | The `primary` target always wins — `fallback` numbers on other targets are ignored at the routing step. |
-- `token_limit` — `{num, duration}` rolling-window cap (`1h`/`1d`/`1w`/`1m`); returns HTTP 429 when exceeded.
+- `token_limit` — `{num, duration}` token cap. Duration follows the same vocabulary as `global_token_limit` (see [Token Limits](#token-limits)). Returns HTTP 413 when exceeded.
 
 **Fusion** fans a request out to multiple "panel" models in parallel and routes through an
 optional "judge" and an optional but recommended "synth" model that writes the final answer.
@@ -692,6 +697,58 @@ toolset = []
 > chain must terminate at a real `[models.*]` entry — `A → B → C → A` is rejected at load time
 > with a `[FATAL]` log, marked with a red `x` in the TUI / dashboard, and the cyclic target is
 > omitted from the snapshot. See [CHANGELOG.md](./CHANGELOG.md) for the full safety rules.
+
+## Token Limits
+
+Two layers of token caps share the same windowing engine:
+
+- **Global** — `general.global_token_limit`, applied to every model-API request.
+- **Per-alias** — `token_limit` inside any `[composite]` entry, applied to requests routed through that alias.
+
+When the in-window usage is at or above the configured cap, the next request is rejected with HTTP 413 (`over_limit_error`) before it reaches the upstream. Both layers are checked at request-admission time; if both apply, hitting either one rejects the request.
+
+### Windowing strategies
+
+Every duration token is either **sliding** (rolls continuously from "now") or **calendar** (anchored to a wall-clock boundary). The vocabulary:
+
+| Token | Strategy | Cutoff (lower bound of the window) |
+|---|---|---|
+| `1h`–`23h` | sliding | `now - N×1h` |
+| `1d`–`6d` | sliding | `now - N×24h` |
+| `1w` | calendar | start of the current calendar week (`week_start_day` 00:00 local) |
+| `1m` | calendar | first day of the current calendar month, 00:00 local |
+
+The token amount accepts an optional magnitude suffix: `K` (thousand), `M` (million), `B` (billion), `T` (trillion). Examples: `"50K 6h"`, `"1.5M 1w"`, `"2B 1m"`.
+
+Calendar windows refresh at the boundary, not on a rolling timer. With `1w`, the cutoff is Monday 00:00 (or Sunday 00:00 if `week_start_day = "sunday"`); with `1m`, it is the first of the month at 00:00. Configure the week anchor:
+
+```toml
+[general]
+global_token_limit = "700M 1w"
+week_start_day = "monday"   # or "sunday" (default: monday)
+```
+
+```toml
+[composite]
+# Sliding 6-hour cap on this alias
+"fast" = {token_limit = {num = 1000000, duration = "6h"}, "model-a" = {}}
+# Calendar-month cap on this alias
+"monthly" = {token_limit = {num = 2000000000, duration = "1m"}, "model-b" = {primary = true}}
+```
+
+### What the limit actually does — and what it doesn't
+
+The cap is enforced as a **pre-request admission check**, not a hard ceiling. The proxy sums the tokens already recorded in the window and rejects new requests once that sum reaches the configured number. It does **not**:
+
+- pre-reserve tokens before the upstream call,
+- abort a response mid-stream if it crosses the cap,
+- coordinate across concurrent in-flight requests.
+
+So actual peak consumption in a window can overshoot the configured number — by as much as the largest single request that slipped in just before the threshold, and by `(concurrency − 1) × avg_request_size` during concurrent bursts. If you need a true hard cap, treat the configured number as a soft target and monitor actual usage.
+
+### Migration note (from pre-`3.x` rolling windows)
+
+Older versions treated `1w` and `1m` as **sliding** windows (rolling 7 days / 30 days from now). They are now **calendar** windows. There is no exact replacement for the previous rolling-7d / rolling-30d behavior — the closest sliding equivalents are `6d`. Users who depended on the rolling semantics should re-evaluate which duration fits their use case.
 
 ## Schedule Aliases
 
@@ -902,7 +959,8 @@ environment; on Cloudflare Workers they come from `[vars]` in `wrangler.toml`.
 | `auth_url` | `"https://auth.example.com/validate"` | If set, every inbound request's proxy auth headers (`Authorization`, `x-api-key`, `x-goog-api-key`) plus `User-Agent` are validated by a `GET` to this URL before routing. HTTP 200 = pass; 4xx/5xx = 401 to client; network error = 503. **Exempt paths:** `/health`, `/`, `/dashboard`, and `/v1/models` (model listing is unauthenticated so SDKs can enumerate without a credential). |
 | `auth_with_model` | `false` | When `true`, the `auth_url` call is deferred until after the request body is parsed so the requested model id can be forwarded as `x-resource-for` header. Allows the auth server to make per-model decisions. Default: `false` (auth runs before body parsing). |
 | `auth_passthrough_with` | `"user_key"` | Standalone upstream-auth setting, separate from `auth_url` / `auth_with_model`. Controls which key is passed to the upstream provider: `"user_key"` (default) forwards the caller's key; `"config_key"` uses the configured `api_key`. |
-| `global_token_limit` | `"1B 1d"` | Rolling-window token cap across all models. Format: `"<num><K/M/B> <duration>"` where duration is `1h`/`1d`/`1w`/`1m`. Returns HTTP 429 when exceeded. |
+| `global_token_limit` | `"1B 1d"` | Token cap across all models, queried against a sliding or calendar window. Format: `"<num><K/M/B/T> <duration>"`. Sliding durations: `1h`–`23h`, `1d`–`6d` (rolling from now). Calendar durations: `1w` (calendar week, anchored to `week_start_day`), `1m` (calendar month, anchored to first of month). Returns HTTP 413 when exceeded. |
+| `week_start_day` | `"monday"` | Anchor day for `1w` calendar windows. `"monday"` (default) or `"sunday"`. Applies to both global and composite limits. |
 | `budget_to_effort_low` | `32768` | Thinking-budget threshold (tokens) below which `reasoning_effort: "low"` is emitted for upstreams that use effort levels instead of token budgets. |
 | `budget_to_effort_medium` | `65536` | Threshold above `low` and below this → `reasoning_effort: "medium"`. |
 | `budget_to_effort_high` | `128000` | Threshold above `medium` → `reasoning_effort: "high"`. Set to `0` to always emit `"high"`. |

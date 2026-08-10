@@ -30,7 +30,7 @@ import {
 } from './handlers/dashboard.js';
 import { getConfiguredModelIds, getCompositeAliasMode, type ScheduleWindow, type ScheduleDaysSpec } from './utils/config-loader.js';
 import { buildHeatmap, renderHeatmapPanel } from './heatmap.js';
-import { dumpTodayTokens, TOKEN_LOG_FILE, getActiveRequestCount, getTokensInWindow, getLiveTokens, blockTool, unblockTool, isToolBlocked } from './utils/dashboard-stats.js';
+import { dumpTodayTokens, TOKEN_LOG_FILE, getActiveRequestCount, getTokensInWindowSince, getLiveTokens, blockTool, unblockTool, isToolBlocked, parseWindowSpec, getWindowCutoff } from './utils/dashboard-stats.js';
 import type { Env } from './types/shared.js';
 import type { ConfigValidationError } from './utils/config-loader.js';
 import type { ProxyConfig, FusionRole, FusionOptions } from './utils/config-loader.js';
@@ -1090,14 +1090,11 @@ class DashboardView implements Component {
     let globalLimitSuffix = '';
     if (globalLimitDisplay) {
       const parsedGlobal = globalLimit ? parseHumanTokenLimit(globalLimit.trim()) : null;
-      let windowMs = 7 * 24 * 60 * 60 * 1000; // default: 1w
+      let windowTotal = 0;
       if (parsedGlobal) {
-        if (parsedGlobal.duration === '1h') windowMs = 60 * 60 * 1000;
-        else if (parsedGlobal.duration === '1d') windowMs = 24 * 60 * 60 * 1000;
-        else if (parsedGlobal.duration === '1w') windowMs = 7 * 24 * 60 * 60 * 1000;
-        else if (parsedGlobal.duration === '1m') windowMs = 30 * 24 * 60 * 60 * 1000;
+        const cutoff = getWindowCutoff(parseWindowSpec(parsedGlobal.duration));
+        windowTotal = getTokensInWindowSince(cutoff);
       }
-      const windowTotal = getTokensInWindow(windowMs);
       let limitColor: (s: string) => string = dim;
       if (parsedGlobal && parsedGlobal.num > 0) {
         const ratio = windowTotal / parsedGlobal.num;

@@ -25,6 +25,7 @@ export interface ProxyConfig {
     budget_to_effort_medium?: number | string;
     budget_to_effort_high?: number | string;
     global_token_limit?: string;
+    week_start_day?: 'monday' | 'sunday';
   };
   default_upstream?: {
     upstream_mode?: string;
@@ -330,7 +331,21 @@ export interface ModelCategoryConfig {
 
 export type ModelArrayConfig = [string, string, string]; // [model_alias, base_url, api_key]
 
-export type TokenLimitDuration = '1h' | '1d' | '1w' | '1m';
+// Sliding tokens (Nh, Nd) roll continuously from "now".
+// Calendar tokens (1w, 1m) anchor to wall-clock boundaries.
+export const TOKEN_LIMIT_DURATIONS = [
+  '1h','2h','3h','4h','5h','6h','7h','8h','9h','10h','11h','12h',
+  '13h','14h','15h','16h','17h','18h','19h','20h','21h','22h','23h',
+  '1d','2d','3d','4d','5d','6d',
+  '1w', '1m',
+] as const;
+export type TokenLimitDuration = typeof TOKEN_LIMIT_DURATIONS[number];
+
+// True if duration rolls continuously from `now` (e.g. 1h, 6h, 1d, 6d).
+// False for calendar-anchored durations (1w, 1m).
+export function isSlidingDuration(d: string): boolean {
+  return /^([1-9]|1[0-9]|2[0-3])h$/.test(d) || /^([1-6])d$/.test(d);
+}
 
 /**
  * Parse a human-readable token limit string into a number.
@@ -341,7 +356,7 @@ export type TokenLimitDuration = '1h' | '1d' | '1w' | '1m';
 export function parseHumanTokenLimit(raw: string): { num: number; duration: TokenLimitDuration } | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
-  const match = trimmed.match(/^([\d.]+)\s*([kKmMbBtT]?)\s+(1[hHdDwWmM])$/);
+  const match = trimmed.match(/^([\d.]+)\s*([kKmMbBtT]?)\s+(\d{1,2})([hHdDwWmM])$/);
   if (!match) return null;
   let num = parseFloat(match[1]);
   if (!Number.isFinite(num) || num < 0) return null;
@@ -351,7 +366,14 @@ export function parseHumanTokenLimit(raw: string): { num: number; duration: Toke
   else if (suffix === 'b') num *= 1_000_000_000;
   else if (suffix === 't') num *= 1_000_000_000_000;
   if (num < 0 || !Number.isFinite(num)) return null;
-  return { num, duration: match[3].toLowerCase() as TokenLimitDuration };
+  const count = parseInt(match[3], 10);
+  const unit = match[4].toLowerCase();
+  // Validate count ranges per unit. w/m are calendar tokens and only accept 1.
+  if (unit === 'h' && (count < 1 || count > 23)) return null;
+  if (unit === 'd' && (count < 1 || count > 6)) return null;
+  if ((unit === 'w' || unit === 'm') && count !== 1) return null;
+  const duration = `${count}${unit}` as TokenLimitDuration;
+  return { num, duration };
 }
 
 /**
@@ -451,7 +473,7 @@ function getCompositeTokenLimit(config: CompositeModelConfig | undefined): Token
   const l = limit as unknown as Record<string, unknown>;
   if (typeof l.num !== 'number' || !Number.isFinite(l.num)) return undefined;
   if (typeof l.duration !== 'string') return undefined;
-  if (!(['1h', '1d', '1w', '1m'] as string[]).includes(l.duration)) return undefined;
+  if (!(TOKEN_LIMIT_DURATIONS as readonly string[]).includes(l.duration)) return undefined;
   return limit as TokenLimitConfig;
 }
 
@@ -2750,6 +2772,8 @@ export function parseSimpleToml(content: string): ProxyConfig {
           (config.general as any)[cleanKey] = value;
         } else if (cleanKey === 'auth_with_model') {
           (config.general as any)[cleanKey] = value === 'true';
+        } else if (cleanKey === 'week_start_day') {
+          (config.general as any)[cleanKey] = value === 'sunday' ? 'sunday' : 'monday';
         }
       } else if (currentSection === 'default_upstream' && config.default_upstream) {
         (config.default_upstream as any)[cleanKey] = normalizeUpstreamThresholdValue(cleanKey, value);
@@ -3821,11 +3845,11 @@ export function upsertGlobalTokenLimit(
  * invalid input elsewhere, so this is a best-effort cosmetic pass.
  */
 export function normalizeHumanTokenLimit(raw: string): string {
-  const m = raw.match(/^([\d.]+)\s*([kKmMbBtT]?)\s+(1[hHdDwWmM])$/);
+  const m = raw.match(/^([\d.]+)\s*([kKmMbBtT]?)\s+(\d{1,2})([hHdDwWmM])$/);
   if (!m) return raw.trim();
-  const [, num, suffix, duration] = m;
+  const [, num, suffix, count, unit] = m;
   const upperSuffix = suffix ? suffix.toUpperCase() : '';
-  return `${num}${upperSuffix} ${duration}`;
+  return `${num}${upperSuffix} ${count}${unit}`;
 }
 
 export function upsertFusionOptions(

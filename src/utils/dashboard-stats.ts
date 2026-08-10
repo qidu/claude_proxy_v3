@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import { dirname } from 'path';
 import { stringify } from './stringify.js';
 import type { TokenLimitDuration } from './config-loader.js';
+import { isSlidingDuration } from './config-loader.js';
 
 export type UsageStats = {
   input_tokens?: number;
@@ -105,7 +106,7 @@ function getOrAssignModelId(model: string): string {
 }
 
 const TOKEN_HEATMAP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;   // heatmap rendering: 7 days
-const TOKEN_RETENTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // event retention for enforcement: 30 days
+const TOKEN_RETENTION_WINDOW_MS = 31 * 24 * 60 * 60 * 1000; // event retention for enforcement: 31d (covers max calendar month)
 
 // Tools in this set are blocked: future stat recording is skipped for them.
 // Existing (pre-block) counts are preserved but stop growing.
@@ -154,25 +155,87 @@ let windowSumCutoff = 0; // ms; 0 = cache is empty, rebuild on first call
 
 // ── Composite token limit windows ───────────────────────────────────────────────
 
-export interface CompositeLimitWindow {
+/**
+ * Internal runtime state for a composite alias limit. The cutoff is derived
+ * from `duration` + the current time (via parseWindowSpec/getWindowCutoff),
+ * so we do not persist a `windowStartMs` or `accumulator` — we keep the
+ * per-alias event log and compute the in-window sum on read.
+ */
+interface CompositeAliasState {
   limit: number;
   duration: TokenLimitDuration;
-  windowStartMs: number;
-  accumulator: number;
+  events: Array<{ ts: number; tokens: number }>; // ascending by ts
 }
 
-export const compositeLimitWindows = new Map<string, CompositeLimitWindow>();
+// Retention bound for per-alias event arrays. Must be >= the longest possible
+// calendar window (31d for `1m`).
+const COMPOSITE_RETENTION_MS = 31 * 24 * 60 * 60 * 1000;
+
+export const compositeAliasStates = new Map<string, CompositeAliasState>();
 
 // Reverse map: target model name → composite alias names that include it
 const modelToCompositeAliases = new Map<string, Set<string>>();
 
 export function getWindowMs(duration: TokenLimitDuration): number {
-  switch (duration) {
-    case '1h': return 60 * 60 * 1000;
-    case '1d': return 24 * 60 * 60 * 1000;
-    case '1w': return 7 * 24 * 60 * 60 * 1000;
-    case '1m': return 30 * 24 * 60 * 60 * 1000;
+  // Sliding-equivalent duration used for retention sizing and "max possible span"
+  // calculations. For calendar tokens (1w, 1m) we return the longest span the
+  // window could cover so callers retain enough history.
+  const m = duration.match(/^(\d+)([hdwm])$/);
+  if (!m) return 0;
+  const count = parseInt(m[1], 10);
+  const unit = m[2];
+  if (unit === 'h') return count * 60 * 60 * 1000;
+  if (unit === 'd') return count * 24 * 60 * 60 * 1000;
+  if (unit === 'w') return 7 * 24 * 60 * 60 * 1000;
+  if (unit === 'm') return 31 * 24 * 60 * 60 * 1000; // worst-case calendar month
+  return 0;
+}
+
+// ── Window spec & cutoff (sliding vs calendar) ──────────────────────────────────
+
+export type WindowSpec =
+  | { kind: 'sliding'; ms: number }
+  | { kind: 'calendar'; unit: 'week' | 'month' };
+
+let weekStartDay: 'monday' | 'sunday' = 'monday';
+
+export function setWeekStartDay(d: 'monday' | 'sunday'): void {
+  weekStartDay = d;
+}
+
+export function getWeekStartDay(): 'monday' | 'sunday' {
+  return weekStartDay;
+}
+
+/**
+ * Convert a duration token into a WindowSpec. Sliding tokens (Nh, Nd) roll
+ * continuously from `now`; calendar tokens (1w, 1m) anchor to wall-clock
+ * boundaries (week_start_day 00:00, first-of-month 00:00).
+ */
+export function parseWindowSpec(d: TokenLimitDuration): WindowSpec {
+  if (isSlidingDuration(d)) {
+    return { kind: 'sliding', ms: getWindowMs(d) };
   }
+  if (d === '1w') return { kind: 'calendar', unit: 'week' };
+  return { kind: 'calendar', unit: 'month' };
+}
+
+/**
+ * Compute the inclusive lower-bound cutoff timestamp for a window spec.
+ * Events with `timestamp >= cutoff` are in-window.
+ */
+export function getWindowCutoff(spec: WindowSpec, now: number = Date.now()): number {
+  if (spec.kind === 'sliding') return now - spec.ms;
+  const dt = new Date(now);
+  if (spec.unit === 'month') {
+    return new Date(dt.getFullYear(), dt.getMonth(), 1).getTime();
+  }
+  // Calendar week: offset back to the configured week_start_day at 00:00 local.
+  const day = dt.getDay(); // 0=Sun..6=Sat
+  const offset = weekStartDay === 'monday'
+    ? (day === 0 ? 6 : day - 1)
+    : day;
+  return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() - offset).getTime();
 }
 
 /**
@@ -195,15 +258,15 @@ export function updateCompositeAliasReverseMap(
 }
 
 /**
- * Set or update the token limit for a composite alias.
- * Resets the window start and accumulator (fresh window begins now).
+ * Set or update the token limit for a composite alias. Preserves any existing
+ * per-alias event log (so config reloads do not wipe in-flight usage history).
  */
 export function setCompositeLimit(alias: string, limit: number, duration: TokenLimitDuration): void {
-  compositeLimitWindows.set(alias, {
+  const existing = compositeAliasStates.get(alias);
+  compositeAliasStates.set(alias, {
     limit,
     duration,
-    windowStartMs: Date.now(),
-    accumulator: 0,
+    events: existing?.events ?? [],
   });
 }
 
@@ -211,21 +274,7 @@ export function setCompositeLimit(alias: string, limit: number, duration: TokenL
  * Clear the token limit for a composite alias.
  */
 export function clearCompositeLimit(alias: string): void {
-  compositeLimitWindows.delete(alias);
-}
-
-/**
- * Check if a composite limit window has expired and advance it if so.
- * Call this at the start of enforcement and before persisting state.
- */
-function advanceCompositeLimitWindow(alias: string): void {
-  const win = compositeLimitWindows.get(alias);
-  if (!win) return;
-  const windowMs = getWindowMs(win.duration);
-  if (Date.now() - win.windowStartMs >= windowMs) {
-    win.windowStartMs = Date.now();
-    win.accumulator = 0;
-  }
+  compositeAliasStates.delete(alias);
 }
 
 /**
@@ -233,14 +282,27 @@ function advanceCompositeLimitWindow(alias: string): void {
  * Falls back to all-time sum of targets if no duration limit is set.
  */
 export function getCompositeAliasTokenUsage(alias: string, targets: string[]): number {
-  const win = compositeLimitWindows.get(alias);
-  if (!win) {
+  const state = compositeAliasStates.get(alias);
+  if (!state) {
     // No duration limit — fall back to all-time sum (backwards compat for
     // configs that set token_limit without duration, e.g. migrated total_token_limit)
     return targets.reduce((sum, m) => sum + getModelTotalTokens(m), 0);
   }
-  advanceCompositeLimitWindow(alias);
-  return compositeLimitWindows.get(alias)!.accumulator;
+  return sumCompositeEventsSince(state, getWindowCutoff(parseWindowSpec(state.duration)));
+}
+
+/** Helper: sum events with ts >= cutoff using binary search (events sorted ascending). */
+function sumCompositeEventsSince(state: CompositeAliasState, cutoff: number): number {
+  const events = state.events;
+  let lo = 0, hi = events.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (events[mid].ts < cutoff) lo = mid + 1;
+    else hi = mid;
+  }
+  let total = 0;
+  for (let i = lo; i < events.length; i++) total += events[i].tokens;
+  return total;
 }
 
 /**
@@ -248,10 +310,15 @@ export function getCompositeAliasTokenUsage(alias: string, targets: string[]): n
  * Also updates windows for all aliases that include the same model.
  */
 export function recordCompositeTokenUsage(alias: string, _targetModel: string, tokenCount: number): void {
-  if (!compositeLimitWindows.has(alias)) return;
-  advanceCompositeLimitWindow(alias);
-  const win = compositeLimitWindows.get(alias)!;
-  win.accumulator += tokenCount;
+  const state = compositeAliasStates.get(alias);
+  if (!state) return;
+  const now = Date.now();
+  state.events.push({ ts: now, tokens: tokenCount });
+  // Prune head while oldest event is older than the retention bound.
+  const pruneBefore = now - COMPOSITE_RETENTION_MS;
+  while (state.events.length > 0 && state.events[0].ts < pruneBefore) {
+    state.events.shift();
+  }
 }
 
 /**
@@ -266,8 +333,13 @@ export function recordModelUsageForComposites(modelName: string, tokenCount: num
 }
 
 /**
- * Returns a snapshot of all composite limit windows as a plain object,
- * with windowMs and remainingMs computed for each.
+ * Returns a snapshot of all composite limit windows as a plain object.
+ * For each alias: `windowStartMs` is the current cutoff (derived from now),
+ * `windowMs` is the full period span, `remainingMs` is ms until the next
+ * boundary (0 for sliding, since sliding has no fixed reset), and
+ * `accumulator` is the in-window token sum.
+ *
+ * Field names are retained for backwards compatibility with dashboard consumers.
  */
 export function getCompositeLimitWindowsSnapshot(): Record<string, {
   limit: number;
@@ -286,16 +358,32 @@ export function getCompositeLimitWindowsSnapshot(): Record<string, {
     accumulator: number;
   }> = {};
   const now = Date.now();
-  for (const [alias, win] of compositeLimitWindows) {
-    const windowMs = getWindowMs(win.duration);
-    const remainingMs = Math.max(0, win.windowStartMs + windowMs - now);
+  for (const [alias, state] of compositeAliasStates) {
+    const spec = parseWindowSpec(state.duration);
+    const cutoff = getWindowCutoff(spec, now);
+    const windowMs = getWindowMs(state.duration);
+    // For calendar windows: remainingMs = ms until next boundary.
+    // For sliding windows: no fixed reset point; report 0.
+    let remainingMs = 0;
+    if (spec.kind === 'calendar') {
+      const dt = new Date(now);
+      if (spec.unit === 'month') {
+        const nextBoundary = new Date(dt.getFullYear(), dt.getMonth() + 1, 1).getTime();
+        remainingMs = Math.max(0, nextBoundary - now);
+      } else {
+        const day = dt.getDay();
+        const offset = weekStartDay === 'monday' ? (day === 0 ? 6 : day - 1) : day;
+        const weekStart = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() - offset).getTime();
+        remainingMs = Math.max(0, weekStart + 7 * 24 * 60 * 60 * 1000 - now);
+      }
+    }
     result[alias] = {
-      limit: win.limit,
-      duration: win.duration,
-      windowStartMs: win.windowStartMs,
+      limit: state.limit,
+      duration: state.duration,
+      windowStartMs: cutoff,
       windowMs,
       remainingMs,
-      accumulator: win.accumulator,
+      accumulator: sumCompositeEventsSince(state, cutoff),
     };
   }
   return result;
@@ -413,14 +501,14 @@ function dumpDailyTokens(dateStr: string): void {
     return getLocalDateStr(e.timestamp) === dateStr && e.timestamp >= cutoff;
   });
 
-  // Serialize composite limit windows (keyed by alias → plain object)
-  const windowsObj: Record<string, { limit: number; duration: string; windowStartMs: number; accumulator: number }> = {};
-  for (const [alias, win] of compositeLimitWindows) {
-    windowsObj[alias] = {
-      limit: win.limit,
-      duration: win.duration,
-      windowStartMs: win.windowStartMs,
-      accumulator: win.accumulator,
+  // Serialize composite alias states (keyed by alias → {limit, duration, events}).
+  // Events are persisted in second precision to match the heatmap format.
+  const statesObj: Record<string, { limit: number; duration: string; events: Array<{ ts: number; tokens: number }> }> = {};
+  for (const [alias, state] of compositeAliasStates) {
+    statesObj[alias] = {
+      limit: state.limit,
+      duration: state.duration,
+      events: state.events.map((e) => ({ ts: Math.floor(e.ts / 1000), tokens: e.tokens })),
     };
   }
 
@@ -430,7 +518,7 @@ function dumpDailyTokens(dateStr: string): void {
     lastDumpTs: 0, // 0 = full snapshot, load treats missing/0 as full
     modelStats: [...dailyTokenStats.values()],
     heatmapEvents: buildHeatmapDump(recentEvents),
-    compositeLimitWindows: windowsObj,
+    compositeAliasStates: statesObj,
   }) + '\n';
   writeFileSync(TOKEN_LOG_FILE, logLine, { flag: 'a' });
   // Reset: next delta dump starts from now (day rollover = fresh start)
@@ -509,7 +597,16 @@ export function dumpTodayTokens(): void {
   lastHeatmapDumpTs = timestampSec;
 }
 
-type PersistedLimitWindow = {
+type PersistedCompositeState = {
+  limit: number;
+  duration: string;
+  events: Array<{ ts: number; tokens: number }>;
+};
+
+// Legacy shape (pre-refactor). Accepted on restore for backwards compat only —
+// we cannot reconstruct an event log from an accumulator, so legacy entries
+// initialize an empty event log.
+type PersistedLimitWindowLegacy = {
   limit: number;
   duration: string;
   windowStartMs: number;
@@ -586,7 +683,8 @@ export function loadTokenStatsFromLog(retentionDays = 30): void {
           modelStats?: ModelStatsEntry[];
           toolStats?: unknown;
           heatmapEvents?: unknown;
-          compositeLimitWindows?: Record<string, PersistedLimitWindow>;
+          compositeAliasStates?: Record<string, PersistedCompositeState>;
+          compositeLimitWindows?: Record<string, PersistedLimitWindowLegacy>; // legacy
         };
         if (!lastNDays.has(record.date)) continue;
 
@@ -670,8 +768,8 @@ export function loadTokenStatsFromLog(retentionDays = 30): void {
           // getModelStatsDesc(), and is also read by getModelTotalTokens()
           // for the legacy total_token_limit fallback path in
           // getCompositeAliasTokenUsage() (used when an alias has
-          // token_limit but no compositeLimitWindows entry — e.g. an
-          // expired window at restore time).
+          // token_limit but no compositeAliasStates entry — e.g. an
+          // empty event log at restore time).
           const existing = modelStats.get(entry.model);
           if (existing) {
             existing.requests += toSafeNumber(entry.requests);
@@ -714,21 +812,35 @@ export function loadTokenStatsFromLog(retentionDays = 30): void {
           }
         }
 
-        // Load composite limit windows from the latest dump per date
-        const windows = record.compositeLimitWindows;
-        if (windows && typeof windows === 'object') {
-          for (const [alias, win] of Object.entries(windows)) {
-            const duration = win.duration as TokenLimitDuration;
-            if (!(['1h', '1d', '1w', '1m'] as string[]).includes(duration)) continue;
-            const windowMs = getWindowMs(duration);
-            // If the saved window has expired (start + duration <= now), don't restore stale accumulator
-            if (win.windowStartMs + windowMs <= Date.now()) continue;
-            compositeLimitWindows.set(alias, {
-              limit: win.limit,
-              duration,
-              windowStartMs: win.windowStartMs,
-              accumulator: win.accumulator,
-            });
+        // Restore composite alias states from the latest dump per date.
+        // Two on-disk shapes are accepted:
+        //   - current: record.compositeAliasStates = { alias: { limit, duration, events: [{ts, tokens}] } }
+        //   - legacy:  record.compositeLimitWindows = { alias: { limit, duration, windowStartMs, accumulator } }
+        // For legacy entries we cannot reconstruct an event log from an accumulator,
+        // so they restore with an empty events array (current window starts fresh).
+        const persistedStates = record.compositeAliasStates;
+        if (persistedStates && typeof persistedStates === 'object') {
+          const nowMs = Date.now();
+          const pruneBefore = nowMs - COMPOSITE_RETENTION_MS;
+          for (const [alias, s] of Object.entries(persistedStates)) {
+            const duration = s.duration as TokenLimitDuration;
+            if (!(typeof s.limit === 'number') || typeof duration !== 'string') continue;
+            if (!Array.isArray(s.events)) continue;
+            const events = (s.events as Array<Record<string, unknown>>)
+              .filter((e) => typeof e?.ts === 'number' && typeof e?.tokens === 'number')
+              .map((e) => ({ ts: (e.ts as number) * 1000, tokens: e.tokens as number })) // sec → ms
+              .filter((e) => e.ts >= pruneBefore)
+              .sort((a, b) => a.ts - b.ts);
+            compositeAliasStates.set(alias, { limit: s.limit, duration, events });
+          }
+        } else {
+          const legacyWindows = record.compositeLimitWindows;
+          if (legacyWindows && typeof legacyWindows === 'object') {
+            for (const [alias, win] of Object.entries(legacyWindows)) {
+              const duration = win.duration as TokenLimitDuration;
+              if (!(typeof win.limit === 'number') || typeof duration !== 'string') continue;
+              compositeAliasStates.set(alias, { limit: win.limit, duration, events: [] });
+            }
           }
         }
       } catch {
@@ -1611,17 +1723,22 @@ export function getTokenHeatmapStatsDesc(): Array<{ weekday: number; hour: numbe
   });
 }
 
-export function getTokensInWindow(durationMs: number): number {
-  const cutoff = Date.now() - durationMs;
-
-  // tokenHeatmapEvents is append-only (within the 30d retention window) and
+/**
+ * Sum tokens from events with `timestamp >= cutoffMs`. Uses the same
+ * incremental cache as getTokensInWindow — events aged out of the window
+ * are absorbed into `windowSumFrozen` so subsequent calls only scan the
+ * live tail. Supports both sliding cutoffs (`now - ms`) and calendar
+ * cutoffs (start-of-week / start-of-month).
+ */
+export function getTokensInWindowSince(cutoff: number): number {
+  // tokenHeatmapEvents is append-only (within the 31d retention window) and
   // sorted by ascending timestamp.  Events before `cutoff` are immutable —
   // their sum is cached in `windowSumFrozen` / `windowSumCutoff` so we only
-  // need to scan the live tail on each call instead of the full 30d array.
+  // need to scan the live tail on each call instead of the full array.
   //
-  // Pruning (shift) only removes events older than 30d, which are always
-  // outside any query window (durationMs <= 30d), so the frozen sum is never
-  // invalidated by pruning.
+  // Pruning (shift) only removes events older than 31d, which are always
+  // outside any query window (max duration is `1m` ≈ 31d), so the frozen
+  // sum is never invalidated by pruning.
 
   if (windowSumCutoff > 0) {
     // Binary-search for the first event at or after the previous boundary so
@@ -1660,6 +1777,14 @@ export function getTokensInWindow(durationMs: number): number {
     total += tokenHeatmapEvents[j].values;
   }
   return total;
+}
+
+/**
+ * Sliding-window convenience: sum tokens in the last `durationMs`.
+ * Equivalent to getTokensInWindowSince(Date.now() - durationMs).
+ */
+export function getTokensInWindow(durationMs: number): number {
+  return getTokensInWindowSince(Date.now() - durationMs);
 }
 
 function normalizeUpstreamBaseUrl(urlLike: string): string {

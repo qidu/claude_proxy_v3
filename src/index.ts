@@ -60,14 +60,17 @@ import {
   createUsageTrackingTransformStream,
   getCompositeAliasTokenUsage,
   recordCompositeTokenUsage,
-  compositeLimitWindows,
+  compositeAliasStates,
   updateCompositeAliasReverseMap,
   setCompositeLimit,
   clearCompositeLimit,
-  getWindowMs,
+  parseWindowSpec,
+  getWindowCutoff,
+  setWeekStartDay,
   incrementActiveRequests,
   attachActiveRequestRelease,
   getTokensInWindow,
+  getTokensInWindowSince,
   recordPrivacyKeysDetected,
 } from './utils/dashboard-stats.js';
 import { ThinkingConversionOptions } from './converters/claude-to-openai.js';
@@ -713,30 +716,24 @@ export default {
     const proxyConfig = await loadProxyConfig(env);
     const configuredModelIds = getConfiguredModelIds(proxyConfig);
 
-    // Sync composite limit windows from config: update reverse map and init/clear windows
+    // Apply general.week_start_day to the windowing helper.
+    setWeekStartDay(proxyConfig.general?.week_start_day === 'sunday' ? 'sunday' : 'monday');
+
+    // Sync composite alias states from config: update reverse map and init/clear states.
     const composite = proxyConfig.composite || {};
     updateCompositeAliasReverseMap(composite);
-    // Add/reset windows for aliases with limits; remove windows for aliases without limits.
-    // If a valid (non-expired) window was restored from the JSONL log, keep its accumulator
-    // instead of resetting to 0 — this preserves token-limit state across restarts.
+    // setCompositeLimit preserves any existing per-alias event log, so reloads
+    // (including post-restart state restored from JSONL) keep their history.
     for (const [alias, targets] of Object.entries(composite)) {
       if (targets.token_limit && typeof targets.token_limit === 'object') {
         const cfg = targets.token_limit;
-        const existing = compositeLimitWindows.get(alias);
-        const windowMs = getWindowMs(cfg.duration);
-        if (existing && existing.windowStartMs + windowMs > Date.now()) {
-          // Valid window restored from log — update limit/duration from config, keep accumulator
-          existing.limit = cfg.num;
-          existing.duration = cfg.duration;
-        } else {
-          setCompositeLimit(alias, cfg.num, cfg.duration);
-        }
+        setCompositeLimit(alias, cfg.num, cfg.duration);
       } else {
         clearCompositeLimit(alias);
       }
     }
-    // Clear windows for aliases that no longer exist in config
-    for (const alias of compositeLimitWindows.keys()) {
+    // Clear states for aliases that no longer exist in config
+    for (const alias of compositeAliasStates.keys()) {
       if (!(alias in composite)) {
         clearCompositeLimit(alias);
       }
@@ -966,8 +963,8 @@ export default {
       if (globalTokenLimitRaw) {
         const parsedGlobal = parseHumanTokenLimit(globalTokenLimitRaw.trim());
         if (parsedGlobal && parsedGlobal.num > 0) {
-          const windowMs = getWindowMs(parsedGlobal.duration);
-          const windowTotal = getTokensInWindow(windowMs);
+          const cutoff = getWindowCutoff(parseWindowSpec(parsedGlobal.duration));
+          const windowTotal = getTokensInWindowSince(cutoff);
           if (windowTotal >= parsedGlobal.num) {
             throw new OverLimitError(
               `exceed local token limit: global token limit (${parsedGlobal.num} ${parsedGlobal.duration}) reached (${windowTotal}). No further requests will be routed.`

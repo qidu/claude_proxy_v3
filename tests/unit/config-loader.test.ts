@@ -88,6 +88,34 @@ describe('parseHumanTokenLimit', () => {
       assert.equal(r?.duration, d);
     }
   });
+
+  it('parses multi-hour sliding durations (2h..23h)', () => {
+    assert.deepEqual(parseHumanTokenLimit('100 2h'), { num: 100, duration: '2h' });
+    assert.deepEqual(parseHumanTokenLimit('100 12h'), { num: 100, duration: '12h' });
+    assert.deepEqual(parseHumanTokenLimit('100 23h'), { num: 100, duration: '23h' });
+  });
+
+  it('parses multi-day sliding durations (2d..6d)', () => {
+    assert.deepEqual(parseHumanTokenLimit('100 2d'), { num: 100, duration: '2d' });
+    assert.deepEqual(parseHumanTokenLimit('100 6d'), { num: 100, duration: '6d' });
+  });
+
+  it('rejects out-of-range sliding counts', () => {
+    assert.equal(parseHumanTokenLimit('100 24h'), null); // 24h not allowed (use 1d)
+    assert.equal(parseHumanTokenLimit('100 0h'), null);  // 0h invalid
+    assert.equal(parseHumanTokenLimit('100 7d'), null);  // 7d not allowed (use 1w)
+    assert.equal(parseHumanTokenLimit('100 0d'), null);  // 0d invalid
+  });
+
+  it('rejects multi-week / multi-month counts', () => {
+    assert.equal(parseHumanTokenLimit('100 2w'), null);  // calendar tokens only accept 1
+    assert.equal(parseHumanTokenLimit('100 2m'), null);
+  });
+
+  it('rejects unknown duration units', () => {
+    assert.equal(parseHumanTokenLimit('100 1y'), null);
+    assert.equal(parseHumanTokenLimit('100 5x'), null);
+  });
 });
 
 // ---------------------------------------------------------------------------

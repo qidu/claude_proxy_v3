@@ -7,6 +7,47 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Breaking: unified sliding/calendar token-limit windowing
+
+The global `global_token_limit` and per-alias composite `token_limit` previously
+used two different windowing strategies — sliding for global, fixed-window
+accumulator for composite. They now share one parser and one event-log-based
+enforcement path, with both sliding and calendar-anchored durations supported.
+
+**Duration vocabulary (shared by both limits):**
+
+| Token | Shape | Cutoff |
+|---|---|---|
+| `1h`–`23h` | sliding | last N hours from now |
+| `1d`–`6d` | sliding | last N days from now |
+| `1w` | calendar | start of current calendar week (configurable start day) |
+| `1m` | calendar | first day of current calendar month, 00:00 local |
+
+**Breaking changes:**
+
+- `1w` is now a **calendar week** (was: sliding 7 days from now).
+- `1m` is now a **calendar month** (was: sliding 30 days from now).
+- Composite alias limits no longer use a fixed-window accumulator that resets
+  at a drifting boundary. They use a per-alias event log queried against the
+  derived cutoff. State no longer needs `windowStartMs`/`accumulator` fields;
+  persistence format changed to `compositeAliasStates` (legacy
+  `compositeLimitWindows` records still load but with empty event logs).
+
+**New config key:** `general.week_start_day = "monday" | "sunday"` (default
+`monday`). Controls where the `1w` calendar cutoff lands.
+
+**Migration impact:** there is no exact replacement for the previous rolling
+7-day or rolling-30-day behavior. The closest sliding equivalents are `6d` and
+`6d` respectively (max sliding day-count). Users who depended on rolling
+windows should re-evaluate which duration best fits their use case.
+
+**Files touched:** `src/utils/config-loader.ts` (type + parser +
+`getCompositeTokenLimit` + `week_start_day`), `src/utils/dashboard-stats.ts`
+(`WindowSpec`, `parseWindowSpec`, `getWindowCutoff`, `setWeekStartDay`,
+composite storage rewrite, `getTokensInWindowSince`, 31-day retention,
+persistence), `src/index.ts` (global check uses cutoff, simplified config
+sync), `src/tui.ts` (panel uses cutoff).
+
 ### Fix: config sections losting on dashboard/TUI save
 
 Four bugs in `src/utils/config-loader.ts` caused silent data loss when the
