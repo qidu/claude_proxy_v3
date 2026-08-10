@@ -99,7 +99,7 @@ A minimal `proxy_config.toml` looks like this:
 # every section's exact / wildcard / catch-all lookup gets routed here.
 [default_upstream]
 default_base_url = "https://api.your-provider.com"
-# default_api_key = "your-key"   # used in config_key mode or as fallback for [models.free]
+# default_api_key = "your-key"   # used in config_key mode or as fallback for [models.FREE]
 
 # Claude models, spoken to in native Anthropic format
 [models.claude]
@@ -130,7 +130,7 @@ base_url = "https://api.your-provider.com"   # section base_url overrides [defau
 # header on `/v1/embeddings` — see "Who wins — caller's key vs. configured
 # api_key" below. Model entries are exact-match only; bare model names without
 # the upstream's required prefix (e.g. `nvidia/`) will fail at the upstream.
-[models.embedding]
+[models.EMBEDDING]
 upstream_mode = "openai-completions"   # value is informational — the proxy hardcodes this for /v1/embeddings
 base_url = "https://integrate.api.nvidia.com"
 api_key = "nvapi-..."
@@ -481,9 +481,12 @@ resolved against the configured sections in three priority levels (highest first
 
 - An exact entry always wins over a wildcard in the same category — e.g. an explicit
   `claude-sonnet-4-6` is matched before `claude-*`.
-- Only provider wildcard sections (`models.claude`, `models.gemini`, `models.gpt`) and
-  optional `models.default` wildcards are checked for `prefix-*` matches. Other sections,
-  including `models.free` and `models.embedding`, are exact-only.
+- All sections except `[models.FREE]` and `[models.EMBEDDING]` support `prefix-*` wildcard
+  matching. This includes built-in sections (`claude`, `gemini`, `gpt`) and any
+  user-defined section (`nvidia`, `openrouter`, etc.).
+- `[models.FREE]` and `[models.EMBEDDING]` are **exact-only** — they never pick up wildcards.
+  Both names are case-insensitive (`free`/`FREE`, `embedding`/`EMBEDDING` are equivalent);
+  UPPERCASE is the canonical form in documentation and example configs.
 - Only `prefix-*` (hyphen before `*`) is a wildcard; the `*` is substituted so the
   upstream sees the real model name. A bare `*` key is the final `models.default`
   catch-all and preserves the original model name.
@@ -492,17 +495,17 @@ resolved against the configured sections in three priority levels (highest first
 |:--------|:-----:|:----------:|:-------------:|
 | `models.claude` | ✅ | ✅ | ❌ |
 | `models.gemini` | ✅ | ✅ | ❌ |
-| `models.free` | ✅ | ❌ | ❌ |
+| `models.gpt`, `models.nvidia`, … (user-defined) | ✅ | ✅ | ❌ |
+| `models.FREE` | ✅ | ❌ | ❌ |
 | `models.default` | ✅ | ✅ (optional) | ✅ (recommended) |
-| `models.embedding` | ✅ | ❌ | ❌ |
+| `models.EMBEDDING` | ✅ | ❌ | ❌ |
 
-> **Section flavors — wildcards vs. exact-only:** user-defined provider sections
-> such as `[models.gpt]` and `[models.nvidia]` **inherit** the same exact /
-> `prefix-*` / `*` catch-all routing surface as `[models.default]`,
-> `[models.claude]`, and `[models.gemini]`, so wildcards work in them. The
-> concrete sections `[models.free]` and `[models.embedding]` are **exact-only**
-> and never pick up wildcards. Runtime caller-vs-config key priority is
-> governed separately by the **Who wins** tables below.
+> **Section flavors — wildcards vs. exact-only:** every section supports `prefix-*`
+> wildcard routing **except** the two special concrete sections `[models.FREE]` and
+> `[models.EMBEDDING]`, which are exact-only. User-defined provider sections such as
+> `[models.gpt]` and `[models.nvidia]` support wildcards the same way built-in
+> sections do. Runtime caller-vs-config key priority is governed separately by the
+> **Who wins** tables below.
 
 ### `base_url` / `api_key` override rules
 
@@ -543,27 +546,27 @@ inheritance chain — anything left empty falls back to the level above:
 
 | Section | Caller's auth header | Configured `api_key` |
 |:--------|:---------------------|:---------------------|
-| `[models.free]` | **Ignored** | Section/per-entry key **always wins** — the proxy authenticates upstream on the caller's behalf (this is what makes the FREE tier work). |
+| `[models.FREE]` | **Ignored** | Section/per-entry key **always wins** — the proxy authenticates upstream on the caller's behalf (this is what makes the FREE tier work). |
 | `[models.default]` | **Wins** | Used only when the caller sends no key. May come from the entry, section, or `[default_upstream] default_api_key`. |
 | `[models.claude]`, `[models.gemini]` | **Wins** | Caller's key passes through; configured keys are not used. |
-| `[models.embedding]` | **Overridden for embeddings** | Section `api_key` wins for `/v1/embeddings` requests when configured. |
+| `[models.EMBEDDING]` | **Overridden for embeddings** | Section `api_key` wins for `/v1/embeddings` requests when configured. |
 
 `auth_passthrough_with = "config_key"`
 
 | Section | Caller's auth header | Configured `api_key` |
 |:--------|:---------------------|:---------------------|
-| `[models.free]` | **Ignored** | Section/per-entry key always wins (unchanged). |
+| `[models.FREE]` | **Ignored** | Section/per-entry key always wins (unchanged). |
 | `[models.default]`, `[models.claude]`, `[models.gemini]`, etc. | **Replaced** | Configured key **always wins** — per-entry → section → `[default_upstream] default_api_key`. |
 | Models hitting `[default_upstream]` (no section match) | **Replaced** | `[default_upstream] default_api_key` is used if set. |
-| `[models.embedding]` | **Overridden for embeddings** | Section `api_key` wins for `/v1/embeddings` requests when configured. |
+| `[models.EMBEDDING]` | **Overridden for embeddings** | Section `api_key` wins for `/v1/embeddings` requests when configured. |
 
-> **Why `[models.embedding].api_key` always wins** — the fixed-route branch in
+> **Why `[models.EMBEDDING].api_key` always wins** — the fixed-route branch in
 > `src/index.ts` (around line 1534) applies the embedding section's `api_key`
 > **after** `transformAuthHeadersForUpstream` has populated `modelAuthHeaders`
 > from the caller's headers, and the spread order is
 > `{ ...modelAuthHeaders, ...formatApiKeyForUpstream(embeddingApiKey, …) }`.
 > So when the section has an `api_key`, the config key replaces whatever the
-> caller sent. This is intentional: `[models.embedding]` is typically used to
+> caller sent. This is intentional: `[models.EMBEDDING]` is typically used to
 > pin a single provider-scoped key (e.g. NVIDIA integrate) so callers don't
 > need to manage upstream credentials. For other sections, the
 > `auth_passthrough_with` setting controls this same priority.
@@ -970,7 +973,7 @@ environment; on Cloudflare Workers they come from `[vars]` in `wrangler.toml`.
 | Field | Example | Purpose |
 |---|---|---|
 | `default_base_url` | `"https://api.example.com"` | Global upstream endpoint fallback when a route has no per-entry or section `base_url`, and for models not claimed by any `[models.*]` section. |
-| `default_api_key` | `"sk-..."` | Global configured-key fallback. In `user_key` mode (default): wins only for `[models.free]`, acts as a fallback for other sections when the caller sends no key. In `config_key` mode: used for all models that have no per-entry or section `api_key`. Typically left unset in production. |
+| `default_api_key` | `"sk-..."` | Global configured-key fallback. In `user_key` mode (default): wins only for `[models.FREE]`, acts as a fallback for other sections when the caller sends no key. In `config_key` mode: used for all models that have no per-entry or section `api_key`. Typically left unset in production. |
 | `upstream_mode` | `"openai-completions"` | Default protocol for models not claimed by any `[models.*]` section. |
 
 **`[model_usage]` config fields**
@@ -1061,7 +1064,7 @@ schema = "anthropic-messages"
 request_ingress.builtins = ["lowercase_tool_schema_types"]
 before_upstream.builtins  = ["inject_missing_tool_results"]
 
-[models.free]
+[models.FREE]
 upstream_mode = "openai-completions"
 # attach the set via the entry's `transforms` field, or it resolves to nothing:
 deepseek-v4-anth = {target = "deepseek-v4-flash", base_url = "https://api.deepseek.com/anthropic", api_key = "sk-...", mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat"}
@@ -1127,7 +1130,7 @@ consecutive per-call tool messages, and reordering text-only assistant turns. Wi
 schema = "anthropic-messages"
 before_upstream.builtins = ["inject_missing_tool_results"]
 
-[models.free]
+[models.FREE]
 upstream_mode = "openai-completions"
 deepseek-v4-anth = {target = "deepseek-v4-flash", base_url = "https://api.deepseek.com/anthropic", api_key = "sk-...", mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat"}
 ```

@@ -7,6 +7,38 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Fix: wildcard routing now works in all provider sections; `[models.FREE]` / `[models.EMBEDDING]` are canonical exact-only names
+
+**What changed:**
+
+Previously, `prefix-*` wildcard matching in Priority 2 was hardcoded to only
+check `claude`, `gemini`, and `gpt` sections. User-defined provider sections
+(e.g. `[models.nvidia]`, `[models.openrouter]`) were silently skipped — their
+wildcard entries never matched, contrary to what the README documented.
+
+Priority 2 now iterates all sections dynamically, giving every provider section
+(built-in or user-defined) full `prefix-*` wildcard support. The two special
+concrete sections — `[models.FREE]` and `[models.EMBEDDING]` — remain
+exact-only and are explicitly excluded.
+
+**Canonical section names:** `FREE` and `EMBEDDING` are now the documented and
+example-config forms. Both names are case-insensitive (`free`/`FREE`,
+`embedding`/`EMBEDDING` work identically at runtime).
+
+**Routing priority (unchanged structure, corrected behaviour):**
+
+| Priority | Match type | Sections checked |
+|---|---|---|
+| 1 | Exact key | All sections |
+| 2 | `prefix-*` wildcard | All sections except `FREE`/`free`, `EMBEDDING`/`embedding`, `default` |
+| 3 | `prefix-*` then `*` catch-all | `default` only |
+
+**Files touched:** `src/utils/config-loader.ts` (Priority 2 wildcard loop),
+`src/index.ts` (`EMBEDDING`/`embedding` fallback lookup, `FREE`/`free` section
+check), `proxy_config.toml_example`, `proxy_config.toml_template` (section
+headers updated to uppercase), `README.md` (routing table + callout corrected),
+`tests/unit/config-loader.test.ts` (4 new `getModelConfig` cases).
+
 ### Breaking: unified sliding/calendar token-limit windowing
 
 The global `global_token_limit` and per-alias composite `token_limit` previously

@@ -632,6 +632,44 @@ describe('getModelConfig', () => {
     assert.equal(getModelConfig(cfg, 'specific')?.entry[0], 'specific-target');
     assert.equal(getModelConfig(cfg, 'other')?.entry[0], 'star-target');
   });
+
+  it('user-defined section supports prefix wildcard', () => {
+    const cfg: ProxyConfig = {
+      models: {
+        nvidia: { 'nvidia-*': ['nvidia-alias', '', ''] } as any,
+      },
+    };
+    const r = getModelConfig(cfg, 'nvidia-nemotron-3');
+    assert.equal(r?.category, 'nvidia');
+    assert.deepEqual(r?.entry, ['nvidia-alias', '', '']);
+  });
+
+  it('models.FREE is exact-only — prefix wildcard is not matched', () => {
+    const cfg: ProxyConfig = {
+      models: {
+        FREE: { 'claude-*': ['claude-alias', '', ''] } as any,
+      },
+    };
+    assert.equal(getModelConfig(cfg, 'claude-sonnet-4-6'), undefined);
+  });
+
+  it('models.free is exact-only — prefix wildcard is not matched', () => {
+    const cfg: ProxyConfig = {
+      models: {
+        free: { 'claude-*': ['claude-alias', '', ''] } as any,
+      },
+    };
+    assert.equal(getModelConfig(cfg, 'claude-sonnet-4-6'), undefined);
+  });
+
+  it('models.EMBEDDING is exact-only — prefix wildcard is not matched', () => {
+    const cfg: ProxyConfig = {
+      models: {
+        EMBEDDING: { 'text-*': ['embed-alias', '', ''] } as any,
+      },
+    };
+    assert.equal(getModelConfig(cfg, 'text-embedding-3-small'), undefined);
+  });
 });
 
 // ---------------------------------------------------------------------------

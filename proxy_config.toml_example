@@ -48,7 +48,7 @@ week_start_day = "monday"
 # does neither will fail to resolve at routing time rather than silently
 # inheriting from this global default.
 default_base_url = "https://api.qnaigc.com"
-# default_api_key = "sk-..."  # In user_key mode (default): fallback for [models.free] and models
+# default_api_key = "sk-..."  # In user_key mode (default): fallback for [models.FREE] and models
                                # with no configured key. In config_key mode: used for all models.
                                # Typically left unset in production.
 
@@ -120,8 +120,8 @@ gemini-3.0-flash-preview = {target = "gemini-3-flash-preview"}
 # Wildcard fallback: catches any `gemini-*` model not matched above.
 "gemini-*" = {}
 
-[models.free]
-# For the `free` model category:
+[models.FREE]
+# For the `FREE` model category:
 # This section exposes a curated set of models that the proxy can serve to
 # callers without requiring them to supply their own upstream credentials.
 # Each specific model entry is routed using the section's configured
@@ -167,7 +167,7 @@ minimax-m2.7 = {target = "MiniMax-M2.7-HighSpeed", base_url = "https://api.minim
 [models.default]
 # For the `default` model category (and the section's catch-all wildcard):
 # This is the default routing tier for any model that didn't match a more
-# specific section (e.g. `models.claude`, `models.free`, `models.gemini`).
+# specific section (e.g. `models.claude`, `models.FREE`, `models.gemini`).
 # Each specific model entry uses the inline-table form:
 #   {target = "upstream_model_name", base_url = "override_or_empty", api_key = "override_or_empty", mode = "override_or_empty"}
 # with empty override strings falling back to the section defaults.
@@ -200,8 +200,8 @@ deepseek-v4-pro = {base_url = "https://api.deepseek.com", api_key = "sk-66c13986
 # the section's `upstream_mode` and `base_url` and the caller's auth key.
 "*" = {}
 
-[models.embedding]
-# For `embedding` models ONLY.
+[models.EMBEDDING]
+# For `EMBEDDING` models ONLY.
 # If a configured `api_key` exists (section-level or per-entry), it takes
 # priority over the caller's auth key because there are not so many embedding existing.
 # So this priority order should be easier for users.
@@ -216,7 +216,7 @@ base_url = "https://openrouter.ai/api"
 # from one or more real target models. It does NOT define how those target
 # models themselves are routed to an upstream — every target is resolved
 # through the regular routing rules in the other `[models.*]` sections
-# (`models.claude`, `models.free`, `models.gemini`, `models.default`, etc.),
+# (`models.claude`, `models.FREE`, `models.gemini`, `models.default`, etc.),
 # which still control its `upstream_mode`, `base_url`, `api_key`, and
 # auth-key priority.
 #
@@ -437,7 +437,7 @@ openai-completions = ["max_tokens_rename"]
 openai-responses   = ["max_tokens_rename"]
 
 # Attach multiple transforms to a model entry (applied left-to-right):
-# In [models.free]:
+# In [models.FREE]:
 #   deepseek-v4-comp = {target = "deepseek-v4-flash", base_url = "...", api_key = "...", transforms = "deepseek_compat"}
 #   deepseek-v4-anth = {target = "deepseek-v4-flash", base_url = "...", api_key = "...", mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat"}
 #   max-m3-comp      = {target = "MiniMax-M3", base_url = "...", api_key = "...", transforms = "minimax_compat"}

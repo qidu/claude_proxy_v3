@@ -3129,20 +3129,21 @@ export function getModelConfig(config: ProxyConfig, modelName: string) {
     }
   }
 
-  // Priority 2: Wildcard pattern match in provider categories (claude, gemini, gpt).
-  // models.free does NOT support wildcards — it only has explicit model entries.
-  const providerWildcardOrder = ['claude', 'gemini', 'gpt'];
-  for (const cat of providerWildcardOrder) {
-    const categoryConfig = config.models[cat];
-    if (categoryConfig && !Array.isArray(categoryConfig)) {
-      const wildcardMatch = findWildcardPatternMatch(categoryConfig, modelName);
-      if (wildcardMatch) {
-        return {
-          category: cat,
-          entry: wildcardMatch.entry,
-          categoryConfig: wildcardMatch.categoryConfig,
-        };
-      }
+  // Priority 2: Wildcard pattern match — all sections except those handled elsewhere.
+  // Skipped here for different reasons:
+  //   - models.FREE / models.free, models.EMBEDDING / models.embedding: exact-only, never match wildcards.
+  //   - models.default: supports wildcards AND catch-all "*", but must be checked LAST (Priority 3).
+  // All other sections (built-in: claude, gemini, gpt; user-defined: nvidia, openrouter, etc.) support wildcards.
+  const skipInPriority2 = new Set(['free', 'FREE', 'embedding', 'EMBEDDING', 'default']);
+  for (const [cat, categoryConfig] of Object.entries(config.models)) {
+    if (skipInPriority2.has(cat) || Array.isArray(categoryConfig)) continue;
+    const wildcardMatch = findWildcardPatternMatch(categoryConfig, modelName);
+    if (wildcardMatch) {
+      return {
+        category: cat,
+        entry: wildcardMatch.entry,
+        categoryConfig: wildcardMatch.categoryConfig,
+      };
     }
   }
 

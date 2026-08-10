@@ -15,7 +15,7 @@ claude-opus-4-8 = ["claude-opus-4-8", "", ""]
 claude-opus-4-6 = ["claude-opus-4-6", "", ""]
 claude-sonnet-4-6 = ["claude-sonnet-4-6", "", ""]
 
-[models.free]
+[models.FREE]
 upstream_mode = "anthropic-messages"
 base_url = "http://localhost:3000"
 api_key = "invalid-sk-f924545e8c87b5c0323fef4373654737dc2a04835b9e028ceef2f8ac4d37096d"
@@ -42,7 +42,7 @@ max-m2.7-high = ["MiniMax-M2.7-highspeed", "https://api.minimaxi.com", "sk-cp-p_
 deepseek-v4-flash = ["deepseek-v4-flash", "https://api.deepseek.com", "sk-66c13986***"]
 deepseek-v4-pro = ["deepseek-v4-pro", "https://api.deepseek.com", "sk-66c13986***"]
 
-[models.embedding]
+[models.EMBEDDING]
 upstream_mode = "anthropic-messages"
 base_url = "https://openrouter.ai/api"
 

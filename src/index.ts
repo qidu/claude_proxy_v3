@@ -634,9 +634,9 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     };
   }
 
-  // Embeddings endpoint — uses [models.embedding] config with priority over defaults
+  // Embeddings endpoint — uses [models.EMBEDDING] / [models.embedding] config with priority over defaults
   if (path === '/v1/embeddings' || path.startsWith('/v1/embeddings?')) {
-    const embeddingCategory = proxyConfig.models?.embedding;
+    const embeddingCategory = proxyConfig.models?.EMBEDDING ?? proxyConfig.models?.embedding;
     const embeddingConfig = embeddingCategory && !Array.isArray(embeddingCategory) ? embeddingCategory : undefined;
     const embeddingBaseUrl = embeddingConfig?.base_url || defaultBaseUrl;
     return {
@@ -1323,7 +1323,7 @@ export default {
 
               let candidateAuthHeaders = transformAuthHeadersForUpstream(candidateRequest, route.upstreamMode, path, requestId, env as Record<string, unknown>);
 
-              if (route.apiKey && (route.section === 'free' || useConfigKey)) {
+              if (route.apiKey && (route.section === 'free' || route.section === 'FREE' || useConfigKey)) {
                 if (route.upstreamMode === 'openai-completions') {
                   if (route.modelAlias) {
                     candidateAuthHeaders = { ...candidateAuthHeaders, ...formatApiKeyForUpstream(route.apiKey, route.upstreamMode) };
@@ -1591,9 +1591,9 @@ export default {
           }
         }
 
-        // Embeddings endpoint: apply [models.embedding] api_key if configured
+        // Embeddings endpoint: apply [models.EMBEDDING] / [models.embedding] api_key if configured
         if (path === '/v1/embeddings' || path.startsWith('/v1/embeddings?')) {
-          const embeddingCategory = proxyConfig.models?.embedding;
+          const embeddingCategory = proxyConfig.models?.EMBEDDING ?? proxyConfig.models?.embedding;
           const embeddingConfig = embeddingCategory && !Array.isArray(embeddingCategory) ? embeddingCategory : undefined;
           const embeddingApiKey = embeddingConfig?.api_key;
           if (embeddingApiKey) {
@@ -1624,7 +1624,7 @@ export default {
         });
 
         let candidateAuthHeaders = transformAuthHeadersForUpstream(candidateRequest, route.upstreamMode, path, requestId, env as Record<string, unknown>);
-        if (route.apiKey && (route.section === 'free' || useConfigKey)) {
+        if (route.apiKey && (route.section === 'free' || route.section === 'FREE' || useConfigKey)) {
           if (route.upstreamMode === 'openai-completions') {
             if (route.modelAlias) {
               candidateAuthHeaders = { ...candidateAuthHeaders, ...formatApiKeyForUpstream(route.apiKey, route.upstreamMode) };
