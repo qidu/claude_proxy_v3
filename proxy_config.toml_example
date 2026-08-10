@@ -32,7 +32,11 @@ api_key = "test"
 budget_to_effort_low = 32768
 budget_to_effort_medium = 65536
 budget_to_effort_high = 128000
+# Sliding duration (1h-23h, 1d-6d): rolling window from "now".
+# Calendar duration (1w, 1m): anchored to week_start_day / first-of-month.
 global_token_limit = "700M 1w"
+# Anchor day for the `1w` calendar window. Default is "monday".
+week_start_day = "monday"
 
 [default_upstream]
 # `default_base_url` is the *global* upstream endpoint applied **only** to models
@@ -245,8 +249,10 @@ base_url = "https://openrouter.ai/api"
 "llama" = {llama3 = {share = 20}}
 # Alias with a per-alias `token_limit` (consumed across all targets under
 # this alias within the given `duration`). The actual upstream call is
-# routed via the rules for `deepseek-v4-flash`.
-"claude-haiku-4-5-20251001" = {token_limit = {num = 1000000, duration = "1d"}, "deepseek-v4-flash" = {}}
+# routed via the rules for `deepseek-v4-flash`. Duration follows the same
+# vocabulary as global_token_limit: sliding (1h-23h, 1d-6d) or calendar
+# (1w, 1m). The example below uses a 6-hour sliding window.
+"claude-haiku-4-5-20251001" = {token_limit = {num = 1000000, duration = "6h"}, "deepseek-v4-flash" = {}}
 # Multi-target composite with a per-alias `token_limit`, weighted `share`
 # distribution, and a single `primary` target (`max-m3`). Remaining targets
 # with `fallback = 0` are not used as fallbacks; targets with `share = 0` are
@@ -283,6 +289,8 @@ base_url = "https://openrouter.ai/api"
 "saver" = {"maxplan" = [{from = 9, to = 12}, {from = 14, to = 18}], "code-small" = [{from = 0, to = 9, days="weekday"}], "max-m3" = [{days = "weekend"}], "max-m2.7-high" = []}
 
 # Transforms — rewrite request/response bodies and headers at named pipeline hooks.
+# For complete, runnable transform-set examples, see
+# proxy_config.toml_transforms_example.
 #
 # Transforms are declared as named sets under [transforms.<name>]. Each set
 # targets one upstream schema (openai-completions | anthropic-messages |
