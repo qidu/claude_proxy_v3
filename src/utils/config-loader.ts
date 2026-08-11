@@ -273,6 +273,19 @@ export function validateTransformSet(name: string, set: TransformSet): Transform
       if (!BUILTIN_NAMES.has(b)) {
         errs.push({ set: name, message: `[${hook}] unknown builtin "${b}"` });
       }
+      // Schema-gated builtins: each entry maps a builtin to the only schema(s)
+      // where it is safe to run. Attaching a builtin outside its allowed
+      // schema silently corrupts the response, so fail loud at load time.
+      const BUILTIN_SCHEMA: Partial<Record<BuiltinName, TransformSchema[]>> = {
+        'assemble_sse_chunks': ['openai-completions'],
+      };
+      const allowed = BUILTIN_SCHEMA[b];
+      if (allowed && !allowed.includes(set.schema)) {
+        errs.push({
+          set: name,
+          message: `[${hook}] builtin "${b}" requires schema ${allowed.map(s => `"${s}"`).join(' or ')} but set has schema "${set.schema}"`,
+        });
+      }
     }
   }
   return errs;

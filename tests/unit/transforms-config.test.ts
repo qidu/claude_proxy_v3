@@ -222,6 +222,53 @@ describe('validateTransformSet', () => {
     const errs = validateTransformSet('bad', set);
     assert.ok(errs.length >= 1, 'must reject multi-segment tool_calls walk');
   });
+
+  // Step 14: schema-gated builtins. assemble_sse_chunks parses OpenAI-shaped
+  // chunks (choices[].index); on a Claude SSE stream it would silently emit
+  // an empty choices array, destroying the response. Reject at load time.
+  it('accepts assemble_sse_chunks under openai-completions schema', () => {
+    const set: TransformSet = {
+      name: 'ok',
+      schema: 'openai-completions',
+      after_upstream: { builtins: ['assemble_sse_chunks'] },
+    };
+    assert.deepEqual(validateTransformSet('ok', set), []);
+  });
+
+  it('rejects assemble_sse_chunks under anthropic-messages schema', () => {
+    const set: TransformSet = {
+      name: 'bad',
+      schema: 'anthropic-messages',
+      after_upstream: { builtins: ['assemble_sse_chunks'] },
+    };
+    const errs = validateTransformSet('bad', set);
+    assert.equal(errs.length, 1);
+    assert.ok(errs[0].message.includes('assemble_sse_chunks'));
+    assert.ok(errs[0].message.includes('openai-completions'));
+    assert.ok(errs[0].message.includes('anthropic-messages'));
+  });
+
+  it('rejects assemble_sse_chunks under openai-responses schema', () => {
+    const set: TransformSet = {
+      name: 'bad',
+      schema: 'openai-responses',
+      after_upstream: { builtins: ['assemble_sse_chunks'] },
+    };
+    const errs = validateTransformSet('bad', set);
+    assert.equal(errs.length, 1);
+    assert.ok(errs[0].message.includes('assemble_sse_chunks'));
+  });
+
+  it('rejects assemble_sse_chunks under gemini-generatecontent schema', () => {
+    const set: TransformSet = {
+      name: 'bad',
+      schema: 'gemini-generatecontent',
+      after_upstream: { builtins: ['assemble_sse_chunks'] },
+    };
+    const errs = validateTransformSet('bad', set);
+    assert.equal(errs.length, 1);
+    assert.ok(errs[0].message.includes('assemble_sse_chunks'));
+  });
 });
 
 // ---------------------------------------------------------------------------

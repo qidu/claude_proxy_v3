@@ -20,6 +20,18 @@ into a single `chat.completion` JSON response returned to the client:
 - `finish_reason` is taken from the last chunk that carries it per choice
 - `usage` is forwarded from the final chunk (requires `stream_options.include_usage`)
 
+**Safety rails:**
+
+- **Schema-gated at config load.** Declaring `assemble_sse_chunks` under any schema
+  other than `openai-completions` now fails load-time validation with an error like
+  `builtin "assemble_sse_chunks" requires schema "openai-completions" but set has
+  schema "anthropic-messages"`. Without this gate, the builtin would silently emit
+  `choices: []` on Claude/Gemini SSE streams, destroying the response.
+- **Warns on content-type mismatch.** When the builtin is declared but the upstream
+  returns a non-SSE content type (e.g. `application/json`), the proxy logs
+  `assemble_sse_chunks: expected text/event-stream from upstream but got "..."`
+  and passes the response through unchanged — no silent corruption.
+
 Example config (see `proxy_config.toml_transforms_example` for full snippet):
 
 ```toml
@@ -33,6 +45,12 @@ before_upstream.ops = [
 ]
 after_upstream.builtins = ["assemble_sse_chunks"]
 ```
+
+Multiple transforms compose via comma-separated CSV (e.g.
+`transforms = "max_tokens_rename,sse_to_completions"`). Sets at different hook
+points never conflict; sets touching the same path at the same hook resolve
+last-writer-wins (left-to-right). See the inline comments in
+`proxy_config.toml_transforms_example` for the full conflict-avoidance notes.
 
 Newest merged work, reverse-chronological.
 
