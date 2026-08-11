@@ -991,10 +991,9 @@ class DashboardView implements Component {
     this.invalidate();
   }
 
-  // holdMs = 0: normal (cleared by next refresh)
-  // holdMs > 0: timed hold
+  // holdMs > 0: timed hold (default 1000ms is the minimum display time)
   // holdMs = -1: sticky — survives refresh until explicitly cleared or overwritten
-  setMessage(message: string, holdMs = 0): void {
+  setMessage(message: string, holdMs = 1000): void {
     this.message = message;
     this.messageUntil = holdMs === -1 ? -1 : holdMs > 0 ? Date.now() + holdMs : 0;
     this.invalidate();
@@ -1345,17 +1344,20 @@ class DashboardApp {
       // errors that persist after the save.
       if (fromMutation) {
         // skip message update — save flow will set its own
-      } else if (validationErrors && validationErrors.length > 0) {
-        const first = validationErrors[0];
-        this.view.setMessage(`Config error: ${first.path} — ${first.message}`, 15000);
-      } else if (validationWarnings && validationWarnings.length > 0) {
-        const first = validationWarnings[0];
-        this.view.setMessage(`Config warning: ${first.path} — ${first.message}`, 8000);
       } else if (!this.view.shouldPreserveMessage()) {
-        this.view.setMessage('Ready');
+        // Idle: surface existing config errors/warnings, else 'Ready'.
+        if (validationErrors && validationErrors.length > 0) {
+          const first = validationErrors[0];
+          this.view.setMessage(`Config error: ${first.path} — ${first.message}`, 6000);
+        } else if (validationWarnings && validationWarnings.length > 0) {
+          const first = validationWarnings[0];
+          this.view.setMessage(`Config warning: ${first.path} — ${first.message}`, 2000);
+        } else {
+          this.view.setMessage('Ready');
+        }
       }
     } catch (error) {
-      this.view.setMessage((error as Error).message);
+      this.view.setMessage((error as Error).message, 2000);
     } finally {
       this.refreshing = false;
       if (this.pendingMutationRefresh) {
@@ -1847,7 +1849,7 @@ class DashboardApp {
               this.view.setMessage(`added ${item.value} to ${alias}`);
               this.requestRender();
             } catch (err) {
-              this.view.setMessage((err as Error).message);
+              this.view.setMessage((err as Error).message, 2000);
               await this.refresh();
               this.compositeOverlay?.focusAlias(alias);
               this.requestRender();
@@ -1872,7 +1874,7 @@ class DashboardApp {
               this.view.setMessage(`added ${item.value} to ${alias}`);
               this.requestRender();
             } catch (err) {
-              this.view.setMessage((err as Error).message);
+              this.view.setMessage((err as Error).message, 2000);
               await this.refresh();
               this.compositeOverlay?.focusAlias(alias);
               this.requestRender();
@@ -1982,14 +1984,19 @@ class DashboardApp {
 
   async runModelTest(modelId: string): Promise<void> {
     const displayId = / \[[CF]\]$/.test(modelId) ? modelId.replace(/ \[[CF]\]$/, '').trim() : modelId;
-    this.view.setMessage(`testing ${displayId} …`, -1);
+    const snap = this.viewSnapshot();
+    const cfg = snap ? resolveModelTestConfig(snap.config, displayId, snap.compositeResolved) : undefined;
+    const target = cfg?.directModel && cfg.directModel !== displayId ? `(${cfg.directModel})` : '';
+    const schema = cfg?.upstreamMode ?? '?';
+    const baseUrl = cfg?.targetUrl ? stripHttps(cfg.targetUrl) : '?';
+    this.view.setMessage(`testing ${displayId}${target} ${schema} at ${baseUrl} …`, -1);
     this.requestRender();
     const result = await this.executeModelTest(modelId);
     if (!result) return;
     if (!result.ok) {
-      this.view.setMessage(`test failed ${result.modelId} (${result.status ?? '?'}) ${result.detail}`, 10000);
+      this.view.setMessage(`${red(`test failed ${result.modelId} (${result.status ?? '?'})`)} ${dim(result.detail)}`, 6000);
     } else {
-      this.view.setMessage(`${green(`${result.modelId} OK`)} ${green(`(${result.status})`)} ${green(`usage=${result.usage}`)} ${green(result.detail)}`, 10000);
+      this.view.setMessage(`${green(`${result.modelId} OK (${result.status})`)} ${dim(`usage=${result.usage} ${result.detail}`)}`, 6000);
     }
     this.requestRender();
   }
@@ -2145,10 +2152,10 @@ class DashboardApp {
       else failed++;
     }
     if (this.modelTestAborted) {
-      this.view.setMessage(`test-all: aborted (${passed} ok / ${failed} failed so far)`, 10000);
+      this.view.setMessage(`test-all: aborted (${passed} ok / ${failed} failed so far)`, 6000);
     } else {
       const summary = `test-all: ${passed} ok / ${failed} failed / ${choices.length} total`;
-      this.view.setMessage(this.modelTestTimerActive ? `${green(summary)} (next in 30m)` : summary, 15000);
+      this.view.setMessage(this.modelTestTimerActive ? `${green(summary)} (next in 30m)` : summary, 6000);
     }
     this.requestRender();
     this.modelTestInProgress = false;
@@ -2222,7 +2229,7 @@ class DashboardApp {
           await this.refresh(true);
           this.compositeOverlay?.focusAlias(alias);
         } catch (err) {
-          this.view.setMessage((err as Error).message);
+          this.view.setMessage((err as Error).message, 2000);
           await this.refresh();
           this.compositeOverlay?.focusAlias(alias);
           this.requestRender();
@@ -2250,7 +2257,7 @@ class DashboardApp {
           this.view.setMessage(`updated ${alias}.${target}`);
           await this.refresh(true);
         } catch (err) {
-          this.view.setMessage((err as Error).message);
+          this.view.setMessage((err as Error).message, 2000);
           await this.refresh();
         }
       });
@@ -2324,7 +2331,7 @@ class DashboardApp {
               this.compositeOverlay?.focusAlias(alias);
               this.requestRender();
             } catch (err) {
-              this.view.setMessage((err as Error).message);
+              this.view.setMessage((err as Error).message, 2000);
               await this.refresh();
               this.compositeOverlay?.focusAlias(alias);
               this.requestRender();
@@ -2398,7 +2405,7 @@ class DashboardApp {
             this.view.setMessage(`deleted composite alias ${alias}`);
             void this.refresh(true);
           } catch (err) {
-            this.view.setMessage((err as Error).message);
+            this.view.setMessage((err as Error).message, 2000);
             void this.refresh();
           }
         } else {
@@ -2429,7 +2436,7 @@ class DashboardApp {
         this.scheduleOverlay?.focusAlias(trimmed);
         this.view.setMessage(`added schedule alias ${trimmed}`);
       } catch (error) {
-        this.view.setMessage((error as Error).message);
+        this.view.setMessage((error as Error).message, 2000);
         await this.refresh();
         this.scheduleOverlay?.focusAlias(trimmed);
       }
@@ -2472,7 +2479,7 @@ class DashboardApp {
             this.scheduleOverlay?.focusAlias(alias);
             this.view.setMessage(`added ${item.value} to ${alias}`);
           } catch (error) {
-            this.view.setMessage((error as Error).message);
+            this.view.setMessage((error as Error).message, 2000);
             await this.refresh();
             this.showScheduleOverlay();
             this.scheduleOverlay?.focusAlias(alias);
@@ -2517,7 +2524,7 @@ class DashboardApp {
         await this.refresh(true);
         this.view.setMessage(windows.length === 0 ? `${alias}.${target} = fallback` : `updated ${alias}.${target} (${windows.length} window${windows.length === 1 ? '' : 's'})`);
       } catch (error) {
-        this.view.setMessage((error as Error).message);
+        this.view.setMessage((error as Error).message, 2000);
         await this.refresh();
       }
       this.showScheduleOverlay();
@@ -2684,7 +2691,7 @@ class DashboardApp {
             this.view.setMessage(`deleted schedule.${alias}`);
             void this.refresh(true);
           } catch (error) {
-            this.view.setMessage((error as Error).message);
+            this.view.setMessage((error as Error).message, 2000);
             void this.refresh();
           }
         } else {
@@ -2723,7 +2730,7 @@ class DashboardApp {
             this.view.setMessage(`deleted schedule.${alias}.${target}`);
             void this.refresh(true);
           } catch (error) {
-            this.view.setMessage((error as Error).message);
+            this.view.setMessage((error as Error).message, 2000);
             void this.refresh();
           }
         } else {
@@ -2834,7 +2841,7 @@ class DashboardApp {
             }
             this.requestRender();
           } catch (error) {
-            this.view.setMessage((error as Error).message);
+            this.view.setMessage((error as Error).message, 2000);
             await this.refresh();
           }
         })();

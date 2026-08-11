@@ -7,6 +7,23 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 Newest merged work, reverse-chronological.
 
+### Tweak: config errors/warnings surface only at idle, not mid-held-message
+
+Config errors and warnings in the periodic refresh now only surface when the
+status bar is idle (no held message). Previously they would fire unconditionally
+every 500ms, overwriting any in-progress success or action message. Now held
+messages are preserved to their natural expiry; when the bar goes idle it shows
+existing config errors (6000ms) or warnings (2000ms) before settling to 'Ready'.
+
+### Tweak: TUI status-bar messages now have explicit hold durations
+
+Error and result messages in the TUI bottom status bar previously cleared on the
+next refresh (no guaranteed display time). They now hold for a fixed duration by
+category: caught errors and config warnings hold 2s, config errors hold 5s, and
+model test results (single and test-all) hold 6s. The minimum hold is now 1s —
+the `setMessage` default changed from `0` to `1000ms`, so transient messages
+that previously passed no duration also linger for at least one second.
+
 ### Fix: wildcard routing now works in all provider sections; `[models.FREE]` / `[models.EMBEDDING]` are canonical exact-only names
 
 **What changed:**
