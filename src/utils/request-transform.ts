@@ -316,6 +316,10 @@ function applyBuiltin(
     return;
   }
 
+  // assemble_sse_chunks is handled at the Response level in applyAfterUpstream,
+  // not here (it operates on a stream, not a buffered JSON body).
+  if (name === 'assemble_sse_chunks') return;
+
   if (name === 'filter_anthropic_beta') {
     // Filter and optionally rename entries in the anthropic-beta header using
     // the owning set's `anthropic_beta_map`. Mirrors LiteLLM's
@@ -552,6 +556,34 @@ export async function applyAfterUpstream(
   const activeSets = transforms.filter(s => s['after_upstream'] !== undefined);
   if (activeSets.length === 0) return response;
 
+  // If any active set declares assemble_sse_chunks and the upstream sent SSE,
+  // buffer all chunks and assemble into a single chat.completion JSON.
+  const needsAssembly = activeSets.some(s =>
+    s['after_upstream']?.builtins?.includes('assemble_sse_chunks'),
+  );
+  const contentType = response.headers.get('content-type') ?? '';
+  if (needsAssembly && !contentType.includes('text/event-stream')) {
+    ctx.logger.warn(ctx.requestId, `assemble_sse_chunks: expected text/event-stream from upstream but got "${contentType || '(none)'}"; skipping assembly and passing response through unchanged`);
+  }
+  if (needsAssembly && contentType.includes('text/event-stream')) {
+    const assembled = await assembleSseChunks(response);
+    // Re-enter the normal JSON-ops path with the assembled body.
+    const hookCtx: HookContext = { ...ctx, status: response.status };
+    let body = assembled;
+    let headers: Record<string, string> = {};
+    for (const set of activeSets) {
+      ({ body, headers } = applyTransformSet(set, 'after_upstream', body, headers));
+      void headers;
+    }
+    const responseHeaders = sanitizeUpstreamResponseHeaders(response);
+    responseHeaders.set('content-type', 'application/json');
+    return new Response(JSON.stringify(body), {
+      status: hookCtx.status,
+      statusText: response.statusText,
+      headers: responseHeaders,
+    });
+  }
+
   // Buffer body and parse JSON.
   const text = await response.text();
   let body: Record<string, unknown>;
@@ -579,6 +611,116 @@ export async function applyAfterUpstream(
     statusText: response.statusText,
     headers: sanitizeUpstreamResponseHeaders(response),
   });
+}
+
+/**
+ * Read an OpenAI SSE stream to completion and assemble all chat.completion.chunk
+ * events into a single chat.completion JSON object.
+ *
+ * Chunks may arrive with choices in any order and with any index values. The
+ * assembled choices array is sorted by index. Content deltas are concatenated
+ * in arrival order per index. Tool-call argument deltas are concatenated per
+ * (choice index, tool-call index) pair. The finish_reason and tool_calls id/name
+ * from the last chunk that carries them per choice are used. Usage is taken from
+ * the final chunk that includes a non-null usage object (stream_options.include_usage).
+ */
+async function assembleSseChunks(response: Response): Promise<Record<string, unknown>> {
+  const text = await response.text();
+
+  // Per-choice accumulation state.
+  interface ChoiceState {
+    index: number;
+    role: string;
+    content: string;
+    finish_reason: string | null;
+    // tool_calls keyed by tool-call index
+    toolCalls: Map<number, { id: string; type: string; name: string; arguments: string }>;
+  }
+  const choices = new Map<number, ChoiceState>();
+  let id = '';
+  let model = '';
+  let created = 0;
+  let usage: Record<string, unknown> | null = null;
+
+  const getChoice = (idx: number): ChoiceState => {
+    if (!choices.has(idx)) {
+      choices.set(idx, { index: idx, role: 'assistant', content: '', finish_reason: null, toolCalls: new Map() });
+    }
+    return choices.get(idx)!;
+  };
+
+  for (const line of text.split('\n')) {
+    if (!line.startsWith('data: ')) continue;
+    const payload = line.slice(6).trim();
+    if (payload === '[DONE]') continue;
+    let chunk: Record<string, unknown>;
+    try { chunk = JSON.parse(payload); } catch { continue; }
+
+    if (typeof chunk.id === 'string' && chunk.id) id = chunk.id;
+    if (typeof chunk.model === 'string' && chunk.model) model = chunk.model;
+    if (typeof chunk.created === 'number' && chunk.created) created = chunk.created;
+    if (chunk.usage && typeof chunk.usage === 'object') usage = chunk.usage as Record<string, unknown>;
+
+    const chunkChoices = chunk.choices as Array<Record<string, unknown>> | undefined;
+    if (!Array.isArray(chunkChoices)) continue;
+
+    for (const c of chunkChoices) {
+      const idx = typeof c.index === 'number' ? c.index : 0;
+      const state = getChoice(idx);
+      const delta = c.delta as Record<string, unknown> | undefined;
+      if (!delta) continue;
+
+      if (typeof delta.role === 'string') state.role = delta.role;
+      if (typeof delta.content === 'string') state.content += delta.content;
+      if (typeof c.finish_reason === 'string') state.finish_reason = c.finish_reason;
+
+      const tcDeltas = delta.tool_calls as Array<Record<string, unknown>> | undefined;
+      if (Array.isArray(tcDeltas)) {
+        for (const tc of tcDeltas) {
+          const tcIdx = typeof tc.index === 'number' ? tc.index : 0;
+          if (!state.toolCalls.has(tcIdx)) {
+            state.toolCalls.set(tcIdx, { id: '', type: 'function', name: '', arguments: '' });
+          }
+          const entry = state.toolCalls.get(tcIdx)!;
+          if (typeof tc.id === 'string') entry.id = tc.id;
+          if (typeof tc.type === 'string') entry.type = tc.type;
+          const fn = tc.function as Record<string, unknown> | undefined;
+          if (fn) {
+            if (typeof fn.name === 'string') entry.name += fn.name;
+            if (typeof fn.arguments === 'string') entry.arguments += fn.arguments;
+          }
+        }
+      }
+    }
+  }
+
+  // Build sorted choices array.
+  const sortedChoices = Array.from(choices.values())
+    .sort((a, b) => a.index - b.index)
+    .map(state => {
+      const message: Record<string, unknown> = { role: state.role, content: state.content || null };
+      if (state.toolCalls.size > 0) {
+        message.content = state.content || null;
+        message.tool_calls = Array.from(state.toolCalls.entries())
+          .sort(([a], [b]) => a - b)
+          .map(([, tc]) => ({
+            id: tc.id,
+            type: tc.type,
+            function: { name: tc.name, arguments: tc.arguments },
+          }));
+      }
+      return { index: state.index, message, finish_reason: state.finish_reason };
+    });
+
+  const result: Record<string, unknown> = {
+    id: id || `chatcmpl_${Date.now()}`,
+    object: 'chat.completion',
+    created: created || Math.floor(Date.now() / 1000),
+    model,
+    choices: sortedChoices,
+  };
+  if (usage) result.usage = usage;
+  return result;
 }
 
 /**

@@ -1268,3 +1268,266 @@ describe('engine: nested-path safety (no literal-bracketed keys)', () => {
     assert.deepEqual(body.choices, [{ message: { content: 'real' } }]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tier-2 builtin: assemble_sse_chunks
+// ---------------------------------------------------------------------------
+
+/** Build an SSE Response from a list of chunk objects. */
+function makeSseResponse(chunks: Array<Record<string, unknown>>, status = 200, includeDone = true): Response {
+  const lines: string[] = [];
+  for (const c of chunks) lines.push(`data: ${JSON.stringify(c)}`);
+  if (includeDone) lines.push('data: [DONE]');
+  const body = lines.map(l => `${l}\n\n`).join('');
+  return new Response(body, {
+    status,
+    headers: { 'Content-Type': 'text/event-stream' },
+  });
+}
+
+const ASSEMBLE_SET: TransformSet = {
+  name: 'sse_to_completions',
+  schema: 'openai-completions',
+  after_upstream: { builtins: ['assemble_sse_chunks'] },
+};
+
+describe('Tier-2 builtin: assemble_sse_chunks', () => {
+  it('assembles a single-choice stream into a chat.completion', async () => {
+    const ctx = makeAfterCtx([ASSEMBLE_SET]);
+    const original = makeSseResponse([
+      { id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 1700, model: 'm',
+        choices: [{ index: 0, delta: { role: 'assistant', content: 'Hello' }, finish_reason: null }] },
+      { id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 1700, model: 'm',
+        choices: [{ index: 0, delta: { content: ' world' }, finish_reason: null }] },
+      { id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 1700, model: 'm',
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+    ]);
+    const result = await applyAfterUpstream(original, ctx);
+    assert.equal(result.headers.get('content-type'), 'application/json');
+    const body = await result.json() as Record<string, unknown>;
+    assert.equal(body['object'], 'chat.completion');
+    assert.equal(body['id'], 'chatcmpl-1');
+    assert.equal(body['model'], 'm');
+    assert.equal(body['created'], 1700);
+    const choices = body['choices'] as Array<Record<string, unknown>>;
+    assert.equal(choices.length, 1);
+    assert.equal(choices[0].index, 0);
+    const message = choices[0].message as Record<string, unknown>;
+    assert.equal(message.role, 'assistant');
+    assert.equal(message.content, 'Hello world');
+    assert.equal(choices[0].finish_reason, 'stop');
+  });
+
+  it('assembles n=4 interleaved choices into sorted-index choices array', async () => {
+    // Upstream may emit chunks for different choices in any order.
+    // Here we interleave all 4 choices and assert the assembled output has
+    // choices sorted by index 0,1,2,3 with each choice's content fully concatenated.
+    const ctx = makeAfterCtx([ASSEMBLE_SET]);
+    const original = makeSseResponse([
+      // round 1 — out of order: 2, 0, 3, 1
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 2, delta: { role: 'assistant', content: 'C2-a' }, finish_reason: null }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 0, delta: { role: 'assistant', content: 'C0-a' }, finish_reason: null }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 3, delta: { role: 'assistant', content: 'C3-a' }, finish_reason: null }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 1, delta: { role: 'assistant', content: 'C1-a' }, finish_reason: null }] },
+      // round 2 — different order: 1, 3, 0, 2
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 1, delta: { content: 'C1-b' }, finish_reason: null }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 3, delta: { content: 'C3-b' }, finish_reason: null }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 0, delta: { content: 'C0-b' }, finish_reason: null }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 2, delta: { content: 'C2-b' }, finish_reason: null }] },
+      // finish round — one per choice, in yet another order
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 3, delta: {}, finish_reason: 'stop' }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 2, delta: {}, finish_reason: 'stop' }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 1, delta: {}, finish_reason: 'stop' }] },
+    ]);
+    const result = await applyAfterUpstream(original, ctx);
+    const body = await result.json() as Record<string, unknown>;
+    const choices = body['choices'] as Array<Record<string, unknown>>;
+    assert.equal(choices.length, 4, 'all four choices must be present');
+    // Indexes must be sorted ascending.
+    assert.deepEqual(choices.map(c => c.index), [0, 1, 2, 3]);
+    // Each choice's content was concatenated in arrival order per index.
+    const contents = choices.map(c => (c.message as Record<string, unknown>).content);
+    assert.deepEqual(contents, ['C0-aC0-b', 'C1-aC1-b', 'C2-aC2-b', 'C3-aC3-b']);
+    // All four must carry finish_reason: stop.
+    assert.deepEqual(choices.map(c => c.finish_reason), ['stop', 'stop', 'stop', 'stop']);
+  });
+
+  it('assembles n=5 choices that arrive fully sequential (0,0,1,1,2,2,...)', async () => {
+    // Different upstreams emit choices sequentially rather than interleaved.
+    // The assembler must still produce a sorted choices array.
+    const ctx = makeAfterCtx([ASSEMBLE_SET]);
+    const chunks: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < 5; i++) {
+      chunks.push({ id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: i, delta: { role: 'assistant', content: `r${i}-1` }, finish_reason: null }] });
+      chunks.push({ id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: i, delta: { content: `r${i}-2` }, finish_reason: null }] });
+      chunks.push({ id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: i, delta: {}, finish_reason: 'stop' }] });
+    }
+    const original = makeSseResponse(chunks);
+    const result = await applyAfterUpstream(original, ctx);
+    const body = await result.json() as Record<string, unknown>;
+    const choices = body['choices'] as Array<Record<string, unknown>>;
+    assert.equal(choices.length, 5);
+    assert.deepEqual(choices.map(c => c.index), [0, 1, 2, 3, 4]);
+    assert.deepEqual(
+      choices.map(c => (c.message as Record<string, unknown>).content),
+      ['r0-1r0-2', 'r1-1r1-2', 'r2-1r2-2', 'r3-1r3-2', 'r4-1r4-2'],
+    );
+  });
+
+  it('accumulates tool_calls across chunks per (choice, tool-call) index', async () => {
+    // Choice 0 calls one tool; arguments arrive as two partial JSON deltas.
+    const ctx = makeAfterCtx([ASSEMBLE_SET]);
+    const original = makeSseResponse([
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 0, delta: { role: 'assistant', content: null }, finish_reason: null }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '' } }] }, finish_reason: null }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"city":"' } }] }, finish_reason: null }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '"SF"}' } }] }, finish_reason: null }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+    ]);
+    const result = await applyAfterUpstream(original, ctx);
+    const body = await result.json() as Record<string, unknown>;
+    const choice = (body['choices'] as Array<Record<string, unknown>>)[0];
+    assert.equal(choice.finish_reason, 'tool_calls');
+    const message = choice.message as Record<string, unknown>;
+    const toolCalls = message['tool_calls'] as Array<Record<string, unknown>>;
+    assert.equal(toolCalls.length, 1);
+    const tc = toolCalls[0];
+    assert.equal(tc.id, 'call_1');
+    assert.equal(tc.type, 'function');
+    const fn = tc.function as Record<string, string>;
+    assert.equal(fn.name, 'get_weather');
+    assert.equal(fn.arguments, '{"city":""SF"}');
+  });
+
+  it('forwards usage from the final chunk when present', async () => {
+    const ctx = makeAfterCtx([ASSEMBLE_SET]);
+    const original = makeSseResponse([
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: null }] },
+      // Final chunk with usage and empty choices (stream_options.include_usage shape).
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [], usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 } },
+    ]);
+    const result = await applyAfterUpstream(original, ctx);
+    const body = await result.json() as Record<string, unknown>;
+    assert.deepEqual(body['usage'], { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 });
+  });
+
+  it('sets content to null when only tool_calls are present (no text deltas)', async () => {
+    const ctx = makeAfterCtx([ASSEMBLE_SET]);
+    const original = makeSseResponse([
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'f', arguments: '{}' } }] }, finish_reason: null }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+    ]);
+    const result = await applyAfterUpstream(original, ctx);
+    const body = await result.json() as Record<string, unknown>;
+    const message = (body['choices'] as Array<Record<string, unknown>>)[0].message as Record<string, unknown>;
+    assert.equal(message.content, null);
+    assert.ok(Array.isArray(message['tool_calls']));
+  });
+
+  it('warns and passes through unchanged when content-type is not text/event-stream', async () => {
+    const warnings: string[] = [];
+    const ctx: HookContext = {
+      hook: 'after_upstream',
+      route: makeRoute([ASSEMBLE_SET]),
+      upstreamMode: 'openai-completions',
+      clientModel: 'm',
+      requestId: 'r1',
+      streaming: false,
+      logger: { debug() {}, info() {}, warn(_rid, m) { warnings.push(m); }, error() {} } as any,
+    };
+    // Upstream returned plain JSON despite stream=true being injected.
+    const original = makeJsonResponse({
+      id: 'x', object: 'chat.completion', model: 'm',
+      choices: [{ index: 0, message: { role: 'assistant', content: 'already-json' }, finish_reason: 'stop' }],
+    });
+    const result = await applyAfterUpstream(original, ctx);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /assemble_sse_chunks: expected text\/event-stream/);
+    // Body is passed through unchanged (the normal JSON-ops path runs but
+    // ASSEMBLE_SET declares no ops, so the JSON is identical).
+    const body = await result.json() as Record<string, unknown>;
+    assert.equal(body['object'], 'chat.completion');
+    const choice = (body['choices'] as Array<Record<string, unknown>>)[0];
+    const message = choice.message as Record<string, unknown>;
+    assert.equal(message.content, 'already-json');
+  });
+
+  it('is a no-op when no transform declares assemble_sse_chunks (fast path)', async () => {
+    const set: TransformSet = {
+      name: 'other',
+      schema: 'openai-completions',
+      after_upstream: { ops: [{ op: 'remove', path: 'model' }] },
+    };
+    const ctx = makeAfterCtx([set]);
+    const original = makeSseResponse([
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: null }] },
+    ]);
+    // Without assemble_sse_chunks declared, the SSE body fails JSON.parse and
+    // is passed through verbatim.
+    const result = await applyAfterUpstream(original, ctx);
+    const text = await result.text();
+    assert.ok(text.includes('chat.completion.chunk'));
+    assert.ok(text.includes('[DONE]'));
+  });
+
+  it('combines with another set: max_tokens_rename at before_upstream + assemble at after_upstream', async () => {
+    // Mirror the documented `transforms = "max_tokens_rename,sse_to_completions"` pattern.
+    // max_tokens_rename runs at before_upstream (request body); assemble runs at after_upstream
+    // (response body). They never interact, so the assembly must still produce correct output.
+    const maxTokensRename: TransformSet = {
+      name: 'max_tokens_rename',
+      schema: 'openai-completions',
+      before_upstream: { ops: [{ op: 'rename', path: 'max_tokens', to: 'max_completion_tokens' }] },
+    };
+    const ctx = makeAfterCtx([maxTokensRename, ASSEMBLE_SET]);
+    const original = makeSseResponse([
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 0, delta: { role: 'assistant', content: 'Hi ' }, finish_reason: null }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 0, delta: { content: 'there' }, finish_reason: null }] },
+      { id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm',
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+    ]);
+    const result = await applyAfterUpstream(original, ctx);
+    const body = await result.json() as Record<string, unknown>;
+    assert.equal(body['object'], 'chat.completion');
+    const choice = (body['choices'] as Array<Record<string, unknown>>)[0];
+    const message = choice.message as Record<string, unknown>;
+    assert.equal(message.content, 'Hi there');
+    assert.equal(choice.finish_reason, 'stop');
+  });
+
+  it('produces an empty choices array when the SSE body has no data lines', async () => {
+    const ctx = makeAfterCtx([ASSEMBLE_SET]);
+    const original = makeSseResponse([]);
+    const result = await applyAfterUpstream(original, ctx);
+    const body = await result.json() as Record<string, unknown>;
+    assert.deepEqual(body['choices'], []);
+  });
+});

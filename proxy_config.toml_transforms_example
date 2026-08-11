@@ -1,6 +1,24 @@
 deepseek-v4-comp = {target = "deepseek-v4-flash", base_url = "https://api.deepseek.com", api_key = "sk-***", transforms = "deepseek_v4_comp_compat"}
 deepseek-v4-anth = {target = "deepseek-v4-flash", base_url = "https://api.deepseek.com/anthropic", api_key = "sk-***", mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat"}
 
+# Multiple transforms: comma-separated, applied left-to-right.
+# max_tokens_rename runs at before_upstream (renames max_tokens field).
+# sse_to_completions runs at before_upstream (forces stream=true) and after_upstream
+# (assembles SSE chunks into a single chat.completion response).
+# These two sets operate at different hook points with no overlapping paths — safe to combine.
+#
+# Conflict rules for multi-transform configs:
+#   - Sets touching different hook points or different paths never conflict.
+#   - Two sets that set/rename the same path at the same hook: last one in the CSV wins
+#     (left-to-right fold). Put the set that should win last.
+#   - Never declare assemble_sse_chunks twice across combined sets — the second
+#     invocation would attempt to re-parse the already-assembled JSON as SSE and
+#     produce an empty choices array.
+#   - Never pair sse_to_completions with another set that sets stream=false at
+#     before_upstream — it would undo the forced stream=true. Put sse_to_completions
+#     last so its stream=true takes precedence.
+my-sse-only-model = {target = "actual-model-id", base_url = "https://api.example.com", api_key = "sk-***", transforms = "max_tokens_rename,sse_to_completions"}
+
 
 [transforms.deepseek_v4_comp_compat]
 schema = "openai-completions"
@@ -52,6 +70,20 @@ before_upstream.builtins = ["filter_anthropic_beta"]
 [transforms.bedrock_tool_cache_ttl_compat]
 schema = "anthropic-messages"
 before_upstream.builtins = ["ensure_tool_config_cache_ttl"]
+
+# Assemble upstream SSE stream into a single non-streaming chat.completion response.
+# Use when the upstream only supports streaming (stream=true) but the client sends
+# stream=false. The before_upstream ops force SSE + usage from the upstream; the
+# assemble_sse_chunks builtin buffers all chunks and reconstructs the choices array
+# (sorted by index, supports n>1 with interleaved chunks).
+# Attach to any openai-completions model alias that needs SSE-to-non-SSE assembly.
+[transforms.sse_to_completions]
+schema = "openai-completions"
+before_upstream.ops = [
+  {op = "set", path = "stream",         value = true},
+  {op = "set", path = "stream_options", value = {include_usage = true}},
+]
+after_upstream.builtins = ["assemble_sse_chunks"]
 
 [transform_defaults]
 openai-completions = ["max_tokens_rename"]

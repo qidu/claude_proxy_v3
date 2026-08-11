@@ -111,7 +111,7 @@ export type TransformOp =
   | { op: 'remove';    path: string }
   | { op: 'map_value'; path: string; from: unknown; to: unknown; when_sibling?: string };
 
-export type BuiltinName = 'lowercase_tool_schema_types' | 'recover_tool_message_name' | 'inject_missing_tool_results' | 'filter_anthropic_beta' | 'ensure_tool_config_cache_ttl';
+export type BuiltinName = 'lowercase_tool_schema_types' | 'recover_tool_message_name' | 'inject_missing_tool_results' | 'filter_anthropic_beta' | 'ensure_tool_config_cache_ttl' | 'assemble_sse_chunks';
 
 /** A named transform set declared under [transforms.<name>] */
 export interface TransformSet {
@@ -172,7 +172,7 @@ const SCHEMA_PATHS: Record<TransformSchema, Set<string>> = {
   ]),
 };
 
-const BUILTIN_NAMES: Set<BuiltinName> = new Set(['lowercase_tool_schema_types', 'recover_tool_message_name', 'inject_missing_tool_results', 'filter_anthropic_beta', 'ensure_tool_config_cache_ttl']);
+const BUILTIN_NAMES: Set<BuiltinName> = new Set(['lowercase_tool_schema_types', 'recover_tool_message_name', 'inject_missing_tool_results', 'filter_anthropic_beta', 'ensure_tool_config_cache_ttl', 'assemble_sse_chunks']);
 
 /**
  * Backward-compatible hook name aliases.

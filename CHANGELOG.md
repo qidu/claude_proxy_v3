@@ -5,6 +5,35 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### Feature: `assemble_sse_chunks` builtin — SSE-to-non-SSE assembly for openai-completions
+
+New builtin for the `after_upstream` hook on `openai-completions` routes. When an
+upstream only supports streaming, attach this builtin alongside `before_upstream`
+ops that force `stream=true` and `stream_options.include_usage=true`. The builtin
+reads the SSE stream to completion and assembles all `chat.completion.chunk` events
+into a single `chat.completion` JSON response returned to the client:
+
+- Choices are grouped by `choices[].index` and sorted; supports `n>1` with
+  out-of-order or interleaved chunks
+- Text `content` deltas are concatenated per choice index
+- `tool_calls` argument deltas are concatenated per `(choice index, tool-call index)`
+- `finish_reason` is taken from the last chunk that carries it per choice
+- `usage` is forwarded from the final chunk (requires `stream_options.include_usage`)
+
+Example config (see `proxy_config.toml_transforms_example` for full snippet):
+
+```toml
+my-model = {target = "actual-model-id", base_url = "https://...", api_key = "sk-...", transforms = "sse_to_completions"}
+
+[transforms.sse_to_completions]
+schema = "openai-completions"
+before_upstream.ops = [
+  {op = "set", path = "stream",         value = true},
+  {op = "set", path = "stream_options", value = {include_usage = true}},
+]
+after_upstream.builtins = ["assemble_sse_chunks"]
+```
+
 Newest merged work, reverse-chronological.
 
 ### Tweak: config errors/warnings surface only at idle, not mid-held-message
