@@ -39,7 +39,8 @@ const env: NodeEnv = {
   INTERACTIONS_UPSTREAM_MODE: (process.env.INTERACTIONS_UPSTREAM_MODE as 'native' | 'openai-completions') || 'native',
   GENERATE_CONTENT_UPSTREAM_MODE: (process.env.GENERATE_CONTENT_UPSTREAM_MODE as 'native' | 'openai-completions') || 'native',
   PROXY_CONFIG_PATH: process.env.PROXY_CONFIG_PATH || (process.env.TEST_CONFIG ? `./${process.env.TEST_CONFIG}proxy_config.toml` : './proxy_config.toml'),
-  PROXY_CONFIG_URL: process.env.PROXY_CONFIG_URL,
+  PROXY_CONFIG_CONSUL: process.env.PROXY_CONFIG_CONSUL,
+  PROXY_CONFIG_APOLLO: process.env.PROXY_CONFIG_APOLLO,
   PORT: process.env.PORT || '8788',
   DEV_PASS_THROUGH: process.env.DEV_PASS_THROUGH || 'false',
   DEV_NO_KEY: process.env.DEV_NO_KEY || 'false',
@@ -171,10 +172,10 @@ server.listen(port, '0.0.0.0', async () => {
   if (persistenceEnabled) {
     // Restore token stats from log with a retention window sized to fit the
     // largest configured token-limit duration. Falls back to 30 days when no
-    // local TOML config is available (e.g. PROXY_CONFIG_URL mode).
+    // local TOML config is available (e.g. PROXY_CONFIG_CONSUL / PROXY_CONFIG_APOLLO mode).
     let retentionDays = 30;
     const configPath = env.PROXY_CONFIG_PATH;
-    if (configPath && !env.PROXY_CONFIG_URL) {
+    if (configPath && !env.PROXY_CONFIG_CONSUL && !env.PROXY_CONFIG_APOLLO) {
       try {
         const cfg = loadProxyConfigFromPath(configPath);
         const durationDays = (d: string): number => Math.ceil(getWindowMs(d as '1h' | '1d' | '1w' | '1m') / (24 * 60 * 60 * 1000));
@@ -210,7 +211,7 @@ server.listen(port, '0.0.0.0', async () => {
         if (forceReload) clearProxyConfigCache();
         return loadProxyConfig(env);
       },
-      readOnly: !!env.PROXY_CONFIG_URL,
+      readOnly: !!env.PROXY_CONFIG_CONSUL || !!env.PROXY_CONFIG_APOLLO,
     });
   } else {
     // Non-TUI mode: eagerly load config to validate and show errors in console

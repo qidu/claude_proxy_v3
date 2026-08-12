@@ -8,9 +8,11 @@ import { Env } from '../types/shared.js';
 import { mkdirSync, readFileSync, writeFileSync, renameSync, copyFileSync, existsSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
-import { isInternalHost } from './routing.js';
 import { getPrivacyFilterConfig } from './privacy-filter.js';
 import { resolveImageEncodeConfig, setImageEncodeConfig } from './image-fetch.js';
+import { buildConsulKvUrl, parseConsulConfig } from './consul-loader.js';
+import type { ConsulKvEntry } from './consul-loader.js';
+import { parseApolloFile, fetchApolloConfig } from './apollo-loader.js';
 
 // Check if we're running in Node.js environment
 const isNodeEnvironment = (typeof process !== 'undefined' && process.versions?.node) ||
@@ -1069,13 +1071,6 @@ function parseApiKey(apiKey: string | undefined): string | undefined {
   return apiKey;
 }
 
-type ConsulKvEntry = {
-  Key: string;
-  Value?: string | null;
-};
-
-const CONSUL_CONFIG_PREFIX = 'model-proxy-v3';
-
 function normalizeUpstreamThresholdValue(key: string, rawValue: string | number): string | number {
   if (key !== 'budget_to_effort_low' && key !== 'budget_to_effort_medium' && key !== 'budget_to_effort_high') {
     return rawValue;
@@ -1092,140 +1087,6 @@ function normalizeUpstreamThresholdValue(key: string, rawValue: string | number)
 
   const parsed = Number(numericMatch[0]);
   return Number.isNaN(parsed) ? rawValue : parsed;
-}
-
-function decodeBase64(value: string): string {
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.from(value, 'base64').toString('utf-8');
-  }
-
-  const binary = atob(value);
-  return new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)));
-}
-
-function parseConsulArrayValue(value: string): string[] {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) {
-    return [value];
-  }
-
-  const inner = trimmed.slice(1, -1);
-  const elements: string[] = [];
-  let current = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < inner.length; i++) {
-    const char = inner[i];
-    if (char === '"') {
-      inQuotes = !inQuotes;
-    } else if (char === ',' && !inQuotes) {
-      elements.push(current.trim().replace(/^"|"$/g, ''));
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-
-  if (current.trim()) {
-    elements.push(current.trim().replace(/^"|"$/g, ''));
-  }
-
-  return elements;
-}
-
-function parseConsulScalarValue(value: string): string | number {
-  if (value === '') {
-    return '';
-  }
-
-  const numeric = Number(value);
-  if (!Number.isNaN(numeric) && value.trim() !== '') {
-    return numeric;
-  }
-
-  return value;
-}
-
-function buildConsulKvUrl(baseUrl: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl);
-  } catch {
-    throw new Error(`PROXY_CONFIG_URL is not a valid URL: ${baseUrl}`);
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`PROXY_CONFIG_URL must use http or https, got: ${parsed.protocol}`);
-  }
-  if (!isInternalHost(parsed.hostname)) {
-    throw new Error(`PROXY_CONFIG_URL must point to localhost or a private/LAN address, got: ${parsed.hostname}`);
-  }
-  // Reconstruct from parsed URL to prevent path traversal / injection via the raw string
-  const origin = parsed.origin; // scheme + host + port, no path
-  return `${origin}/v1/kv/${CONSUL_CONFIG_PREFIX}?recurse=true`;
-}
-
-function applyConsulKvEntry(config: ProxyConfig, entry: ConsulKvEntry): void {
-  if (!entry.Value) {
-    return;
-  }
-
-  const relativeKey = entry.Key.startsWith(`${CONSUL_CONFIG_PREFIX}/`)
-    ? entry.Key.slice(CONSUL_CONFIG_PREFIX.length + 1)
-    : entry.Key;
-  const parts = relativeKey.split('/').filter(Boolean);
-  if (parts.length === 0) {
-    return;
-  }
-
-  const rawValue = decodeBase64(entry.Value).trim();
-  const section = parts[0];
-
-  if (section === 'general' && parts.length >= 2) {
-    config.general ??= {};
-    const key = parts.slice(1).join('/');
-    (config.general as any)[key] = parseConsulScalarValue(rawValue);
-    return;
-  }
-
-  if (section === 'default_upstream' && parts.length >= 2) {
-    config.default_upstream ??= {};
-    const key = parts.slice(1).join('/');
-    (config.default_upstream as any)[key] = parseConsulScalarValue(rawValue);
-    return;
-  }
-
-  if (section === 'defaults' && parts.length >= 2) {
-    config.defaults ??= {};
-    const key = parts.slice(1).join('/');
-    (config.defaults as any)[key] = rawValue;
-    return;
-  }
-
-  if (section === 'models' && parts.length >= 3) {
-    config.models ??= {};
-    const categoryName = parts[1];
-    const key = parts.slice(2).join('/');
-    const category = (config.models[categoryName] ??= {});
-
-    if (Array.isArray(category)) {
-      return;
-    }
-
-    if (rawValue.startsWith('[') && rawValue.endsWith(']')) {
-      category[key] = parseConsulArrayValue(rawValue);
-      return;
-    }
-
-    category[key] = rawValue;
-  }
-}
-
-function parseConsulConfig(entries: ConsulKvEntry[]): ProxyConfig {
-  const config: ProxyConfig = {};
-  for (const entry of entries) {
-    applyConsulKvEntry(config, entry);
-  }
-  return config;
 }
 
 function parseCompositeTargetConfig(value: string): CompositeTargetConfig {
@@ -2554,22 +2415,40 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
   }
 
   const configPath = env.PROXY_CONFIG_PATH;
-  const configUrl = env.PROXY_CONFIG_URL;
+  const configConsul = env.PROXY_CONFIG_CONSUL;
+  const configApollo = env.PROXY_CONFIG_APOLLO;
 
-  console.log(`[INFO] Config path: ${configPath}, Config URL: ${configUrl}`);
+  console.log(`[INFO] Config source: apollo=${configApollo ?? '-'}, consul=${configConsul ?? '-'}, path=${configPath ?? '-'}`);
+  if (configApollo) {
+    // No Apollo long-poll / notification subscription: portal changes are
+    // picked up only when /config-reload is called (or the process restarts).
+    console.warn('[WARN] Apollo backend has no live-update notification — call /config-reload after publishing portal changes');
+  }
 
   try {
     let config: ProxyConfig;
 
-    if (configUrl) {
-      const response = await fetch(buildConsulKvUrl(configUrl));
+    if (configApollo) {
+      // Apollo: the named namespace holds the full proxy_config.toml content
+      // as a plain-text value. Node-only — the connection file is read with
+      // fs, so this branch is not available in the Cloudflare Workers build.
+      if (!isNodeEnvironment) {
+        throw new Error('PROXY_CONFIG_APOLLO is not supported in non-Node (Cloudflare Workers) environments');
+      }
+      const fs = await import('fs');
+      const apolloFileContent = fs.readFileSync(configApollo, 'utf-8');
+      const ap = parseApolloFile(apolloFileContent);
+      const toml = await fetchApolloConfig(ap);
+      config = parseSimpleToml(toml);
+    } else if (configConsul) {
+      const response = await fetch(buildConsulKvUrl(configConsul));
       if (!response.ok) {
-        throw new Error(`Failed to fetch config from Consul at ${configUrl}: ${response.status}`);
+        throw new Error(`Failed to fetch config from Consul at ${configConsul}: ${response.status}`);
       }
 
       const kvEntries = (await response.json()) as ConsulKvEntry[];
       if (!Array.isArray(kvEntries)) {
-        throw new Error(`Invalid Consul KV response from ${configUrl}`);
+        throw new Error(`Invalid Consul KV response from ${configConsul}`);
       }
       config = parseConsulConfig(kvEntries);
       const validation = validateProxyConfig(config);

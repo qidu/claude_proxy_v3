@@ -667,7 +667,8 @@ export default {
 
     // Load proxy config on first request
     const configPath = env.PROXY_CONFIG_PATH;
-    const configUrl = env.PROXY_CONFIG_URL;
+    const configConsul = env.PROXY_CONFIG_CONSUL;
+    const configApollo = env.PROXY_CONFIG_APOLLO;
 
     // Admin endpoints are restricted to loopback connections only.
     // server.ts injects the real socket address as x-client-address.
@@ -685,10 +686,10 @@ export default {
     }
 
     if (path === '/config-reload') {
-      logger.debug(requestId, `${path} Config path: ${configPath}, Config URL: ${configUrl}`);
+      logger.debug(requestId, `${path} Config path: ${configPath}, Consul: ${configConsul}, Apollo: ${configApollo}`);
       try {
-        if (!env.PROXY_CONFIG_URL) {
-          throw new Error('proxy config url is not set.');
+        if (!env.PROXY_CONFIG_CONSUL && !env.PROXY_CONFIG_APOLLO) {
+          throw new Error('no remote config source is set (PROXY_CONFIG_CONSUL or PROXY_CONFIG_APOLLO).');
         }
 
         clearProxyConfigCache();

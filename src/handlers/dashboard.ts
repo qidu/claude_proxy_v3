@@ -58,12 +58,12 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 function isDashboardReadOnly(env: Env): boolean {
-  return !!env.PROXY_CONFIG_URL;
+  return !!env.PROXY_CONFIG_CONSUL || !!env.PROXY_CONFIG_APOLLO;
 }
 
 function getConfigPathForWrite(env: Env): string {
   if (isDashboardReadOnly(env)) {
-    throw new Error('Dashboard config editing is disabled when PROXY_CONFIG_URL is configured');
+    throw new Error('Dashboard config editing is disabled when PROXY_CONFIG_CONSUL or PROXY_CONFIG_APOLLO is configured');
   }
 
   if (!env.PROXY_CONFIG_PATH) {
@@ -2463,7 +2463,7 @@ export function handleDashboardPage(env: Env): Response {
 
       async function saveConfig() {
         if (isReadOnly) {
-          configStatus.textContent = 'Read-only mode: config source is PROXY_CONFIG_URL';
+          configStatus.textContent = 'Read-only mode: config source is PROXY_CONFIG_CONSUL or PROXY_CONFIG_APOLLO';
           return;
         }
 

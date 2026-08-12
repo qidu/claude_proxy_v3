@@ -19,7 +19,7 @@ services:
       PORT: "8788"
       LOG_LEVEL: info
       # If you prefer remote config over the file mount, set:
-      # PROXY_CONFIG_URL: https://consul.internal/v1/kv/proxy/config.toml
+      # PROXY_CONFIG_CONSUL: http://consul.internal:8500
       LOCAL_TIKTOKEN: "true"
       TIKTOKEN_MODEL: o200k_base
       ALLOWED_HOSTS: "127.0.0.1,localhost,nginx"

@@ -347,7 +347,7 @@ On startup, the proxy avoids double-counting persisted stats as follows:
 | `POST /v1/embeddings` | Embeddings (proxied to an OpenAI-compatible upstream) |
 | `GET /v1/models` | List available models (no auth required) |
 | `GET /dashboard` | Web dashboard for config + stats |
-| `GET /config-reload` | Reload config from `PROXY_CONFIG_URL`. Only meaningful when a remote config URL is set; returns `400`/`500` otherwise. Clears the config cache and re-fetches. |
+| `GET /config-reload` | Reload config from `PROXY_CONFIG_CONSUL` or `PROXY_CONFIG_APOLLO`. Only meaningful when a remote config source is set; returns `400`/`500` otherwise. Clears the config cache and re-fetches. |
 | `GET /health` (also `GET /`) | Health check. Probes the resolved default-category / `[default_upstream]` upstream `/v1/models`; returns `{status:"ok", models, cached, version}` on success or `404` when no models are reachable. No auth required. |
 | `GET /favicon.ico` | Returns `204 No Content` (browser plumbing). |
 | `/{protocol}/{host}/...` dynamic route | Per-request upstream override. See [Dynamic routing](#dynamic-routing) below. |
@@ -1207,10 +1207,57 @@ is rewritten before the upstream fetch to append a placeholder `tool_result`:
 
 **Config source**
 
+The proxy loads its config from one of three backends. When more than one is
+set, precedence is **Apollo > Consul > Path**. Setting any remote backend
+(Apollo or Consul) makes the dashboard read-only; reload config with
+`GET /config-reload`.
+
+**No live-update from remote backends.** Neither Apollo nor Consul pushes
+change notifications to the proxy — after editing/publishing in the portal
+(or Consul KV), you must call `GET /config-reload` (or restart) for the change
+to take effect. The proxy logs a `[WARN]` reminder at startup when Apollo is
+active.
+
 | Variable | Default | Purpose |
 |---|---|---|
-| `PROXY_CONFIG_PATH` | `./proxy_config.toml` | Path to the local config file |
-| `PROXY_CONFIG_URL` | unset | Remote/Consul config URL (read-only dashboard when set) |
+| `PROXY_CONFIG_PATH` | `./proxy_config.toml` | Path to the local TOML config file |
+| `PROXY_CONFIG_CONSUL` | unset | Consul meta URL (e.g. `http://127.0.0.1:8500`); reads KV under the `model-proxy-v3/` prefix recursively. Host must be loopback or private/LAN (SSRF guard). Read-only dashboard. |
+| `PROXY_CONFIG_APOLLO` | unset | Path to an [Apollo](https://www.apolloconfig.com/) connection file (see below). The named Apollo namespace holds the full `proxy_config.toml` content as a plain-text value. Read-only dashboard. Node-only. |
+
+**Apollo connection file** (`PROXY_CONFIG_APOLLO` points here). All fields are required:
+
+| Field | Purpose |
+|---|---|
+| `app_id` | Apollo application id |
+| `cluster` | Apollo cluster name (commonly `default`) |
+| `namespace` | Namespace name; non-properties namespaces carry their format suffix (e.g. `application.json`) |
+| `meta` | Apollo Config Service base URL |
+| `access_key_secret` | Plaintext HMAC-SHA1 key — **not** the `enc:...` Portal storage form; decode `enc:` externally first (see below, that is same with 3 sdk of apollo) |
+
+```
+apollo:
+app_id = "proxyv3"
+cluster = "default"
+namespace = "test"
+meta = "https://test-apollo-config.example.com"
+access_key_secret = "<plaintext HMAC-SHA1 key>"
+```
+
+- The proxy reads the namespace via
+  `GET {meta}/configs/{app_id}/{cluster}/{namespace}` and feeds the
+  `configurations` payload through the same `parseSimpleToml()` + validation
+  pipeline as the local file.
+- `access_key_secret` is the **plaintext HMAC-SHA1 key**. It is never sent
+  directly. Each request is signed:
+  `Authorization: Apollo <app_id>:<base64(HMAC-SHA1(secret, "<ts>\n<path?query>"))>`
+  with a `Timestamp` header. The `enc:...` wrapper is a Portal storage-layer
+  format and is not handled here — if your key is stored encrypted at rest,
+  decrypt it before writing it to this file.
+- Unlike `PROXY_CONFIG_CONSUL`, the Apollo `meta` host is **not** restricted to
+  private/LAN addresses — Apollo meta servers are typically public. Only point
+  `meta` at an Apollo instance you trust.
+- Node-only: the connection file is read with `fs`, so this backend is not
+  available in the Cloudflare Workers build.
 
 **Token counting & upstream**
 
@@ -1299,7 +1346,7 @@ The `hash_min_len` and `entropy_threshold` knobs are also accepted by the Python
 | `IMAGE_ENCODE_URL` | unset | Sidecar base URL for fetching + base64-encoding caller-supplied image URLs. Unset = in-process fetch. Must be localhost / private LAN. |
 | `IMAGE_ENCODE_TIMEOUT_MS` | `40000` | Per-call timeout to the image-encode sidecar (distinct from `PRIVACY_FILTER_TIMEOUT_MS` / `KOMPRESS_TIMEOUT_MS`). |
 
-The full list (including the Consul-backed config and hardcoded upstream-mode defaults)
+The full list (including the Consul- and Apollo-backed config and hardcoded upstream-mode defaults)
 is documented in [`docs/README_DETAILS.md`](./docs/README_DETAILS.md).
 
 ## Testing

@@ -22,7 +22,7 @@ It also supports models composite, alias, fusion, compress, and models, tokens, 
   - `POST /v1/embeddings` - Generate embeddings (proxied to upstream OpenAI-compatible API)
   - `GET /dashboard` - Web dashboard for config and runtime statistics
   - `GET /dashboard/api/config` - Read sanitized editable config (`models.*`, `composite`; hides `api_key`). Add `?reload=1` to clear the in-memory config cache and re-read the config file first (used by the dashboard "Reload" button and the TUI `r` key, so externally edited config — e.g. new models — shows up without restarting)
-  - `PUT /dashboard/api/config` - Save dashboard config edits, persist them, and reload the updated config back into `/dashboard` and the TUI (file mode only; read-only when `PROXY_CONFIG_URL` is set)
+  - `PUT /dashboard/api/config` - Save dashboard config edits, persist them, and reload the updated config back into `/dashboard` and the TUI (file mode only; read-only when `PROXY_CONFIG_CONSUL` or `PROXY_CONFIG_APOLLO` is set)
   - `GET /dashboard/api/stats/models` - Model request + token stats
   - Dashboard "Export CSV" button reads table data from the DOM and triggers a download; it does **not** change the in-memory stats data.
   - `GET /dashboard/api/stats/agents` - Combined tool usage stats by tool (`in requests` is aggregated across UA prefixes; `in responses` is by tool)
@@ -305,7 +305,7 @@ The TUI displays fusion targets with `role:weight` instead of the usual `share P
 
 #### Consul-backed config
 
-`PROXY_CONFIG_URL` can point to a Consul server address, and the proxy will read the KV prefix `model-proxy-v3/`.
+`PROXY_CONFIG_CONSUL` can point to a Consul server address, and the proxy will read the KV prefix `model-proxy-v3/`.
 
 **Notice**: `wrangler.toml` vars are loaded by Wrangler/Cloudflare at runtime. The Node server (`npm run server` / `dist/server.js`) uses process environment variables instead.
 
@@ -313,7 +313,7 @@ Example:
 
 ```toml
 # wrangler.toml
-PROXY_CONFIG_URL = "http://localhost:8500"
+PROXY_CONFIG_CONSUL = "http://localhost:8500"
 ```
 
 Put config into Consul KV using the `model-proxy-v3/` prefix:
@@ -1133,11 +1133,11 @@ The proxy includes a built-in web dashboard for config editing and runtime stats
 - `GET /dashboard/api/config`
   - Returns sanitized config for dashboard editing (`models.*`, `composite`)
   - `api_key` values are never returned
-  - Includes `read_only: true` when `PROXY_CONFIG_URL` is configured
+  - Includes `read_only: true` when `PROXY_CONFIG_CONSUL` or `PROXY_CONFIG_APOLLO` is configured
 - `PUT /dashboard/api/config`
   - Applies dashboard edits to local `proxy_config.toml`
   - Available only when using file config mode
-  - Read-only/disabled when `PROXY_CONFIG_URL` is configured
+  - Read-only/disabled when `PROXY_CONFIG_CONSUL` or `PROXY_CONFIG_APOLLO` is configured
 
 **Stats APIs**:
 - `GET /dashboard/api/stats/models`
@@ -1214,7 +1214,7 @@ All configuration is driven through `wrangler.toml` `[vars]`. When running via t
 # File mode:
 PROXY_CONFIG_PATH = "./proxy_config.toml"
 # Consul mode (comment out PROXY_CONFIG_PATH):
-# PROXY_CONFIG_URL = "http://localhost:8500"
+# PROXY_CONFIG_CONSUL = "http://localhost:8500"
 
 # ─── Optional ───────────────────────────────────────────────────────────────────
 
@@ -1324,7 +1324,8 @@ node dist/server.js
 | `INTERACTIONS_UPSTREAM_MODE` | — (hardcoded) | `"native"` |
 | `GENERATE_CONTENT_UPSTREAM_MODE` | — (hardcoded) | `"native"` |
 | `PROXY_CONFIG_PATH` | `PROXY_CONFIG_PATH` | `"./proxy_config.toml"` |
-| `PROXY_CONFIG_URL` | `PROXY_CONFIG_URL` | unset |
+| `PROXY_CONFIG_CONSUL` | `PROXY_CONFIG_CONSUL` | unset |
+| `PROXY_CONFIG_APOLLO` | `PROXY_CONFIG_APOLLO` | unset |
 | `PORT` | — (Node.js only) | `"8788"` |
 | `DEV_PASS_THROUGH` | `DEV_PASS_THROUGH` | `"false"` |
 | `DEFAULT_MAX_TOKENS` | `DEFAULT_MAX_TOKENS` | unset |
@@ -1728,10 +1729,11 @@ deepseek-v4-flash = {base_url = "https://api.deepseek.com", api_key = "sk-..."}
 
 ### Configuration Loading
 
-The proxy supports two config sources:
+The proxy supports three config sources (precedence: Apollo > Consul > Path):
 
 1. **Local File**: `PROXY_CONFIG_PATH=./proxy_config.toml`
-2. **Remote URL**: `PROXY_CONFIG_URL=http://eureka-server/config/proxy_config.toml`
+2. **Consul KV**: `PROXY_CONFIG_CONSUL=http://localhost:8500` (reads KV prefix `model-proxy-v3/`)
+3. **Apollo**: `PROXY_CONFIG_APOLLO=/path/to/apollo.toml` (namespace holds the full TOML; see [README.md](../README.md#config-source))
 
 Config is loaded on startup and validated against the schema. Errors are printed to console (`[ERROR]`) and surfaced in the TUI status bar and dashboard status indicator.
 

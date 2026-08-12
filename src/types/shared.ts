@@ -93,12 +93,22 @@ export interface Env {
     GENERATE_CONTENT_UPSTREAM_MODE?: 'native' | 'openai-completions';
 
     /**
-     * Proxy config file path or URL.
+     * Proxy config file path (local TOML).
      * Path: "./proxy_config.toml"
-     * URL: "http://eureka-server/config/proxy_config.toml"
      */
     PROXY_CONFIG_PATH?: string;
-    PROXY_CONFIG_URL?: string;
+    /**
+     * Consul meta URL for remote KV config (read-only dashboard when set).
+     * e.g. "http://127.0.0.1:8500" — host must be loopback or private/LAN.
+     */
+    PROXY_CONFIG_CONSUL?: string;
+    /**
+     * Path to an Apollo connection file describing { app_id, cluster,
+     * namespace, meta, access_key_secret }. The named Apollo namespace holds
+     * the full proxy_config.toml content. Read-only dashboard when set.
+     * Node-only (not available in the Cloudflare Workers build).
+     */
+    PROXY_CONFIG_APOLLO?: string;
 
     /**
      * Node server port used for local TUI test requests.

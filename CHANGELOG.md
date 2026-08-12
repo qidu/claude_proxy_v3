@@ -5,6 +5,67 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### Feature: Apollo config backend (`PROXY_CONFIG_APOLLO`)
+
+Added [Apollo](https://www.apolloconfig.com/) (apolloconfig/apollo) as a third
+config source alongside the local TOML file and Consul. One Apollo namespace
+holds the *entire* `proxy_config.toml` content as a plain-text value; the
+proxy fetches it via `GET {meta}/configs/{app_id}/{cluster}/{namespace}` and
+runs it through the existing `parseSimpleToml()` + validation pipeline — no
+Apollo SDK, no live-reload long-poll. Reload is on-demand via `/config-reload`,
+the same model Consul uses.
+
+`PROXY_CONFIG_APOLLO` points at a connection file:
+
+```
+apollo:
+app_id = "proxyv3"
+cluster = "default"
+namespace = "test"
+meta = "https://test-apollo-config.example.com"
+access_key_secret = "<plaintext HMAC-SHA1 key>"
+```
+
+`access_key_secret` is the **plaintext HMAC-SHA1 key**. It is never sent
+directly; each request is signed as `Authorization: Apollo
+<app_id>:<base64(HMAC-SHA1(secret, "<timestamp>\n<path?query>"))>` with a
+`Timestamp` header. The `enc:...` wrapper is a Portal storage-layer format and
+is not handled here — if a deployment stores the key encrypted at rest, it must
+be decrypted before being written to the connection file.
+
+The Apollo `meta` host is **not** restricted to private/LAN addresses (unlike
+Consul) — point it only at an Apollo instance you trust. Node-only: the
+connection file is read with `fs`, so this backend is unavailable in the
+Cloudflare Workers build.
+
+Backend precedence when more than one is set: **Apollo > Consul > Path**.
+
+**No live-update notifications.** The proxy does not subscribe to Apollo's
+`notifications/v2` long-poll (nor Consul watches). After publishing a change
+in the portal, call `GET /config-reload` (or restart) for it to take effect.
+The proxy emits a `[WARN]` startup reminder when the Apollo backend is active.
+
+### Refactor: Consul KV loader extracted to `src/utils/consul-loader.ts`
+
+Moved `ConsulKvEntry`, `buildConsulKvUrl`, `parseConsulConfig`, and their
+helpers (`decodeBase64`, `parseConsulArrayValue`, `parseConsulScalarValue`,
+`applyConsulKvEntry`) out of `config-loader.ts` into a standalone module.
+No behavior change. `config-loader.ts` now imports these via
+`./consul-loader.js`.
+
+### Breaking: `PROXY_CONFIG_URL` renamed to `PROXY_CONFIG_CONSUL`
+
+The Consul-backend discriminator env var has been renamed to make room for the
+Apollo backend. Update your environment:
+
+```
+- PROXY_CONFIG_URL=http://127.0.0.1:8500
++ PROXY_CONFIG_CONSUL=http://127.0.0.1:8500
+```
+
+No backward-compat alias is provided. The Consul host SSRF guard (loopback /
+private-LAN only) is unchanged.
+
 ### Feature: `assemble_sse_chunks` builtin — SSE-to-non-SSE assembly for openai-completions
 
 New builtin for the `after_upstream` hook on `openai-completions` routes. When an
