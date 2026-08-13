@@ -90,6 +90,6 @@ If you want them to differ (different key for Bearer vs x-api-key on
   unconditional and does not interact with `try_files` / rewriting).
 - `/v1/models/` (trailing slash, a sub-resource) returns 404 — fail-closed.
   Only the bare `/v1/models` and `/v1/models?...` are exempt.
-- This is **complementary** to `auth_url` in `proxy_config.toml`. You can
+- This is **complementary** to `auth_server` in `proxy_config.toml`. You can
   run both; nginx does the cheap key check, the Worker still calls your
-  `auth_url` sidecar for non-exempt paths if configured.
+  `auth_server` sidecar for non-exempt paths if configured.

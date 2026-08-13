@@ -580,7 +580,7 @@ export function addForwardedHeaders(authHeaders: Record<string, string>, request
  *
  * Distinct from {@link addForwardedHeaders}: that one targets upstream provider
  * calls (Claude/OpenAI/Gemini) and only carries `x-forwarded-for`; this one is
- * for the auth_url / record_url sidecars where both headers are expected.
+ * for the auth_server / record_server sidecars where both headers are expected.
  */
 export function getSidecarForwardedHeaders(request: Request): Record<string, string> {
   const clientIp = getClientIp(request);

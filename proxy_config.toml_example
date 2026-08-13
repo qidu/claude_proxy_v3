@@ -8,27 +8,37 @@
 # If omitted or empty, dashboard APIs remain loopback-only.
 api_key = "test"
 
-[model_usage]
+[remote.authentication]
+# Optional: remote auth sidecar. Proxy forwards client auth headers (Authorization,
+# x-api-key, x-goog-api-key) plus User-Agent to this URL (GET, follows 301/302).
+# HTTP 200 = success; any 4xx/5xx = 401 to the client; network error = 503.
+# If unset, the proxy only checks that at least one auth header is present.
+# auth_server = "https://auth.example.com/validate"
+# auth_with_model: defer auth until after the request body is parsed; forward
+# the requested model id as x-resource-for header. Default: false.
+# auth_with_model = false
+# auth_with_body: defer auth until after the request body is parsed; POST the
+# entire parsed request body (raw JSON) to the auth server. Method switches
+# GET → POST. Either auth_with_model or auth_with_body triggers the deferred
+# path. On routes with no body, auth_with_body sends no body. Default: false.
+# auth_with_body = false
+# auth_passthrough_with: controls which key is forwarded to the upstream provider
+# (not the auth sidecar). "user_key" (default): forward client's key; "config_key": use configured api_key.
+# auth_passthrough_with = "user_key"
+
+[remote.recording]
 # Optional: POST per-request model usage records to an HTTP collector.
-# Payload includes request_id, endpoint, raw user_key, model, and token usage
-# counters: input/cached/cache_written/output/total.
-# record_url = "http://127.0.0.1:8080/model-usage"
+# Payload includes request_id, endpoint, raw user_key, model, response_status,
+# and token usage counters: input/cached/cache_written/output/total.
+# Non-2xx upstream responses are recorded with zero token counters.
+# record_server = "http://127.0.0.1:8080/model-usage"
+# record_response_body: when true, each usage record also includes the
+# constructed response_body (parsed JSON for non-streaming; accumulated raw SSE
+# text for streaming). Sent raw (not base64). Default: false (field omitted).
+# record_response_body = false
 
 [general]
-# auth_url: if set, proxy forwards the request auth headers used by proxy API
-# endpoints (Authorization, x-api-key, x-goog-api-key) plus User-Agent to this
-# URL (GET, follows 301/302). HTTP 200 = success; any 4xx/5xx = 401 to the
-# client; network error = 503. If unset, the proxy only checks that at least
-# one auth header is present.
-# auth_url = "https://auth.example.com/validate"
-# auth_with_model: when true, the auth call is deferred until after the request
-# body is parsed, and the requested model id is forwarded as x-resource-for
-# header to the auth server. Allows the auth server to make per-model decisions.
-# Default: false (auth runs before body parsing, no x-resource-for header).
-# auth_with_model = false
-# auth_passthrough_with is separate from auth_url/auth_with_model: it only controls
-# which key is passed to the upstream provider, not the remote auth sidecar server.
-# auth_passthrough_with = "user_key"  # "user_key" (default): forward client's key; "config_key": use configured api_key
+# auth_passthrough_with is now under [remote.authentication] (see above).
 budget_to_effort_low = 32768
 budget_to_effort_medium = 65536
 budget_to_effort_high = 128000

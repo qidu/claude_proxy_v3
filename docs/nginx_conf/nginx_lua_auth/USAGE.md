@@ -58,7 +58,7 @@ changes.
 ## What it enforces
 
 - Reads `Authorization: Bearer <key>`, `x-api-key`, or `x-goog-api-key`
-  (same headers the Worker forwards to its `auth_url` sidecar).
+  (same headers the Worker forwards to its `auth_server` sidecar).
 - A path requires auth unless it is in `EXEMPT_PREFIXES` in `auth.lua`
   (`/health`, `/dashboard`). Everything else — `/v1/messages`,
   `/v1/responses`, `/v1/chat/completions`, `/v1/embeddings`, `/v1/models`,
@@ -90,8 +90,8 @@ if a reload fails, it keeps the previously cached set and logs an error
 - Constant-time-ish lookup: keys are stored in a shared dict and probed by
   hash, not by per-character comparison. The dict is shared across workers,
   so there's no per-worker key list whose presence/absence leaks via timing.
-- This gate is **complementary** to `auth_url` in `proxy_config.toml`. You
+- This gate is **complementary** to `auth_server` in `proxy_config.toml`. You
   can run both: nginx does the cheap key check, the Worker still calls your
-  `auth_url` for per-model policy via `x-resource-for` if configured. If you
-  only want one, set `auth_url` to empty in the config and rely on this Lua
+  `auth_server` for per-model policy via `x-resource-for` if configured. If you
+  only want one, set `auth_server` to empty in the config and rely on this Lua
   gate alone.

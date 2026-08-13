@@ -20,14 +20,23 @@ const isNodeEnvironment = (typeof process !== 'undefined' && process.versions?.n
 
 export interface ProxyConfig {
   general?: {
-    auth_url?: string;
-    auth_with_model?: boolean;
-    auth_passthrough_with?: 'user_key' | 'config_key';
     budget_to_effort_low?: number | string;
     budget_to_effort_medium?: number | string;
     budget_to_effort_high?: number | string;
     global_token_limit?: string;
     week_start_day?: 'monday' | 'sunday';
+  };
+  remote?: {
+    authentication?: {
+      auth_server?: string;
+      auth_with_model?: boolean;
+      auth_with_body?: boolean;
+      auth_passthrough_with?: 'user_key' | 'config_key';
+    };
+    recording?: {
+      record_server?: string;
+      record_response_body?: boolean;
+    };
   };
   default_upstream?: {
     upstream_mode?: string;
@@ -44,9 +53,6 @@ export interface ProxyConfig {
   };
   dashboard?: {
     api_key?: string;
-  };
-  model_usage?: {
-    record_url?: string;
   };
   /**
    * Privacy filter plugin configuration. When omitted, the plugin is inert
@@ -2230,9 +2236,15 @@ export function serializeProxyConfigToml(config: ProxyConfig): string {
     lines.push('');
   }
 
-  if (config.model_usage) {
-    lines.push('[model_usage]');
-    lines.push(...serializeTomlSection(config.model_usage as Record<string, unknown>));
+  if (config.remote?.authentication) {
+    lines.push('[remote.authentication]');
+    lines.push(...serializeTomlSection(config.remote.authentication as Record<string, unknown>));
+    lines.push('');
+  }
+
+  if (config.remote?.recording) {
+    lines.push('[remote.recording]');
+    lines.push(...serializeTomlSection(config.remote.recording as Record<string, unknown>));
     lines.push('');
   }
 
@@ -2617,10 +2629,15 @@ export function parseSimpleToml(content: string): ProxyConfig {
         currentSection = 'dashboard';
         currentCategory = null;
         config.dashboard = {};
-      } else if (parts[0] === 'model_usage') {
-        currentSection = 'model_usage';
-        currentCategory = null;
-        config.model_usage = {};
+      } else if (parts[0] === 'remote' && (parts[1] === 'authentication' || parts[1] === 'recording')) {
+        currentSection = 'remote';
+        currentCategory = parts[1];
+        if (!config.remote) config.remote = {};
+        if (currentCategory === 'authentication') {
+          config.remote.authentication = {};
+        } else {
+          config.remote.recording = {};
+        }
       } else if (parts[0] === 'privacy_filter') {
         currentSection = 'privacy_filter';
         currentCategory = null;
@@ -2660,12 +2677,22 @@ export function parseSimpleToml(content: string): ProxyConfig {
       seenKeys.add(seenKeyId);
 
       if (currentSection === 'general' && config.general) {
-        if (cleanKey === 'auth_url' || cleanKey === 'global_token_limit' || cleanKey === 'auth_passthrough_with') {
+        if (cleanKey === 'global_token_limit') {
           (config.general as any)[cleanKey] = value;
-        } else if (cleanKey === 'auth_with_model') {
-          (config.general as any)[cleanKey] = value === 'true';
         } else if (cleanKey === 'week_start_day') {
           (config.general as any)[cleanKey] = value === 'sunday' ? 'sunday' : 'monday';
+        }
+      } else if (currentSection === 'remote' && currentCategory === 'authentication' && config.remote?.authentication) {
+        if (cleanKey === 'auth_server' || cleanKey === 'auth_passthrough_with') {
+          (config.remote.authentication as any)[cleanKey] = value;
+        } else if (cleanKey === 'auth_with_model' || cleanKey === 'auth_with_body') {
+          (config.remote.authentication as any)[cleanKey] = value === 'true';
+        }
+      } else if (currentSection === 'remote' && currentCategory === 'recording' && config.remote?.recording) {
+        if (cleanKey === 'record_server') {
+          config.remote.recording.record_server = value;
+        } else if (cleanKey === 'record_response_body') {
+          config.remote.recording.record_response_body = value === 'true';
         }
       } else if (currentSection === 'default_upstream' && config.default_upstream) {
         (config.default_upstream as any)[cleanKey] = normalizeUpstreamThresholdValue(cleanKey, value);
@@ -2680,8 +2707,6 @@ export function parseSimpleToml(content: string): ProxyConfig {
         (config.defaults as any)[cleanKey] = value;
       } else if (currentSection === 'dashboard' && config.dashboard && cleanKey === 'api_key') {
         config.dashboard.api_key = value;
-      } else if (currentSection === 'model_usage' && config.model_usage && cleanKey === 'record_url') {
-        config.model_usage.record_url = value;
       } else if (currentSection === 'privacy_filter' && config.privacy_filter) {
         // filter_mode, filter_url, whitelist_file are stored as strings;
         // numeric thresholds are coerced in the unquoted branch below.
@@ -2961,6 +2986,18 @@ export function parseSimpleToml(content: string): ProxyConfig {
           config.fetch.timeout_ms = cleanValueAny;
         } else if (cleanKey === 'image_encode' && typeof cleanValueAny === 'string') {
           config.fetch.image_encode = cleanValueAny;
+        }
+      } else if (currentSection === 'remote' && currentCategory === 'recording' && config.remote?.recording) {
+        if (cleanKey === 'record_server' && typeof cleanValueAny === 'string') {
+          config.remote.recording.record_server = cleanValueAny;
+        } else if (cleanKey === 'record_response_body' && typeof cleanValueAny === 'boolean') {
+          config.remote.recording.record_response_body = cleanValueAny;
+        }
+      } else if (currentSection === 'remote' && currentCategory === 'authentication' && config.remote?.authentication) {
+        if ((cleanKey === 'auth_with_model' || cleanKey === 'auth_with_body') && typeof cleanValueAny === 'boolean') {
+          (config.remote.authentication as any)[cleanKey] = cleanValueAny;
+        } else if (cleanKey === 'auth_server' || cleanKey === 'auth_passthrough_with') {
+          (config.remote.authentication as any)[cleanKey] = cleanValueAny;
         }
       }
       continue;

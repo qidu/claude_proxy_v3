@@ -894,7 +894,7 @@ export default {
       // for model API requests. Health/dashboard/admin paths above are exempt.
       // /v1/models is also exempt: model listing/discovery must work without a
       // credential so SDKs can enumerate. DEV_NO_KEY disables only this
-      // presence check; auth_url still applies for non-exempt paths.
+      // presence check; auth_server still applies for non-exempt paths.
       const isModelsListPath = path === '/v1/models' || path.startsWith('/v1/models?');
       const authHeader = request.headers.get('authorization');
       const xApiKey = request.headers.get('x-api-key');
@@ -912,18 +912,22 @@ export default {
         );
       }
 
-      // If auth_url is configured, validate the client's auth headers against it.
+      // If auth_server is configured, validate the client's auth headers against it.
       // When auth_with_model is true, defer the auth call until after body parsing
       // so the requested model id can be forwarded as x-resource-for.
       // Skipped for /v1/models (exempt from auth entirely).
-      const authUrl = isModelsListPath ? '' : (proxyConfig.general?.auth_url?.trim() ?? '');
-      const authWithModel = proxyConfig.general?.auth_with_model === true;
-      let modelUsageAccessToken: string | undefined;
-      // Client-IP forwarding headers for the auth_url / record_url sidecars.
+      const authUrl = isModelsListPath ? '' : (proxyConfig.remote?.authentication?.auth_server?.trim() ?? '');
+      const authWithModel = proxyConfig.remote?.authentication?.auth_with_model === true;
+      const authWithBody = proxyConfig.remote?.authentication?.auth_with_body === true;
+      let modelUsageOneTimeAuthCode: string | undefined;
+      // Client-IP forwarding headers for the auth_server / record_server sidecars.
       // Computed early so it is in scope for doAuthRequest (which may run now
       // when auth_with_model = false) and for the later stats record calls.
       const sidecarForwardedHeaders = getSidecarForwardedHeaders(request);
-      const doAuthRequest = async (modelNameForAuth?: string): Promise<Response | null> => {
+      const doAuthRequest = async (
+        modelNameForAuth?: string,
+        bodyTextForAuth?: string,
+      ): Promise<Response | null> => {
         if (!authUrl) return null;
         const authForwardHeaders: Record<string, string> = {};
         if (authHeader) authForwardHeaders['Authorization'] = authHeader;
@@ -936,15 +940,23 @@ export default {
         if (modelNameForAuth) authForwardHeaders['x-resource-for'] = modelNameForAuth;
         Object.assign(authForwardHeaders, sidecarForwardedHeaders);
 
+        // When auth_with_body is set, forward the entire parsed request body
+        // to the auth sidecar as the POST body (raw JSON, no base64). This
+        // requires the body to already be parsed, so it only fires on the
+        // deferred (post-parse) auth path.
+        const sendBody = authWithBody && typeof bodyTextForAuth === 'string';
+        if (sendBody) authForwardHeaders['Content-Type'] = 'application/json';
+
         let authStatus: number;
         try {
           const authResp = await fetch(authUrl, {
-            method: 'GET',
+            method: sendBody ? 'POST' : 'GET',
             headers: authForwardHeaders,
+            body: sendBody ? bodyTextForAuth : undefined,
             redirect: 'follow',
           });
           authStatus = authResp.status;
-          modelUsageAccessToken = authResp.headers.get('access_token') || undefined;
+          modelUsageOneTimeAuthCode = authResp.headers.get('one_time_auth_code') || undefined;
         } catch (err) {
           logger.warn(requestId, `Auth URL fetch failed: ${(err as Error).message}`);
           return createErrorResponse(new Error('Authentication service unavailable.'), requestId, 503);
@@ -957,12 +969,14 @@ export default {
         return null;
       };
 
-      if (authUrl && !authWithModel) {
+      // Early auth runs only when neither auth_with_model nor auth_with_body is
+      // set — both require the body to be parsed first, so they defer auth.
+      if (authUrl && !authWithModel && !authWithBody) {
         const authError = await doAuthRequest();
         if (authError) return authError;
       }
 
-      const useConfigKey = proxyConfig.general?.auth_passthrough_with === 'config_key';
+      const useConfigKey = proxyConfig.remote?.authentication?.auth_passthrough_with === 'config_key';
 
       // Global token limit check: only applies to model API requests, not dashboard/health
       const globalTokenLimitRaw = proxyConfig.general?.global_token_limit;
@@ -1081,7 +1095,8 @@ export default {
       // Extract authentication headers early
       const authHeaders = extractAuthHeaders(request);
       const endpointUserKey = getRawEndpointUserKey(authHeaders);
-      const modelUsageRecordUrl = proxyConfig.model_usage?.record_url?.trim();
+      const modelUsageRecordUrl = proxyConfig.remote?.recording?.record_server?.trim();
+      const modelUsageRecordBody = proxyConfig.remote?.recording?.record_response_body === true;
       let modelAuthHeaders = authHeaders;
 
       // For endpoints that need model-specific routing, extract model from request body
@@ -1168,9 +1183,10 @@ export default {
             }
           }
 
-          // Deferred auth: when auth_with_model is true, run auth after model is known.
-          if (authUrl && authWithModel) {
-            const authError = await doAuthRequest(modelName);
+          // Deferred auth: runs after the body is parsed when either auth_with_model
+          // (forwards x-resource-for) or auth_with_body (forwards the whole body) is set.
+          if (authUrl && (authWithModel || authWithBody)) {
+            const authError = await doAuthRequest(modelName, bodyText);
             if (authError) return authError;
           }
 
@@ -1559,8 +1575,10 @@ export default {
         // Auth headers forwarded as-is for dynamic routes
         modelAuthHeaders = authHeaders;
       } else {
-        // Deferred auth for non-body-parsed paths: no model available, auth without x-resource-for.
-        if (authUrl && authWithModel) {
+        // Deferred auth for non-body-parsed paths: no model or body available,
+        // auth runs with neither x-resource-for nor a body. auth_with_body has
+        // no effect on these routes (there is no parsed body to forward).
+        if (authUrl && (authWithModel || authWithBody)) {
           const authError = await doAuthRequest();
           if (authError) return authError;
         }
@@ -2209,9 +2227,12 @@ export default {
                 if (modelUsageRecordUrl) {
                   recordModelUsageToRemote(
                     modelUsageRecordUrl,
-                    buildModelUsageRecordPayload(requestId, path, endpointUserKey, attemptModelId, usage),
+                    buildModelUsageRecordPayload(
+                      requestId, path, endpointUserKey, attemptModelId, usage, response.status,
+                      modelUsageRecordBody ? payload : undefined,
+                    ),
                     logger,
-                    modelUsageAccessToken,
+                    modelUsageOneTimeAuthCode,
                     sidecarForwardedHeaders,
                   );
                 }
@@ -2232,17 +2253,58 @@ export default {
               attemptModelId,
               compositeAliasName,
               modelUsageRecordUrl
-                ? usage => recordModelUsageToRemote(
+                ? (usage, responseBody) => recordModelUsageToRemote(
                   modelUsageRecordUrl,
-                  buildModelUsageRecordPayload(requestId, path, endpointUserKey, attemptModelId, usage),
+                  buildModelUsageRecordPayload(
+                    requestId, path, endpointUserKey, attemptModelId, usage, 200,
+                    modelUsageRecordBody ? responseBody : undefined,
+                  ),
                   logger,
-                  modelUsageAccessToken,
+                  modelUsageOneTimeAuthCode,
                   sidecarForwardedHeaders,
                 )
                 : undefined,
+              modelUsageRecordBody,
             );
             const toolStream = createResponseToolTrackingTransformStream((names, agent) => recordUpstreamResponseToolNames(names, agent), attempt.agent);
             response = new Response(response.body!.pipeThrough(usageStream).pipeThrough(toolStream), response);
+          }
+        } else if (attemptModelId) {
+          // Non-2xx upstream response: record it to the remote stats service
+          // with zero usage and the real status, so the collector sees failed
+          // requests too. When record_response_body is on, attach the constructed error
+          // body (best-effort parse for JSON; raw text otherwise).
+          if (modelUsageRecordUrl) {
+            let errorBody: unknown;
+            if (modelUsageRecordBody) {
+              try {
+                const ct = response.headers.get('content-type') || '';
+                if (ct.includes('application/json')) {
+                  errorBody = await response.clone().json();
+                } else {
+                  errorBody = await response.clone().text();
+                }
+              } catch {
+                errorBody = undefined;
+              }
+            }
+            const zeroUsage = {
+              input_tokens: 0,
+              cached_tokens: 0,
+              cache_written_tokens: 0,
+              output_tokens: 0,
+              total_tokens: 0,
+            };
+            recordModelUsageToRemote(
+              modelUsageRecordUrl,
+              buildModelUsageRecordPayload(
+                requestId, path, endpointUserKey, attemptModelId, zeroUsage, response.status,
+                errorBody,
+              ),
+              logger,
+              modelUsageOneTimeAuthCode,
+              sidecarForwardedHeaders,
+            );
           }
         }
 

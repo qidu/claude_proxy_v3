@@ -1470,7 +1470,8 @@ export function getModelStatsDesc(): ModelStatsEntry[] {
 export function createUsageTrackingTransformStream(
   model: string,
   compositeAlias?: string,
-  onUsage?: (usage: UsageStats) => void,
+  onUsage?: (usage: UsageStats, responseBody?: string) => void,
+  collectBody?: boolean,
 ): TransformStream<Uint8Array, Uint8Array> {
   let inputTokens = 0;
   let cachedTokens = 0;
@@ -1480,6 +1481,10 @@ export function createUsageTrackingTransformStream(
   let foundUsage = false;
   let remainder = '';
   const decoder = new TextDecoder();
+  // When record_response_body is enabled, accumulate the decoded SSE text so the full
+  // response body can be forwarded to the stats sidecar in flush().
+  let collectedBody = '';
+  const shouldCollect = collectBody === true;
 
   return new TransformStream({
     transform(chunk: Uint8Array, controller: TransformStreamDefaultController<Uint8Array>) {
@@ -1489,7 +1494,9 @@ export function createUsageTrackingTransformStream(
       // the data line and JSON.parse silently throws in the catch below,
       // dropping the message_start frame (so input_tokens stays 0 while
       // message_delta's output_tokens still records).
-      const text = (remainder + decoder.decode(chunk, { stream: true })).replace(/\r\n/g, '\n');
+      const decoded = decoder.decode(chunk, { stream: true });
+      if (shouldCollect) collectedBody += decoded;
+      const text = (remainder + decoded).replace(/\r\n/g, '\n');
       const parts = text.split('\n\n');
       remainder = parts.pop() || '';
 
@@ -1616,7 +1623,7 @@ export function createUsageTrackingTransformStream(
           total_tokens: totalTokens > 0 ? totalTokens : (computedTotal > 0 ? computedTotal : undefined),
         };
         recordModelUsage(model, usageObj);
-        onUsage?.(usageObj);
+        onUsage?.(usageObj, shouldCollect ? collectedBody : undefined);
         if (compositeAlias && usageObj.total_tokens) {
           recordCompositeTokenUsage(compositeAlias, model, usageObj.total_tokens);
         }

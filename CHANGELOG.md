@@ -5,6 +5,90 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### Rename: `auth_url` → `auth_server`
+
+The remote-auth sidecar URL field under `[remote.authentication]` is renamed
+from `auth_url` to `auth_server`, matching the `record_server` naming on the
+stats side (new form only — no legacy parsing). Updated: `ProxyConfig`
+interface + both parser branches + serializer in `config-loader.ts`; the
+single accessor in `src/index.ts`; README (quick-start TOML, protocol section,
+mermaid diagram, config-reference table, `DEV_NO_KEY` row); the two
+`docs/nginx_conf/*/USAGE.md` notes; `proxy_config.toml_example`; and the
+unit / `15_config_parse` test fixtures.
+
+### Config schema: `[remote.authentication]` + `[remote.recording]`
+
+The sidecar config is restructured under a new `[remote]` namespace (new form
+only — no legacy parsing):
+
+- **`[general] auth_url` / `auth_with_model` / `auth_with_body` /
+  `auth_passthrough_with`** moved to **`[remote.authentication]`** (field names
+  unchanged).
+- **`[model_usage]`** renamed to **`[remote.recording]`**; **`record_url`** →
+  **`record_server`**; **`record_body`** → **`record_response_body`**.
+
+Updated: `ProxyConfig` interface, `parseSimpleToml` (section-header, quoted-key,
+and unquoted-value parsers), `serializeProxyConfigToml`, all `src/index.ts`
+accessors (`proxyConfig.remote?.authentication?.*` /
+`proxyConfig.remote?.recording?.*`), README config-reference tables + protocol
+section + mermaid diagram, `proxy_config.toml_example`, and the unit /
+`15_config_parse` test cases.
+
+### Rename: `access_token` → `one_time_auth_code` (OTAC) on auth/stats sidecars
+
+The linkage header exchanged between the auth sidecar (`[general] auth_url`)
+and the stats sidecar (`[model_usage] record_url`) is renamed from
+`access_token` to `one_time_auth_code` (OTAC — one-time authorization code).
+The semantics are unchanged: the auth response's `one_time_auth_code` header
+is stored per-request and re-sent on the stats POST so a combined backend can
+correlate the usage record with the authenticated principal. Renamed in:
+`doAuthRequest` (header read), the `modelUsageOneTimeAuthCode` variable,
+`recordModelUsageToRemote`'s `oneTimeAuthCode` parameter, and the stats POST
+header. README + mermaid diagram updated.
+
+### Feature: record non-2xx responses + `response_status` to stats service
+
+Every usage record POSTed to `[model_usage] record_url` now carries a
+`response_status` field (the upstream HTTP status; `0` when no response was
+obtained). Non-2xx upstream responses are now recorded too — previously only
+successful responses produced a record, so failures were invisible to the
+collector. Non-2xx records carry all token counters at `0` (error bodies rarely
+carry usage) and the real status. When `record_body = true`, the non-2xx
+constructed error body is attached to `response_body` (parsed JSON for
+JSON errors, raw text otherwise), matching the success-body behavior. Streaming
+responses remain 200-or-bust (errors come as non-streaming JSON even when
+`stream:true` was requested). `buildModelUsageRecordPayload` grew a required
+`responseStatus` param; the two success call sites pass the real status, the
+new non-2xx branch passes `response.status`.
+
+### Feature: `auth_with_body` / `record_body` — forward full request/response bodies to sidecars
+
+Two new config flags let the remote auth and stats sidecars see entire request
+and response bodies (raw JSON, not base64):
+
+- **`[general] auth_with_body = true`** (default `false`) — the `auth_url` call
+  is deferred until after the request body is parsed (same timing as
+  `auth_with_model`), and the entire parsed request body is forwarded as the
+  `POST` body with `Content-Type: application/json`. The method switches from
+  `GET` to `POST` only when a parsed body is available; on non-body-parsed
+  routes (dynamic routes) it degrades to the bodyless form. Either
+  `auth_with_model` or `auth_with_body` triggers the deferred path. The body
+  sent is post privacy-filter / kompress / tool-blocklist, so redacted PII
+  never reaches the auth sidecar.
+- **`[model_usage] record_body = true`** (default `false`) — each usage record
+  POSTed to `record_url` includes a `response_body` field: the parsed JSON
+  object for non-streaming responses, or the accumulated raw SSE text (all
+  events concatenated) for streaming responses. Streaming body capture is
+  threaded through `createUsageTrackingTransformStream` via a new optional
+  `collectBody` flag.
+
+Implementation: `doAuthRequest` now takes an optional body string; the payload
+builder `buildModelUsageRecordPayload` and recorder `recordModelUsageToRemote`
+grew an optional `responseBody` argument; the two stats call sites (JSON +
+streaming SSE) populate it. The README "Auth & Stats Service Protocol" section
+documents both flags, and the mermaid diagram now shows the GET/POST auth form
+and the optional `response_body` on the stats POST.
+
 ### Docs: auth & stats service protocol + dynamic-routing override spec
 
 Documented the wire-level contract between the proxy and the two optional

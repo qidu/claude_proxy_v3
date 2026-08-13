@@ -140,7 +140,7 @@ describe('remote usage recording', () => {
       cache_written_tokens: 5,
       output_tokens: 7,
       total_tokens: 26,
-    });
+    }, 200);
 
     assert.equal(payload.request_id, 'req-1');
     assert.equal(payload.endpoint, '/v1/messages');
@@ -151,10 +151,11 @@ describe('remote usage recording', () => {
     assert.equal(payload.cache_written_tokens, 5);
     assert.equal(payload.output_tokens, 7);
     assert.equal(payload.total_tokens, 26);
+    assert.equal(payload.response_status, 200);
     assert.match(payload.timestamp, /^\d{4}-\d{2}-\d{2}T/);
   });
 
-  it('posts payload only when record_url is configured', async () => {
+  it('posts payload only when record_server is configured', async () => {
     const originalFetch = globalThis.fetch;
     const calls: Array<{ url: string; headers: Record<string, string>; body: any }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -167,14 +168,14 @@ describe('remote usage recording', () => {
     }) as typeof fetch;
 
     try {
-      const payload = buildModelUsageRecordPayload('req-2', '/v1/messages', 'sk-user', 'gpt-test', { total_tokens: 9 });
+      const payload = buildModelUsageRecordPayload('req-2', '/v1/messages', 'sk-user', 'gpt-test', { total_tokens: 9 }, 200);
       recordModelUsageToRemote(undefined, payload);
       recordModelUsageToRemote('http://collector.test/usage', payload, undefined, 'one-time-token');
       await new Promise(resolve => setTimeout(resolve, 0));
 
       assert.equal(calls.length, 1);
       assert.equal(calls[0].url, 'http://collector.test/usage');
-      assert.equal(calls[0].headers.access_token, 'one-time-token');
+      assert.equal(calls[0].headers.one_time_auth_code, 'one-time-token');
       assert.equal(calls[0].body.user_key, 'sk-user');
       assert.equal(calls[0].body.total_tokens, 9);
     } finally {

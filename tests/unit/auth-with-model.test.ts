@@ -99,8 +99,8 @@ const BASE_TOML = `
 [dashboard]
 api_key = "dash"
 
-[general]
-auth_url = "${AUTH_URL}"
+[remote.authentication]
+auth_server = "${AUTH_URL}"
 
 [models.claude]
 upstream_mode = "anthropic-messages"
@@ -113,8 +113,8 @@ const AUTH_WITH_MODEL_TOML = `
 [dashboard]
 api_key = "dash"
 
-[general]
-auth_url = "${AUTH_URL}"
+[remote.authentication]
+auth_server = "${AUTH_URL}"
 auth_with_model = true
 
 [models.claude]
@@ -156,7 +156,7 @@ describe('DEV_NO_KEY', () => {
         { ...makeEnv(configPath), DEV_NO_KEY: value } as any,
       );
       assert.equal(resp.status, 200);
-      assert.equal(authCalls.length, 1, 'configured auth_url must still be called');
+      assert.equal(authCalls.length, 1, 'configured auth_server must still be called');
     });
   }
 

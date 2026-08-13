@@ -175,15 +175,21 @@ describe('normalizeHookAlias', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseSimpleToml', () => {
-  it('parses [general] section with string and boolean values', () => {
+  it('parses [remote.authentication] section with string and boolean values', () => {
+    const cfg = parseSimpleToml(`
+      [remote.authentication]
+      auth_server = "https://auth.example.com"
+      auth_with_model = "true"
+    `);
+    assert.equal(cfg.remote?.authentication?.auth_server, 'https://auth.example.com');
+    assert.equal(cfg.remote?.authentication?.auth_with_model, true);
+  });
+
+  it('parses [general] section (global_token_limit)', () => {
     const cfg = parseSimpleToml(`
       [general]
-      auth_url = "https://auth.example.com"
-      auth_with_model = "true"
       global_token_limit = "50k 1d"
     `);
-    assert.equal(cfg.general?.auth_url, 'https://auth.example.com');
-    assert.equal(cfg.general?.auth_with_model, true);
     assert.equal(cfg.general?.global_token_limit, '50k 1d');
   });
 
@@ -362,11 +368,11 @@ describe('parseSimpleToml', () => {
     const cfg = parseSimpleToml(`
       # a comment
 
-      [general]
+      [remote.authentication]
       # inline-ish
-      auth_url = "https://x"  # trailing comment
+      auth_server = "https://x"  # trailing comment
     `);
-    assert.equal(cfg.general?.auth_url, 'https://x');
+    assert.equal(cfg.remote?.authentication?.auth_server, 'https://x');
   });
 
   it('handles inline comment after value containing # (no preceding space is preserved)', () => {
@@ -400,16 +406,18 @@ describe('parseSimpleToml', () => {
     assert.deepEqual(cfg.privacy_filter?.whitelist_add, ['deadbeef', 'cafef00d']);
   });
 
-  it('parses [dashboard] and [model_usage] sections', () => {
+  it('parses [dashboard] and [remote.recording] sections', () => {
     const cfg = parseSimpleToml(`
       [dashboard]
       api_key = "dash-key"
 
-      [model_usage]
-      record_url = "https://record.example.com"
+      [remote.recording]
+      record_server = "https://record.example.com"
+      record_response_body = true
     `);
     assert.equal(cfg.dashboard?.api_key, 'dash-key');
-    assert.equal(cfg.model_usage?.record_url, 'https://record.example.com');
+    assert.equal(cfg.remote?.recording?.record_server, 'https://record.example.com');
+    assert.equal(cfg.remote?.recording?.record_response_body, true);
   });
 
   it('folds multi-line array values into one logical line', () => {
@@ -1356,36 +1364,49 @@ before_upstream.headers.remove = ["x-stainless-os", "x-stainless-arch"]
     assert.doesNotMatch(toml, /value = "false"/);
   });
 
-  it('preserves [general] across parse→serialize→parse (string, boolean, numeric fields)', () => {
+  it('preserves [general] + [remote.*] across parse→serialize→parse', () => {
     const original = `
 [general]
-auth_url = "https://auth.example.com/validate"
-auth_with_model = true
-auth_passthrough_with = "user_key"
 budget_to_effort_low = 32768
 budget_to_effort_medium = 65536
 budget_to_effort_high = 128000
 global_token_limit = "700M 1w"
+
+[remote.authentication]
+auth_server = "https://auth.example.com/validate"
+auth_with_model = true
+auth_passthrough_with = "user_key"
+
+[remote.recording]
+record_server = "http://127.0.0.1:8080/model-usage"
+record_response_body = true
 `;
     const parsed = parseSimpleToml(original);
-    // Parser must store every field (uses generic `as any` assignment).
-    assert.equal(parsed.general?.auth_url, 'https://auth.example.com/validate');
-    assert.equal(parsed.general?.auth_with_model, true);
-    assert.equal(parsed.general?.auth_passthrough_with, 'user_key');
     assert.equal(parsed.general?.budget_to_effort_low, 32768);
     assert.equal(parsed.general?.budget_to_effort_medium, 65536);
     assert.equal(parsed.general?.budget_to_effort_high, 128000);
     assert.equal(parsed.general?.global_token_limit, '700M 1w');
+    assert.equal(parsed.remote?.authentication?.auth_server, 'https://auth.example.com/validate');
+    assert.equal(parsed.remote?.authentication?.auth_with_model, true);
+    assert.equal(parsed.remote?.authentication?.auth_passthrough_with, 'user_key');
+    assert.equal(parsed.remote?.recording?.record_server, 'http://127.0.0.1:8080/model-usage');
+    assert.equal(parsed.remote?.recording?.record_response_body, true);
 
     const roundTripped = parseSimpleToml(serializeProxyConfigToml(parsed));
     assert.deepEqual(roundTripped.general, {
-      auth_url: 'https://auth.example.com/validate',
-      auth_with_model: true,
-      auth_passthrough_with: 'user_key',
       budget_to_effort_low: 32768,
       budget_to_effort_medium: 65536,
       budget_to_effort_high: 128000,
       global_token_limit: '700M 1w',
+    });
+    assert.deepEqual(roundTripped.remote?.authentication, {
+      auth_server: 'https://auth.example.com/validate',
+      auth_with_model: true,
+      auth_passthrough_with: 'user_key',
+    });
+    assert.deepEqual(roundTripped.remote?.recording, {
+      record_server: 'http://127.0.0.1:8080/model-usage',
+      record_response_body: true,
     });
   });
 

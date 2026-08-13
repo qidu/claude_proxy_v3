@@ -153,7 +153,7 @@ export interface Env {
     /**
      * Development-only: skip the requirement that model requests include an
      * Authorization, x-api-key, or x-goog-api-key header. Set to "true" or "1".
-     * Configured auth_url validation still applies.
+     * Configured auth_server validation still applies.
      */
     DEV_NO_KEY?: string;
 
