@@ -40,6 +40,7 @@ import {
   getRequestStatusCodeToEndpointStatsDesc,
   getRequestUpstreamStatsDesc,
   getTokenHeatmapStatsDesc,
+  getTokenHeatmapStatsMonthly,
   getToolUsageStatsDesc,
   getUpstreamResponseToolStatsDesc,
   getAgentToolPanelStats,
@@ -92,6 +93,7 @@ export interface DashboardSnapshot {
     model_timings: ReturnType<typeof getRequestModelTimingStatsDesc>;
   };
   tokenHeatmap: ReturnType<typeof getTokenHeatmapStatsDesc>;
+  tokenHeatmapMonthly: ReturnType<typeof getTokenHeatmapStatsMonthly>;
   privacyKeysDetected: number;
   compositeLimitWindows: ReturnType<typeof getCompositeLimitWindowsSnapshot>;
   compositeResolved: Array<{
@@ -170,6 +172,7 @@ export function getDashboardSnapshot(proxyConfig: ProxyConfig, env: Env): Dashbo
       model_timings: getRequestModelTimingStatsDesc(),
     },
     tokenHeatmap: getTokenHeatmapStatsDesc(),
+    tokenHeatmapMonthly: getTokenHeatmapStatsMonthly(),
     privacyKeysDetected: getPrivacyKeysDetected(),
     compositeLimitWindows: getCompositeLimitWindowsSnapshot(),
     compositeResolved,

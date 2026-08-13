@@ -29,7 +29,7 @@ import {
   upsertScheduleTargetFromDashboard,
 } from './handlers/dashboard.js';
 import { getConfiguredModelIds, getCompositeAliasMode, type ScheduleWindow, type ScheduleDaysSpec } from './utils/config-loader.js';
-import { buildHeatmap, renderHeatmapPanel } from './heatmap.js';
+import { buildHeatmap, renderHeatmapPanel, buildMonthlyHeatmap, renderMonthlyHeatmapPanel } from './heatmap.js';
 import { dumpTodayTokens, TOKEN_LOG_FILE, getActiveRequestCount, getTokensInWindowSince, getLiveTokens, blockTool, unblockTool, isToolBlocked, parseWindowSpec, getWindowCutoff } from './utils/dashboard-stats.js';
 import type { Env } from './types/shared.js';
 import type { ConfigValidationError } from './utils/config-loader.js';
@@ -601,19 +601,19 @@ class CompositeAliasesOverlay implements Component, Focusable {
     }
 
     const selected = this.selectCurrent();
-    if (matchesKey(data, 'a')) {
+    if (matchesKey(data, 'a') || matchesKey(data, 'shift+a')) {
       this.app.openAddAliasPrompt();
       return;
     }
-    if (matchesKey(data, 'l') && selected?.kind === 'alias') {
+    if ((matchesKey(data, 'l') || matchesKey(data, 'shift+l')) && selected?.kind === 'alias') {
       this.app.openEditAliasLimitPrompt(selected.alias);
       return;
     }
-    if (matchesKey(data, 'f') && selected?.kind === 'alias') {
+    if ((matchesKey(data, 'f') || matchesKey(data, 'shift+f')) && selected?.kind === 'alias') {
       this.app.openEditFusionOptionsPrompt(selected.alias);
       return;
     }
-    if (matchesKey(data, 'm')) {
+    if (matchesKey(data, 'm') || matchesKey(data, 'shift+m')) {
       const alias = selected?.kind === 'alias' ? selected.alias : selected?.kind === 'target' ? selected.alias : undefined;
       if (alias) {
         this.app.openTargetPicker(alias);
@@ -623,15 +623,15 @@ class CompositeAliasesOverlay implements Component, Focusable {
       }
       return;
     }
-    if (matchesKey(data, 'e') && selected?.kind === 'target') {
+    if ((matchesKey(data, 'e') || matchesKey(data, 'shift+e')) && selected?.kind === 'target') {
       this.app.openEditTargetPrompt(selected.alias, selected.target);
       return;
     }
-    if (matchesKey(data, 'd') && selected?.kind === 'target') {
+    if ((matchesKey(data, 'd') || matchesKey(data, 'shift+d')) && selected?.kind === 'target') {
       this.app.openDeleteConfirm(selected.alias, selected.target);
       return;
     }
-    if (matchesKey(data, 'd') && selected?.kind === 'alias') {
+    if ((matchesKey(data, 'd') || matchesKey(data, 'shift+d')) && selected?.kind === 'alias') {
       this.app.openDeleteAliasConfirm(selected.alias);
       return;
     }
@@ -644,7 +644,7 @@ class CompositeAliasesOverlay implements Component, Focusable {
 
   render(width: number): string[] {
     const snap = this.snapshot;
-    const toolbar = `A ${dim('add alias')} M ${dim('add target')} F ${dim('edit fusion')} E ${dim('edit composite')} L ${dim('limit')} D ${dim('del')} Esc ${dim('hide')} ↑↓ ${dim('move')} `;
+    const toolbar = `a ${dim('add alias')} m ${dim('add target')} f ${dim('edit fusion')} e ${dim('edit composite')} l ${dim('limit')} d ${dim('del')} Esc ${dim('hide')} ↑↓ ${dim('move')} `;
 
     if (!snap) {
       return frame('Edit Composite Aliases Config', [toolbar, 'Loading…'], width).map((line) => clip(line, width));
@@ -971,6 +971,7 @@ class DashboardView implements Component {
   private lastTime = '';
   private configStatus: 'normal' | 'changed' | 'saved' = 'normal';
   private configStatusTimer: ReturnType<typeof setTimeout> | null = null;
+  private heatmapView: 'weekly' | 'monthly' = 'weekly';
 
   constructor(private readonly app: DashboardApp, private readonly onInvalidate: () => void) {}
 
@@ -1028,7 +1029,7 @@ class DashboardView implements Component {
       this.app.openScheduleAliasesOverlay();
       return;
     }
-    if (matchesKey(data, 'l')) {
+    if (matchesKey(data, 'l') || matchesKey(data, 'shift+l')) {
       void this.app.openEditGlobalTokenLimitPrompt();
       return;
     }
@@ -1038,6 +1039,15 @@ class DashboardView implements Component {
     }
     if (matchesKey(data, 'p') || matchesKey(data, 'shift+p')) {
       this.app.openToolBlocklistOverlay();
+      return;
+    }
+    if (matchesKey(data, 'shift+u')) {
+      this.heatmapView = this.heatmapView === 'weekly' ? 'monthly' : 'weekly';
+      this.invalidate();
+      return;
+    }
+    if (matchesKey(data, 'h')) {
+      this.app.openHelpOverlay();
       return;
     }
   }
@@ -1081,9 +1091,15 @@ class DashboardView implements Component {
     const warnCount = cfgMeta.config_warnings?.length ?? 0;
     const cfgSuffix = errCount > 0 ? red(` (${errCount} errors)`) : warnCount > 0 ? yellow(` (${warnCount} warnings)`) : '';
     lines.push(`${dim('Config:')} ${dim(snap.config.config_path ?? 'memory')} ${configIndicator}${cfgSuffix}`);
-    const tokenHeatmap = buildHeatmap(snap.tokenHeatmap);
+    const isMonthly = this.heatmapView === 'monthly';
+    const tokenHeatmap = isMonthly
+      ? buildMonthlyHeatmap(snap.tokenHeatmapMonthly)
+      : buildHeatmap(snap.tokenHeatmap);
     const heatmapRowFilter = termRows < 40 ? [1, 3, 5] : undefined; // show Mon/Wed/Fri in small terminals
-    const tokenHeatmapLines = renderHeatmapPanel(tokenHeatmap, { title: 'Tokens Panel', rowFilter: heatmapRowFilter }).split('\n');
+    const tokenHeatmapLines = (isMonthly
+      ? renderMonthlyHeatmapPanel(tokenHeatmap, { title: 'Tokens Panel' })
+      : renderHeatmapPanel(tokenHeatmap, { title: 'Tokens Panel', rowFilter: heatmapRowFilter })
+    ).split('\n');
     const globalLimit = snap.config.global_token_limit;
     const globalLimitDisplay = globalLimit ? globalLimit.trim().replace(/\s+/, '/') : '';
     let globalLimitSuffix = '';
@@ -1170,7 +1186,7 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(`C ${dim('composite,fusion')}  S ${dim('schedule')}  T ${dim('models test')}  R ${dim('reload')}  L ${dim('token limit')}  D ${dim('stats')}  P ${dim('tools block')}  Ctrl+U ${dim('dump usage')}`);
+    lines.push(`C ${dim('composite,fusion')}  S ${dim('schedule')}  T ${dim('models test')}  L ${dim('token limit')}  D ${dim('stats')}  P ${dim('tools block')}  h ${dim('help')}  ↑↓ ${dim('move')}`);
     lines.push(this.message ? yellow(this.message) : dim('Ready'));
 
     return lines.map((line) => clip(line, width));
@@ -1631,6 +1647,55 @@ class DashboardApp {
       },
     );
     this.overlay = this.tui.showOverlay(overlay, { width: '90%', maxHeight: '70%', anchor: 'center' });
+    this.overlay.focus();
+  }
+
+  openHelpOverlay(): void {
+    const items: SelectItem[] = [
+      { value: 'help\0c', label: `  ${bold('C(c)').padEnd(6)} ${dim('Manage composite and fusion aliases')}` },
+      { value: 'help\0s', label: `  ${bold('S(s)').padEnd(6)} ${dim('Manage schedule aliases')}` },
+      { value: 'help\0t', label: `  ${bold('T(t)').padEnd(6)} ${dim('Test custom models')}` },
+      { value: 'help\0l', label: `  ${bold('L(l)').padEnd(6)} ${dim('Edit global token limit')}` },
+      { value: 'help\0d', label: `  ${bold('D(d)').padEnd(6)} ${dim('View detailed statistics')}` },
+      { value: 'help\0p', label: `  ${bold('P(p)').padEnd(6)} ${dim('Block or unblock tools')}` },
+      { value: 'help\0u', label: `  ${bold('Shift+u').padEnd(6)} ${dim('Toggle weekly and monthly heatmap')}` },
+      { value: 'help\0ctrlu', label: `  ${bold('Ctrl+u').padEnd(6)} ${dim('Dump today tokens to file')}` },
+      { value: 'help\0h', label: `  ${bold('h').padEnd(6)} ${dim('Show this help')}` },
+      { value: 'help\0r', label: `  ${bold('r').padEnd(6)} ${dim('Reload config and refresh dashboard')}` },
+      { value: 'help\0ctrlc', label: `  ${bold('Ctrl+c').padEnd(6)} ${dim('Quit')}` },
+      { value: 'help\0sep1', label: dim('─'.repeat(50)) },
+      { value: 'help\0hdr', label: dim('Composite aliases overlay') },
+      { value: 'help\0a', label: `  ${bold('a').padEnd(6)} ${dim('Add a new composite alias')}` },
+      { value: 'help\0m', label: `  ${bold('m').padEnd(6)} ${dim('Add target model to alias')}` },
+      { value: 'help\0f', label: `  ${bold('f').padEnd(6)} ${dim('Edit fusion options for alias')}` },
+      { value: 'help\0e', label: `  ${bold('e').padEnd(6)} ${dim('Edit composite target config')}` },
+      { value: 'help\0cl', label: `  ${bold('l').padEnd(6)} ${dim('Set token limit for alias')}` },
+      { value: 'help\0cd', label: `  ${bold('d').padEnd(6)} ${dim('Delete alias or target model')}` },
+    ];
+
+    if (this.overlay) this.hideOverlay();
+    const overlay = new ListOverlay(
+      'Hotkeys',
+      `Esc/h ${dim('close')}`,
+      items,
+      () => {},
+      () => {
+        this.hideOverlay();
+        this.requestRender();
+      },
+      19,
+      (data) => {
+        if (matchesKey(data, 'h')) {
+          this.hideOverlay();
+          this.requestRender();
+          return true;
+        }
+        return false;
+      },
+      undefined,
+      60,
+    );
+    this.overlay = this.tui.showOverlay(overlay, { width: '50%', maxHeight: '70%', anchor: 'center' });
     this.overlay.focus();
   }
 

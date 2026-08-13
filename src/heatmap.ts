@@ -1,4 +1,5 @@
 type HeatmapRecord = { weekday: number; hour: number; values: number };
+type MonthlyHeatmapRecord = { day: number; values: number };
 type HeatmapCell = { values: number };
 type HeatmapData = {
   rows: readonly string[];
@@ -166,6 +167,61 @@ export function renderHeatmapPanel(heatmap: HeatmapData, options: TuiOptions = {
 
     lines.push(`  ${labelDay} ${cells.join(' ')}`);
   }
+
+  return lines.join('\n');
+}
+
+export function buildMonthlyHeatmap(records: MonthlyHeatmapRecord[]): HeatmapData {
+  const cells: HeatmapCell[][] = Array.from({ length: 1 }, () =>
+    Array.from({ length: 31 }, () => ({ values: 0 })),
+  );
+
+  let totalValues = 0;
+  let maxValues = 0;
+
+  for (const record of records) {
+    const idx = record.day - 1; // day 1..31 → index 0..30
+    if (idx < 0 || idx > 30) continue;
+    cells[0][idx].values += record.values;
+    totalValues += record.values;
+    maxValues = Math.max(maxValues, cells[0][idx].values);
+  }
+
+  const columns = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
+
+  return {
+    rows: ['Day'],
+    columns,
+    cells,
+    totalValues,
+    maxValues,
+  };
+}
+
+export function renderMonthlyHeatmapPanel(heatmap: HeatmapData, options: TuiOptions = {}): string {
+  const title = options.title ?? 'Values';
+  const total = getMetricValue(heatmap);
+  const maxValue = getMetricMax(heatmap);
+  const currentDay = new Date().getDate();
+
+  // Show odd days (1, 3, 5, ..., 31) like the weekly view shows even hours
+  const headerLabels = heatmap.columns.map((col, index) => {
+    const dayNum = index + 1;
+    return dayNum === currentDay ? bold(col) : dim(col);
+  });
+  const oddLabels = headerLabels.filter((_, index) => index % 2 === 0); // days 1, 3, 5, ...
+  const headerStr = oddLabels.join('  ') + '  ';
+
+  const lines: string[] = [];
+  lines.push(`  ${title} (${total} total)`);
+  lines.push(`      ${headerStr}`);
+
+  const cells: string[] = [];
+  for (let columnIndex = 0; columnIndex < heatmap.columns.length; columnIndex += 1) {
+    const value = getCellValue(heatmap, 0, columnIndex);
+    cells.push(`${getAnsiColor(value, maxValue)}${CELL}${RESET}`);
+  }
+  lines.push(`  Day ${cells.join(' ')}`);
 
   return lines.join('\n');
 }

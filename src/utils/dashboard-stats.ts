@@ -1723,6 +1723,24 @@ export function getTokenHeatmapStatsDesc(): Array<{ weekday: number; hour: numbe
   });
 }
 
+export function getTokenHeatmapStatsMonthly(): Array<{ day: number; values: number }> {
+  const cutoff = Date.now() - TOKEN_HEATMAP_WINDOW_MS;
+  const buckets = new Map<number, number>();
+
+  for (const event of tokenHeatmapEvents) {
+    if (event.timestamp < cutoff) {
+      continue;
+    }
+
+    const day = new Date(event.timestamp).getDate();
+    buckets.set(day, (buckets.get(day) ?? 0) + event.values);
+  }
+
+  return [...buckets.entries()]
+    .map(([day, values]) => ({ day, values }))
+    .sort((a, b) => a.day - b.day);
+}
+
 /**
  * Sum tokens from events with `timestamp >= cutoffMs`. Uses the same
  * incremental cache as getTokensInWindow — events aged out of the window
