@@ -30,6 +30,57 @@ usage stats and some configs modification.
                   upstream
 ```
 
+### Proxy ↔ remote auth & stats service
+
+The two optional remote sidecars (`[general] auth_url` and
+`[model_usage] record_url`) can be the **same** service or two separate ones.
+`auth_url` gates admission; `record_url` collects per-request usage after the
+response. When they are the same service, the proxy can authenticate and
+report stats against one backend.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant P as Model Proxy
+    participant A as Auth Service<br/>([general] auth_url)
+    participant S as Stats Service<br/>([model_usage] record_url)
+    participant U as Upstream Provider
+
+    C->>P: POST /v1/messages<br/>(Authorization / x-api-key)
+    Note over P: auth_with_model = false → auth now<br/>auth_with_model = true → defer until body parsed
+    P->>A: GET auth_url<br/>forward: Authorization, x-api-key,<br/>x-goog-api-key, user-agent, request_id,<br/>endpoint, [x-resource-for: model_id]
+    A-->>P: 200 OK<br/>header: access_token (optional)<br/>body: dynamic routing override (optional)
+    Note over P: if body carries target/mode/base/key/transforms<br/>→ use as one-time dynamic route,<br/>skip config-file model resolution
+    P->>U: forwarded request (native or converted)
+    U-->>P: response (streaming or JSON)
+    P-->>C: response (converted back to client schema)
+    P-)S: POST record_url<br/>{request_id, endpoint, user_key,<br/>model, token counters}<br/>header: access_token (if auth returned one)
+```
+
+**Auth dynamic-routing override (response body).** The auth service MAY respond
+with a JSON body that acts as a **one-time alias config entry** — the same shape
+as a `[models.*]` inline table. When present, the proxy uses it directly for
+this single request and skips resolving the model from `[models.*]` / `[composite]`
+/ `[schedule]` in the config file. All fields are optional; omitted fields fall
+back to the normal inheritance chain (`[default_upstream]` → section → entry):
+
+| Body field | Type | Meaning |
+|---|---|---|
+| `target` | string | Real upstream model id to send (like an alias `target`). |
+| `mode` / `upstream_mode` | string | Upstream protocol: `anthropic-messages`, `openai-completions`, `openai-responses`, `gemini-generatecontent`, `gemini-interactions`. |
+| `base` / `base_url` | string | Upstream base URL. |
+| `key` / `api_key` | string | Upstream API key for this request only. |
+| `transforms` | string | Comma-separated `[transforms.*]` set names to apply. |
+
+> The override is **per-request and ephemeral** — it is never cached, never
+> written to config, and does not persist across requests. If the auth response
+> body is empty or not JSON, the proxy falls back to normal config resolution.
+> Requires `auth_with_model = true` so the auth call runs after body parsing
+> (the proxy needs the requested model id and the override before routing).
+
+See [Auth & Stats Service Protocol](#auth--stats-service-protocol) below for the
+full wire-level contract.
+
 ## Features
 
 - **Five API formats in, any provider out** — accept requests in any of these schemas:
@@ -981,6 +1032,129 @@ Object.fromEntries(response.headers.entries())
 could therefore send plain text with a stale `content-encoding: br` / `gzip`
 header. Clients such as opencode may then try to decode Brotli by default and
 fail to read the response body.
+
+## Auth & Stats Service Protocol
+
+The proxy talks to two optional remote services over plain HTTP. This section
+documents the exact wire-level contract for each, so an operator can implement
+a compatible auth/stats backend in any language.
+
+### Auth service — `[general] auth_url`
+
+**When**: before routing (every non-exempt model-API request). Exempt paths:
+`/health`, `/`, `/dashboard`, `/v1/models`.
+
+**Timing**:
+- `auth_with_model = false` (default) → auth runs **before** the request body is
+  parsed.
+- `auth_with_model = true` → auth runs **after** body parsing, so the requested
+  model id is known and forwarded as `x-resource-for`. Required for the dynamic
+  routing override (the proxy needs the override before resolving the route).
+
+**Request** (proxy → auth service):
+
+| Aspect | Value |
+|---|---|
+| Method | `GET` |
+| URL | `auth_url` as configured |
+| Redirects | followed |
+
+Headers forwarded (each only if the client sent it):
+
+| Header | Source |
+|---|---|
+| `Authorization` | client's `Authorization` |
+| `x-api-key` | client's `x-api-key` |
+| `x-goog-api-key` | client's `x-goog-api-key` |
+| `user-agent` | client's `User-Agent` |
+| `request_id` | proxy-generated request id |
+| `endpoint` | inbound request path (e.g. `/v1/messages`) |
+| `x-resource-for` | requested model id — **only when `auth_with_model = true`** |
+| `x-forwarded-for` | resolved client IP (`cf-connecting-ip` → `x-forwarded-for`[0] → `x-real-ip`). Always sent when a client IP is detectable. |
+| `x-real-ip` | resolved client IP — **only when the caller did not already send `x-real-ip`** (an explicit outer-proxy value is preserved). |
+
+**Response** (auth service → proxy):
+
+| Status | Proxy behavior |
+|---|---|
+| `200` | Auth passes; proceed to routing. |
+| any `4xx` / `5xx` | Proxy returns `401 Authentication failed.` to the client. |
+| network error | Proxy returns `503 Authentication service unavailable.` to the client. |
+
+On `200`, the proxy reads:
+
+- **Header `access_token`** (optional) — stored and re-sent as the `access_token`
+  header on the later stats `POST record_url` call (see below).
+- **JSON body** (optional) — the **dynamic routing override**, a one-time alias
+  config entry. See the table in [Proxy ↔ remote auth & stats service](#proxy--remote-auth--stats-service).
+
+**Dynamic routing override precedence.** When the auth response body carries
+any of `target` / `mode` (`upstream_mode`) / `base` (`base_url`) / `key`
+(`api_key`) / `transforms`, the proxy treats them as the resolved route for
+**this request only**:
+
+1. The override fields are merged on top of the normal inheritance chain
+   (per-entry → section → `[default_upstream]`). Auth-provided fields win over
+   config-file fields for the same request.
+2. If the override supplies a `target`, the upstream sees that model id and the
+   proxy skips `[models.*]` / `[composite]` / `[schedule]` resolution entirely.
+3. If the override supplies `transforms`, those `[transforms.*]` sets are
+   applied at the same five lifecycle hooks as config-attached sets.
+4. If the body is empty / not JSON / not a `200`, normal config resolution
+   proceeds unchanged.
+
+The override is **never cached** and **never persisted** to `proxy_config.toml`
+— it is a single-use, per-request alias.
+
+### Stats service — `[model_usage] record_url`
+
+**When**: after the upstream response is received, once token usage is known.
+For streaming (`text/event-stream`) responses, usage is extracted from the SSE
+final event and the record is POSTed when the stream closes. For JSON
+responses, it is POSTed immediately after parsing. The POST is fire-and-forget
+(non-blocking); failures are logged at `WARN` and do not affect the client
+response.
+
+**Request** (proxy → stats service):
+
+| Aspect | Value |
+|---|---|
+| Method | `POST` |
+| URL | `record_url` as configured |
+| Content-Type | `application/json` |
+
+| Header | Value |
+|---|---|
+| `access_token` | the `access_token` the auth service returned for this request, if any (absent otherwise) |
+| `x-forwarded-for` | resolved client IP, same value as sent to the auth service (when detectable) |
+| `x-real-ip` | resolved client IP — **only when the caller did not already send `x-real-ip`** |
+
+Body (`ModelUsageRecordPayload`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `request_id` | string | Same proxy-generated request id forwarded to auth. |
+| `timestamp` | string | ISO 8601 timestamp of the record. |
+| `endpoint` | string | Inbound request path (e.g. `/v1/messages`). |
+| `user_key` | string | Raw caller auth key (from `Authorization` / `x-api-key` / `x-goog-api-key`). |
+| `model` | string | **Resolved** upstream model id actually sent upstream (the `target`, not the alias key). |
+| `input_tokens` | number | Input tokens reported by the upstream (or local tiktoken estimate when `LOCAL_TIKTOKEN=true`). |
+| `cached_tokens` | number | Prompt-caching read tokens (Anthropic / OpenAI cache-read), if reported. |
+| `cache_written_tokens` | number | Prompt-caching write tokens, if reported. |
+| `output_tokens` | number | Output tokens reported by the upstream. |
+| `total_tokens` | number | Sum when reported by the upstream, else `input + output`. |
+
+**Response**: the proxy only checks `response.ok`; a non-2xx is logged at
+`WARN` with the status code. There is no retry.
+
+### Combining auth and stats in one service
+
+When `auth_url` and `record_url` point at the same backend, the `access_token`
+header returned by the auth step is the linkage key: it travels on the auth
+response header, then on the stats request header, letting the backend tie the
+usage record back to the authenticated principal without re-validating the
+credential. If the two are separate services, `access_token` is simply not
+sent on the stats call.
 
 ## Configuration Reference
 

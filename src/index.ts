@@ -6,7 +6,7 @@
  */
 
 import { Env } from './types/shared.js';
-import { extractAuthHeaders, transformAuthHeadersForUpstream, formatApiKeyForUpstream, parseDynamicRoute, isHostAllowed, getHandlerType, buildTargetUrl, buildUpstreamUrl, sanitizeUpstreamResponseHeaders } from './utils/routing.js';
+import { extractAuthHeaders, transformAuthHeadersForUpstream, formatApiKeyForUpstream, parseDynamicRoute, isHostAllowed, getHandlerType, buildTargetUrl, buildUpstreamUrl, sanitizeUpstreamResponseHeaders, getSidecarForwardedHeaders } from './utils/routing.js';
 import { createErrorResponse, OverLimitError, ClaudeProxyError, classifyTransportError } from './utils/errors.js';
 import { createLogger } from './utils/logger.js';
 import { handleModelsRequest, getModelCount } from './handlers/models.js';
@@ -919,6 +919,10 @@ export default {
       const authUrl = isModelsListPath ? '' : (proxyConfig.general?.auth_url?.trim() ?? '');
       const authWithModel = proxyConfig.general?.auth_with_model === true;
       let modelUsageAccessToken: string | undefined;
+      // Client-IP forwarding headers for the auth_url / record_url sidecars.
+      // Computed early so it is in scope for doAuthRequest (which may run now
+      // when auth_with_model = false) and for the later stats record calls.
+      const sidecarForwardedHeaders = getSidecarForwardedHeaders(request);
       const doAuthRequest = async (modelNameForAuth?: string): Promise<Response | null> => {
         if (!authUrl) return null;
         const authForwardHeaders: Record<string, string> = {};
@@ -930,6 +934,7 @@ export default {
         authForwardHeaders.request_id = requestId;
         authForwardHeaders.endpoint = path;
         if (modelNameForAuth) authForwardHeaders['x-resource-for'] = modelNameForAuth;
+        Object.assign(authForwardHeaders, sidecarForwardedHeaders);
 
         let authStatus: number;
         try {
@@ -2207,6 +2212,7 @@ export default {
                     buildModelUsageRecordPayload(requestId, path, endpointUserKey, attemptModelId, usage),
                     logger,
                     modelUsageAccessToken,
+                    sidecarForwardedHeaders,
                   );
                 }
                 if (compositeAliasName && usage.total_tokens) {
@@ -2231,6 +2237,7 @@ export default {
                   buildModelUsageRecordPayload(requestId, path, endpointUserKey, attemptModelId, usage),
                   logger,
                   modelUsageAccessToken,
+                  sidecarForwardedHeaders,
                 )
                 : undefined,
             );

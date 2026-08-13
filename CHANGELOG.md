@@ -5,6 +5,34 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### Docs: auth & stats service protocol + dynamic-routing override spec
+
+Documented the wire-level contract between the proxy and the two optional
+remote sidecars (`[general] auth_url` and `[model_usage] record_url`) in a new
+**Auth & Stats Service Protocol** section of the README, plus a mermaid
+sequence diagram showing proxy ↔ auth/stats/upstream interaction. Documented
+the design contract for the auth service returning a **one-time dynamic
+routing override** in its response body (acting as a single-use alias config
+entry: `target` / `mode` / `base` / `key` / `transforms`), which the proxy
+would apply directly for that request and skip config-file model resolution.
+The override is per-request and ephemeral; requires `auth_with_model = true`.
+(README documentation only — no code change in this revision.)
+
+### Feature: client-IP forwarding headers on auth / stats sidecar calls
+
+The proxy now forwards the caller's client IP to the remote auth service
+(`[general] auth_url`) and the stats recorder (`[model_usage] record_url`) via
+two headers: `x-forwarded-for` (always set when a client IP is detectable) and
+`x-real-ip` (set only when the caller did not already provide one, preserving
+any explicit value from an outer proxy). The client IP is resolved by the
+existing `getClientIp` helper (`cf-connecting-ip` → first `x-forwarded-for`
+entry → `x-real-ip`). Added `getSidecarForwardedHeaders` in `src/utils/routing.ts`
+alongside `addForwardedHeaders`; the latter is unchanged so upstream provider
+calls (Claude/OpenAI/Gemini) keep carrying only `x-forwarded-for` as before.
+`recordModelUsageToRemote` grew an optional `extraHeaders` parameter that the
+two stats call sites (JSON response + streaming SSE) populate with the same
+forwarding headers.
+
 ### Feature: Apollo config backend (`PROXY_CONFIG_APOLLO`)
 
 Added [Apollo](https://www.apolloconfig.com/) (apolloconfig/apollo) as a third

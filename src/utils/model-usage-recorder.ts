@@ -44,11 +44,13 @@ export function recordModelUsageToRemote(
   payload: ModelUsageRecordPayload,
   logger?: Logger,
   accessToken?: string,
+  extraHeaders?: Record<string, string>,
 ): void {
   if (!recordUrl) return;
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (accessToken) headers.access_token = accessToken;
+  if (extraHeaders) Object.assign(headers, extraHeaders);
 
   void fetch(recordUrl, {
     method: 'POST',

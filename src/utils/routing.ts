@@ -571,6 +571,29 @@ export function addForwardedHeaders(authHeaders: Record<string, string>, request
 }
 
 /**
+ * Build client-IP forwarding headers for the remote auth / stats sidecars.
+ *
+ * Sets `x-forwarded-for` to the resolved client IP. Sets `x-real-ip` only when
+ * the caller did not already provide one (preserves an explicit `x-real-ip`
+ * from an outer proxy). Returns an empty object when no client IP can be
+ * determined, so the caller can spread the result without conditional checks.
+ *
+ * Distinct from {@link addForwardedHeaders}: that one targets upstream provider
+ * calls (Claude/OpenAI/Gemini) and only carries `x-forwarded-for`; this one is
+ * for the auth_url / record_url sidecars where both headers are expected.
+ */
+export function getSidecarForwardedHeaders(request: Request): Record<string, string> {
+  const clientIp = getClientIp(request);
+  if (!clientIp) return {};
+  const headers: Record<string, string> = { 'x-forwarded-for': clientIp };
+  const existingRealIp = request.headers.get('x-real-ip');
+  if (!existingRealIp) {
+    headers['x-real-ip'] = clientIp;
+  }
+  return headers;
+}
+
+/**
  * Strip transfer-encoding headers that no longer match the body.
  *
  * Node's fetch (undici) auto-decompresses gzip/deflate/br bodies but leaves
