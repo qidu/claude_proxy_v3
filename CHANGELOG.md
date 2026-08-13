@@ -5,6 +5,63 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### Fix: local privacy filter rejects word-underscore false positives
+
+The base64url scanner in `src/utils/hash-detect.ts` (`detectB64Priority`)
+treated any ≥20-char token with a digit and high entropy as a secret, so
+descriptive identifiers such as `deepseek_v4_anthropic_compat` (length 28,
+entropy 3.9, one `4`) were wrongly redacted to `⟦HASH:N⟧` sentinels. Added
+two independent guards, each tuned with margin so real random keys are kept:
+
+- **Max segment run ≥ 12**: the longest run between `_`/`-` separators must
+  reach 12. Random keys have a long unbroken run (`ouV7bwSqBiabj9kei4_ZiIlcQW90nsx`
+  → 18); word identifiers split into short dictionary segments (≤ 9).
+- **Digit ratio ≥ 0.08**: random keys are digit-rich (≥ 0.16 in practice);
+  word identifiers carry only an incidental digit (`v4` → ~0.04).
+
+Pure-hex keys (`sk-6f1ea0…`, `6255cf92…`) are unaffected — they are caught
+by the hex scanner, which still runs first.
+
+### Fix: privacy filter dedups identical tokens across messages
+
+`redactLocal` in `src/utils/privacy-filter.ts` minted a new `⟦HASH:N⟧`
+sentinel for every detected span, so the same token (e.g. an API key
+repeated across message turns) produced N distinct sentinels all mapping
+to the identical value. Now one sentinel is reused per unique token
+string, keeping the mapping minimal and the debug log accurate.
+
+### TUI: help overlay, monthly heatmap view, hotkey updates
+
+- **`h` hotkey**: opens a help overlay listing all hotkeys with short
+  descriptions. Composite overlay keys (`a`, `m`, `f`, `e`, `l`, `d`) are
+  also listed. Closes with `Esc` or `h`.
+- **`Shift+u` hotkey**: toggle the token heatmap between the existing
+  weekly view (weekday × hour) and a new monthly view (day-of-month 1–31).
+  Both views build from the same usage stats data.
+- **Hotkey consistency**: dashboard keys `C/S/T/D/P/L` now accept both
+  lower and upper case; composite overlay keys `a/m/f/e/l/d` also accept
+  both cases; bottom hotkey bar updated.
+
+### Privacy filter: hash detection improvements
+
+- **Require at least one digit** in base64url tokens (`detectB64Priority`).
+  Real API keys almost always contain digits; this filters out descriptive
+  identifiers like filenames while still catching real keys.
+- **Default entropy threshold raised** from 3.0 to 3.5 across `detectHashPriority`,
+  `detectB64Priority`, and `findHashSpans`, reducing false positives on
+  descriptive identifiers.
+- **Path-context exclusion** in `findHashSpans`: tokens preceded by `/` or `\`
+  (path separator) or followed by a file extension (`.ext`, 1–5 chars) are
+  now skipped as path components.
+
+### Fix: privacy filter restore fallback gap
+
+`restorePrivacyResponse` in `src/index.ts` only restored sentinels for
+`text/event-stream` and `application/json` responses. Other content-types
+(e.g. `text/plain`, empty content-type) fell through unrestored, leaking
+`⟦HASH:n⟧` sentinels to the client. Added a text fallback that buffers and
+restores any remaining content-type.
+
 ### Rename: `auth_url` → `auth_server`
 
 The remote-auth sidecar URL field under `[remote.authentication]` is renamed

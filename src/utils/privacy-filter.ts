@@ -163,7 +163,7 @@ export function getPrivacyFilterConfig(
 
   const entropyThreshold = Number.isFinite(Number(toml?.entropy_threshold))
     ? Number(toml?.entropy_threshold)
-    : 3.0;
+    : 3.3;
 
   const hashMinLenParsed = Number(toml?.hash_min_len);
   const hashMinLen = Number.isFinite(hashMinLenParsed) && hashMinLenParsed >= 1
@@ -373,15 +373,23 @@ async function redactLocal(
 
   let counter = 0;
   const mapping: PiiMapping = {};
+  // Dedup by original token: identical tokens reuse one sentinel so a key
+  // repeated across messages produces one mapping entry, not N.
+  const tokenToSentinel = new Map<string, string>();
+  const mintSentinel = (token: string): string => {
+    const existing = tokenToSentinel.get(token);
+    if (existing) return existing;
+    const sentinel = `\u27e6HASH:${counter}\u27e7`;
+    counter++;
+    tokenToSentinel.set(token, sentinel);
+    mapping[sentinel] = token;
+    return sentinel;
+  };
   const redacted: string[] = texts.map((text) => {
     if (!text) return text;
     const spans = findHashSpans(text, config.entropyThreshold, whitelist, config.hashMinLen);
     if (spans.length === 0) return text;
-    return applySpans(text, spans, () => {
-      const sentinel = `\u27e6HASH:${counter}\u27e7`;
-      counter++;
-      return sentinel;
-    }, mapping);
+    return applySpans(text, spans, mintSentinel);
   });
 
   // Write the redacted strings back into the body in place.
@@ -395,15 +403,13 @@ async function redactLocal(
 function applySpans(
   text: string,
   spans: HashSpan[],
-  mintSentinel: () => string,
-  mapping: PiiMapping,
+  mintSentinel: (token: string) => string,
 ): string {
   // Iterate right-to-left so earlier indexes stay valid as we splice.
   let out = text;
   for (let i = spans.length - 1; i >= 0; i--) {
     const span = spans[i];
-    const sentinel = mintSentinel();
-    mapping[sentinel] = span.token;
+    const sentinel = mintSentinel(span.token);
     out = out.slice(0, span.start) + sentinel + out.slice(span.end);
   }
   return out;
@@ -430,9 +436,20 @@ async function resolveLocalWhitelist(config: PrivacyFilterConfig): Promise<Reado
 /** Replace every sentinel in `text` with its original value. */
 export function restoreText(text: string, mapping: PiiMapping): string {
   if (!text || Object.keys(mapping).length === 0) return text;
-  return text.replace(SENTINEL_REGEX, (match) =>
-    Object.prototype.hasOwnProperty.call(mapping, match) ? mapping[match] : match,
-  );
+  let restoreCount = 0;
+  let missCount = 0;
+  const result = text.replace(SENTINEL_REGEX, (match) => {
+    if (Object.prototype.hasOwnProperty.call(mapping, match)) {
+      restoreCount++;
+      return mapping[match];
+    }
+    missCount++;
+    return match;
+  });
+  if (restoreCount > 0 || missCount > 0) {
+    console.debug(`[PII-RESTORE] restoreText: ${restoreCount} replaced, ${missCount} unmatched sentinels (text ${text.length} -> ${result.length} chars)`);
+  }
+  return result;
 }
 
 /**

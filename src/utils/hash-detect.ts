@@ -19,7 +19,7 @@
  * base64url alphabet `[A-Za-z0-9+/=_-]` that contain at least one uppercase
  * letter or digit not in `[a-f0-9]`, so they are not pure-hex. This catches
  * API keys like `ouV7bwSqBiabj9kei4_ZiIlcQW90nsx` that the hex scanner misses.
- * Minimum length: 20 chars. Entropy threshold: same as hex (default 3.0 bits,
+ * Minimum length: 20 chars. Entropy threshold: same as hex (default 3.3 bits,
  * computed over the full alphabet so the effective bar is higher).
  *
  * Use case: pre-redacting API keys, tokens and other hash-shaped secrets
@@ -150,13 +150,14 @@ function isOrderedHexSequence(token: string): boolean {
  *
  * Returns one of `HASH_HIGH`, `HASH_LOW`, `HASH_NO`.
  *
- * The default `entropyThreshold` of 3.0 is permissive enough to catch
- * real-world MD5 / SHA prefixes (which can have entropy around 3.3), while
- * still filtering out repetitive runs (`ffff...`, `abababab...`).
+ * The default `entropyThreshold` of 3.3 filters out most descriptive
+ * identifiers (filenames, kebab-case words) while still catching full-length
+ * SHA-256 hashes and longer API keys. Some short MD5 prefixes with low
+ * entropy may be missed at this threshold.
  */
 export function detectHashPriority(
   token: string,
-  entropyThreshold: number = 3.0,
+  entropyThreshold: number = 3.3,
   whitelist: ReadonlySet<string> = BUILTIN_HEX_WORDS_WHITELIST,
   minLen: number = DEFAULT_HASH_MIN_LEN,
 ): string {
@@ -191,13 +192,46 @@ function buildB64TokenRe(effectiveMin: number): RegExp {
 }
 
 /**
+ * Minimum length of the longest `_`/`-`-delimited segment for a base64url
+ * token to qualify as a key. Random keys have one long unbroken run; word-
+ * underscore identifiers (`deepseek_v4_anthropic_compat`) are chopped into
+ * short dictionary segments (max run 8-9), so this rejects them while keeping
+ * real keys that happen to contain a separator (`ouV7bwSqBiabj9kei4_ZiIlcQW90nsx`,
+ * max run 18).
+ */
+const B64_MIN_SEGMENT_RUN = 12;
+
+/**
+ * Minimum digit ratio for a base64url token to qualify as a key. Random keys
+ * are digit-rich (>= 0.16 in practice); descriptive identifiers carry only an
+ * incidental digit or two (`v4` -> ~0.04), so this is a second, independent
+ * signal against word-underscore false positives.
+ */
+const B64_MIN_DIGIT_RATIO = 0.08;
+
+/** Longest run of chars between `_`/`-` separators. */
+function maxSegmentRun(token: string): number {
+  let max = 0;
+  for (const seg of token.split(/[_-]/)) {
+    if (seg.length > max) max = seg.length;
+  }
+  return max;
+}
+
+/**
  * Classify a single base64url token.
  *
  * Returns `HASH_HIGH` when:
  *   1. The token length meets `Math.max(B64_MIN_LEN, minLen)`.
  *   2. It contains at least one character outside `[a-f0-9]` (i.e. is not a
  *      pure-hex string — those are already handled by the hex scanner).
- *   3. Shannon entropy meets `entropyThreshold`.
+ *   3. It contains at least one digit `[0-9]` (real API keys almost always do;
+ *      this filters out descriptive identifiers like filenames).
+ *   4. Its longest `_`/`-`-delimited segment is at least `B64_MIN_SEGMENT_RUN`
+ *      chars, and its digit ratio is at least `B64_MIN_DIGIT_RATIO` — two
+ *      independent signals that reject word-underscore identifiers such as
+ *      `deepseek_v4_anthropic_compat` while keeping real random keys.
+ *   5. Shannon entropy meets `entropyThreshold`.
  *
  * Returns `HASH_NO` otherwise.
  *
@@ -207,27 +241,60 @@ function buildB64TokenRe(effectiveMin: number): RegExp {
  */
 export function detectB64Priority(
   token: string,
-  entropyThreshold: number = 3.0,
+  entropyThreshold: number = 3.3,
   minLen: number = DEFAULT_HASH_MIN_LEN,
 ): string {
   if (token.length < Math.max(B64_MIN_LEN, minLen)) return HASH_NO;
   // Skip pure-hex tokens — the hex scanner handles them with finer-grained
   // priority classification (HIGH/LOW) and the hexspeak whitelist.
   if (/^[a-fA-F0-9]+$/.test(token)) return HASH_NO;
+  // Require at least one digit — real API keys contain digits; descriptive
+  // identifiers (filenames, kebab-case words) typically do not.
+  if (!/[0-9]/.test(token)) return HASH_NO;
+  // Reject word-underscore identifiers: they split into short dictionary
+  // segments and carry only an incidental digit. Real keys have a long
+  // unbroken run and are digit-rich.
+  if (maxSegmentRun(token) < B64_MIN_SEGMENT_RUN) return HASH_NO;
+  const digitCount = (token.match(/[0-9]/g) as RegExpMatchArray | null)?.length ?? 0;
+  if (digitCount / token.length < B64_MIN_DIGIT_RATIO) return HASH_NO;
   if (shannonEntropy(token) < entropyThreshold) return HASH_NO;
   return HASH_HIGH;
+}
+
+const EXT_RE = /^\.[A-Za-z0-9]{1,5}(?![A-Za-z0-9_-])/;
+
+/**
+ * Check whether the span at [start, end) in `text` sits inside a file path.
+ *
+ * Returns true when:
+ *   - The char before the span is `/` or `\` (path separator), or
+ *   - The text after the span looks like a file extension: `.ext` (1-5
+ *     alphanumeric chars) followed by a non-base64url boundary.
+ *
+ * This filters out path components and filenames that the entropy/length
+ * scanners would otherwise flag as hash-shaped.
+ */
+function isInPathContext(text: string, start: number, end: number): boolean {
+  if (start > 0) {
+    const before = text[start - 1];
+    if (before === '/' || before === '\\') return true;
+  }
+  if (EXT_RE.test(text.slice(end))) return true;
+  return false;
 }
 
 /**
  * Find hash-shaped spans in `text`.
  *
  * Runs both the hex scanner and the base64url scanner. Spans from both are
- * merged, de-overlapped (hex spans take priority), and returned in
- * left-to-right order. `HASH_NO` candidates are omitted.
+ * merged, de-overlapped (a span fully contained within another is dropped,
+ * so a b64url key like `sk-6f1ea0…` and its inner hex run `6f1ea0…` produce
+ * one span, not two), and returned in left-to-right order. `HASH_NO`
+ * candidates are omitted.
  */
 export function findHashSpans(
   text: string,
-  entropyThreshold: number = 3.0,
+  entropyThreshold: number = 3.3,
   whitelist: ReadonlySet<string> = BUILTIN_HEX_WORDS_WHITELIST,
   minLen: number = DEFAULT_HASH_MIN_LEN,
 ): HashSpan[] {
@@ -238,15 +305,13 @@ export function findHashSpans(
   const tokenRe = buildTokenRe(minLen);
   let match: RegExpExecArray | null;
   while ((match = tokenRe.exec(text)) !== null) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (isInPathContext(text, start, end)) continue;
     const token = match[0];
     const priority = detectHashPriority(token, entropyThreshold, whitelist, minLen);
     if (priority === HASH_NO) continue;
-    spans.push({
-      start: match.index,
-      end: match.index + token.length,
-      token,
-      priority,
-    });
+    spans.push({ start, end, token, priority });
   }
 
   // --- Base64url scanner ---
@@ -260,12 +325,39 @@ export function findHashSpans(
     // Skip if this range is already fully covered by a hex span (no duplicate).
     const overlaps = spans.some((s) => s.start <= start && s.end >= end);
     if (overlaps) continue;
+    if (isInPathContext(text, start, end)) continue;
     spans.push({ start, end, token, priority });
   }
 
   // Sort left-to-right for the caller (applySpans iterates right-to-left).
   spans.sort((a, b) => a.start - b.start);
-  return spans;
+
+  // De-overlap: drop any span fully contained within another. This resolves
+  // the case where a b64url span and a hex span share the same key — e.g.
+  // `sk-6f1ea04…` is matched by the b64 scanner (prefix `sk-`) while the
+  // hex scanner matches the inner `6f1ea04…` run. The narrower span is the
+  // duplicate; keeping only the wider one ensures applySpans produces a
+  // clean, non-overlapping replacement set so round-trip restore is exact.
+  const deduped: HashSpan[] = [];
+  for (const span of spans) {
+    // Pop the last kept span if the current one contains it.
+    while (deduped.length > 0) {
+      const prev = deduped[deduped.length - 1];
+      if (span.start <= prev.start && span.end >= prev.end) {
+        deduped.pop();
+      } else {
+        break;
+      }
+    }
+    // Skip the current span if the last kept one contains it.
+    const prev = deduped[deduped.length - 1];
+    if (prev && prev.start <= span.start && prev.end >= span.end) {
+      continue;
+    }
+    deduped.push(span);
+  }
+
+  return deduped;
 }
 
 /**

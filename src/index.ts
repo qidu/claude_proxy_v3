@@ -8,7 +8,7 @@
 import { Env } from './types/shared.js';
 import { extractAuthHeaders, transformAuthHeadersForUpstream, formatApiKeyForUpstream, parseDynamicRoute, isHostAllowed, getHandlerType, buildTargetUrl, buildUpstreamUrl, sanitizeUpstreamResponseHeaders, getSidecarForwardedHeaders } from './utils/routing.js';
 import { createErrorResponse, OverLimitError, ClaudeProxyError, classifyTransportError } from './utils/errors.js';
-import { createLogger } from './utils/logger.js';
+import { createLogger, type Logger } from './utils/logger.js';
 import { handleModelsRequest, getModelCount } from './handlers/models.js';
 import { handleTokenCountingRequest } from './handlers/token-counting.js';
 import { handleMessagesRequest } from './handlers/messages.js';
@@ -181,11 +181,19 @@ function generateRequestId(): string {
  * response. Handles JSON (buffered) and text/event-stream (transform) bodies.
  * Returns the response unchanged when the mapping is empty.
  */
-async function restorePrivacyResponse(response: Response, mapping: PiiMapping): Promise<Response> {
+async function restorePrivacyResponse(
+  response: Response,
+  mapping: PiiMapping,
+  requestId: string,
+  logger: Logger,
+): Promise<Response> {
   if (Object.keys(mapping).length === 0) return response;
   const contentType = response.headers.get('content-type') || '';
+  const sentinelKeys = Object.keys(mapping);
+  logger.debug(requestId, `[PII-RESTORE] mapping size=${sentinelKeys.length}, content-type=${contentType || '-'}, sentinels=${JSON.stringify(sentinelKeys)}`);
 
   if (contentType.includes('text/event-stream') && response.body) {
+    logger.debug(requestId, `[PII-RESTORE] streaming restore via transform stream`);
     return new Response(response.body.pipeThrough(createRestoreTransformStream(mapping)), {
       status: response.status,
       statusText: response.statusText,
@@ -196,9 +204,23 @@ async function restorePrivacyResponse(response: Response, mapping: PiiMapping): 
   if (contentType.includes('application/json')) {
     const text = await response.text();
     const restored = restoreText(text, mapping);
+    logger.debug(requestId, `[PII-RESTORE] json restore: body ${text.length} -> ${restored.length} chars`);
     // restored text length differs from the redacted body; and the upstream
     // body has already been decompressed by .text(), so content-encoding no
     // longer matches. Strip both via sanitizeUpstreamResponseHeaders.
+    return new Response(restored, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: sanitizeUpstreamResponseHeaders(response),
+    });
+  }
+
+  // Fallback: treat any other content-type as text and restore sentinels.
+  // This catches text/plain, text/html, empty content-type, etc.
+  if (response.body) {
+    const text = await response.text();
+    const restored = restoreText(text, mapping);
+    logger.debug(requestId, `[PII-RESTORE] text restore: body ${text.length} -> ${restored.length} chars`);
     return new Response(restored, {
       status: response.status,
       statusText: response.statusText,
@@ -2368,7 +2390,7 @@ export default {
       if (_fusionPlan && _fusionBody) {
         const fusionResp = await runFusion(_fusionPlan, _fusionBody);
         recordRequestTiming(path, Date.now() - requestStartTime);
-        return applyCorsHeaders(await restorePrivacyResponse(fusionResp, piiMapping), request, env);
+        return applyCorsHeaders(await restorePrivacyResponse(fusionResp, piiMapping, requestId, logger), request, env);
       }
 
       if (compositeAttempts && compositeAttempts.length > 0) {
@@ -2379,7 +2401,7 @@ export default {
             logger.info(requestId, `${new URL(attempt.request.url).pathname} for ${scheduleAliasName ?? compositeAliasName ?? attempt.modelId} to ${attempt.targetUrl} (${attempt.upstreamMode})`);
             const response = await runAttempt(attempt);
             recordRequestTiming(path, Date.now() - requestStartTime);
-            return applyCorsHeaders(await restorePrivacyResponse(response, piiMapping), attempt.request, env);
+            return applyCorsHeaders(await restorePrivacyResponse(response, piiMapping, requestId, logger), attempt.request, env);
           } catch (error) {
             lastError = error;
             // Transport errors (DNS / refused / TLS / abort) arrive as plain
@@ -2430,7 +2452,7 @@ export default {
 
       // Apply CORS headers
       recordRequestTiming(path, Date.now() - requestStartTime);
-      return applyCorsHeaders(await restorePrivacyResponse(response, piiMapping), request, env);
+      return applyCorsHeaders(await restorePrivacyResponse(response, piiMapping, requestId, logger), request, env);
 
     } catch (error) {
       // Handle errors with Claude API format (without exposing sensitive info)

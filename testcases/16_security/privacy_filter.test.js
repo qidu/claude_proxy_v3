@@ -48,9 +48,10 @@
  * - TC2120: redactBody in local mode does NOT throw when the sidecar URL is
  *           absent (the whole point of local mode is to skip the network call)
  * - TC2123: redactBody in local mode feeds the entire proxy config file as
- *           message content and asserts that at least one key is detected,
+ *           message content and asserts that more than one key is detected,
  *           using the config's own [privacy_filter] settings (entropy_threshold,
  *           whitelist_remove). Round-trips sentinels back to the original text.
+ *           The test is skipped if the proxy config file does not exist.
  *
  * Reference: src/utils/privacy-filter.ts, src/index.ts (privacy-filter wiring),
  *            testcases/gaps-of-testcases-konwn-round-2.md gap #1
@@ -445,7 +446,8 @@ async function testRedactBodyLocalModeRespectsTomlWhitelistAdd() {
 // ---------------------------------------------------------------------------
 // TC2123: redactBody in local mode detects keys when given the entire proxy
 //         config file as message content. Uses the config's own
-//         [privacy_filter] settings. Asserts at least one key is detected.
+//         [privacy_filter] settings. Asserts more than one key is detected.
+//         Skipped (not failed) if the proxy config file does not exist.
 // ---------------------------------------------------------------------------
 async function testRedactBodyDetectsKeyFromProxyConfig() {
   const TEST_CONFIG = process.env.TEST_CONFIG || 'test_';
@@ -453,7 +455,12 @@ async function testRedactBodyDetectsKeyFromProxyConfig() {
   const fallbackPath = path.join(process.cwd(), 'proxy_config.toml');
   const tomlPath = fs.existsSync(configPath) ? configPath : fallbackPath;
 
-  assert(fs.existsSync(tomlPath), `Proxy config not found at ${tomlPath}`);
+  // Skip gracefully when the proxy config is absent — this test only applies
+  // when real API keys are present in the repo's config file.
+  if (!fs.existsSync(tomlPath)) {
+    console.log(`  [skip] TC2123: proxy config not found at ${tomlPath}`);
+    return;
+  }
 
   const tomlText = fs.readFileSync(tomlPath, 'utf8');
   const proxyConfig = parseSimpleToml(tomlText);
@@ -476,8 +483,9 @@ async function testRedactBodyDetectsKeyFromProxyConfig() {
   const detectedCount = Object.keys(result.mapping).length;
 
   assert(
-    detectedCount > 0,
-    `Expected at least 1 key detected in proxy config file, got 0. Config file may have no hex-shaped API keys.`
+    detectedCount > 1,
+    `Expected more than 1 key detected in proxy config file, got ${detectedCount}. ` +
+    `The config is expected to contain multiple hex-shaped API keys (>= 8 hex chars, high entropy).`
   );
 
   // Sentinels must appear in the redacted content.
@@ -590,6 +598,62 @@ async function testFindHashSpansDetectsB64Tokens() {
   assert(restored === 'token=' + b64Key, `Round-trip failed, got: ${restored}`);
 }
 
+// ---------------------------------------------------------------------------
+// TC2126: redactBody local mode dedups identical tokens across messages
+// ---------------------------------------------------------------------------
+async function testRedactBodyLocalModeDedupsIdenticalTokens() {
+  // The same high-entropy token in two messages plus a second distinct token.
+  // Dedup means one sentinel per unique token — 2 mapping entries, not 3.
+  const shared = '5d41402abc4b2a76b9719d911017c592';
+  const other = 'aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d';
+  const cfg = getPrivacyFilterConfig({}, { filter_mode: 'local' });
+  const body = {
+    messages: [
+      { role: 'user', content: 'key=' + shared + ' alt=' + other },
+      { role: 'assistant', content: 'seen key=' + shared },
+      { role: 'user', content: 'again key=' + shared },
+    ],
+  };
+  const result = await redactBody(cfg, body);
+
+  // Exactly 2 unique tokens → 2 mapping entries.
+  assert(
+    Object.keys(result.mapping).length === 2,
+    `Expected 2 mapping entries (one per unique token), got ${JSON.stringify(result.mapping)}`
+  );
+
+  // Find the sentinel minted for `shared` and assert it appears in all three
+  // messages (deduped, not three different sentinels).
+  let sharedSentinel = null;
+  for (const [sentinel, original] of Object.entries(result.mapping)) {
+    if (original === shared) { sharedSentinel = sentinel; break; }
+  }
+  assert(sharedSentinel !== null, `Expected a mapping entry for the shared token`);
+
+  const c0 = result.body.messages[0].content;
+  const c1 = result.body.messages[1].content;
+  const c2 = result.body.messages[2].content;
+  assert(c0.includes(sharedSentinel), `msg[0] should use the deduped sentinel, got: ${c0}`);
+  assert(c1.includes(sharedSentinel), `msg[1] should reuse the same sentinel, got: ${c1}`);
+  assert(c2.includes(sharedSentinel), `msg[2] should reuse the same sentinel, got: ${c2}`);
+  assert(!c0.includes(shared) && !c1.includes(shared) && !c2.includes(shared),
+    'original shared token must not leak into any message');
+
+  // Round-trip restore returns the original strings.
+  assert(
+    restoreText(c0, result.mapping) === 'key=' + shared + ' alt=' + other,
+    `msg[0] round-trip failed`
+  );
+  assert(
+    restoreText(c1, result.mapping) === 'seen key=' + shared,
+    `msg[1] round-trip failed`
+  );
+  assert(
+    restoreText(c2, result.mapping) === 'again key=' + shared,
+    `msg[2] round-trip failed`
+  );
+}
+
 module.exports = {
   testConfigNullWhenUnset,
   testConfigRejectsExternalHost,
@@ -612,6 +676,7 @@ module.exports = {
   testRedactBodyLocalModeRespectsTomlWhitelistAdd,
   testRedactBodyLocalModeNoNetwork,
   testRedactBodyDetectsKeyFromProxyConfig,
+  testRedactBodyLocalModeDedupsIdenticalTokens,
   testDetectB64PriorityClassification,
   testFindHashSpansDetectsB64Tokens,
 };
@@ -638,8 +703,9 @@ if (require.main === module) {
     { name: 'TC2118: redactBody local mode respects built-in whitelist', fn: testRedactBodyLocalModeRespectsBuiltinWhitelist },
     { name: 'TC2119: redactBody local mode respects toml whitelist_add', fn: testRedactBodyLocalModeRespectsTomlWhitelistAdd },
     { name: 'TC2120: redactBody local mode no network', fn: testRedactBodyLocalModeNoNetwork },
-    { name: 'TC2123: redactBody detects key from proxy config whitelist_remove', fn: testRedactBodyDetectsKeyFromProxyConfig },
+    { name: 'TC2123: redactBody detects >1 keys from proxy config', fn: testRedactBodyDetectsKeyFromProxyConfig },
     { name: 'TC2124: detectB64Priority classification', fn: testDetectB64PriorityClassification },
     { name: 'TC2125: findHashSpans detects base64url API keys', fn: testFindHashSpansDetectsB64Tokens },
+    { name: 'TC2126: redactBody local mode dedups identical tokens', fn: testRedactBodyLocalModeDedupsIdenticalTokens },
   ]));
 }
