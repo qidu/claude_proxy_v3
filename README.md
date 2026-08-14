@@ -128,6 +128,17 @@ cd model_proxy_v3
 npm install
 ```
 
+> **Node ≥ 19 recommended.** The proxy uses the Web Crypto global (`crypto.randomUUID()`)
+> available natively in Node ≥ 19. On Node 18.17–18.x, either:
+> - export `NODE_OPTIONS=--experimental-global-webcrypto` before running any command
+>   (`npm run server`, `npm run test:unit`, etc.); or
+> - in each source file that calls `crypto.randomUUID()`, add at the top:
+>   ```ts
+>   import { webcrypto } from 'node:crypto';
+>   const crypto = webcrypto;
+>   ```
+> Node < 18.17 is not supported.
+
 ### 2. Configure
 
 Copy the example config and edit it:

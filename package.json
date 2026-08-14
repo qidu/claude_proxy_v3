@@ -11,7 +11,7 @@
     "build": "tsc -p tsconfig.server.json",
     "start": "node dist/server.js",
     "server": "tsx src/server.ts",
-    "test:unit": "tsx --test tests/unit/**/*.test.ts"
+    "test:unit": "node --experimental-global-webcrypto --import tsx --test tests/unit/**/*.test.ts"
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.76.0",
