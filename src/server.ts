@@ -7,7 +7,6 @@ import { createServer } from 'http';
 import type { Env } from './types/shared.js';
 import { loadProxyConfig, clearProxyConfigCache, loadProxyConfigFromPath, parseHumanTokenLimit } from './utils/config-loader.js';
 import { consumeActiveRequestRelease, loadTokenStatsFromLog, getWindowMs, setStatsPersistenceEnabled } from './utils/dashboard-stats.js';
-import { startTUI } from './tui.js';
 
 const port = parseInt(process.env.PORT || '8788', 10);
 
@@ -205,6 +204,8 @@ server.listen(port, '0.0.0.0', async () => {
     console.error = () => {};
     console.debug = () => {};
 
+    // Lazy import: pi-tui is a devDependency, not shipped in the production image
+    const { startTUI } = await import('./tui.js');
     stopTui = startTUI({
       env,
       loadConfig: async (forceReload?: boolean) => {

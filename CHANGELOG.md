@@ -5,6 +5,17 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### Change: `@earendil-works/pi-tui` moved to devDependencies
+
+The interactive TUI only runs in local/TTY sessions, not in the Docker
+production image. `src/server.ts` now lazy-imports `src/tui.js`
+(`await import`) only when `TUI` is enabled and stdin/stdout are TTYs,
+so the server starts without `pi-tui` installed. This also resolves the
+previous mismatch where the runtime image (`node:20-alpine`) was below
+pi-tui's declared `node >= 22.19.0` requirement. Enabling `TUI` in a
+container without devDependencies installed fails loudly at startup
+(`ERR_MODULE_NOT_FOUND`).
+
 ### Fix: local privacy filter rejects word-underscore false positives
 
 The base64url scanner in `src/utils/hash-detect.ts` (`detectB64Priority`)
