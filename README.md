@@ -93,7 +93,7 @@ full wire-level contract.
 - **Model-based routing** — route each model name to its own upstream URL, API key,
   and protocol via a simple TOML config. Exact model keys are supported in every
   `[models.*]` category; provider wildcards (`claude-*`) and the final catch-all
-  (`*`) are scoped as described in [Model Routing](#model-routing).
+  (`*`) are scoped as described in [Model Routing & Aliases](#model-routing--aliases).
 - **Composite aliases** — group several models under one name with weighted-random,
   primary/fallback (with runtime share decay on failure), fusion fan-out, or a
   planner→executor coordinator that hands off once a trigger tool appears.
@@ -206,8 +206,8 @@ base_url = "https://api.your-provider.com"   # section base_url overrides [defau
 # /v1/embeddings — OpenAI-compatible. The proxy appends `v1/embeddings` to
 # `base_url`, so set the **API root** (e.g. `https://integrate.api.nvidia.com`,
 # NOT `…/v1`). When `api_key` is set, it always overrides any caller-supplied
-# header on `/v1/embeddings` — see "Who wins — caller's key vs. configured
-# api_key" below. Model entries are exact-match only; bare model names without
+# header on `/v1/embeddings` — see the "Who wins" tables in
+# docs/routing-and-aliases.md. Model entries are exact-match only; bare model names without
 # the upstream's required prefix (e.g. `nvidia/`) will fail at the upstream.
 [models.EMBEDDING]
 upstream_mode = "openai-completions"   # value is informational — the proxy hardcodes this for /v1/embeddings
@@ -291,7 +291,7 @@ Key ideas:
   accumulates these fragments and flushes one complete `functionCall` part per tool call when
   `finish_reason` arrives, avoiding name-less `call_undefined` entries in the client's history.
 - **Wildcards** (`claude-*`) apply only in the provider/default sections listed in
-  [Model Routing](#model-routing); the **catch-all** (`*`) is only the final
+  [Model Routing & Aliases](#model-routing--aliases); the **catch-all** (`*`) is only the final
   `[models.default]` fallback for anything not claimed earlier.
 
 See [`proxy_config.toml_example`](./proxy_config.toml_example) for a fully commented config
@@ -411,7 +411,7 @@ On startup, the proxy avoids double-counting persisted stats as follows:
 | `GET /config-reload` | Reload config from `PROXY_CONFIG_CONSUL` or `PROXY_CONFIG_APOLLO`. Only meaningful when a remote config source is set; returns `400`/`500` otherwise. Clears the config cache and re-fetches. |
 | `GET /health` (also `GET /`) | Health check. Probes the resolved default-category / `[default_upstream]` upstream `/v1/models`; returns `{status:"ok", models, cached, version}` on success or `404` when no models are reachable. No auth required. |
 | `GET /favicon.ico` | Returns `204 No Content` (browser plumbing). |
-| `/{protocol}/{host}/...` dynamic route | Per-request upstream override. See [Dynamic routing](#dynamic-routing) below. |
+| `/{protocol}/{host}/...` dynamic route | Per-request upstream override. See [Dynamic routing](./docs/api-endpoints.md#dynamic-routing). |
 
 A Gemini `/v1/models/{model}:...` variant exists for each `/v1beta/models/{model}:...`
 endpoint. `:countTokens` is supported too: native Gemini routes forward to Gemini
@@ -428,7 +428,7 @@ The mode is selected by the route's `defaultMode` / model config:
 |---|---|---|---|---|---|
 | `POST /v1/messages` | **Native passthrough** to `/v1/messages`; request stays Claude Messages format end-to-end. | **Direct transform**: Claude Messages → Chat Completions → Claude Messages. If input is already OpenAI-shaped, it can pass through. | **Indirect transform via `openai-completions`**: Claude Messages → Chat Completions → Responses `input` → Claude Messages. Basic tools and streaming are supported; `max_tokens` is rewritten to `max_output_tokens`. | **Direct transform**: Claude Messages → Gemini generateContent → Claude Messages. | **Direct transform**: Claude Messages → Gemini Interactions/generateContent-compatible upstream → Claude Messages. |
 | `POST /v1/responses` | **Direct transform**: Responses `input`/`instructions` → Claude Messages → Responses. Text and tool-use are supported for non-streaming and streaming. | **Direct transform**: Responses → Chat Completions → Responses. For `api.qnaigc.com`, keeps legacy `max_tokens`; otherwise uses `max_completion_tokens`. | **Native passthrough** to `/v1/responses`. | **Direct transform via Claude Messages**: Responses → Claude Messages → Gemini generateContent → Claude Messages → Responses. | **Direct transform via Claude Messages**: Responses → Claude Messages → Gemini Interactions/generateContent → Claude Messages → Responses. |
-| `POST /v1/chat/completions` | **Convert passthrough** only when `DEV_PASS_THROUGH=true`; Chat Completions body is converted to Claude Messages format and forwarded to `/v1/messages`; response (streaming and non-streaming) is converted back to OpenAI completions format. Tool schema types are lowercased; `content: ""` on assistant messages with `tool_calls` is normalized to `null`; consecutive tool messages are grouped into one user turn. | **Native passthrough** only when `DEV_PASS_THROUGH=true`; otherwise rejected. Uses the resolved per-model route; composite aliases and `target`-mapped model ids are resolved and the `model` field in the forwarded body is rewritten to the target model id. | **Transform passthrough** only when `DEV_PASS_THROUGH=true`; Chat Completions body is converted to Responses `input` and forwarded to `/v1/responses` using the resolved per-model route. | **Transform passthrough** only when `DEV_PASS_THROUGH=true`; Chat Completions body (including `image_url` blocks) is converted to Gemini `generateContent` body (`inline_data` for data-URI images; http(s) image URLs are fetched server-side with an SSRF guard) and forwarded to `:generateContent` / `:streamGenerateContent?alt=sse`. Text deltas and `finishReason` round-trip; tool-call/thinking response parts and any model-generated image output are dropped (response schemas for Claude Messages and OpenAI Completions do not carry image output — see [image I/O notes](#image-inputoutput-across-format-boundaries)). | Same as `gemini-generatecontent`; not separately wired today. |
+| `POST /v1/chat/completions` | **Convert passthrough** only when `DEV_PASS_THROUGH=true`; Chat Completions body is converted to Claude Messages format and forwarded to `/v1/messages`; response (streaming and non-streaming) is converted back to OpenAI completions format. Tool schema types are lowercased; `content: ""` on assistant messages with `tool_calls` is normalized to `null`; consecutive tool messages are grouped into one user turn. | **Native passthrough** only when `DEV_PASS_THROUGH=true`; otherwise rejected. Uses the resolved per-model route; composite aliases and `target`-mapped model ids are resolved and the `model` field in the forwarded body is rewritten to the target model id. | **Transform passthrough** only when `DEV_PASS_THROUGH=true`; Chat Completions body is converted to Responses `input` and forwarded to `/v1/responses` using the resolved per-model route. | **Transform passthrough** only when `DEV_PASS_THROUGH=true`; Chat Completions body (including `image_url` blocks) is converted to Gemini `generateContent` body (`inline_data` for data-URI images; http(s) image URLs are fetched server-side with an SSRF guard) and forwarded to `:generateContent` / `:streamGenerateContent?alt=sse`. Text deltas and `finishReason` round-trip; tool-call/thinking response parts and any model-generated image output are dropped (response schemas for Claude Messages and OpenAI Completions do not carry image output — see [image I/O notes](./docs/api-endpoints.md#image-inputoutput-across-format-boundaries)). | Same as `gemini-generatecontent`; not separately wired today. |
 | `POST /v1beta/models/{model}:generateContent` / `:streamGenerateContent` | **Indirect transform via `openai-completions`**: generateContent → Chat Completions → Claude Messages → generateContent. Forwards upstream to `/v1/messages`; text, tool calls, and streaming text deltas return as Gemini `candidates[].content.parts`; tool calls become `functionCall` parts. | **Direct transform**: generateContent → Chat Completions → generateContent. Forwards upstream to `/v1/chat/completions`. | **Indirect transform via `openai-completions`**: generateContent → Chat Completions → Responses `input` → generateContent. Forwards upstream to `/v1/responses`; `system`/`developer` messages become Responses `instructions`; content-part arrays are normalized to text. | **Native passthrough** to `:generateContent` / `:streamGenerateContent` using the configured Gemini API version. | **Native Gemini-family route**; forwards to Gemini generateContent/stream endpoint using Interactions-compatible mode. |
 | `POST /v1/interactions` | **Indirect transform via `openai-completions`**: Interactions → Chat Completions → Claude Messages → Interactions. Forwards upstream to `/v1/messages`; text, tool calls, and streaming text deltas return in Interactions shape. | **Direct transform**: Interactions → Chat Completions → Interactions. Forwards upstream to `/v1/chat/completions`. | **Indirect transform via `openai-completions`**: Interactions → Chat Completions → Responses `input` → Interactions. Forwards upstream to `/v1/responses`; `system`/`developer` messages become Responses `instructions`; content-part arrays are normalized to text. | **Native Gemini-family route**; forwards to Gemini generateContent/stream endpoint. | **Native Gemini-family route**; forwards to Gemini generateContent/stream endpoint using Interactions-compatible mode. |
 | `GET /v1/models` | Passthrough model listing; no `upstreamMode` conversion is applied. | Passthrough model listing; no `upstreamMode` conversion is applied. | Passthrough model listing; no `upstreamMode` conversion is applied. | Passthrough model listing; no `upstreamMode` conversion is applied. | Passthrough model listing; no `upstreamMode` conversion is applied. |
@@ -441,487 +441,41 @@ Notes:
 - **Indirect transform via `openai-completions`** means the request body is routed through OpenAI Chat Completions as an intermediate shape before reaching the target upstream family. This covers two cases: (a) Gemini endpoint input becomes Chat Completions, then becomes Claude Messages or OpenAI Responses; (b) `/v1/messages` routed to an `openai-responses` upstream becomes Chat Completions, then Responses `input`. This reuses the Chat Completions middle mode for code reuse while preserving the original client endpoint response shape.
 - Direct transforms are preferred long-term for endpoint fidelity. The current `/v1/interactions` → `anthropic-messages` / `openai-responses` routes use the indirect `openai-completions` bridge for code reuse; see [Routing transform review](./docs/routing-review.md) for tradeoffs and recommendations.
 
-### Dynamic routing
 
-In addition to the fixed endpoints above, the proxy accepts **per-request dynamic routes** of the
-form `/{protocol}/{host}/{path_prefix}/{model_id?}/{claude_endpoint}`, e.g.
-`/https/api.qnaigc.com/openai/v1/models/deepseek-v3.1/v1/messages`. The first path segment after
-the leading slash is the protocol (`http` or `https`); the next is the upstream host; the proxy
-then walks the remaining segments to find the boundary between the upstream API path prefix, an
-optional model id, and the trailing Claude-style endpoint (`v1/messages`, `v1/models`,
-`v1/messages/count_tokens`, etc.).
-
-- **No body conversion.** Dynamic routes are passthrough: the body is forwarded to the resolved
-  upstream URL verbatim, and auth headers (`Authorization` / `x-api-key` / `x-goog-api-key`) are
-  forwarded as-is from the caller. The proxy does **not** perform a local credential check.
-- **SSRF guard.** The parsed host is checked against `ALLOWED_HOSTS` (env, default
-  `127.0.0.1,localhost`) plus any host derived from `[models.*]` / `[default_upstream]` config
-  (`getAllowedHostsFromConfig`). Requests for hosts outside that allowlist are rejected with `403`.
-- **Use case.** Lets a single proxy instance fan out to many config-approved upstreams without a
-  `[models.*]` entry per target — useful for ad-hoc probing during development.
-
-### Image input/output across format boundaries
-
-**Wire shapes the proxy produces.** In every supported direction, image bytes travel **inline in the request body** — The proxy does NOT upload images to external storage and does NOT expose any image-serving endpoint.
-- The '[fetch] image_encode' sidecard for processing the images fetching and base64 encoding of image_url from `/v1/chat/completions` asynchronously outside the proxy.
-
-| Target upstream | Wire shape emitted | What's in it |
-|---|---|---|
-| Gemini (`gemini-generatecontent`) | `inline_data: {mime_type, data: "<base64>"}` | Raw base64 string in a JSON field |
-| OpenAI (`openai-completions` / `openai-responses`) | `image_url: {url: "data:<mime>;base64,<base64>"}` | A **data URI** — the base64 bytes are inside the URL string itself |
-| Claude (`anthropic-messages`) | `image: {source: {type: "base64", media_type, data}}` | Raw base64 string in a JSON field |
-
-This row describes only what the proxy **emits to an OpenAI upstream when source bytes are inline** (Gemini `inline_data`, Claude base64, or a caller-supplied `data:` URI). In that direction the proxy always produces a `data:` URI — the field is named `image_url` but the bytes live inside the string after the comma, and the upstream parses it server-side with no second network fetch. It is **not** a constraint on what callers can send: OpenAI's schema also accepts a real `https://...` URL in `image_url.url`. When a caller does send an HTTP URL, see the **Source-shape handling** table below for the per-route behavior (some routes fetch+inline the bytes, others pass the URL through unchanged).
-
-**Source-shape handling.**
-
-| Source shape | What happens | Result |
-|---|---|---|
-| Client sent `data:` URI | Decoded synchronously in-process | Bytes embedded inline in the upstream request |
-| Client sent raw base64 (Gemini `inline_data` / Claude `image`) | Passed through / re-wrapped into target shape | Bytes embedded inline |
-| Client sent `https://...` URL | **Fetched and base64-encoded, then the URL is discarded** (see *who fetches HTTP URLs* below) | Bytes embedded inline — except on the OpenAI → OpenAI Responses route, where the URL is passed through unchanged |
-
-**Fetch+base64 only runs for real HTTP(S) URLs** — `data:` URIs are decoded, raw base64 is re-wrapped, neither hits the network.
-
-**Who fetches HTTP URLs** (only relevant when the caller actually sent an `https://...` URL):
-
-- **OpenAI → OpenAI Responses route**: nobody. The proxy passes `image_url: {url, detail?}` through unchanged and the OpenAI Responses upstream fetches the URL itself. No in-proxy SSRF guard, no sidecar.
-- **Every other route that needs inline bytes** (OpenAI → Gemini, OpenAI → Claude, Responses → Claude/Gemini): the work is done by whichever of these is configured:
-  - **No sidecar configured** (default) → the **proxy fetches in-process**, with its own SSRF guard (loopback / RFC1918 / link-local / mDNS blocked via `isInternalHost`; 20 MiB byte cap; `ALLOWED_HOSTS` does **not** apply to image URLs).
-  - **`[fetch] image_encode` (or `IMAGE_ENCODE_URL`) configured** → the proxy delegates to the **sidecar** via `POST {url}/encode` with `{"url":"..."}`; the sidecar returns `{"mime_type","data"}`. The sidecar must be on localhost / private LAN and applies its own SSRF policy. The sidecar is **opt-in**.
-
-The only HTTP URL ever involved is the *input* URL the client sent; neither proxy nor sidecar hosts or re-serves images.
-
-Image **input** is converted across the OpenAI ↔ Gemini boundary in both directions:
-
-- **Gemini → OpenAI** (Gemini SDK client → OpenAI-compatible upstream): each Gemini `inline_data`/`inlineData` request part becomes an OpenAI `image_url` data-URI part. Both snake_case and camelCase Gemini field names are accepted.
-- **OpenAI → Gemini** (`/v1/chat/completions` client → `gemini-generatecontent` upstream, `DEV_PASS_THROUGH=true` only): each OpenAI `image_url` request part becomes a Gemini `inline_data` part. `data:` URIs decode synchronously. http(s) URLs are either (a) fetched server-side in-process with an SSRF guard (loopback / RFC1918 / link-local / mDNS hosts blocked via `isInternalHost`, 20 MiB byte cap; `ALLOWED_HOSTS` does **not** apply to image URLs), or (b) delegated to an image-encode sidecar when `[fetch] image_encode` (or `IMAGE_ENCODE_URL`) is configured — the sidecar receives `POST {url}/encode` with `{"url":"..."}` and returns `{"mime_type","data"}`. The sidecar must be on localhost / private LAN; its own SSRF policy governs the image URL.
-- **OpenAI → Claude** (`/v1/chat/completions` or `/v1/interactions` client → `anthropic-messages` upstream): each OpenAI `image_url` request part becomes a Claude `image` block (`source.type = "base64"`). `data:` URIs decode via the shared `decodeDataUri` helper; http(s) URLs use the same SSRF-guarded fetch / sidecar path as the Gemini direction above. Text-only array `content` collapses back to a plain string to preserve the existing wire shape. Anthropic's spec restricts `image` blocks to `user`-role messages; the proxy emits them for any role containing `image_url` (matches the existing cross-role behavior of `convertClaudeToGeminiRequest` / `convertClaudeContentToOpenAI`) — if Claude rejects assistant-role images, that is upstream spec enforcement.
-- **OpenAI → OpenAI Responses** (`/v1/chat/completions` or `/v1/interactions` client → `openai-responses` upstream): each OpenAI `image_url` request part becomes a Responses `input_image` part. The `image_url` object (`{url, detail?}`) is passed through unchanged — the Responses upstream performs its own image fetch, so no in-proxy SSRF guard or sidecar is involved. Text parts use the role-appropriate `input_text` (user) / `output_text` (assistant).
-- **Responses → Claude / Gemini** (`/v1/responses` client → `anthropic-messages` or `gemini-generatecontent` / `gemini-interactions` upstream): each Responses `input_image` part becomes a Completions `image_url` part (object form `{url, detail?}`) in the intermediate representation, then a Claude `image` block on the `anthropic-messages` route (data: URI decoded in-process; http(s) via the same SSRF-guarded fetch / sidecar path as the OpenAI → Claude direction). The Gemini direction benefits from the same chain via the shared `completionsToClaudeBody` reuse.
-
-Image **output** from a Gemini model (e.g. `inlineData` returned by an image-generation model) is **not carryable** to a `/v1/chat/completions` or `/v1/messages` client through any cross-mode route. This is a hard limit imposed by the target response schemas, not a missing converter:
-
-- **Claude Messages**: the Anthropic API spec restricts `image` content blocks to **user** (input) messages. An assistant message carrying an `image` block is rejected by a real Anthropic-compatible upstream. The proxy's local TypeScript types permit the structure, but the spec does not.
-- **OpenAI Chat Completions**: `choices[].message.content` is text, or an array of `text` / `image_url` parts where `image_url` is also input-only. There is no field for a model-generated image in a completion response.
-
-Model-generated images only reach clients through **native Gemini passthrough** — a `:generateContent` / `/v1/interactions` client routed to a `gemini-generatecontent` / `gemini-interactions` upstream — where `inlineData` passes through unchanged.
-
-On the cross-mode `/v1/chat/completions` → `gemini-generatecontent` response path specifically, tool-call and thinking parts of a Gemini response are also dropped today (the response-side `convertGeminiGenerateContentToClaude` extracts text only). Extending that converter would let tool-calls round-trip into OpenAI `tool_calls` and thinking into `reasoning_content`; image output would still be blocked by the schema limits above.
-
-**Known limitation — Gemini `generateContent` → OpenAI with mixed `functionCall` + `inline_data` in one turn:** `convertGeminiGenerateContentToOpenAI` (in `src/handlers/openai.ts`) drops `inline_data` parts when a Gemini model turn contains both a `functionCall` *and* an image in the same turn — only the `tool_calls` and text are emitted. This is an intentional trade-off: it's a rare edge case (image-generation-with-tools models that emit a tool call and an image together), and OpenAI's Chat Completions spec does not define assistant `tool_calls` turns that also carry array-form image content, so emitting such a turn would risk upstream rejection. Text-only turns and image+text turns (no tool calls) on this route are unaffected.
-
-### OpenAI prompt caching fields
-
-The proxy only preserves OpenAI prompt-caching controls when the target mode can carry them without changing prompt structure. Cross-mode conversion preserves the top-level routing key, but not request-wide cache policy or content-block breakpoints.
-
-| Client endpoint | `upstream_mode` | `prompt_cache_key` | `prompt_cache_options` | `prompt_cache_breakpoint` |
-|---|---|---|---|---|
-| `POST /v1/responses` | `openai-responses` | Preserved | Preserved | Preserved |
-| `POST /v1/responses` | `openai-completions` | Preserved | Dropped | Dropped during `input` → `messages` conversion |
-| `POST /v1/chat/completions` | `openai-completions` | Preserved | Preserved | Preserved |
-| `POST /v1/chat/completions` | `openai-responses` | Preserved | Dropped | Dropped during `messages` → Responses `input` / `instructions` conversion |
-
-### Dashboard API
-
-The `/dashboard` web UI is driven by a small JSON API. Dashboard/admin routes
-are restricted to loopback clients by the Node server adapter. To also require a
-bearer token for the JSON API, set:
-
-```toml
-[dashboard]
-api_key = "your-dashboard-key"
-```
-
-When `dashboard.api_key` is configured, every `/dashboard/api/*` route requires
-`Authorization: Bearer <dashboard.api_key>`. `GET /dashboard` remains loadable
-from loopback without auth. The browser dashboard prompts for the key on the
-first API `401`, sends dashboard API requests sequentially, stores the key in
-browser `localStorage`, and expires the saved key after 7 days. The `/dashboard`
-HTML response uses no-cache headers so browser users get the latest dashboard
-script. If `dashboard.api_key` is omitted or empty, dashboard APIs keep the old
-loopback-only behavior.
-
-| Endpoint | Purpose |
-|---|---|
-| `GET /dashboard/api/config` | Read current config snapshot; `?reload=1` re-reads the TOML file |
-| `PUT /dashboard/api/config` | Replace the whole config snapshot (also auto-saves the TOML) |
-| `POST /dashboard/api/global-token-limit` | Set / update the global token cap (sliding or calendar window) |
-| `POST /dashboard/api/schedule/alias` | Add a new `[schedule]` alias (body: `{alias: string}`) |
-| `DELETE /dashboard/api/schedule/alias/:alias` | Remove a `[schedule]` alias |
-| `POST /dashboard/api/schedule/alias/:alias/target` | Upsert a target's window list (body: `{target, windows}`) |
-| `DELETE /dashboard/api/schedule/alias/:alias/target/:target` | Remove a target from an alias |
-| `POST /dashboard/api/test-model` | Send a test request through a configured model |
-| `GET /dashboard/api/stats/models` | Per-model token and request stats |
-| `GET /dashboard/api/stats/agents` | Per-agent request stats |
-| `GET /dashboard/api/stats/requests` | Endpoint, upstream, status-code, timing, and tool-response stats |
-| `GET /dashboard/api/tools/blocklist` | Read the current tool blocklist |
-| `POST /dashboard/api/tools/toggle-block` | Block or unblock a tool by name |
-
-The four `schedule/*` routes are the dedicated CRUD for `[schedule]` aliases;
-mutations also round-trip through the TOML file so the change persists across restarts.
-
-**Stats are keyed by resolved upstream model id, not the alias/target key.**
-A `[models.*]` entry like `max-m3 = {target = "MiniMax-M3", ...}` is looked up
-under the key `max-m3`, but every request routed through it — including
-`requests`/`failed_requests` counts and all token counters — is recorded
-against `MiniMax-M3` (the resolved `target`), because that's the model id
-actually sent upstream. If a `[models.*]` entry has no explicit `target`
-(so key == resolved model id), this distinction doesn't matter. But when
-`target` differs from the key, check stats under the `target` value, not
-the alias key, if a row looks stuck at zero requests/tokens despite live traffic.
-
-## Model Routing
-
-### Category lookup priority
-
-Each `[models.<category>]` section groups models by provider. An incoming model name is
-resolved against the configured sections in three priority levels (highest first):
-
-| Priority | Lookup | Where it's checked |
-|:--------:|:-------|:-------------------|
-| 1 | **Exact key** match | All `[models.*]` sections |
-| 2 | **`prefix-*` wildcard** | `models.claude`, then `models.gemini`, then `models.gpt` |
-| 3 | **`*` catch-all** | `models.default` |
-
-- An exact entry always wins over a wildcard in the same category — e.g. an explicit
-  `claude-sonnet-4-6` is matched before `claude-*`.
-- All sections except `[models.FREE]` and `[models.EMBEDDING]` support `prefix-*` wildcard
-  matching. This includes built-in sections (`claude`, `gemini`, `gpt`) and any
-  user-defined section (`nvidia`, `openrouter`, etc.).
-- `[models.FREE]` and `[models.EMBEDDING]` are **exact-only** — they never pick up wildcards.
-  Both names are case-insensitive (`free`/`FREE`, `embedding`/`EMBEDDING` are equivalent);
-  UPPERCASE is the canonical form in documentation and example configs.
-- Only `prefix-*` (hyphen before `*`) is a wildcard; the `*` is substituted so the
-  upstream sees the real model name. A bare `*` key is the final `models.default`
-  catch-all and preserves the original model name.
-
-| Section | Exact | `prefix-*` | `*` catch-all |
-|:--------|:-----:|:----------:|:-------------:|
-| `models.claude` | ✅ | ✅ | ❌ |
-| `models.gemini` | ✅ | ✅ | ❌ |
-| `models.gpt`, `models.nvidia`, … (user-defined) | ✅ | ✅ | ❌ |
-| `models.FREE` | ✅ | ❌ | ❌ |
-| `models.default` | ✅ | ✅ (optional) | ✅ (recommended) |
-| `models.EMBEDDING` | ✅ | ❌ | ❌ |
-
-> **Section flavors — wildcards vs. exact-only:** every section supports `prefix-*`
-> wildcard routing **except** the two special concrete sections `[models.FREE]` and
-> `[models.EMBEDDING]`, which are exact-only. User-defined provider sections such as
-> `[models.gpt]` and `[models.nvidia]` support wildcards the same way built-in
-> sections do. Runtime caller-vs-config key priority is governed separately by the
-> **Who wins** tables below.
-
-### `base_url` / `api_key` override rules
-
-Each model entry is an inline table `{target, base_url, api_key}`. Resolution walks an
-inheritance chain — anything left empty falls back to the level above:
-
-- **`base_url`**: per-entry override → section `base_url` → `[default_upstream] default_base_url`
-  → `http://localhost`.
-- **Configured `api_key`**: per-entry override → section `api_key` → `[default_upstream] default_api_key`.
-  This only resolves the configured fallback key; runtime caller-vs-config priority is section-specific below.
-- **`upstream_mode`**: per-entry `mode` → section `upstream_mode` → `[default_upstream] upstream_mode`
-  → `"openai-completions"`.
-- The target-only form (`opus48 = {target = "..."}`) inherits `base_url` from the section,
-  then `[default_upstream] default_base_url`; `api_key` may be inherited from the section or
-  `[default_upstream] default_api_key`, or supplied by the caller for non-`free` sections.
-
-> **What `[default_upstream] default_base_url` is for:** it is the global upstream endpoint used
-> when no per-entry or section `base_url` is configured, including models that fall through
-> every section's exact / wildcard / catch-all lookup.
-
-> **`base_url` may include the full endpoint path.** If `base_url` already contains a known
-> full upstream endpoint path, the proxy uses it as-is instead of appending the endpoint
-> suffix again. This lets you point a model at the exact URL an upstream expects (e.g.
-> `base_url = "https://api.anthropic.com/v1/messages"` with
-> `upstream_mode = "anthropic-messages"`) without producing a doubled path like
-> `.../v1/messages/v1/messages`. Recognised full-endpoint markers (case-insensitive):
-> `/v1/messages`, `/anthropic/messages`, `/v1/chat/completions`, `/chat/completions`, `/v1/interactions`,
-> `/v1/responses`, `/openai/responses`, and
-> `/v1beta/models/{model}:generateContent` or `/v1/models/{model}:generateContent`
-> (`:streamGenerateContent`, `:countTokens`). For Gemini, `base_url` may also end
-> at the API version or models collection (for example `/v1beta` or `/v1beta/models`);
-> the proxy appends the model endpoint without duplicating the version path.
-
-
-**Who wins — caller's key vs. configured `api_key`** — controlled by `[remote.authentication] auth_passthrough_with`:
-
-`auth_passthrough_with = "user_key"` *(default)*
-
-| Section | Caller's auth header | Configured `api_key` |
-|:--------|:---------------------|:---------------------|
-| `[models.FREE]` | **Ignored** | Section/per-entry key **always wins** — the proxy authenticates upstream on the caller's behalf (this is what makes the FREE tier work). |
-| `[models.default]` | **Wins** | Used only when the caller sends no key. May come from the entry, section, or `[default_upstream] default_api_key`. |
-| `[models.claude]`, `[models.gemini]` | **Wins** | Caller's key passes through; configured keys are not used. |
-| `[models.EMBEDDING]` | **Overridden for embeddings** | Section `api_key` wins for `/v1/embeddings` requests when configured. |
-
-`auth_passthrough_with = "config_key"`
-
-| Section | Caller's auth header | Configured `api_key` |
-|:--------|:---------------------|:---------------------|
-| `[models.FREE]` | **Ignored** | Section/per-entry key always wins (unchanged). |
-| `[models.default]`, `[models.claude]`, `[models.gemini]`, etc. | **Replaced** | Configured key **always wins** — per-entry → section → `[default_upstream] default_api_key`. |
-| Models hitting `[default_upstream]` (no section match) | **Replaced** | `[default_upstream] default_api_key` is used if set. |
-| `[models.EMBEDDING]` | **Overridden for embeddings** | Section `api_key` wins for `/v1/embeddings` requests when configured. |
-
-> **Why `[models.EMBEDDING].api_key` always wins** — the fixed-route branch in
-> `src/index.ts` (around line 1534) applies the embedding section's `api_key`
-> **after** `transformAuthHeadersForUpstream` has populated `modelAuthHeaders`
-> from the caller's headers, and the spread order is
-> `{ ...modelAuthHeaders, ...formatApiKeyForUpstream(embeddingApiKey, …) }`.
-> So when the section has an `api_key`, the config key replaces whatever the
-> caller sent. This is intentional: `[models.EMBEDDING]` is typically used to
-> pin a single provider-scoped key (e.g. NVIDIA integrate) so callers don't
-> need to manage upstream credentials. For other sections, the
-> `auth_passthrough_with` setting controls this same priority.
-
-Use `config_key` when the proxy is a shared gateway and callers should not supply their own upstream credentials.
-
-Composite and fusion aliases don't route directly: each target is resolved through its own
-`[models.*]` section, so the rules above apply per target. The rule is keyed on
-`route.section === 'free'`, so it holds uniformly across direct, composite, and fusion paths.
-
-## Composite Aliases & Fusion
-
-Group multiple models under one name in a `[composite]` section:
-
-```toml
-[composite]
-# Weighted random: ~70% to model-a, ~30% to model-b
-"smart" = {"model-a" = {share = 70}, "model-b" = {share = 30}}
-
-# Primary with fallback, plus a daily token cap
-"gpt" = {token_limit = {num = 80000, duration = "1d"}, "gpt-5-mini" = {primary = true}, "gpt-5.4-mini" = {fallback = 1}}
-```
-
-- `share` — weighted random selection across targets.
-- `primary` / `fallback` — try primary first, fall back in order on failure.
-  When a target returns a non-200 upstream error, its effective share is reduced in memory
-  by half for later requests, down to a floor of one tenth of its configured share:
-  - **Primary target**: decay fires when the `primary = true` target fails. Subsequent
-    requests use a weighted pick between the primary (at its reduced share) and the other
-    targets, so a heavily degraded primary is less likely to be tried first.
-  - **Fallback targets** (no primary): when the alias has two or more `fallback`-numbered
-    targets and the first-tried one fails, its effective share is decayed by the same rule.
-    The next request picks the first attempt by weighted share, so a degraded fallback-1
-    can be overtaken by fallback-2.
-  - Decay is runtime-only — `proxy_config.toml` is never modified and state resets when
-    the proxy process restarts.
-- `primary` and `fallback` are **independent and both optional** — the table below
-  covers every valid shape for a composite alias's targets. The detected mode is
-  derived from the targets, not set explicitly:
-
-  | Targets with `primary` | Targets with `fallback > 0` | Detected mode | Selection behavior |
-  |:---:|:---:|:---|:---|
-  | 0 | 0 | `share` | Weighted random across targets by `share` |
-  | ≥1 | 0 | `fallback` | The first `primary` target in config order wins; other targets are unused at the routing step (they still participate in weighted pick after a primary decay). |
-  | 0 | ≥1 | `fallback` | Lowest `fallback` number wins; ties broken by config order. |
-  | ≥1 | ≥1 | `fallback` | The `primary` target always wins — `fallback` numbers on other targets are ignored at the routing step. |
-- `token_limit` — `{num, duration}` token cap. Duration follows the same vocabulary as `global_token_limit` (see [Token Limits](#token-limits)). Returns HTTP 413 when exceeded.
-
-**Fusion** fans a request out to multiple "panel" models in parallel and routes through an
-optional "judge" and an optional but recommended "synth" model that writes the final answer.
-If no synth is configured, the judge is used as synth; if no judge exists, the first panel is used:
-
-```toml
-[composite]
-"answer" = {opus = {fusion = 1, role = "panel"}, sonnet = {fusion = 1, role = "panel"}, "judge-m" = {fusion = 1, role = "judge"}, "synth-m" = {role = "synth"}}
-```
-
-For the full set of composite/fusion options and the TUI editor workflow, see
-[`docs/design_fusion_composite_alias.md`](./docs/design_fusion_composite_alias.md).
-
-**Coordinator** routes a single conversation through two models in sequence — a
-`planner` (capable/expensive) during the planning stage, then an `executor`
-(fast/cheap) once the planning stage is over — reusing the full accumulated
-context without re-reading anything. This mirrors the *prewalk* pattern: the
-expensive model reads and thinks, the cheap model edits and executes.
-
-```toml
-[composite]
-# Planner → executor hand-off at ExitPlanMode / Edit / Write (default toolset)
-"smart-coder" = {
-  "deepseek-v4-pro"   = {coord = 1, role = "planner"},
-  "deepseek-v4-flash" = {coord = 1, role = "executor"}
-}
-
-# Custom toolset — only explicit plan-mode exit triggers hand-off
-"smart-coder-strict" = {
-  "deepseek-v4-pro"   = {coord = 1, role = "planner"},
-  "deepseek-v4-flash" = {coord = 1, role = "executor"},
-  toolset = ["ExitPlanMode"]
-}
-
-# Role targets can be other composite aliases (resolved recursively)
-"smart-claw" = {
-  "code-strong" = {coord = 1, role = "planner"},
-  "code-small"  = {coord = 1, role = "executor"},
-  toolset = ["ExitPlanMode", "Edit", "Write"]
-}
-```
-
-- Each participant carries `coord = 1` and `role = "planner"` or `"executor"`. Exactly one of each is required.
-- The optional top-level `toolset` key lists the tool names the proxy scans for in the accumulated `messages[]` history to detect the stage boundary.
-- The switch is **one-way and stateless**: once a trigger tool appears in the message history it stays there, so every subsequent request for the same conversation routes to the executor.
-- Role targets resolve through the full routing chain — direct model names, `[models.*]` aliases, `[schedule]` aliases, or other `[composite]` aliases of any mode.
-
-#### What tools should be configured in the coordinator's `toolset`?
-
-`toolset` should only contain tools whose **first call unambiguously signals the end of planning and the start of execution** (file mutations, explicit plan-mode exits). Tools the planner legitimately calls during the planning stage must never be in `toolset` — they would trigger a premature hand-off to the executor while the planner is still thinking.
-
-| Tool | Suitable for `toolset`? | Reason |
-|---|---|---|
-| `ExitPlanMode` | ✅ Yes (in default) | Explicit end of Claude Code plan mode |
-| `Edit` | ✅ Yes (in default) | First file mutation |
-| `Write` | ✅ Yes (in default) | First file creation |
-| `NotebookEdit` | ✅ Yes (in default) | First notebook mutation |
-| `Bash` | ✅ Yes (in default) | Shell execution (can be removed if planner shells out for reads) |
-| `EnterPlanMode` | ❌ Never | Called *during* planning — would hand off immediately |
-| `AskUserQuestion` | ❌ Never | Planner may ask for clarification — a planning-stage call |
-| `TaskCreate` / `TaskList` | ❌ Never | Planner uses these to record the plan — planning-stage calls |
-| `WebFetch` / `WebSearch` | ❌ Never | Planner researches context — planning-stage calls |
-| `EnterWorktree` | ⚠️ Operator choice | Only useful if your workflow always enters a worktree at the start of execution, never during planning |
-| `ExitWorktree` | ❌ Not useful | Signals completion, not start of execution — too late |
-
-**Practical `toolset` recipes:**
-
-```toml
-# Default (absent key) — best for Claude Code plan-mode workflows:
-# triggers on ExitPlanMode, Edit, Write, Bash, NotebookEdit
-"smart-coder" = {"opus" = {coord=1, role="planner"}, "flash" = {coord=1, role="executor"}}
-
-# Strictest — only explicit plan-mode exit triggers; planner can freely shell out / grep
-toolset = ["ExitPlanMode"]
-
-# Mutation-only — file changes trigger but Bash is allowed during planning
-toolset = ["ExitPlanMode", "Edit", "Write", "NotebookEdit"]
-
-# Any tool triggers — planner does zero tool calls (pure prose planning only)
-toolset = []
-```
-
-> **Cycles are not allowed.** A composite alias may target another composite alias, but the
-> chain must terminate at a real `[models.*]` entry — `A → B → C → A` is rejected at load time
-> with a `[FATAL]` log, marked with a red `x` in the TUI / dashboard, and the cyclic target is
-> omitted from the snapshot. See [CHANGELOG.md](./CHANGELOG.md) for the full safety rules.
-
-## Token Limits
-
-Two layers of token caps share the same windowing engine:
-
-- **Global** — `general.global_token_limit`, applied to every model-API request.
-- **Per-alias** — `token_limit` inside any `[composite]` entry, applied to requests routed through that alias.
-
-When the in-window usage is at or above the configured cap, the next request is rejected with HTTP 413 (`over_limit_error`) before it reaches the upstream. Both layers are checked at request-admission time; if both apply, hitting either one rejects the request.
-
-### Windowing strategies
-
-Every duration token is either **sliding** (rolls continuously from "now") or **calendar** (anchored to a wall-clock boundary). The vocabulary:
-
-| Token | Strategy | Cutoff (lower bound of the window) |
-|---|---|---|
-| `1h`–`23h` | sliding | `now - N×1h` |
-| `1d`–`6d` | sliding | `now - N×24h` |
-| `1w` | calendar | start of the current calendar week (`week_start_day` 00:00 local) |
-| `1m` | calendar | first day of the current calendar month, 00:00 local |
-
-The token amount accepts an optional magnitude suffix: `K` (thousand), `M` (million), `B` (billion), `T` (trillion). Examples: `"50K 6h"`, `"1.5M 1w"`, `"2B 1m"`.
-
-Calendar windows refresh at the boundary, not on a rolling timer. With `1w`, the cutoff is Monday 00:00 (or Sunday 00:00 if `week_start_day = "sunday"`); with `1m`, it is the first of the month at 00:00. Configure the week anchor:
-
-```toml
-[general]
-global_token_limit = "700M 1w"
-week_start_day = "monday"   # or "sunday" (default: monday)
-```
-
-```toml
-[composite]
-# Sliding 6-hour cap on this alias
-"fast" = {token_limit = {num = 1000000, duration = "6h"}, "model-a" = {}}
-# Calendar-month cap on this alias
-"monthly" = {token_limit = {num = 2000000000, duration = "1m"}, "model-b" = {primary = true}}
-```
-
-### What the limit actually does — and what it doesn't
-
-The cap is enforced as a **pre-request admission check**, not a hard ceiling. The proxy sums the tokens already recorded in the window and rejects new requests once that sum reaches the configured number. It does **not**:
-
-- pre-reserve tokens before the upstream call,
-- abort a response mid-stream if it crosses the cap,
-- coordinate across concurrent in-flight requests.
-
-So actual peak consumption in a window can overshoot the configured number — by as much as the largest single request that slipped in just before the threshold, and by `(concurrency − 1) × avg_request_size` during concurrent bursts. If you need a true hard cap, treat the configured number as a soft target and monitor actual usage.
-
-### Migration note (from pre-`3.x` rolling windows)
-
-Older versions treated `1w` and `1m` as **sliding** windows (rolling 7 days / 30 days from now). They are now **calendar** windows. There is no exact replacement for the previous rolling-7d / rolling-30d behavior — the closest sliding equivalents are `6d`. Users who depended on the rolling semantics should re-evaluate which duration fits their use case.
-
-## Schedule Aliases
-
-A `[schedule]` alias is the **top-most layer**: it picks *one* target for the request
-based on a timetable (server-local hour-of-day and day-of-week), then hands that target
-down to whatever routing rule resolves it (`[models.*]` or another `[composite]`).
-There is no weighting or fan-out here — exactly one target is selected per request.
-
-```toml
-[schedule]
-"saver" = {"maxplan" = [{from = 9, to = 12}, {from = 14, to = 18}], "code-small" = [{from = 0, to = 9, days = "weekday"}], "max-m3" = [{days = "weekend"}], "max-m2.7-high" = []}
-```
-
-In the example above, on weekday mornings `code-small` serves, on weekday office
-hours `maxplan` serves, on weekends `max-m3` serves, and `max-m2.7-high` (the
-**fallback** with an empty `[]` window list) handles anything that falls between
-the configured windows.
-
-**Window syntax — every entry is `{from?, to?, days?}`:**
-
-| Field | Range | Default | Meaning |
-|---|---|---|---|
-| `from` | `0..24` (inclusive of start) | `0` | Hour-of-day the window opens (server-local time). |
-| `to`   | `0..24` (exclusive of end) | `24` | Hour-of-day the window closes. `24` is a legal value (end-of-day). |
-| `days` | `"weekday"`/`"weekdays"`, `"weekend"`/`"weekends"` (any casing), or `[mon, tue, ...]` | everyday | When the window applies, evaluated against server-local day-of-week. Any other string (including hand-typed typos) normalizes to "everyday" rather than raising an error. |
-
-A target with **`windows = []`** is a **fallback**: it serves when no other target
-matches the current time. If multiple empty-window targets are configured, the first one listed is used.
-If no fallback exists and no window matches, schedule does not select a target; the
-request falls through to normal routing with the original model name, including
-`[models.default]` / `*` catch-all routing when configured.
-
-**Selection rules (in order, first match wins):**
-
-1. The current `(hour, day-of-week)` matches one of the target's `windows` → that target.
-2. Otherwise, the target with `windows = []` (the fallback) → that target.
-3. Otherwise, no schedule target is selected and normal/default routing handles the original model name.
-
-**Windows are unioned across the alias**, not per-target: a single window belongs to
-exactly one target. If two targets cover overlapping hours, the *first one listed*
-in the TOML wins for the overlap.
-
-**A schedule target is itself routed through the rest of the config** — `maxplan`,
-`code-small`, `max-m3`, `max-m2.7-high` above are ordinary `[composite]` or
-`[models.*]` entries. Schedule is *transparent composition*: it doesn't replace
-composite/fusion/models, it just decides which of them serves this request at this
-moment.
-
-**Manage via the dashboard / TUI:**
-
-- Web UI: open `GET /dashboard`, scroll to the **Schedule** section, edit aliases and
-  their window lists inline — each window has `from`/`to` number inputs and a
-  **days dropdown** (Every day / Weekdays / Weekend). Save persists to `proxy_config.toml`.
-- TUI: press `s` to open `ScheduleAliasesOverlay` (mirror of the composite editor
-  at `c`). `a` adds an alias, `m` adds a target under the selected alias (a
-  concrete `[models.*]` entry or another composite/fusion alias — wildcard
-  patterns like `*`/`claude-*` and the alias itself are excluded from the
-  picker), `d` deletes, `e` opens a step-by-step window editor (from → to → a
-  Every day/Weekdays/Weekend picker, repeat to add more windows, or choose
-  "Set as fallback" to clear all windows), arrow keys navigate, `Esc` closes.
-- HTTP: the four `/dashboard/api/schedule/*` routes listed in [Dashboard API](#dashboard-api).
-
-**Auth / section flag:** schedule targets inherit whatever `route.section === 'free'`
-or "caller's key wins" rule their underlying `[models.*]` section imposes — schedule
-selects the target, but the target's section still governs upstream auth.
+### Endpoint details
+
+Additional endpoint behavior is documented in [`docs/api-endpoints.md`](./docs/api-endpoints.md):
+
+- **Dynamic routing** — per-request upstream override routes `/{protocol}/{host}/...` with an SSRF allowlist (`ALLOWED_HOSTS`).
+- **Image input/output across format boundaries** — wire shapes, source-shape handling, who fetches HTTP image URLs, and the model-generated-image limits.
+- **OpenAI prompt caching fields** — which of `prompt_cache_key` / `prompt_cache_options` / `prompt_cache_breakpoint` survive each cross-mode conversion.
+- **Dashboard API** — the `/dashboard/api/*` JSON routes, optional bearer token, and stats keying by resolved model id.
+
+## Model Routing & Aliases
+
+Incoming model names resolve through three stacked logic levels (see the
+[Routing Hierarchy](#routing-hierarchy-logic-levels) table below):
+
+- **Level 1 — `[models.*]`** — exact key → `prefix-*` wildcard → `*` catch-all lookup,
+  with `base_url` / `api_key` / `upstream_mode` inherited per-entry → section →
+  `[default_upstream]`. `[models.FREE]` and `[models.EMBEDDING]` are exact-only;
+  in `[models.FREE]` the configured key always wins, elsewhere the caller's key wins
+  by default (`auth_passthrough_with`).
+- **Level 2 — `[composite]`** aliases:
+  - **share / primary+fallback** — weighted random or ordered fallback, with runtime
+    share decay when a target keeps failing, plus optional per-alias `token_limit`.
+  - **fusion** — fan-out to parallel panel models with an optional judge and synth.
+  - **coordinator** — planner → executor hand-off: routes to the planner until a trigger
+    tool call (`ExitPlanMode`, `Edit`, `Write`, …) appears in the conversation history.
+- **Level 3 — `[schedule]`** aliases — pick one target by server-local hour-of-day /
+  day-of-week windows, with an empty-window fallback target.
+- **Token limits** — global (`general.global_token_limit`) and per-alias caps over
+  sliding (`1h`–`6d`) or calendar (`1w`/`1m`) windows; HTTP 413 when exceeded.
+
+The full reference — category lookup priority tables, `base_url`/`api_key` override and
+"who wins" rules, every composite/fusion/coordinator/schedule option, the token-limit
+windowing engine, and worked examples — lives in
+[`docs/routing-and-aliases.md`](./docs/routing-and-aliases.md).
 
 ## Routing Hierarchy (Logic Levels)
 
@@ -941,51 +495,6 @@ level below* gets to serve this request:
                         └────────────────────────────────┘
 ```
 
-### Level 1 — `[models.*]` custom / target models
-
-Direct routing to an upstream. Three lookup modes, tried in priority order:
-
-- **Exact key** — `"claude-sonnet-4-6" = {...}` resolves only that exact name.
-- **Prefix wildcard** — `"claude-*" = {...}` resolves any `claude-*` and substitutes
-  the `*` with the real suffix.
-- **`*` catch-all** — `"*" = {}` (typically in `[models.default]`) resolves anything
-  that wasn't claimed by an earlier mode, preserving the original model name.
-
-Each entry picks its `upstream_mode` / `base_url` / `api_key` from an inheritance
-chain (per-entry → section → `[default_upstream]` defaults). Custom/target models are the
-*only* level that actually talks to an upstream — Levels 2 and 3 must always
-resolve down to a Level-1 entry before a single byte is sent.
-
-### Level 2 — `[composite]` aliases (share, fan-out, or coordinator)
-
-Logical grouping of two or more Level-1 entries under one name. Three strategies:
-
-- **`share`-weighted distribution** — `{"max-m2.7-high" = {share = 100}, "max-m3" = {share = 100}}`
-  splits each request randomly across targets by weight. One or more may be marked
-  `primary` (the default target) or `fallback` (consulted in order if the primary fails).
-  This is one request → one target.
-- **`fusion` fan-out** — every target with `fusion = 1, role = "panel"` runs in parallel
-  against the same request; an optional `role = "judge"` scores them; and an optional but recommended
-  `role = "synth"` merges them into one final response. Without synth, fusion uses the judge, then the first panel. `fusion_options` configures
-  `min_panel`, `panel_timeout_ms`, `judge_required`, `expose_metadata`, `max_concurrent`.
-  This is one request → many targets → one response.
-- **`coordinator` (prewalk)** — routes to the `planner` target until a trigger tool call
-  appears in the conversation history, then permanently switches to the `executor` target.
-  This is one request → one target (which target depends on conversation stage).
-
-A composite alias **does not route directly**. Each target it names is resolved
-through its own `[models.*]` section, so per-target `base_url`, `api_key`, and
-section-based auth rules all still apply. Section flag `route.section === 'free'`
-is computed per-target, so a composite made of free-tier targets stays free-tier end-to-end.
-
-### Level 3 — `[schedule]` timetable
-
-The highest layer. Each request asks: *given the current server-local hour and
-day-of-week, which [composite] or [models.*] entry should serve me right now?*
-The chosen target then flows through Levels 2 → 1 exactly as if the caller had
-asked for that target by name. Schedule is **transparent**: it adds *when* without
-overriding *how*.
-
 | Level | Section | Selects by | Cardinality | Re-routes to |
 |:-----:|:--------|:-----------|:------------|:-------------|
 | 3 | `[schedule]` | Timetable windows | 1 → 1 (one target picked per request) | Level 2 or 1 |
@@ -994,24 +503,9 @@ overriding *how*.
 | 2 | `[composite]` (coordinator) | Stage detection via `toolset` in messages history | 1 → 1 (planner → executor, one-way) | Level 1 |
 | 1 | `[models.*]` | Exact / `prefix-*` / `*` catch-all | 1 → 1 (one upstream) | — (sends) |
 
-Three concrete examples of the same caller request resolving differently per layer:
 
-- **Level 1 only** — `model: "claude-sonnet-4-6"` → matched exactly in `[models.claude]`
-  → sent to `api.anthropic.com`.
-- **Level 2 (share)** — `model: "maxplan"` → `[composite].maxplan` picks
-  `max-m2.7-high` or `max-m3` by weight → that target resolved in `[models.*]`
-  → sent to its upstream.
-- **Level 2 (coordinator)** — `model: "smart-coder"` → `[composite].smart-coder`
-  detects stage from the messages history (no trigger yet → planner; trigger present →
-  executor) → that target resolved in `[models.*]` → sent. Once an `Edit`/`Write`/`ExitPlanMode`
-  appears, every subsequent request for the same conversation routes to the executor.
-- **Level 2 (fusion)** — `model: "smarter"` → `[composite].smarter` fans out to
-  three panel targets in parallel, judges them, and a `synth` target merges the
-  result → each leg resolved in its own `[models.*]`.
-- **Level 3 (schedule)** — `model: "saver"` at 10 AM Tuesday → `[schedule].saver`
-  picks the `maxplan` target (its `from = 9, to = 12` window matches) →
-  `[composite].maxplan` picks one of its targets by weight → that target resolved
-  in `[models.*]` → sent.
+Level-by-level details and worked request-resolution examples are in
+[`docs/routing-and-aliases.md`](./docs/routing-and-aliases.md#routing-hierarchy-logic-levels--details).
 
 ## Deployment
 
@@ -1043,536 +537,32 @@ could therefore send plain text with a stale `content-encoding: br` / `gzip`
 header. Clients such as opencode may then try to decode Brotli by default and
 fail to read the response body.
 
+
 ## Auth & Stats Service Protocol
 
-The proxy talks to two optional remote services over plain HTTP. This section
-documents the exact wire-level contract for each, so an operator can implement
-a compatible auth/stats backend in any language.
-
-### Auth service — `[remote.authentication] auth_server`
-
-**When**: before routing (every non-exempt model-API request). Exempt paths:
-`/health`, `/`, `/dashboard`, `/v1/models`.
-
-**Timing**:
-- `auth_with_model = false` (default) → auth runs **before** the request body is
-  parsed.
-- `auth_with_model = true` → auth runs **after** body parsing, so the requested
-  model id is known and forwarded as `x-resource-for`. Required for the dynamic
-  routing override (the proxy needs the override before resolving the route).
-- `auth_with_body = true` → auth also runs **after** body parsing, and the entire
-  parsed request body is forwarded to the auth service as the `POST` body (raw
-  JSON, not base64). Either `auth_with_model` or `auth_with_body` defers auth
-  until the body is available. On endpoints where the proxy does not parse a
-  body (e.g. dynamic routes), `auth_with_body` has no body to send and degrades
-  to a bodyless call.
-
-**Request** (proxy → auth service):
-
-| Aspect | Value |
-|---|---|
-| Method | `GET` by default; switches to **`POST`** when `auth_with_body = true` and a parsed body is available |
-| URL | `auth_server` as configured |
-| Redirects | followed |
-
-Headers forwarded (each only if the client sent it):
-
-| Header | Source |
-|---|---|
-| `Authorization` | client's `Authorization` |
-| `x-api-key` | client's `x-api-key` |
-| `x-goog-api-key` | client's `x-goog-api-key` |
-| `user-agent` | client's `User-Agent` |
-| `request_id` | proxy-generated request id |
-| `endpoint` | inbound request path (e.g. `/v1/messages`) |
-| `x-resource-for` | requested model id — **only when `auth_with_model = true`** |
-| `x-forwarded-for` | resolved client IP (`cf-connecting-ip` → `x-forwarded-for`[0] → `x-real-ip`). Always sent when a client IP is detectable. |
-| `x-real-ip` | resolved client IP — **only when the caller did not already send `x-real-ip`** (an explicit outer-proxy value is preserved). |
-| `Content-Type` | `application/json` — **only on the `POST` form** (`auth_with_body = true` with a parsed body). Absent on the default `GET`. |
-
-When `auth_with_body = true`, the `POST` body is the **raw parsed request JSON**
-(post privacy-filter / kompress / tool-blocklist rewriting, so the auth sidecar
-never sees redacted PII). The body is not base64-encoded — it is sent as
-parseable JSON so the sidecar can inspect fields directly.
-
-**Response** (auth service → proxy):
-
-| Status | Proxy behavior |
-|---|---|
-| `200` | Auth passes; proceed to routing. |
-| any `4xx` / `5xx` | Proxy returns `401 Authentication failed.` to the client. |
-| network error | Proxy returns `503 Authentication service unavailable.` to the client. |
-
-On `200`, the proxy reads:
-
-- **Header `one_time_auth_code`** (OTAC, optional) — stored and re-sent as the
-  `one_time_auth_code` header on the later stats `POST record_server` call (see below).
-- **JSON body** (optional) — the **dynamic routing override**, a one-time alias
-  config entry. See the table in [Proxy ↔ remote auth & stats service](#proxy--remote-auth--stats-service).
-
-**Dynamic routing override precedence.** When the auth response body carries
-any of `target` / `mode` (`upstream_mode`) / `base` (`base_url`) / `key`
-(`api_key`) / `transforms`, the proxy treats them as the resolved route for
-**this request only**:
-
-1. The override fields are merged on top of the normal inheritance chain
-   (per-entry → section → `[default_upstream]`). Auth-provided fields win over
-   config-file fields for the same request.
-2. If the override supplies a `target`, the upstream sees that model id and the
-   proxy skips `[models.*]` / `[composite]` / `[schedule]` resolution entirely.
-3. If the override supplies `transforms`, those `[transforms.*]` sets are
-   applied at the same five lifecycle hooks as config-attached sets.
-4. If the body is empty / not JSON / not a `200`, normal config resolution
-   proceeds unchanged.
-
-The override is **never cached** and **never persisted** to `proxy_config.toml`
-— it is a single-use, per-request alias.
-
-### Stats service — `[remote.recording] record_server`
-
-**When**: after the upstream response is received, once token usage is known.
-For streaming (`text/event-stream`) responses, usage is extracted from the SSE
-final event and the record is POSTed when the stream closes. For JSON
-responses, it is POSTed immediately after parsing. The POST is fire-and-forget
-(non-blocking); failures are logged at `WARN` and do not affect the client
-response.
-
-**When (with `record_response_body`)**: `[remote.recording] record_response_body = true` (default `false`)
-adds the **entire constructed response body** to each usage record. For JSON
-responses this is the parsed response object; for streaming (`text/event-stream`)
-responses this is the accumulated raw SSE text (all events concatenated,
-captured as the stream flows through to the client, and POSTed once the stream
-closes). The body is sent raw (not base64) as a JSON value, so the collector
-can inspect it directly. When `record_response_body = false` (default), the field is
-omitted entirely.
-
-**Non-2xx responses are recorded too.** Every record carries a `response_status`
-field (the upstream HTTP status), reported **by default** whenever `record_server`
-is configured — no extra flag needed. When the upstream returns a non-2xx
-status, the proxy still POSTs a record — with all token counters at `0` (error
-bodies rarely carry usage) and `response_status` set to the real status. Only
-`response_body` is gated (by `record_response_body = true`); when that flag is on, the
-non-2xx constructed response body (the upstream's error JSON or text) is
-attached to `response_body` just like a success body. This lets the collector
-see failures and their statuses by default, and opt into error payloads via
-`record_response_body`.
-
-**Request** (proxy → stats service):
-
-| Aspect | Value |
-|---|---|
-| Method | `POST` |
-| URL | `record_server` as configured |
-| Content-Type | `application/json` |
-
-| Header | Value |
-|---|---|
-| `one_time_auth_code` | the one-time authorization code (OTAC) the auth service returned for this request, if any (absent otherwise) |
-| `x-forwarded-for` | resolved client IP, same value as sent to the auth service (when detectable) |
-| `x-real-ip` | resolved client IP — **only when the caller did not already send `x-real-ip`** |
-
-Body (`ModelUsageRecordPayload`):
-
-| Field | Type | Meaning |
-|---|---|---|
-| `request_id` | string | Same proxy-generated request id forwarded to auth. |
-| `timestamp` | string | ISO 8601 timestamp of the record. |
-| `endpoint` | string | Inbound request path (e.g. `/v1/messages`). |
-| `user_key` | string | Raw caller auth key (from `Authorization` / `x-api-key` / `x-goog-api-key`). |
-| `model` | string | **Resolved** upstream model id actually sent upstream (the `target`, not the alias key). |
-| `response_status` | number | Upstream HTTP status. `0` means no response was obtained. Non-2xx statuses are recorded with all token counters at `0`. |
-| `input_tokens` | number | Input tokens reported by the upstream (or local tiktoken estimate when `LOCAL_TIKTOKEN=true`). For non-2xx, `0`. |
-| `cached_tokens` | number | Prompt-caching read tokens (Anthropic / OpenAI cache-read), if reported. |
-| `cache_written_tokens` | number | Prompt-caching write tokens, if reported. |
-| `output_tokens` | number | Output tokens reported by the upstream. |
-| `total_tokens` | number | Sum when reported by the upstream, else `input + output`. |
-| `response_body` | object \| string | **Only when `record_response_body = true`.** Parsed JSON object for non-streaming responses; accumulated raw SSE text for streaming responses. Absent otherwise. |
-
-**Response**: the proxy only checks `response.ok`; a non-2xx is logged at
-`WARN` with the status code. There is no retry.
-
-### Combining auth and stats in one service
-
-When `auth_server` and `record_server` point at the same backend, the
-`one_time_auth_code` (OTAC) header returned by the auth step is the linkage key:
-it travels on the auth response header, then on the stats request header,
-letting the backend tie the usage record back to the authenticated principal
-without re-validating the credential. If the two are separate services,
-`one_time_auth_code` is simply not sent on the stats call.
+The proxy talks to two optional remote services over plain HTTP: an auth service
+(`[remote.authentication] auth_server`) that gates admission before routing, and a stats
+service (`[remote.recording] record_server`) that collects per-request usage records after
+the response. The exact wire-level contract — request/response shapes, forwarded headers,
+the `one_time_auth_code` (OTAC) linkage, `auth_with_model` / `auth_with_body` timing, the
+dynamic routing override, and how to combine both services in one backend — is documented
+in [`docs/auth-stats-protocol.md`](./docs/auth-stats-protocol.md).
 
 ## Configuration Reference
 
-Most users only need `proxy_config.toml`. Optional environment variables tune behavior.
-On the Node server (`npm run server` / `dist/server.js`) these come from the process
-environment.
-
-**`[general]` config fields**
-
-| Field | Example | Purpose |
-|---|---|---|
-| `global_token_limit` | `"1B 1d"` | Token cap across all models, queried against a sliding or calendar window. Format: `"<num><K/M/B/T> <duration>"`. Sliding durations: `1h`–`23h`, `1d`–`6d` (rolling from now). Calendar durations: `1w` (calendar week, anchored to `week_start_day`), `1m` (calendar month, anchored to first of month). Returns HTTP 413 when exceeded. |
-| `week_start_day` | `"monday"` | Anchor day for `1w` calendar windows. `"monday"` (default) or `"sunday"`. Applies to both global and composite limits. |
-| `budget_to_effort_low` | `32768` | Thinking-budget threshold (tokens) below which `reasoning_effort: "low"` is emitted for upstreams that use effort levels instead of token budgets. |
-| `budget_to_effort_medium` | `65536` | Threshold above `low` and below this → `reasoning_effort: "medium"`. |
-| `budget_to_effort_high` | `128000` | Threshold above `medium` → `reasoning_effort: "high"`. Set to `0` to always emit `"high"`. |
-
-**`[default_upstream]` config fields**
-
-| Field | Example | Purpose |
-|---|---|---|
-| `default_base_url` | `"https://api.example.com"` | Global upstream endpoint fallback when a route has no per-entry or section `base_url`, and for models not claimed by any `[models.*]` section. |
-| `default_api_key` | `"sk-..."` | Global configured-key fallback. In `user_key` mode (default): wins only for `[models.FREE]`, acts as a fallback for other sections when the caller sends no key. In `config_key` mode: used for all models that have no per-entry or section `api_key`. Typically left unset in production. |
-| `upstream_mode` | `"openai-completions"` | Default protocol for models not claimed by any `[models.*]` section. |
-
-**`[remote.authentication]` config fields**
-
-| Field | Example | Purpose |
-|---|---|---|
-| `auth_server` | `"https://auth.example.com/validate"` | If set, every inbound request's proxy auth headers (`Authorization`, `x-api-key`, `x-goog-api-key`) plus `User-Agent` are validated by a `GET` to this URL before routing. HTTP 200 = pass; 4xx/5xx = 401 to client; network error = 503. **Exempt paths:** `/health`, `/`, `/dashboard`, and `/v1/models` (model listing is unauthenticated so SDKs can enumerate without a credential). |
-| `auth_with_model` | `false` | When `true`, the `auth_server` call is deferred until after the request body is parsed so the requested model id can be forwarded as `x-resource-for` header. Allows the auth server to make per-model decisions. Default: `false` (auth runs before body parsing). |
-| `auth_with_body` | `false` | When `true`, the `auth_server` call is deferred until after body parsing and the entire parsed request body is forwarded to the auth service as the `POST` body (raw JSON). Either `auth_with_model` or `auth_with_body` triggers the deferred path. See [Auth & Stats Service Protocol](#auth--stats-service-protocol). |
-| `auth_passthrough_with` | `"user_key"` | Standalone upstream-auth setting, separate from `auth_server` / `auth_with_model`. Controls which key is passed to the upstream provider: `"user_key"` (default) forwards the caller's key; `"config_key"` uses the configured `api_key`. |
-
-**`[remote.recording]` config fields**
-
-| Field | Example | Purpose |
-|---|---|---|
-| `record_server` | `"http://127.0.0.1:8080/model-usage"` | Optional HTTP collector. When set, the proxy POSTs per-request usage records with `request_id`, `endpoint`, raw `user_key`, `model`, `response_status`, and token counters (`input_tokens`, `cached_tokens`, `cache_written_tokens`, `output_tokens`, `total_tokens`). |
-| `record_response_body` | `false` | When `true`, each usage record also includes the constructed `response_body` (parsed JSON for non-streaming responses; accumulated raw SSE text for streaming; the upstream error body for non-2xx). Sent raw, not base64. See [Auth & Stats Service Protocol](#auth--stats-service-protocol). |
-
-**`[transforms.*]` and `[transform_defaults]` config fields**
-
-Per-model/per-upstream request and response rewriting. Each named set is declared as
-`[transforms.<name>]` and referenced from model entries via `transforms = "set_name"` (CSV
-string for multiple sets: `transforms = "set_a,set_b"`). **List form (`transforms = ["a","b"]`)
-is not supported** — use a comma-separated string. See `docs/transforms-reference.md` for the
-quick-reference cheat sheet and `docs/design_request_transform_hooks.md` for the design.
-
-**Attaching a transform set to a model entry** — model entries accept two forms:
-
-```toml
-# Inline-table form (recommended for readability):
-"deepseek-v4-anth" = {target = "deepseek-v4-flash", base_url = "https://...", api_key = "sk-...", mode = "anthropic-messages", transforms = "my_set"}
-
-# Positional-array form (legacy):
-"deepseek-v4-anth" = ["deepseek-v4-flash", "https://...", "sk-...", "anthropic-messages", "my_set"]
-#                      [0] target           [1] base_url   [2] api_key [3] upstream_mode   [4] transforms CSV
-```
-
-In the positional form, every element is optional from the right — a 3-element array
-`[target, base_url, api_key]` inherits `upstream_mode` from the section and attaches no
-transforms. An empty element (`""`) falls back to the section/default value for that slot.
-The `transforms` field (index 4) is always a comma-separated string of named set names.
-
-**Default transforms** — the example config (`proxy_config.toml_example`) ships a
-`[transform_defaults]` block that wires `max_tokens_rename` as a mode-level default for
-`openai-completions` and `openai-responses`. This renames `max_tokens` →
-`max_completion_tokens` automatically for every route on those modes, which is required by
-most modern OpenAI-compatible upstreams (DeepSeek, MiniMax, etc.). There is **no code-level
-default** — the wiring only takes effect when your `proxy_config.toml` contains the
-`[transform_defaults]` block (copy it from the example file).
-To opt a specific model entry out, attach `transforms = "no_max_completion_tokens"` to that
-entry (renames `max_completion_tokens` back to `max_tokens`).
-
-| Field | Values | Purpose |
-|---|---|---|
-| `schema` | `openai-completions` \| `anthropic-messages` \| `openai-responses` \| `gemini-generatecontent` | Schema the op paths resolve against. Required per set. |
-| `request_ingress.builtins` / `.ops` | see below | Runs after inbound parse, before routing. Client schema. |
-| `before_conversion.builtins` / `.ops` | see below | Runs in-handler after routing, before format conversion. Client schema. |
-| `before_upstream.builtins` / `.ops` / `.headers` | see below | Runs just before the upstream fetch. Upstream schema. **Primary A/B seam.** |
-| `after_upstream.builtins` / `.ops` | see below | Runs after upstream responds, before response conversion. |
-| `response_egress.builtins` / `.ops` / `.headers` | see below | Runs before the client response is written. Client response schema. |
-
-**Tier-1 ops** (generic field rewrites, declared under a hook's `.ops` array):
-
-| Op | Effect |
-|---|---|
-| `{op="rename", path="max_tokens", to="max_completion_tokens"}` | Rename a field, preserving its value. |
-| `{op="set", path="reasoning_effort", value="medium"}` | Force a field to a fixed value. |
-| `{op="default", path="stream", value=false}` | Set a field only when absent. |
-| `{op="remove", path="output_config"}` | Delete a field. |
-| `{op="map_value", path="messages[role=assistant].content", when_sibling="tool_calls", from="", to=null}` | Replace a specific value (optional `when_sibling` guard). |
-
-Paths: bare field name for top-level (`max_tokens`); `messages[].field` for all messages; `messages[role=X].field` for role-filtered; `$response.field` for response-body fields (`response_egress`/`after_upstream` hooks).
-
-> **Legacy hook names**: `endpoint_readin` and `endpoint_writeout` are accepted as backwards-compatible aliases for `request_ingress` and `response_egress` respectively. They are normalized to the canonical names at config load time. New configs should use the canonical names.
-
-**Tier-2 builtins** (deep/cross-message logic, declared under a hook's `.builtins` array):
-
-| Builtin | What it does |
-|---|---|
-| `lowercase_tool_schema_types` | Recursively lowercases every `type` value in `tools[].function.parameters` / `tools[].input_schema`. Required for strict upstreams (e.g. DeepSeek) when the client sends uppercase `"STRING"`. |
-| `recover_tool_message_name` | Backfills missing `name` on `role:"tool"` messages by looking up the matching `tool_call_id` in the preceding assistant turn's `tool_calls`. |
-| `inject_missing_tool_results` | Synthesizes placeholder `tool_result` blocks for any `tool_use.id` that has no matching `tool_result` in the next user message, and appends a consolidated `user(tool_result)` message when an assistant `tool_use` is the **last** message in the array (e.g. when Codex replays the model's prior `function_call` as its final input item). Also merges consecutive per-call `tool` messages into one user message and reorders text-only assistant turns after the `tool_result`. Required by DeepSeek's Anthropic-format endpoint, which rejects trailing or unmatched `tool_use` with `tool_use ids were found without tool_result blocks immediately after`. |
-| `ensure_tool_config_cache_ttl` | Translates the Anthropic-native `system[]` block-level `cache_control` (e.g. `{type:"ephemeral", ttl?:"1h"}`) into the LiteLLM/Bedrock-bridge convention `cache_control_injection_points: [{location:"tool_config", control:{...}}]`. Reads the first usable `cache_control` from a `system` content-block array (plain-string `system` is ignored), appends a `{location:"tool_config"}` entry unless one already exists (caller-provided entries win), and rebuilds body key order so the injection-points field lands after `tools`. Use when forwarding to an upstream that expects the Bedrock-style injection shape. |
-| `filter_anthropic_beta` | Filters and optionally renames entries in the `anthropic-beta` request header using the owning set's `anthropic_beta_map` (a `[name → mapped_name \| null]` table, mirroring LiteLLM's `anthropic_beta_headers_config.json` semantics). Input is the real Claude-Code comma-separated form (`a,b,c`), not the JSON-array form `beta-features.ts` handles. For each entry: not in map → drop; mapped to `null`/`""` → drop; mapped to a non-empty string → emit the mapped name. Requires an `anthropic_beta_map` field on the transform set; without one the header passes through unchanged. |
-
-**Worked example — DeepSeek's Anthropic endpoint rejecting uppercase tool-schema types**
-
-Antigravity/Gemini agents send tool schemas with proto-style uppercase types
-(`"STRING"`), including nested inside `anyOf`. DeepSeek's `anthropic-messages` endpoint
-rejects them:
-
-```
-HTTP 400: Invalid schema for function 'glob_tool':
-"STRING" is not valid under any of the schemas listed in the 'anyOf' keyword
-```
-
-Fix by wiring `lowercase_tool_schema_types` at `request_ingress` and attaching the set to
-the model entry:
-
-```toml
-[transforms.deepseek_v4_anthropic_compat]
-schema = "anthropic-messages"
-request_ingress.builtins = ["lowercase_tool_schema_types"]
-before_upstream.builtins  = ["inject_missing_tool_results"]
-
-[models.FREE]
-upstream_mode = "openai-completions"
-# attach the set via the entry's `transforms` field, or it resolves to nothing:
-deepseek-v4-anth = {target = "deepseek-v4-flash", base_url = "https://api.deepseek.com/anthropic", api_key = "sk-...", mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat"}
-```
-
-An inbound tool schema like this (uppercase, with `anyOf`):
-
-```json
-{"tools": [{"name": "glob_tool", "input_schema": {
-  "type": "OBJECT",
-  "properties": {
-    "pattern": {"type": "STRING"},
-    "path": {"anyOf": [{"type": "STRING"}, {"type": "NULL"}]}
-  }
-}}]}
-```
-
-is rewritten to lowercase (top-level, `properties`, `items`, **and `anyOf`/`oneOf`/`allOf`
-branches**) before reaching the upstream:
-
-```json
-{"type": "object", "properties": {
-  "pattern": {"type": "string"},
-  "path": {"anyOf": [{"type": "string"}, {"type": "null"}]}
-}}
-```
-
-The same set applies across all three entry paths — `/v1/messages`,
-`/v1beta/models/{model}:generateContent`, and `/v1/chat/completions` passthrough
-(`DEV_PASS_THROUGH`) — so Antigravity's `GeminiAPIEndpoint` and `LocalOpenAIAgentConfig`
-transports are both covered.
-
-**Worked example — DeepSeek rejecting a trailing or unmatched `tool_use`**
-
-DeepSeek's `anthropic-messages` endpoint enforces the Anthropic invariant that every
-`tool_use.id` in an assistant message must be matched by a `tool_result.tool_use_id` in
-the **immediately following** user message. Three shapes violate this and all surface as
-the same upstream error:
-
-```
-HTTP 400: tool_use ids were found without tool_result blocks immediately after: call_01_xxx.
-Each tool_use block must have a corresponding tool_result block in the next message
-```
-
-1. **Trailing `tool_use`** — the assistant `tool_use` is the *last* message in the array
-   (no following user message at all). This is the Codex flow: the SDK replays the model's
-   prior `function_call` as its final input item, and the proxy's
-   `completionsBodyToClaudeBody` converter (`src/handlers/responses.ts`) emits a trailing
-   `assistant(tool_use)` with no following user message.
-2. **Split tool_results** — multiple `role:"tool"` messages (one per call) become separate
-   `user(tool_result)` messages after conversion; DeepSeek requires all of them in ONE
-   consolidated user message.
-3. **Mixed-content assistant** — when an assistant turn has both text and `tool_use`, the
-   text-only assistant that follows must be reordered *after* the `tool_result` user
-   message.
-
-The `inject_missing_tool_results` builtin (declared at `before_upstream`) fixes all three
-by appending a consolidated `user(tool_result)` message for any unmatched id, merging
-consecutive per-call tool messages, and reordering text-only assistant turns. Wire it as:
-
-```toml
-[transforms.deepseek_v4_anthropic_compat]
-schema = "anthropic-messages"
-before_upstream.builtins = ["inject_missing_tool_results"]
-
-[models.FREE]
-upstream_mode = "openai-completions"
-deepseek-v4-anth = {target = "deepseek-v4-flash", base_url = "https://api.deepseek.com/anthropic", api_key = "sk-...", mode = "anthropic-messages", transforms = "deepseek_v4_anthropic_compat"}
-```
-
-With this set attached, an inbound Anthropic body ending in an assistant `tool_use` like:
-
-```json
-{"messages": [
-  {"role": "user", "content": "list the ts files"},
-  {"role": "assistant", "content": [{"type": "tool_use", "id": "call_01_xyz", "name": "Glob", "input": {"pattern": "tests/**/*.ts"}}]}
-]}
-```
-
-is rewritten before the upstream fetch to append a placeholder `tool_result`:
-
-```json
-{"messages": [
-  {"role": "user", "content": "list the ts files"},
-  {"role": "assistant", "content": [{"type": "tool_use", "id": "call_01_xyz", "name": "Glob", "input": {"pattern": "tests/**/*.ts"}}]},
-  {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_01_xyz", "content": ""}]}
-]}
-```
-
-**Core / server**
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `PORT` | `8788` | Listen port (Node server) |
-| `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
-| `ALLOWED_ORIGINS` | `*` | CORS origins |
-| `DEFAULT_MAX_TOKENS` | `8192` | `max_tokens` for requests that omit it |
-| `TUI` | unset | `true` launches the terminal dashboard + enables stat persistence |
-| `DUMP` | unset | `true` enables token-log persistence without the TUI |
-| `DEV_MODE` | unset | `true` enables development behaviors |
-| `VERSION` | unset | Build identifier (commit id, tag, or branch) surfaced in the `/health` response. Set via the Docker `--build-arg VERSION=...` / `-e VERSION=...`, or `[vars]` in `wrangler.toml`. |
-
-**Config source**
-
-The proxy loads its config from one of three backends. When more than one is
-set, precedence is **Apollo > Consul > Path**. Setting any remote backend
-(Apollo or Consul) makes the dashboard read-only; reload config with
-`GET /config-reload`.
-
-**No live-update from remote backends.** Neither Apollo nor Consul pushes
-change notifications to the proxy — after editing/publishing in the portal
-(or Consul KV), you must call `GET /config-reload` (or restart) for the change
-to take effect. The proxy logs a `[WARN]` reminder at startup when Apollo is
-active.
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `PROXY_CONFIG_PATH` | `./proxy_config.toml` | Path to the local TOML config file |
-| `PROXY_CONFIG_CONSUL` | unset | Consul meta URL (e.g. `http://127.0.0.1:8500`); reads KV under the `model-proxy-v3/` prefix recursively. Host must be loopback or private/LAN (SSRF guard). Read-only dashboard. |
-| `PROXY_CONFIG_APOLLO` | unset | Path to an [Apollo](https://www.apolloconfig.com/) connection file (see below). The named Apollo namespace holds the full `proxy_config.toml` content as a plain-text value. Read-only dashboard. Node-only. |
-
-**Apollo connection file** (`PROXY_CONFIG_APOLLO` points here). All fields are required:
-
-| Field | Purpose |
-|---|---|
-| `app_id` | Apollo application id |
-| `cluster` | Apollo cluster name (commonly `default`) |
-| `namespace` | Namespace name; non-properties namespaces carry their format suffix (e.g. `application.json`) |
-| `meta` | Apollo Config Service base URL |
-| `access_key_secret` | Plaintext HMAC-SHA1 key — **not** the `enc:...` Portal storage form; decode `enc:` externally first (see below, that is same with 3 sdk of apollo) |
-
-```
-apollo:
-app_id = "proxyv3"
-cluster = "default"
-namespace = "test"
-meta = "https://test-apollo-config.example.com"
-access_key_secret = "<plaintext HMAC-SHA1 key>"
-```
-
-- The proxy reads the namespace via
-  `GET {meta}/configs/{app_id}/{cluster}/{namespace}` and feeds the
-  `configurations` payload through the same `parseSimpleToml()` + validation
-  pipeline as the local file.
-- `access_key_secret` is the **plaintext HMAC-SHA1 key**. It is never sent
-  directly. Each request is signed:
-  `Authorization: Apollo <app_id>:<base64(HMAC-SHA1(secret, "<ts>\n<path?query>"))>`
-  with a `Timestamp` header. The `enc:...` wrapper is a Portal storage-layer
-  format and is not handled here — if your key is stored encrypted at rest,
-  decrypt it before writing it to this file.
-- Unlike `PROXY_CONFIG_CONSUL`, the Apollo `meta` host is **not** restricted to
-  private/LAN addresses — Apollo meta servers are typically public. Only point
-  `meta` at an Apollo instance you trust.
-- Node-only: the connection file is read with `fs`, so this backend is not
-  available in the Cloudflare Workers build.
-
-**Token counting & upstream**
-
-`sdk://...` model `base_url` values are handled by the local SDK adapter instead of
-HTTP fetch for supported Claude/OpenAI-shaped upstream calls. For example, a model
-entry can set `base_url = "sdk://chatjimmy.ai/api"` and keep the appropriate
-`upstream_mode` for the client/upstream protocol shape.
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `LOCAL_TIKTOKEN` | `false` | Count tokens locally instead of calling upstream. Local counts are best-effort estimates and include text, tool results, tool use, images, documents, thinking, and web-search result blocks. |
-| `TIKTOKEN_MODEL` | unset | tiktoken encoding to use, e.g. `o200k_base` |
-| `UPSTREAM_BODY_TIMEOUT_MS` | `600000` | Upstream body timeout (also judge/synth timeout in fusion) |
-| `MODELS_CACHE_TTL` | unset | Seconds to cache the upstream `/v1/models` list |
-| `GEMINI_API_VERSION` | `v1beta` | Gemini API version segment used in upstream URLs (e.g. `/v1beta/models/...:generateContent`). Also accepts `v1` for the GA endpoint shape. |
-| `MESSAGES_UPSTREAM_MODE` | `openai-completions` | Default `upstream_mode` for `POST /v1/messages` when neither the model entry nor section sets one. `native` = forward Claude Messages verbatim to `/v1/messages`; `openai-completions` = convert Claude ↔ Chat Completions. |
-| `INTERACTIONS_UPSTREAM_MODE` | `native` | Default `upstream_mode` for `POST /v1/interactions`. `native` = forward to the Gemini-family Interactions endpoint; `openai-completions` = indirect transform via Chat Completions. |
-| `GENERATE_CONTENT_UPSTREAM_MODE` | `native` | Default `upstream_mode` for `POST /v1beta/models/{model}:generateContent` (+ `:streamGenerateContent`, `:countTokens`). `native` = forward to Gemini; `openai-completions` = indirect transform via Chat Completions. |
-| `JSON_STRINGIFY_METHOD` | `json` | Serialization method for outgoing bodies. Accepted: `json` (default, native `JSON.stringify`), `safe-stable` ([safe-stable-stringify](https://www.npmjs.com/package/safe-stable-stringify), deterministic key order), `fast-safe` ([fast-safe-stringify](https://www.npmjs.com/package/fast-safe-stringify), cycle-safe). |
-| `DEV_PASS_THROUGH` | `false` | `true` enables `/v1/chat/completions`. The proxy resolves the request model first; `openai-completions` routes forward the Chat Completions body as-is, while `openai-responses` routes convert it to Responses format and forward to `/v1/responses`, and `anthropic-messages` routes convert the body to Claude Messages format and forward to `/v1/messages`. Before forwarding, the configured transform sets are applied (see `[transforms.*]` below). **Notice:** the caller's `Authorization` / `x-api-key` / `x-goog-api-key` is forwarded to the upstream as-is — the proxy does **not** perform a local credential check, so the upstream directly authenticates the request. A valid upstream key returns 200; an invalid one returns the upstream's 401. Do not use in production. |
-| `DEV_NO_KEY` | `false` | `true` (or `1`) skips the auth-header presence check on non-exempt model API paths. Only the presence check is disabled — `auth_server` still applies, and `/v1/models` plus dashboard/admin paths remain exempt regardless. Intended for local development behind another gateway that has already authenticated the caller. |
-| `CONVERSATION` | unset | `true` enables experimental in-process stateful conversation cache |
-| `CONVERSATION_MAX_ENTRIES` | `10000` | Cap on the in-process conversation cache size (entries per instance). Only meaningful when `CONVERSATION=true`. Eviction is lazy + opportunistic; no cross-process sharing. |
-| `IMAGE_BLOCK_DATA_MAX_SIZE` | `10485760` | Max inline image bytes accepted |
-| `ALLOWED_HOSTS` | `127.0.0.1,localhost` | SSRF allowlist for dynamic per-request upstream hosts |
-
-**Privacy-filter sidecar** (inert unless `PRIVACY_FILTER_URL` is set)
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `PRIVACY_FILTER_URL` | unset | Sidecar base URL, e.g. `http://127.0.0.1:8799`. Unset = off |
-| `PRIVACY_FILTER_TIMEOUT_MS` | `40000` | Per-call timeout to the sidecar |
-| `PRIVACY_FILTER_MAX_CHARS` | `1024000` | Skip redaction above this total text size |
-
-When the sidecar is `serve.py` from [`submodules/privacy-filter`](./submodules/privacy-filter/), it emits two sentinel prefixes: `⟦PII:n⟧` (model-detected PII) and `⟦HASH:n⟧` (cryptographic-hash-shaped secrets such as API keys and tokens, caught by the entropy-based `hash_detect.py` scan). The proxy restores both prefixes transparently on the response, including for streaming SSE. The sidecar mode covers broad PII — emails, addresses, phone numbers, names, and credit card numbers — in addition to hex-shaped secrets.
-
-**Local hash-only mode** (in-process, no sidecar). If you only need to redact hash-shaped secrets (API keys, tokens) and want to skip the OPF PII model entirely, add a `[privacy_filter]` section to `proxy_config.toml` with `filter_mode = "local"`. This mode detects two token shapes by entropy analysis; emails, addresses, and other free-text PII are not redacted:
-- **hex tokens** (`0–9`, `a–f`) — MD5, SHA-1, SHA-256 digests and similar
-- **base64url tokens** (`A–Z`, `a–z`, `0–9`, `_`, `-`) — API keys such as `sk-…` or `ouV7bwSq…` that contain non-hex characters
-
-The proxy runs an in-process TypeScript port of `hash_detect.py` (`src/utils/hash-detect.ts`) on every `text` fragment; no HTTP call, no Python sidecar. Non-text content blocks are never touched: Anthropic `image`/`document` (`source.data`), OpenAI `image_url` (`image_url.url`), and Gemini `inlineData` (`inlineData.data`) are skipped. Detected spans are replaced with `⟦HASH:n⟧` sentinels and restored on the response, exactly as in sidecar mode. The plugin is enabled when `filter_mode = "local"` (no URL needed), or when `filter_mode = "sidecar"` is paired with a valid `filter_url`; otherwise it stays inert. Env vars override toml values.
-
-```toml
-[privacy_filter]
-filter_mode = "local"         # "sidecar" (default when a filter_url is configured) | "local"
-# filter_url = "http://127.0.0.1:8799"  # required for sidecar mode
-# timeout_ms = 40000          # sidecar only: per-call timeout
-max_chars = 1024000           # skip redaction above this total text size
-entropy_threshold = 3.0       # local mode only: Shannon entropy cutoff for hash detection
-hash_min_len = 8              # local mode only: minimum hex token length to classify as a hash
-whitelist_add = []            # hex tokens to add to the built-in skip-list
-whitelist_remove = []         # built-in whitelist tokens to remove (so they get detected)
-# whitelist_file = ""         # Node-only: path to a whitelist-override file
-```
-
-The `hash_min_len` and `entropy_threshold` knobs are also accepted by the Python sidecar via `--hash-min-len` and `--entropy-threshold` CLI flags (see [`submodules/privacy-filter/README.md`](./submodules/privacy-filter/README.md)).
-
-> **Note — "filtered Keys" counter:** whenever the privacy filter redacts one or more
-> spans from a request, the proxy increments an in-process cumulative counter.
-> The total is shown in two places:
-> - **TUI** — a `filtered Keys: N` line appears above the *Custom Models* section,
->   right-aligned to the Tokens Panel width. The line is hidden while the count is zero.
-> - **Dashboard** — the *Request Statistic* card contains a *Privacy Filter* sub-table
->   with a "filtered Keys (total)" row, refreshed every 10 seconds alongside other stats.
->
-> The counter is runtime-only and resets to zero when the proxy process restarts.
-> Each redacted span (one `⟦HASH:n⟧` sentinel) counts as one key, so a single request
-> carrying three API keys increments the counter by three.
-
-**Compression sidecar** (inert unless `KOMPRESS_URL` is set)
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `KOMPRESS_URL` | unset | Sidecar base URL, e.g. `http://127.0.0.1:7777`. Unset = off |
-| `KOMPRESS_ENDPOINTS` | `/v1/messages,/v1/chat/completions,/v1/responses` | Proxy paths to compress |
-| `KOMPRESS_FAIL_OPEN` | `true` | `true` = fail-open (forward original text on sidecar error) |
-| `KOMPRESS_TIMEOUT_MS` | `40000` | Per-call timeout to the sidecar |
-| `KOMPRESS_MAX_CHARS` | `1024000` | Skip compression above this total text size |
-| `KOMPRESS_KEEP_RATIO` | `0.5` | Fraction of tokens to keep (lower = more aggressive) |
-| `KOMPRESS_MIN_CHARS` | `200` | Skip fragments shorter than this |
-
-**Image-encode sidecar** (inert unless `IMAGE_ENCODE_URL` is set)
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `IMAGE_ENCODE_URL` | unset | Sidecar base URL for fetching + base64-encoding caller-supplied image URLs. Unset = in-process fetch. Must be localhost / private LAN. |
-| `IMAGE_ENCODE_TIMEOUT_MS` | `40000` | Per-call timeout to the image-encode sidecar (distinct from `PRIVACY_FILTER_TIMEOUT_MS` / `KOMPRESS_TIMEOUT_MS`). |
-
-The full list (including the Consul- and Apollo-backed config and hardcoded upstream-mode defaults)
-is documented in [`docs/README_DETAILS.md`](./docs/README_DETAILS.md).
+Most users only need `proxy_config.toml`; optional environment variables tune behavior.
+The full field-by-field reference lives in
+[`docs/configuration-reference.md`](./docs/configuration-reference.md):
+
+- **TOML sections** — `[general]`, `[default_upstream]`, `[remote.authentication]`,
+  `[remote.recording]`, `[transforms.*]` / `[transform_defaults]`, `[privacy_filter]`,
+  `[dashboard]`.
+- **Environment variables** — core/server (`PORT`, `LOG_LEVEL`, …), config source
+  (`PROXY_CONFIG_PATH` / `PROXY_CONFIG_CONSUL` / `PROXY_CONFIG_APOLLO`), token counting &
+  upstream, and the privacy-filter / compression / image-encode sidecars.
+
+Also see [`proxy_config.toml_example`](./proxy_config.toml_example) and
+[`docs/README_DETAILS.md`](./docs/README_DETAILS.md).
 
 ## Testing
 
@@ -1596,7 +586,10 @@ PROXY_URL=http://localhost:8788 API_KEY=sk-test node run-tests.js --all
 
 The [`docs/`](./docs/) folder has deep-dives on specific topics:
 
-- **Routing** — `proxy_config.toml_example`, `docs/routing_refactor.md`, `docs/routing_config_revision.md`
+- **Routing & aliases** — `docs/routing-and-aliases.md` (full `[models.*]` / `[composite]` / `[schedule]` / token-limit reference), plus `proxy_config.toml_example`, `docs/routing_refactor.md`, `docs/routing_config_revision.md`
+- **API endpoint details** — `docs/api-endpoints.md` (dynamic routing, image I/O across formats, prompt-caching fields, Dashboard JSON API)
+- **Configuration reference** — `docs/configuration-reference.md` (all TOML sections + environment variables)
+- **Auth & stats protocol** — `docs/auth-stats-protocol.md` (wire-level contract for the remote auth/stats sidecars)
 - **Config loading** — `docs/config_loader.md`
 - **Thinking / reasoning** — `docs/claude-extended-thinking.md`, `docs/claude-adaptive-thinking.md`
 - **API formats** — `docs/claude-api-reference.md`, `docs/gemini-api-reference.md`, `docs/openai-api-reference.md`
@@ -1619,7 +612,7 @@ The [`docs/`](./docs/) folder has deep-dives on specific topics:
 6. `Gemini-2.5-Flash`, `3.0-Preview`, `3.1-Flash`
 7. `Claude-Sonnet-4.5`, `Sonnet-4.6`, `Opus 4.6`, `Opus 4.8`, `Fable 5`
 8. `Nemotron-3-Super-120b`, `gpt-oss-120b`
-9. `GLM-5.2`
+9. `GLM-5.2`, `GLM-5.3`
 
 ### Tools Involved
 1. `Claude Code`

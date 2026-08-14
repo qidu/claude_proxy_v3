@@ -5,6 +5,32 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### Docs: split README into focused reference docs
+
+`README.md` shrank from ~1,634 to ~630 lines. Four new deep-dive docs
+under `docs/` now hold the reference material, each linked from the
+relevant README summary section:
+
+- **`docs/api-endpoints.md`** — dynamic routing (moved from README),
+  image input/output across format boundaries, OpenAI prompt-caching
+  fields, and the Dashboard JSON API.
+- **`docs/routing-and-aliases.md`** — `[models.*]` category lookup
+  priority, `base_url`/`api_key` override + "who wins" tables,
+  composite/fusion/coordinator aliases (incl. `toolset` recipes), token
+  limits windowing, schedule aliases, and the routing-hierarchy
+  level-by-level details.
+- **`docs/auth-stats-protocol.md`** — wire-level contract for the
+  remote auth and stats sidecars (requests, headers, OTAC linkage,
+  dynamic routing override).
+- **`docs/configuration-reference.md`** — all TOML sections
+  (`[general]`, `[default_upstream]`, `[remote.*]`, `[transforms.*]`,
+  `[privacy_filter]`) and environment variables, incl. sidecars.
+
+The README keeps the endpoint table, the `upstream_mode` matrix, the
+routing-hierarchy diagram + summary table, a new "Model Routing &
+Aliases" summary, Deployment, and Testing. Cross-links were rewritten
+to the new locations (including within the moved docs).
+
 ### Change: `@earendil-works/pi-tui` moved to devDependencies
 
 The interactive TUI only runs in local/TTY sessions, not in the Docker
