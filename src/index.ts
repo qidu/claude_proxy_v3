@@ -541,25 +541,22 @@ function parseFixedRoute(path: string, proxyConfig: ProxyConfig, env: Env): {
     }
   }
 
-  // 4. /v1/chat/completions — passthrough (when DEV_PASS_THROUGH is enabled)
+  // 4. /v1/chat/completions — passthrough
   if (path === '/v1/chat/completions' || path.startsWith('/v1/chat/completions?')) {
-    if (env.DEV_PASS_THROUGH === 'true' || env.DEV_PASS_THROUGH === '1') {
-      if (defaultMode === 'openai-responses') {
-        return {
-          targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/responses'),
-          targetEndpoint: 'v1/chat/completions',
-          handlerType: 'chat-completions' as const,
-          upstreamMode: 'openai-responses',
-        };
-      }
+    if (defaultMode === 'openai-responses') {
       return {
-        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/chat/completions'),
+        targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/responses'),
         targetEndpoint: 'v1/chat/completions',
         handlerType: 'chat-completions' as const,
-        upstreamMode: 'openai-completions',
+        upstreamMode: 'openai-responses',
       };
     }
-    throw new Error('Direct access to /v1/chat/completions is not allowed. Use /v1/messages instead.');
+    return {
+      targetUrl: buildUpstreamUrl(defaultBaseUrl || '', 'v1/chat/completions'),
+      targetEndpoint: 'v1/chat/completions',
+      handlerType: 'chat-completions' as const,
+      upstreamMode: 'openai-completions',
+    };
   }
 
   // Token counting endpoint
@@ -1127,8 +1124,7 @@ export default {
           path === '/v1/responses' || path.startsWith('/v1/responses?') ||
           path === '/v1/responses/compact' || path.startsWith('/v1/responses/compact?') ||
           path === '/v1/responses/input_tokens' || path.startsWith('/v1/responses/input_tokens?') ||
-          ((path === '/v1/chat/completions' || path.startsWith('/v1/chat/completions?')) &&
-           (env.DEV_PASS_THROUGH === 'true' || env.DEV_PASS_THROUGH === '1')) ||
+          (path === '/v1/chat/completions' || path.startsWith('/v1/chat/completions?')) ||
           ((path.startsWith('/v1beta/models/') || path.startsWith('/v1/models/')) && (path.includes(':generateContent') || path.includes(':streamGenerateContent') || path.includes(':countTokens')))) {
         try {
           let bodyText = await request.text();
@@ -1216,64 +1212,64 @@ export default {
           // When passthrough is NOT enabled, skip routing vars entirely — the outer "else" block
           // (fixed routing) calls parseFixedRoute() which throws the block error.
           if (path === '/v1/chat/completions' || path.startsWith('/v1/chat/completions?')) {
-            if (env.DEV_PASS_THROUGH === 'true' || env.DEV_PASS_THROUGH === '1') {
-              // Prefer per-model route (e.g. gpt-5.5 in [models.free]) over the global default,
-              // so the correct base_url, api_key, and upstream_mode are used.
-              const modelRoute = modelName ? getModelRouteConfig(modelName, proxyConfig) : undefined;
-              outerRoute = modelRoute;
-              const fixedRoute = parseFixedRoute(path, proxyConfig, env);
+            // Prefer per-model route (e.g. gpt-5.5 in [models.free]) over the global default,
+            // so the correct base_url, api_key, and upstream_mode are used.
+            const modelRoute = modelName ? getModelRouteConfig(modelName, proxyConfig) : undefined;
+            outerRoute = modelRoute;
+            const fixedRoute = parseFixedRoute(path, proxyConfig, env);
 
-              if (modelRoute && modelRoute.targetUrl) {
-                let upstreamPath: string;
-                if (modelRoute.upstreamMode === 'openai-responses') {
-                  upstreamPath = 'v1/responses';
-                } else if (modelRoute.upstreamMode === 'anthropic-messages') {
-                  upstreamPath = 'v1/messages';
-                } else if (modelRoute.upstreamMode === 'gemini-generatecontent'
-                    || modelRoute.upstreamMode === 'gemini-interactions') {
-                  // Gemini generateContent URL embeds the target model id and the
-                  // action. The chat-completions handler handles non-streaming
-                  // (:generateContent); streaming lands in Phase 3.
-                  const targetModel = modelRoute.modelAlias || modelName || 'gemini-no-id-at-proxy';
-                  upstreamPath = `v1beta/models/${encodeURIComponent(targetModel)}:generateContent`;
-                } else {
-                  upstreamPath = 'v1/chat/completions';
-                }
-                targetUrl = buildUpstreamUrl(modelRoute.targetUrl, upstreamPath);
-                upstreamMode = modelRoute.upstreamMode || fixedRoute.upstreamMode;
+            if (modelRoute && modelRoute.targetUrl) {
+              let upstreamPath: string;
+              if (modelRoute.upstreamMode === 'openai-responses') {
+                upstreamPath = 'v1/responses';
+              } else if (modelRoute.upstreamMode === 'anthropic-messages') {
+                upstreamPath = 'v1/messages';
+              } else if (modelRoute.upstreamMode === 'gemini-generatecontent'
+                  || modelRoute.upstreamMode === 'gemini-interactions') {
+                // Gemini generateContent URL embeds the target model id and the
+                // action. The chat-completions handler handles non-streaming
+                // (:generateContent); streaming lands in Phase 3.
+                const targetModel = modelRoute.modelAlias || modelName || 'gemini-no-id-at-proxy';
+                upstreamPath = `v1beta/models/${encodeURIComponent(targetModel)}:generateContent`;
               } else {
-                targetUrl = fixedRoute.targetUrl;
-                upstreamMode = fixedRoute.upstreamMode;
+                upstreamPath = 'v1/chat/completions';
               }
-              handlerType = fixedRoute.handlerType;
-              modelId = modelName; // Use extracted model name for dashboard stats
-              forceStreaming = fixedRoute.forceStreaming || false;
-
-              // Resolve composite/alias model id: if the configured route resolves to a
-              // different target model (e.g. "for-claw" → "minimax-m3" → target "MiniMax-M3"),
-              // rewrite the model field in the forwarded body so the upstream sees the real
-              // model id. Fall back to the original model name if no alias is resolved.
-              const resolvedModelAlias = modelRoute?.modelAlias;
-              if (resolvedModelAlias && resolvedModelAlias !== modelName) {
-                body.model = resolvedModelAlias;
-                bodyText = JSON.stringify(body);
-                logger.info(requestId, `/v1/chat/completions composite alias resolved: ${modelName} → ${resolvedModelAlias}`);
-              }
-
-              // Recreate request with (possibly rewritten) body
-              request = new Request(request.url, {
-                method: request.method,
-                headers: request.headers,
-                body: bodyText,
-              });
-
-              // Transform auth headers, then override with model-specific api_key if config_key mode
-              modelAuthHeaders = transformAuthHeadersForUpstream(request, upstreamMode || 'openai-completions', path, requestId, env as Record<string, unknown>);
-              if (useConfigKey && modelRoute?.apiKey) {
-                modelAuthHeaders = { ...modelAuthHeaders, ...formatApiKeyForUpstream(modelRoute.apiKey, upstreamMode || 'openai-completions') };
-              }
+              targetUrl = buildUpstreamUrl(modelRoute.targetUrl, upstreamPath);
+              upstreamMode = modelRoute.upstreamMode || fixedRoute.upstreamMode;
+            } else {
+              targetUrl = fixedRoute.targetUrl;
+              upstreamMode = fixedRoute.upstreamMode;
             }
-            // passthrough disabled: don't set routing vars — falls through to outer fixed-routing block
+            handlerType = fixedRoute.handlerType;
+            modelId = modelName; // Use extracted model name for dashboard stats
+            forceStreaming = fixedRoute.forceStreaming || false;
+
+            // Resolve composite/alias model id: if the configured route resolves to a
+            // different target model (e.g. "for-claw" → "minimax-m3" → target "MiniMax-M3"),
+            // rewrite the model field in the forwarded body so the upstream sees the real
+            // model id. Fall back to the original model name if no alias is resolved.
+            const resolvedModelAlias = modelRoute?.modelAlias;
+            if (resolvedModelAlias && resolvedModelAlias !== modelName) {
+              body.model = resolvedModelAlias;
+              bodyText = JSON.stringify(body);
+              logger.info(requestId, `/v1/chat/completions composite alias resolved: ${modelName} → ${resolvedModelAlias}`);
+            }
+
+            // Recreate request with (possibly rewritten) body
+            request = new Request(request.url, {
+              method: request.method,
+              headers: request.headers,
+              body: bodyText,
+            });
+
+            // Transform auth headers, then override with model-specific api_key if config_key mode
+            modelAuthHeaders = transformAuthHeadersForUpstream(request, upstreamMode || 'openai-completions', path, requestId, env as Record<string, unknown>);
+            // Same free-section rule as the normal routing paths: models in
+            // [models.free] always use their configured api_key (client key
+            // is never forwarded upstream for these routes).
+            if ((useConfigKey || modelRoute?.section === 'free') && modelRoute?.apiKey) {
+              modelAuthHeaders = { ...modelAuthHeaders, ...formatApiKeyForUpstream(modelRoute.apiKey, upstreamMode || 'openai-completions') };
+            }
           } else if (modelName && proxyConfig.models) {
             // ---- Coordinator mode: route to planner or executor based on stage ----
             if (getCompositeAliasMode(modelName, proxyConfig) === 'coordinator') {

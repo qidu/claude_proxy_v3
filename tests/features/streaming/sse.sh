@@ -63,9 +63,9 @@ test_chat_completions_endpoint() {
 
   echo "$RESP" >> /tmp/test_resp_sse_output.txt
   echo ""
-  if echo "$RESP" | grep -qE "not allowed"; then
-    EVENT_COUNT=$(echo "$RESP" | grep -cE "not allowed")
-    echo "✅ $name: right blocked ($EVENT_COUNT events)"
+  if echo "$RESP" | grep -qE "^(event:|data:)"; then
+    EVENT_COUNT=$(echo "$RESP" | grep -cE "^(event:|data:)")
+    echo "✅ $name: SSE streaming works ($EVENT_COUNT events)"
     ((PASS++))
   else
     echo "❌ $name: No SSE events detected"

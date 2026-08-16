@@ -434,7 +434,7 @@ export function validateModelsRequestParams(params: {
 }
 
 /**
- * Validate OpenAI chat completions request (used for DEV_PASS_THROUGH passthrough)
+ * Validate OpenAI chat completions request
  */
 export function validateOpenAICompletionsRequest(request: Record<string, unknown>): void {
   if (!request.model || typeof request.model !== 'string') {

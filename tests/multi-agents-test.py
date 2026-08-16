@@ -14,7 +14,7 @@ Usage:
         # create a new venv: python3 -m venv .venv && .venv/bin/pip install -q --upgrade pip && .venv/bin/pip install -q pydantic google-antigravity
         pip install pydantic google-antigravity
 
-    Start the proxy with `DEV_PASS_THROUGH=true DEV_NO_KEY=true` to enable
+    Start the proxy with `DEV_NO_KEY=true` to enable
     `/v1/chat/completions` and permit Antigravity's headerless requests.
     Set `ANTIGRAVITY_USE_GEMINI_API=true` to use the Gemini-compatible
     `LocalAgentConfig` + `GeminiAPIEndpoint` path instead.
@@ -369,7 +369,7 @@ async def run_antigravity_agent(prompt: str, model: str) -> None:
 # `langgraph.prebuilt.create_react_agent` is deprecated) with a LangChain
 # chat model. We point `langchain_openai.ChatOpenAI` at the proxy's
 # OpenAI-compatible endpoint (`{PROXY_BASE}/v1`) which the proxy serves
-# when started with `DEV_PASS_THROUGH=true`.
+.
 
 def run_langgraph_agent(prompt: str, model: str) -> None:
     print(f"\n--- LangGraph Agent | model={model} ---")

@@ -154,8 +154,8 @@ branches**) before reaching the upstream:
 ```
 
 The same set applies across all three entry paths — `/v1/messages`,
-`/v1beta/models/{model}:generateContent`, and `/v1/chat/completions` passthrough
-(`DEV_PASS_THROUGH`) — so Antigravity's `GeminiAPIEndpoint` and `LocalOpenAIAgentConfig`
+`/v1beta/models/{model}:generateContent`, and `/v1/chat/completions` passthrough —
+so Antigravity's `GeminiAPIEndpoint` and `LocalOpenAIAgentConfig`
 transports are both covered.
 
 **Worked example — DeepSeek rejecting a trailing or unmatched `tool_use`**
@@ -300,7 +300,6 @@ entry can set `base_url = "sdk://chatjimmy.ai/api"` and keep the appropriate
 | `INTERACTIONS_UPSTREAM_MODE` | `native` | Default `upstream_mode` for `POST /v1/interactions`. `native` = forward to the Gemini-family Interactions endpoint; `openai-completions` = indirect transform via Chat Completions. |
 | `GENERATE_CONTENT_UPSTREAM_MODE` | `native` | Default `upstream_mode` for `POST /v1beta/models/{model}:generateContent` (+ `:streamGenerateContent`, `:countTokens`). `native` = forward to Gemini; `openai-completions` = indirect transform via Chat Completions. |
 | `JSON_STRINGIFY_METHOD` | `json` | Serialization method for outgoing bodies. Accepted: `json` (default, native `JSON.stringify`), `safe-stable` ([safe-stable-stringify](https://www.npmjs.com/package/safe-stable-stringify), deterministic key order), `fast-safe` ([fast-safe-stringify](https://www.npmjs.com/package/fast-safe-stringify), cycle-safe). |
-| `DEV_PASS_THROUGH` | `false` | `true` enables `/v1/chat/completions`. The proxy resolves the request model first; `openai-completions` routes forward the Chat Completions body as-is, while `openai-responses` routes convert it to Responses format and forward to `/v1/responses`, and `anthropic-messages` routes convert the body to Claude Messages format and forward to `/v1/messages`. Before forwarding, the configured transform sets are applied (see `[transforms.*]` below). **Notice:** the caller's `Authorization` / `x-api-key` / `x-goog-api-key` is forwarded to the upstream as-is — the proxy does **not** perform a local credential check, so the upstream directly authenticates the request. A valid upstream key returns 200; an invalid one returns the upstream's 401. Do not use in production. |
 | `DEV_NO_KEY` | `false` | `true` (or `1`) skips the auth-header presence check on non-exempt model API paths. Only the presence check is disabled — `auth_server` still applies, and `/v1/models` plus dashboard/admin paths remain exempt regardless. Intended for local development behind another gateway that has already authenticated the caller. |
 | `CONVERSATION` | unset | `true` enables experimental in-process stateful conversation cache |
 | `CONVERSATION_MAX_ENTRIES` | `10000` | Cap on the in-process conversation cache size (entries per instance). Only meaningful when `CONVERSATION=true`. Eviction is lazy + opportunistic; no cross-process sharing. |

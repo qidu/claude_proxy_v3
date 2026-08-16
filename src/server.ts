@@ -41,7 +41,6 @@ const env: NodeEnv = {
   PROXY_CONFIG_CONSUL: process.env.PROXY_CONFIG_CONSUL,
   PROXY_CONFIG_APOLLO: process.env.PROXY_CONFIG_APOLLO,
   PORT: process.env.PORT || '8788',
-  DEV_PASS_THROUGH: process.env.DEV_PASS_THROUGH || 'false',
   DEV_NO_KEY: process.env.DEV_NO_KEY || 'false',
   PRIVACY_FILTER_URL: process.env.PRIVACY_FILTER_URL,
   PRIVACY_FILTER_TIMEOUT_MS: process.env.PRIVACY_FILTER_TIMEOUT_MS,
@@ -152,9 +151,6 @@ server.listen(port, '0.0.0.0', async () => {
   console.log(`Server running on http://0.0.0.0:${port} (version: ${env.VERSION})`);
   console.log(` and dashboard at http://0.0.0.0:${port}/dashboard`);
 
-  if (env.DEV_PASS_THROUGH === 'true' || env.DEV_PASS_THROUGH === '1') {
-    console.warn('[WARN] DEV_PASS_THROUGH is enabled: /v1/chat/completions requests are passed through directly with validation only (no model routing). Do not use in production.');
-  }
   if (env.DEV_NO_KEY === 'true' || env.DEV_NO_KEY === '1') {
     console.warn('[WARN] DEV_NO_KEY is enabled: model requests may omit authentication headers. Do not use in production.');
   }

@@ -5,6 +5,18 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### feat(api): serve `/v1/chat/completions` by default; remove `DEV_PASS_THROUGH`
+
+`POST /v1/chat/completions` (per-model routed passthrough) is now always
+enabled — no `DEV_PASS_THROUGH=true` env var needed. The env var, its
+`Env` type field, the startup warning, and docs references were removed;
+`sse.sh` now expects streaming from this endpoint instead of the old
+"not allowed" block.
+
+Also fixed in the same path: models in `[models.free]` now use their
+configured `api_key` for chat-completions passthrough (same rule as the
+other routing paths) instead of forwarding the caller's key upstream.
+
 ### Docs: split README into focused reference docs
 
 `README.md` shrank from ~1,634 to ~630 lines. Four new deep-dive docs

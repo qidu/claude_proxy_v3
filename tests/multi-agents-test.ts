@@ -10,7 +10,7 @@
  * (modulated by the CLI selection below).
  *
  * Testing Sever:
- *   start proxy with `DEV_PASS_THROUGH=true` to enable `/v1/chat/completions` endpoint
+ *   `/v1/chat/completions` endpoint is enabled by default
  *   start proxy with `DEV_NO_KEY=true` to skip auth headers checking on proxy
  *   start proxy with `PORT=7777` on testing port, use lsof to check testing port and get right pid of proxy
  *
@@ -448,9 +448,8 @@ async function runGeminiAgent(prompt: string, model: string) {
 // identical across Pi and the other read-only workers.
 //
 // Model wiring: pi's anthropic-messages API POSTs to `{baseUrl}/v1/messages`.
-// The proxy accepts /v1/messages for any registered model and returns
-// "Direct access to /v1/chat/completions is not allowed" for the completions
-// path, so the Anthropic Messages API is the only client-side choice.
+// The proxy accepts /v1/messages for any registered model; /v1/chat/completions
+// is also served (passthrough), but this test routes via the Anthropic shape.
 // pi's SDK appends "/v1/messages" to baseUrl internally, so the provider's
 // baseUrl is the proxy origin (no /v1 suffix). One static model entry per
 // id in MODELS is registered.

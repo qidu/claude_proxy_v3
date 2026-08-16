@@ -145,12 +145,6 @@ export interface Env {
     CONVERSATION?: string;
 
     /**
-     * When "true", /v1/chat/completions is forwarded as-is to the default upstream
-     * without format conversion. Set to "true" or "1" to enable.
-     */
-    DEV_PASS_THROUGH?: string;
-
-    /**
      * Development-only: skip the requirement that model requests include an
      * Authorization, x-api-key, or x-goog-api-key header. Set to "true" or "1".
      * Configured auth_server validation still applies.

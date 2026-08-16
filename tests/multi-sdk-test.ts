@@ -25,14 +25,13 @@
  * Why @ai-sdk/anthropic as the Vercel transport:
  *   The proxy's universal endpoint is POST /v1/messages (Anthropic shape) —
  *   any registered model is reachable there with any non-empty api key.
- *   /v1/chat/completions is gated behind DEV_PASS_THROUGH=true + a dedicated
- *   sk-cp key, so we route through the Anthropic provider for breadth.
+ *   /v1/chat/completions is served by default (no flag needed); it may need a
+ *   dedicated upstream key, so we route through the Anthropic provider for breadth.
  *
  * Prerequisites:
  *   - `ai`, `@ai-sdk/anthropic` installed (NOT in package.json — write imports
  *     only, the user installs separately).
- *   - Proxy running on PORT=7777 with DEV_NO_KEY=true. DEV_PASS_THROUGH is
- *     NOT required.
+ *   - Proxy running on PORT=7777 with DEV_NO_KEY=true.
  *   - For Codex / OpenCode, the matching CLI binaries (`codex`, `pi`)
  *     must be on PATH.
  *

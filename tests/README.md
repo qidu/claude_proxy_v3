@@ -66,7 +66,7 @@ End-to-end: real agent SDKs talking to a running proxy. Requires the proxy to be
 
 ```bash
 # Start proxy (separate terminal)
-PORT=7777 DEV_NO_KEY=true DEV_PASS_THROUGH=true npx tsx src/index.ts
+PORT=7777 DEV_NO_KEY=true npx tsx src/index.ts
 
 # TypeScript agents (Codex / Claude / Gemini / Pi / OpenCode)
 npx tsx tests/multi-agents-test.ts              # list models, agents, tasks
@@ -145,7 +145,7 @@ By default all 5 agents are enabled. To run a subset, comment the `runXxxAgent(t
 
 #### Per-agent notes
 
-**Codex** — Writes `~/.codex/config.toml` with `base_url = ${PROXY_BASE}/v1` and `wire_api = "responses"`, then runs the prompt through `Codex().startThread(...).run(prompt)`. Requires `DEV_PASS_THROUGH=true` on the proxy so `/v1/chat/completions` (Codex's fallback) is also accepted.
+**Codex** — Writes `~/.codex/config.toml` with `base_url = ${PROXY_BASE}/v1` and `wire_api = "responses"`, then runs the prompt through `Codex().startThread(...).run(prompt)`. The proxy serves `/v1/chat/completions` (Codex's fallback) unconditionally.
 
 **Claude** — Uses `claudeQuery()` with `allowedTools: ["Glob", "Read"]` and `maxTurns: 30`. `ANTHROPIC_BASE_URL` is set to the proxy origin (Claude SDK appends `/v1/messages`).
 
@@ -193,7 +193,7 @@ A reference `~/.config/opencode/opencode.jsonc` for this proxy looks like:
 The two provider packages OpenCode can load — `@ai-sdk/anthropic` and `@ai-sdk/openai-compatible` — end up at different proxy endpoints with very different key requirements:
 
 - **`@ai-sdk/anthropic`** → `/v1/messages`. The proxy's Anthropic Messages handler is open for the local test runner; any non-empty key is accepted (e.g. `API_KEY=sk-hi`). Use this when you just want to point OpenCode at the proxy and exercise the model catalog.
-- **`@ai-sdk/openai-compatible`** → `/v1/chat/completions`. This path is only exposed in **pass-through mode** (`DEV_PASS_THROUGH=true` on the proxy). The proxy forwards the raw `Authorization: Bearer <key>` header to the upstream provider, so the key must be valid for the upstream you target (e.g. the dedicated `sk-cp-…` key for `minimax-m3`). A key that works for `/v1/messages` will be rejected with `401` here.
+- **`@ai-sdk/openai-compatible`** → `/v1/chat/completions`. This path is served directly by the proxy. The proxy forwards the raw `Authorization: Bearer <key>` header to the upstream provider, so the key must be valid for the upstream you target (e.g. the dedicated `sk-cp-…` key for `minimax-m3`). A key that works for `/v1/messages` will be rejected with `401` here.
 - In both cases the `options.apiKey` is what AI SDK uses to authenticate; the `options.headers.Authorization` entry is OpenCode's documented way to also stamp an explicit `Authorization: Bearer …` on the outgoing request and is required when the upstream does not infer auth from the URL.
 - `promptCacheKey` is added by default by `@ai-sdk/openai-compatible`; some proxies/upstreams reject it. For `openai-compatible` on this proxy you can either add `options.setCacheKey = false` or set the header explicitly via the `headers` block above.
 
@@ -262,7 +262,7 @@ If you don't need CrewAI, a single `.venv` (3.13 or 3.14) with `pip install goog
 For Antigravity, start the proxy with both development-only switches:
 
 ```bash
-DEV_PASS_THROUGH=true DEV_NO_KEY=true npm run server
+DEV_NO_KEY=true npm run server
 ```
 
 The active proxy TOML must provide the upstream credential because the installed `LocalOpenAIAgentConfig` cannot send an API key or custom authorization header:
@@ -272,7 +272,7 @@ The active proxy TOML must provide the upstream credential because the installed
 auth_passthrough_with = "config_key"
 ```
 
-The selected model route must define `api_key`, or an applicable unmatched model must have `default_api_key` under `[default_upstream]`. In `config_key` mode, the proxy injects that configured key instead of forwarding Antigravity's absent client key. `DEV_NO_KEY` and `DEV_PASS_THROUGH` must not be enabled in production.
+The selected model route must define `api_key`, or an applicable unmatched model must have `default_api_key` under `[default_upstream]`. In `config_key` mode, the proxy injects that configured key instead of forwarding Antigravity's absent client key. `DEV_NO_KEY` must not be enabled in production.
 
 For the Gemini transport, run the focused `max-m3` test with:
 
@@ -316,12 +316,12 @@ By default all 3 agents are enabled. To run a subset, comment the entries in the
 **LangGraph (`langgraph` + `langchain-openai`)** — Three subtleties:
 
 1. `langgraph` is a low-level orchestrator (per its own docs) and does not ship its own chat client. The runner uses `langchain.agents.create_agent` (the ReAct tool-calling loop, the new home of `langgraph.prebuilt.create_react_agent` from pre-1.x) with `langchain_openai.ChatOpenAI`, which is the standard pairing for tool-calling agents.
-2. `ChatOpenAI(base_url={PROXY_BASE}/v1)` routes through the proxy's `/v1/chat/completions` handler. The proxy must be started with `DEV_PASS_THROUGH=true` so that path is exposed.
+2. `ChatOpenAI(base_url={PROXY_BASE}/v1)` routes through the proxy's `/v1/chat/completions` handler. This path is served unconditionally.
 3. The runner imports `create_agent` aliased as `create_react_agent` so the call site stays readable; this sidesteps the `LangGraphDeprecatedSinceV10` warning emitted by the legacy `langgraph.prebuilt.create_react_agent` in langgraph 1.x.
 
 **CrewAI (`crewai`)** — Four subtleties:
 
-1. The LLM is configured via `LLM(model="openai/<id>", base_url={PROXY_BASE}/v1, api_key=…)`. The `openai/` prefix tells CrewAI to use the OpenAI-compatible chat-completions client; the proxy serves that path when started with `DEV_PASS_THROUGH=true`.
+1. The LLM is configured via `LLM(model="openai/<id>", base_url={PROXY_BASE}/v1, api_key=…)`. The `openai/` prefix tells CrewAI to use the OpenAI-compatible chat-completions client; the proxy serves that path unconditionally.
 2. CrewAI tools must subclass `BaseTool` and declare an `args_schema` (a `pydantic.BaseModel` with `Field(...)` descriptions). The runner wires `GlobTool`/`ReadTool` with explicit schemas so the model sees typed parameters, not raw JSON.
 3. CrewAI's `kickoff()` is synchronous and blocks until the crew finishes; the runner surfaces the result's `raw` attribute (falling back to `str(result)`) and prints `chars=<len>` so silent empty responses are still detectable.
 4. The CLI runner wraps all agents in `asyncio.run(...)`. Calling the sync `crew.kickoff()` from inside an active event loop raises `Agent execution was invoked synchronously from within a running event loop`. The dispatcher handles this by running the CrewAI agent via `asyncio.to_thread(runner, prompt, model)`; the async Antigravity agent and the sync LangGraph agent are invoked inline. Switching the dispatcher away from `asyncio.run` would lift this requirement.
@@ -355,7 +355,7 @@ The two `multi-agents-test.*` runners exercise **8 distinct agent SDKs** end-to-
 
 | Runner | Agent | SDK package | Proxy endpoint exercised | Proxy source path covered |
 |---|---|---|---|---|
-| TS | **Codex** | `@openai/codex-sdk` | `/v1/responses` (primary) + `/v1/chat/completions` (fallback, needs `DEV_PASS_THROUGH`) | `handlers/responses.ts`, `handlers/chat-completions.ts`, `converters/completions-to-responses.ts` |
+| TS | **Codex** | `@openai/codex-sdk` | `/v1/responses` (primary) + `/v1/chat/completions` (fallback) | `handlers/responses.ts`, `handlers/chat-completions.ts`, `converters/completions-to-responses.ts` |
 | TS | **Claude** | `@anthropic-ai/claude-agent-sdk` | `/v1/messages` | `handlers/messages.ts`, `handlers/claude.ts` |
 | TS | **Gemini** | `@google/genai` | `/v1beta/.../generateContent` (+ custom tool-calling loop) | `handlers/gemini.ts`, `converters/gemini-*` |
 | TS | **Pi** | `@earendil-works/pi-agent-core` | `/v1/messages` (via `anthropicMessagesApi()`) | `handlers/messages.ts`, `handlers/claude.ts` |
