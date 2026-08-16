@@ -62,7 +62,7 @@ In the positional form, every element is optional from the right — a 3-element
 transforms. An empty element (`""`) falls back to the section/default value for that slot.
 The `transforms` field (index 4) is always a comma-separated string of named set names.
 
-**Default transforms** — the example config (`proxy_config.toml_example`) ships a
+**Default transforms** — the example config (`proxy_config.example.toml`) ships a
 `[transform_defaults]` block that wires `max_tokens_rename` as a mode-level default for
 `openai-completions` and `openai-responses`. This renames `max_tokens` →
 `max_completion_tokens` automatically for every route on those modes, which is required by

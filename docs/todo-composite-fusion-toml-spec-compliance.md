@@ -21,7 +21,7 @@ addressed and is the subject of this TODO.
 ## Why it matters
 
 - External tooling that uses a spec-compliant TOML parser (e.g. `toml` npm, Python `tomllib`,
-  Go `BurntSushi/toml`) cannot load `proxy_config.toml_example` or the README's composite /
+  Go `BurntSushi/toml`) cannot load `proxy_config.example.toml` or the README's composite /
   fusion blocks as-is. CI scripts, config validators, and editor plugins that go through a
   spec parser will reject them.
 - A `toml.parse()` of a config that includes the wildcard-key form or `: `-separator inline
@@ -34,7 +34,7 @@ Affected files:
 
 | File | Affected blocks |
 |---|---|
-| `proxy_config.toml_example` | `gpt-all`, `code-small`, `maxplan`, `claude-haiku-4-5-20251001`, `smarter` (and any other `[composite]` entries with `token_limit` / `share` / `fallback` / `primary` / `role` / `fusion_options` / `fusion` keys) |
+| `proxy_config.example.toml` | `gpt-all`, `code-small`, `maxplan`, `claude-haiku-4-5-20251001`, `smarter` (and any other `[composite]` entries with `token_limit` / `share` / `fallback` / `primary` / `role` / `fusion_options` / `fusion` keys) |
 | `README.md` L167-172 | composite aliases (`gpt-all`, `gpt-5`, `llama`) |
 | `README.md` L186-189 | fusion alias (`smart-answer`) |
 | `src/utils/config-loader.ts` `parseSimpleToml()` | the parser that has to keep accepting both forms during the transition |
@@ -46,7 +46,7 @@ hand-edited file used `=`. Fixing the write side is part of this TODO.
 
 ## Plan
 
-### Phase 1 — Make `proxy_config.toml_example` spec-compliant
+### Phase 1 — Make `proxy_config.example.toml` spec-compliant
 
 Convert every `[composite]` entry's inline tables from `:` separator to `=` separator. Bare
 sub-keys that are valid TOML bare keys (e.g. `share`, `fallback`, `primary`, `role`, `fusion`,
@@ -115,7 +115,7 @@ least one minor version.
 After Phase 1+2, the following should all parse with `toml.parse()` from the `toml` npm
 package (the same check used to validate the README in this conversation):
 
-- `proxy_config.toml_example`
+- `proxy_config.example.toml`
 - All 13 TOML code blocks in `README.md`
 
 The existing check script at `/tmp/check_toml.js` (and its v2 successor) can be promoted into

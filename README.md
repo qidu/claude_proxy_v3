@@ -144,157 +144,17 @@ npm install
 Copy the example config and edit it:
 
 ```bash
-cp proxy_config.toml_example proxy_config.toml
+cp proxy_config.example.toml proxy_config.toml
 ```
 
-> **Note — inline `#` comments are supported.** `proxy_config.toml` is parsed
-> by a hand-rolled TOML reader (`src/utils/config-loader.ts → parseSimpleToml`)
-> that strips trailing comments before matching values. Comments must be preceded
-> by at least one space (standard TOML convention), e.g.
-> `filter_mode = "local"  # sidecar | local`. A bare `#` with no leading space
-> inside a quoted value (e.g. `api_key = "abc#def"`) is preserved correctly.
-> Standalone `#`-only lines are always fine.
+A minimal-config walkthrough (model categories, `upstream_mode`, per-model overrides,
+wildcards) and the behavioral notes on extended thinking (inline `#` comment support,
+third-party `anthropic-messages` endpoints, synthetic thinking signatures,
+`budget_tokens` vs `max_tokens`, the `kimi-k2.7-code` `thinking_budget` collision,
+tag-based and `reasoning_content` extraction) live in
+[`docs/configuration-guide.md`](./docs/configuration-guide.md).
 
-A minimal `proxy_config.toml` looks like this:
-
-```toml
-# Remote auth sidecar — validates proxy endpoint auth headers.
-# [remote.authentication]
-# auth_server = "https://auth.example.com/validate"
-# auth_with_model = false          # when true, defers auth until after body parsing
-                                   # and forwards requested model id as x-resource-for
-# auth_with_body = false           # when true, POSTs the parsed request body to auth_server
-# auth_passthrough_with = "user_key"   # controls which key is passed upstream:
-                                       # "user_key" (default) or "config_key"
-
-# Remote stats sidecar — POSTs per-request usage records to an HTTP collector.
-# Includes request_id, endpoint, raw user_key, model, response_status, and token counters.
-# [remote.recording]
-# record_server = "http://127.0.0.1:8080/model-usage"
-# record_response_body = false     # when true, each record also includes the constructed response body
-
-# Global upstream defaults — applied ONLY to models that are NOT claimed by
-# any `[models.*]` category section below. A model name that falls through
-# every section's exact / wildcard / catch-all lookup gets routed here.
-[default_upstream]
-default_base_url = "https://api.your-provider.com"
-# default_api_key = "your-key"   # used in config_key mode or as fallback for [models.FREE]
-
-# Claude models, spoken to in native Anthropic format
-[models.claude]
-upstream_mode = "anthropic-messages"
-base_url = "https://api.anthropic.com"
-api_key = "your-claude-key"
-"claude-sonnet-4-6" = {}                    # exact entry; inline table {target, base_url, api_key, mode} — empty fields inherit from section
-"claude-*" = {}                             # prefix wildcard — catch-all for every other claude-* model
-
-# Gemini models, spoken to in native Gemini format
-[models.gemini]
-upstream_mode = "gemini-generatecontent"
-base_url = "https://generativelanguage.googleapis.com"
-api_key = "your-gemini-key"
-"gemini-*" = {}
-
-# Everything else goes here (OpenAI-compatible). Empty entry fields inherit
-# from the section, then from `[default_upstream]` defaults.
-[models.default]
-upstream_mode = "openai-completions"
-base_url = "https://api.your-provider.com"   # section base_url overrides [default_upstream].default_base_url
-"*" = {}                                     # final catch-all for this section
-"deepseek/deepseek-v3.2" = {}
-
-# /v1/embeddings — OpenAI-compatible. The proxy appends `v1/embeddings` to
-# `base_url`, so set the **API root** (e.g. `https://integrate.api.nvidia.com`,
-# NOT `…/v1`). When `api_key` is set, it always overrides any caller-supplied
-# header on `/v1/embeddings` — see the "Who wins" tables in
-# docs/routing-and-aliases.md. Model entries are exact-match only; bare model names without
-# the upstream's required prefix (e.g. `nvidia/`) will fail at the upstream.
-[models.EMBEDDING]
-upstream_mode = "openai-completions"   # value is informational — the proxy hardcodes this for /v1/embeddings
-base_url = "https://integrate.api.nvidia.com"
-api_key = "nvapi-..."
-"nvidia/nemotron-3-embed-1b" = {}
-```
-
-Key ideas:
-
-- **Categories** group models by provider: `[models.claude]`, `[models.gemini]`,
-  `[models.default]`, etc.
-- **`upstream_mode`** picks the protocol: `anthropic-messages`, `gemini-generatecontent`,
-  `gemini-interactions`, `openai-completions`, or `openai-responses`.
-- **`sdk://` target URLs** route supported Claude/OpenAI upstream calls through the
-  local SDK handler instead of plain HTTP fetch, while still using the configured
-  `upstream_mode` for request/response shape.
-- **Per-model overrides** use an inline table: `"my-model" = {target = "real-name", base_url = "...", api_key = "..."}`.
-  Empty fields inherit from the category. Both the canonical keys (`upstream_mode`, `base_url`,
-  `api_key`) and the short aliases (`mode`, `url`, `key`) are accepted; when both are present
-  the canonical form wins.
-
-> **Note — `anthropic-messages` and extended thinking:**
-> When `upstream_mode = "anthropic-messages"` is used with a third-party Anthropic-compatible
-> endpoint (e.g. MiniMax at `api.minimaxi.com/anthropic`), the proxy passes the client's
-> `thinking` field through as-is. If the client sends `{"type": "adaptive"}` the upstream
-> model will respond with thinking blocks; if the client omits `thinking` entirely, the proxy
-> injects `{"type": "disabled"}` as a safe default (needed for DeepSeek-compatible endpoints
-> that otherwise default to thinking mode). On a **fresh conversation** (no prior assistant
-> turns containing thinking blocks), a client-sent `{"type": "enabled"}` will be silently
-> dropped — use `"adaptive"` instead, which the model handles autonomously.
-
-> **Note — synthetic thinking-block signatures (Claude→OpenAI→Claude only):**
-> Anthropic's spec marks `signature` as REQUIRED on thinking content blocks, and clients such
-> as `@ai-sdk/anthropic` reject responses missing it. Upstreams reached via the conversion
-> paths (`openai-completions` / `openai-responses`, and the `sdk://` handler) emit reasoning
-> without a signature, so the proxy synthesizes a constant placeholder
-> (`SYNTHETIC_THINKING_SIGNATURE` = 'synthetic'). This **only** applies to the Claude→OpenAI→Claude
-> round-trip: the reverse converter round-trips reasoning via `reasoning_content` and drops the
-> signature before the upstream call, so the placeholder is never verified. For
-> `upstream_mode = "anthropic-messages"` the proxy does **not** synthesize anything — it is a
-> pure pass-through in both directions, so the upstream's own signature is preserved:
->   - Client enables thinking + provides prior thinking blocks → forwarded as-is; signature passes through. ✓
->   - Client enables thinking + provides prior thinking blocks but the signature is missing/garbage → forwarded as-is; a real Anthropic/Bedrock upstream rejects with HTTP 400.
-
-> **Note — `thinking.budget_tokens` vs `max_tokens`:** on `POST /v1/messages` and
-> `POST /v1/messages/count_tokens`, when `thinking` is enabled the validator reduces
-> `thinking.budget_tokens` down to `max_tokens` if the budget would otherwise exceed it.
-> If you send `anthropic-beta: interleaved-thinking-2025-05-14`, the budget is left
-> unchanged (interleaved thinking may consume the full context window). If `max_tokens`
-> is below `1024` with thinking enabled and a non-null budget, validation throws with
-> a message explaining the minimum.
-
-> **Note — `kimi-k2.7-code` and `thinking_budget` collision:** Moonshot's
-> `kimi-k2.7-code` maps `reasoning_effort: "medium"` to a fixed
-> `thinking_budget = 32768`, so any request with `max_tokens ≤ 32768` fails with
-> `InvalidParameter: max_completion_tokens [N] must be greater than thinking_budget [32768]`.
-> Under `[general]`, set `budget_to_effort_high = 0` — the proxy then emits
-> `reasoning_effort: "high"` for any thinking budget. if set 
-> `budget_to_effort_low = 32768`
-> `budget_to_effort_medium = 65536`
-> `budget_to_effort_high = 128000`
-> map `reasoning_effort: "low"` would avoid the limit of `kimi-k2.7-code`.
-- **Tag-based reasoning extraction (`openai-completions` only):** when an upstream replies
-  with reasoning wrapped in `<think>...</think>` or `<thinking>...</thinking>` tags, the proxy splits
-  the content into the endpoint's native reasoning field. `/v1/messages` returns it as a
-  Claude `thinking` block; `/v1/responses` returns it as a `reasoning` output item plus an
-  embedded `reasoning_text` part for round-trip; `/v1/interactions` returns it as a
-  `thought` output item; `/v1beta/models/<model>:generateContent` returns it as a Gemini
-  `thought` part. The tag itself is stripped from the user-visible text. This applies to
-  both streaming and non-streaming responses; the streaming path stitches tags that cross
-  SSE chunk boundaries before extraction.
-- **`reasoning_content` field round-trip (`openai-completions`, Gemini endpoints):** reasoning
-  models such as DeepSeek emit thinking as a dedicated `reasoning_content` field on the delta
-  rather than inline tags. The proxy extracts it the same way as tag-based reasoning (emitted as
-  a Gemini `thought` part, Claude `thinking` block, etc.) and ensures it is replayed on the
-  assistant turn in subsequent requests — required by DeepSeek-compatible upstreams that reject
-  conversations where a prior thinking turn omits `reasoning_content`. Tool-call streaming is
-  also handled: DeepSeek fragments a single tool call across multiple SSE chunks (first chunk
-  carries `id`+`name`+partial args, continuation chunks carry only more arg text). The proxy
-  accumulates these fragments and flushes one complete `functionCall` part per tool call when
-  `finish_reason` arrives, avoiding name-less `call_undefined` entries in the client's history.
-- **Wildcards** (`claude-*`) apply only in the provider/default sections listed in
-  [Model Routing & Aliases](#model-routing--aliases); the **catch-all** (`*`) is only the final
-  `[models.default]` fallback for anything not claimed earlier.
-
-See [`proxy_config.toml_example`](./proxy_config.toml_example) for a fully commented config
+See [`proxy_config.example.toml`](./proxy_config.example.toml) for a fully commented config
 covering every section and option.
 
 ### 3. Run
@@ -328,71 +188,10 @@ Start with the terminal dashboard:
 TUI=true npm run server
 ```
 
-You get a live view of configured models, token usage, response times, and tool stats.
-Press `c` to edit composite aliases, `s` to edit schedule aliases, `t` to send a test
-request, `r` to reload config, `l` to edit the global token limit, `d` to open the
-statistics overlay, `p` to open the tools blocklist overlay, `Ctrl+U` to dump usage to
-JSONL now, `Ctrl+C` to quit. A web dashboard is also available at `GET /dashboard`.
-
-When `TUI=true` or `DUMP=true` is set, token stats are appended to
-`model_proxy_tokens.jsonl` in the working directory. Each line is one JSON dump:
-
-```json
-{
-  "date": "2026-07-15",
-  "timestamp": 1784112345,
-  "lastDumpTs": 1784109999,
-  "modelStats": [
-    {
-      "model": "claude-sonnet-4-6",
-      "requests": 12,
-      "failed_requests": 0,
-      "input_tokens": 12345,
-      "cached_tokens": 0,
-      "cache_written_tokens": 0,
-      "output_tokens": 6789,
-      "total_tokens": 19134
-    }
-  ],
-  "toolStats": [
-    { "name": "Read", "agent": "unknown", "req": 3, "resp": 1, "len": 2048, "blocked": 0 }
-  ],
-  "heatmapEvents": {
-    "models": { "ab12": "claude-sonnet-4-6" },
-    "sequences": [{ "ts": 1784112300, "values": 19134, "id": "ab12" }]
-  }
-}
-```
-
-Fields:
-- `date`: local `YYYY-MM-DD` bucket for the dump.
-- `timestamp`: dump time in Unix seconds.
-- `lastDumpTs`: previous dump timestamp. `0` means a full snapshot; non-zero means
-  `heatmapEvents` is a delta since that timestamp.
-- `modelStats`: cumulative per-model totals for that date.
-- `toolStats`: optional cumulative per-tool/per-agent totals.
-- `heatmapEvents`: token events used for the Tokens Panel and rolling global token
-  limit. Current files use the compact `{models, sequences}` shape, where model
-  names are mapped to short ids and each sequence stores `{ts, values, id}` in Unix
-  seconds. Older files with `heatmapEvents: [{timestamp, values, model}]` are still
-  accepted.
-- `compositeAliasStates`: optional persisted per-alias token-limit event log,
-  written by day-rollover/full-snapshot dumps. Each alias entry stores
-  `{limit, duration, events: [{ts, tokens}]}`; events are kept in Unix seconds
-  and pruned to the 31-day retention bound on load. Legacy rows using the older
-  `compositeLimitWindows` shape (accumulator-based) are still accepted but
-  restore with an empty event log since an accumulator cannot be reconstructed
-  into per-event history.
-
-On startup, the proxy avoids double-counting persisted stats as follows:
-- `modelStats`, `toolStats`, and `compositeAliasStates` are loaded only from the
-  latest dump for each retained date because they are cumulative snapshots.
-- `modelStats` from those latest per-day dumps are summed across days to rebuild the
-  all-time dashboard totals.
-- `heatmapEvents` are loaded from all retained rows, because delta rows and multiple
-  proxy instances can contain different events. The loader skips events older than
-  the retention cutoff, skips events at or before a row's non-zero `lastDumpTs`, and
-  deduplicates by `timestamp:values:modelId` before adding them to memory.
+You get a live view of configured models, token usage, response times, and tool stats;
+a web dashboard is also available at `GET /dashboard`. The TUI key bindings, the
+`model_proxy_tokens.jsonl` usage-dump format, and the startup stats-restoration rules
+are documented in [`docs/live-stats.md`](./docs/live-stats.md).
 
 ## API Endpoints
 
@@ -512,7 +311,7 @@ Level-by-level details and worked request-resolution examples are in
 **Docker**
 
 ```bash
-cp proxy_config.toml_example proxy_config.toml
+cp proxy_config.example.toml proxy_config.toml
 #COMMIT=$(git rev-parse --short HEAD)
 #docker build --network=host --build-arg VERSION=$COMMIT -t model-proxy-v3:$COMMIT -t model-proxy-v3:latest .
 docker build -t model-proxy-v3 .
@@ -561,7 +360,7 @@ The full field-by-field reference lives in
   (`PROXY_CONFIG_PATH` / `PROXY_CONFIG_CONSUL` / `PROXY_CONFIG_APOLLO`), token counting &
   upstream, and the privacy-filter / compression / image-encode sidecars.
 
-Also see [`proxy_config.toml_example`](./proxy_config.toml_example) and
+Also see [`proxy_config.example.toml`](./proxy_config.example.toml) and
 [`docs/README_DETAILS.md`](./docs/README_DETAILS.md).
 
 ## Testing
@@ -586,11 +385,13 @@ PROXY_URL=http://localhost:8788 API_KEY=sk-test node run-tests.js --all
 
 The [`docs/`](./docs/) folder has deep-dives on specific topics:
 
-- **Routing & aliases** — `docs/routing-and-aliases.md` (full `[models.*]` / `[composite]` / `[schedule]` / token-limit reference), plus `proxy_config.toml_example`, `docs/routing_refactor.md`, `docs/routing_config_revision.md`
+- **Routing & aliases** — `docs/routing-and-aliases.md` (full `[models.*]` / `[composite]` / `[schedule]` / token-limit reference), plus `proxy_config.example.toml`, `docs/routing_refactor.md`, `docs/routing_config_revision.md`
 - **API endpoint details** — `docs/api-endpoints.md` (dynamic routing, image I/O across formats, prompt-caching fields, Dashboard JSON API)
+- **Configuration guide** — `docs/configuration-guide.md` (minimal `proxy_config.toml` walkthrough + thinking/reasoning notes)
 - **Configuration reference** — `docs/configuration-reference.md` (all TOML sections + environment variables)
 - **Auth & stats protocol** — `docs/auth-stats-protocol.md` (wire-level contract for the remote auth/stats sidecars)
 - **Config loading** — `docs/config_loader.md`
+- **Live stats** — `docs/live-stats.md` (TUI/web dashboard, JSONL usage-dump format, startup stats restoration)
 - **Thinking / reasoning** — `docs/claude-extended-thinking.md`, `docs/claude-adaptive-thinking.md`
 - **API formats** — `docs/claude-api-reference.md`, `docs/gemini-api-reference.md`, `docs/openai-api-reference.md`
 - **Fusion & composite design** — `docs/design_fusion_composite_alias.md`

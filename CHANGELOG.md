@@ -119,7 +119,7 @@ stats side (new form only — no legacy parsing). Updated: `ProxyConfig`
 interface + both parser branches + serializer in `config-loader.ts`; the
 single accessor in `src/index.ts`; README (quick-start TOML, protocol section,
 mermaid diagram, config-reference table, `DEV_NO_KEY` row); the two
-`docs/nginx_conf/*/USAGE.md` notes; `proxy_config.toml_example`; and the
+`docs/nginx_conf/*/USAGE.md` notes; `proxy_config.example.toml`; and the
 unit / `15_config_parse` test fixtures.
 
 ### Config schema: `[remote.authentication]` + `[remote.recording]`
@@ -137,7 +137,7 @@ Updated: `ProxyConfig` interface, `parseSimpleToml` (section-header, quoted-key,
 and unquoted-value parsers), `serializeProxyConfigToml`, all `src/index.ts`
 accessors (`proxyConfig.remote?.authentication?.*` /
 `proxyConfig.remote?.recording?.*`), README config-reference tables + protocol
-section + mermaid diagram, `proxy_config.toml_example`, and the unit /
+section + mermaid diagram, `proxy_config.example.toml`, and the unit /
 `15_config_parse` test cases.
 
 ### Rename: `access_token` → `one_time_auth_code` (OTAC) on auth/stats sidecars
@@ -311,7 +311,7 @@ into a single `chat.completion` JSON response returned to the client:
   `assemble_sse_chunks: expected text/event-stream from upstream but got "..."`
   and passes the response through unchanged — no silent corruption.
 
-Example config (see `proxy_config.toml_transforms_example` for full snippet):
+Example config (see `proxy_config.transforms.example.toml` for full snippet):
 
 ```toml
 my-model = {target = "actual-model-id", base_url = "https://...", api_key = "sk-...", transforms = "sse_to_completions"}
@@ -329,7 +329,7 @@ Multiple transforms compose via comma-separated CSV (e.g.
 `transforms = "max_tokens_rename,sse_to_completions"`). Sets at different hook
 points never conflict; sets touching the same path at the same hook resolve
 last-writer-wins (left-to-right). See the inline comments in
-`proxy_config.toml_transforms_example` for the full conflict-avoidance notes.
+`proxy_config.transforms.example.toml` for the full conflict-avoidance notes.
 
 Newest merged work, reverse-chronological.
 
@@ -378,7 +378,7 @@ example-config forms. Both names are case-insensitive (`free`/`FREE`,
 
 **Files touched:** `src/utils/config-loader.ts` (Priority 2 wildcard loop),
 `src/index.ts` (`EMBEDDING`/`embedding` fallback lookup, `FREE`/`free` section
-check), `proxy_config.toml_example`, `proxy_config.toml_template` (section
+check), `proxy_config.example.toml`, `proxy_config.toml_template` (section
 headers updated to uppercase), `README.md` (routing table + callout corrected),
 `tests/unit/config-loader.test.ts` (4 new `getModelConfig` cases).
 
@@ -676,7 +676,7 @@ they carry no network fetch.
 **Files**: `src/utils/image-fetch.ts` (new `resolveImageEncodeConfig`,
 `setImageEncodeConfig`, `getImageEncodeConfig`, `fetchImageViaSidecar`),
 `src/utils/config-loader.ts` (new `[fetch]` section + startup wiring),
-`src/types/shared.ts` (new env vars), `proxy_config.toml_example`
+`src/types/shared.ts` (new env vars), `proxy_config.example.toml`
 (documented example).
 
 **Tests**: 12 new in `tests/unit/image-fetch.test.ts` covering sidecar
@@ -1037,8 +1037,8 @@ jargon (a prior review at `docs/review_of_transforms_hooks_implementation.md`
 flagged this). They are now renamed to the self-describing
 `request_ingress` / `response_egress` everywhere: TypeScript types
 (`TransformSet`, `HookPoint`, `HookKey`), runtime keys, validator, error
-messages, README, `docs/transforms-reference.md`, `proxy_config.toml_example`,
-`proxy_config.toml_transforms_example`, and tests.
+messages, README, `docs/transforms-reference.md`, `proxy_config.example.toml`,
+`proxy_config.transforms.example.toml`, and tests.
 
 **Backwards compatibility**: `endpoint_readin` and `endpoint_writeout` remain
 accepted as legacy aliases in `proxy_config.toml` — the existing
@@ -2392,9 +2392,9 @@ The proxy can now optionally POST per-request model usage records to an HTTP col
 - JSON and streaming responses reuse the existing token accounting path, so both non-streaming usage payloads and final streaming usage chunks are reported.
 - If `auth_url` returns an `access_token` response header, that one-request token is forwarded to `record_url` as an `access_token` request header.
 - Requests to `auth_url` now also include `request_id` and `endpoint` headers, plus the existing auth headers and optional `x-resource-for` when `auth_with_model = true`.
-- `proxy_config.toml_example` and `README.md` document the new optional `[model_usage]` section.
+- `proxy_config.example.toml` and `README.md` document the new optional `[model_usage]` section.
 
-**Files changed:** `src/index.ts`, `src/utils/model-usage-recorder.ts`, `src/utils/config-loader.ts`, `src/utils/dashboard-stats.ts`, `tests/unit/token-usage.test.ts`, `tests/unit/auth-with-model.test.ts`, `testcases/15_config_parse/config_parse.test.js`, `README.md`, `proxy_config.toml_example`.
+**Files changed:** `src/index.ts`, `src/utils/model-usage-recorder.ts`, `src/utils/config-loader.ts`, `src/utils/dashboard-stats.ts`, `tests/unit/token-usage.test.ts`, `tests/unit/auth-with-model.test.ts`, `testcases/15_config_parse/config_parse.test.js`, `README.md`, `proxy_config.example.toml`.
 
 ### TUI statistics overlay and compact tool names
 
@@ -2459,7 +2459,7 @@ specific upstream:
 `config_key` is intended for shared-gateway deployments where callers must
 not supply their own upstream credentials.
 
-**Files changed:** `proxy_config.toml`, `proxy_config.toml_example`,
+**Files changed:** `proxy_config.toml`, `proxy_config.example.toml`,
 `src/utils/config-loader.ts` (interface + TOML parser + Consul loader +
 serializer), `src/index.ts` (five auth-header sites), `src/server.ts`,
 `src/tui.ts`, `src/handlers/dashboard.ts`, `README.md`.
@@ -2500,7 +2500,7 @@ shared.
 **Files changed:** `src/utils/hash-detect.ts` (new), `src/utils/privacy-filter.ts`
 (local mode + toml plumbing), `src/utils/config-loader.ts`
 (`[privacy_filter]` section), `src/index.ts` (wire toml through
-`getPrivacyFilterConfig`), `proxy_config.toml` and `proxy_config.toml_example`
+`getPrivacyFilterConfig`), `proxy_config.toml` and `proxy_config.example.toml`
 (documented example), `testcases/16_security/privacy_filter.test.js`
 (TC2115–TC2122), `dist/`.
 
@@ -2712,7 +2712,7 @@ opus46   = ["claude-opus-4-6", "http://localhost:3000", "", "anthropic-messages"
 
 The non-fusion composite dispatch in `src/index.ts` (the `compositeAttempts.map` block) was applying
 the model's per-entry `api_key` from the config on top of the caller's auth headers unconditionally,
-for every section. This contradicted the documented rule in `proxy_config.toml_example`:
+for every section. This contradicted the documented rule in `proxy_config.example.toml`:
 
 > For the `[models.default]` tier, the auth key sent by the caller takes priority over ALL configured
 > `api_key` values, including per-entry overrides. The `api_key` field is intentionally left unset by

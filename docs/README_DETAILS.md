@@ -137,7 +137,7 @@ The rule applies uniformly across direct routing, composite aliases, and fusion 
 fusion dispatch path and the non-fusion composite dispatch path both check `route.section === 'free'`
 before applying the config key.
 
-See the per-section comments in [`./proxy_config.toml_example`](./proxy_config.toml_example) for the
+See the per-section comments in [`./proxy_config.example.toml`](./proxy_config.example.toml) for the
 full design notes on each section (model array format, `upstream_mode`, per-entry `base_url` /
 `api_key` overrides, wildcard patterns, fusion roles, and the explicit auth-priority rules per
 section).
@@ -368,7 +368,7 @@ npm run dev
 or
 ```bash
 npm run build
-cp proxy_config.toml_example proxy_config.toml
+cp proxy_config.example.toml proxy_config.toml
 PROXY_CONFIG_PATH=./proxy_config.toml npx tsx dist/server.js
 ```
 
@@ -420,7 +420,7 @@ Leave the `api_key` slot empty to use the per-request `Authorization` /
 Run the server with `TUI=true` to open the terminal dashboard in the same process:
 
 ```bash
-cp proxy_config.toml_example proxy_config.toml
+cp proxy_config.example.toml proxy_config.toml
 TUI=true PROXY_CONFIG_PATH=./proxy_config.toml npx tsx dist/server.js
 ```
 
@@ -537,7 +537,7 @@ Fields:
 #### Docker
 ```bash
 # export VERSION=$(git log -n 1 --pretty=format:"%h")
-cp proxy_config.toml_example proxy_config.toml
+cp proxy_config.example.toml proxy_config.toml
 docker build --build-arg VERSION=$(git log -n 1 --pretty=format:"%h") -t model-proxy-v3 .
 docker run -p 8788:8788 -v $(pwd)/proxy_config.toml:/app/proxy_config.toml model-proxy-v3
 ```
@@ -1298,7 +1298,7 @@ LOG_LEVEL = "info"
 For local Node.js runs, either pass inline or export them:
 
 ```bash
-cp proxy_config.toml_example proxy_config.toml
+cp proxy_config.example.toml proxy_config.toml
 # Inline (all vars)
 LOCAL_TIKTOKEN=true LOG_LEVEL=debug PROXY_CONFIG_PATH=./proxy_config.toml node dist/server.js
 
