@@ -1267,7 +1267,7 @@ export default {
             // Same free-section rule as the normal routing paths: models in
             // [models.free] always use their configured api_key (client key
             // is never forwarded upstream for these routes).
-            if ((useConfigKey || modelRoute?.section === 'free') && modelRoute?.apiKey) {
+            if ((useConfigKey || (modelRoute?.section === 'free' || modelRoute?.section === 'FREE')) && modelRoute?.apiKey) {
               modelAuthHeaders = { ...modelAuthHeaders, ...formatApiKeyForUpstream(modelRoute.apiKey, upstreamMode || 'openai-completions') };
             }
           } else if (modelName && proxyConfig.models) {

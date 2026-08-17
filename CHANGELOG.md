@@ -5,6 +5,44 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### refactor(transforms): thinking-strip on fresh conversations is now an opt-in builtin
+
+The unconditional drop of `thinking: {type: "enabled"}` when the conversation
+has no prior assistant thinking blocks (a DeepSeek Anthropic-compat workaround,
+`400 "The content[].thinking in the thinking mode must be passed back to the
+API"`) moved from `src/handlers/claude.ts` into a new Tier-2 builtin,
+`strip_fresh_thinking` (`src/utils/request-transform.ts`), schema-gated to
+`anthropic-messages`. Attach it via a transform set
+(`deepseek_v4_anthropic_compat` now includes it) — spec-compliant Anthropic
+upstreams no longer have client thinking intent silently dropped. The
+unset-`thinking` → `{type: "disabled"}` injection remains unconditional.
+`proxy_config.toml`'s `deepseek-v4-anth` entry now attaches the compat set.
+
+### feat(config): per-entry `max_tokens` (fill + cap, all upstream modes); strict passthrough when unset
+
+Model entries accept an optional `max_tokens` field (inline-table
+`{target = "...", max_tokens = 8192}`, or positional-array index 5). It is a
+bare number, not a quoted string.
+
+- **Fill** (`anthropic-messages` routes, where the field is required): when the
+  request omits `max_tokens`, the proxy fills this value
+  (`src/handlers/claude.ts`).
+- **Cap** (all upstream modes): applied centrally at the `before_upstream` hook
+  in `runHook` (`src/utils/request-transform.ts`, after transforms run) — if the
+  client or a transform sends a larger value, it is clamped down to the
+  per-entry cap. Smaller client values pass through unchanged. The
+  max-output-tokens field is resolved per upstream schema: `max_tokens`
+  (`anthropic-messages`), `max_tokens`/`max_completion_tokens`
+  (`openai-completions`), `max_output_tokens` (`openai-responses`),
+  `generation_config.max_output_tokens`/`generationConfig.maxOutputTokens`
+  (`gemini`).
+
+**Unset → strict passthrough**: when the entry sets no `max_tokens`, the proxy
+never sets, modifies, or caps the request's max-output-tokens field on any
+endpoint. The `DEFAULT_MAX_TOKENS` env var (fill `8192` when omitted) was
+removed as a consequence. The field round-trips through the dashboard config
+save (parse → serialize → parse).
+
 ### feat(api): serve `/v1/chat/completions` by default; remove `DEV_PASS_THROUGH`
 
 `POST /v1/chat/completions` (per-model routed passthrough) is now always

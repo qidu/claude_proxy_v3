@@ -119,7 +119,7 @@ export type TransformOp =
   | { op: 'remove';    path: string }
   | { op: 'map_value'; path: string; from: unknown; to: unknown; when_sibling?: string };
 
-export type BuiltinName = 'lowercase_tool_schema_types' | 'recover_tool_message_name' | 'inject_missing_tool_results' | 'filter_anthropic_beta' | 'ensure_tool_config_cache_ttl' | 'assemble_sse_chunks';
+export type BuiltinName = 'lowercase_tool_schema_types' | 'recover_tool_message_name' | 'inject_missing_tool_results' | 'strip_fresh_thinking' | 'filter_anthropic_beta' | 'ensure_tool_config_cache_ttl' | 'assemble_sse_chunks';
 
 /** A named transform set declared under [transforms.<name>] */
 export interface TransformSet {
@@ -180,7 +180,7 @@ const SCHEMA_PATHS: Record<TransformSchema, Set<string>> = {
   ]),
 };
 
-const BUILTIN_NAMES: Set<BuiltinName> = new Set(['lowercase_tool_schema_types', 'recover_tool_message_name', 'inject_missing_tool_results', 'filter_anthropic_beta', 'ensure_tool_config_cache_ttl', 'assemble_sse_chunks']);
+const BUILTIN_NAMES: Set<BuiltinName> = new Set(['lowercase_tool_schema_types', 'recover_tool_message_name', 'inject_missing_tool_results', 'strip_fresh_thinking', 'filter_anthropic_beta', 'ensure_tool_config_cache_ttl', 'assemble_sse_chunks']);
 
 /**
  * Backward-compatible hook name aliases.
@@ -286,6 +286,7 @@ export function validateTransformSet(name: string, set: TransformSet): Transform
       // schema silently corrupts the response, so fail loud at load time.
       const BUILTIN_SCHEMA: Partial<Record<BuiltinName, TransformSchema[]>> = {
         'assemble_sse_chunks': ['openai-completions'],
+        'strip_fresh_thinking': ['anthropic-messages'],
       };
       const allowed = BUILTIN_SCHEMA[b];
       if (allowed && !allowed.includes(set.schema)) {
@@ -505,6 +506,7 @@ export interface ModelRouteConfig {
   modelAlias?: string;
   section?: string;
   transforms: TransformSet[];  // resolved & merged: mode-defaults → sector-defaults → entry
+  maxTokens?: number;  // per-entry default max_tokens; falls back to DEFAULT_MAX_TOKENS when unset
 }
 
 export interface CompositeRouteSelection {
@@ -585,6 +587,10 @@ function resolveModelRouteFromEntry(
 
     const resolvedMode = modelMode || categoryUpstreamMode;
     const entryTransformsCsv = modelEntry[4]; // index 4: comma-separated transform set names
+    const entryMaxTokensRaw = modelEntry[5]; // index 5: optional per-entry max_tokens
+    const entryMaxTokens = entryMaxTokensRaw !== undefined && /^\d+$/.test(entryMaxTokensRaw)
+      ? parseInt(entryMaxTokensRaw, 10)
+      : undefined;
     const categoryTransformsCsv = (categoryConfig as Record<string, unknown>)['transforms'] as string | undefined;
     return {
       targetUrl: modelBaseUrl || categoryBaseUrl,
@@ -593,6 +599,7 @@ function resolveModelRouteFromEntry(
       modelAlias: resolvedTarget || undefined,
       section: sectionName,
       transforms: resolveTransforms(resolvedMode, categoryTransformsCsv, entryTransformsCsv, proxyConfig),
+      ...entryMaxTokens !== undefined ? { maxTokens: entryMaxTokens } : {},
     };
   }
 
@@ -1571,26 +1578,29 @@ function serializeTomlSection(section: Record<string, unknown>): string[] {
  * The alias key is passed so target-equals-alias can be omitted entirely.
  */
 function serializeModelEntry(entry: string[], aliasKey: string): string {
-  const [target = '', base_url = '', api_key = '', mode = '', transforms = ''] = entry;
+  const [target = '', base_url = '', api_key = '', mode = '', transforms = '', max_tokens = ''] = entry;
   const hasOverrides = base_url !== '' || api_key !== '' || mode !== '';
   const targetIsAlias = target === aliasKey || target === '';
   const transformsSuffix = transforms ? `, transforms = ${JSON.stringify(transforms)}` : '';
+  // max_tokens is a bare number (unquoted); appended last to keep index 5.
+  const maxTokensSuffix = max_tokens !== '' ? `, max_tokens = ${max_tokens}` : '';
+  const suffix = transformsSuffix + maxTokensSuffix;
   if (!hasOverrides && targetIsAlias) {
-    return transforms ? `{transforms = ${JSON.stringify(transforms)}}` : `{}`;
+    return suffix ? `{${suffix.slice(2)}}` : `{}`;
   }
   if (!hasOverrides) {
-    return `{target = ${JSON.stringify(target)}${transformsSuffix}}`;
+    return `{target = ${JSON.stringify(target)}${suffix}}`;
   }
   if (targetIsAlias) {
     if (mode !== '') {
-      return `{base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}, mode = ${JSON.stringify(mode)}${transformsSuffix}}`;
+      return `{base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}, mode = ${JSON.stringify(mode)}${suffix}}`;
     }
-    return `{base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}${transformsSuffix}}`;
+    return `{base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}${suffix}}`;
   }
   if (mode !== '') {
-    return `{target = ${JSON.stringify(target)}, base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}, mode = ${JSON.stringify(mode)}${transformsSuffix}}`;
+    return `{target = ${JSON.stringify(target)}, base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}, mode = ${JSON.stringify(mode)}${suffix}}`;
   }
-  return `{target = ${JSON.stringify(target)}, base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}${transformsSuffix}}`;
+  return `{target = ${JSON.stringify(target)}, base_url = ${JSON.stringify(base_url)}, api_key = ${JSON.stringify(api_key)}${suffix}}`;
 }
 
 /** Serialize a model category section, emitting model entries as inline tables. */
@@ -2757,8 +2767,9 @@ export function parseSimpleToml(content: string): ProxyConfig {
         }
         if (buf.trim()) fieldParts.push(buf);
         for (const field of fieldParts) {
-          const kv = field.trim().match(/^(\w+)\s*=\s*"([^"]*)"$/);
-          if (kv) fields[kv[1]] = kv[2];
+          // Values are quoted strings, or bare numbers (max_tokens = 8192).
+          const kv = field.trim().match(/^(\w+)\s*=\s*(?:"([^"]*)"|(\d+))$/);
+          if (kv) fields[kv[1]] = kv[2] !== undefined ? kv[2] : kv[3];
         }
         // Inline model tables accept both canonical and short aliases:
         //   target; upstream_mode | mode; base_url | url; api_key | key.
@@ -2769,6 +2780,11 @@ export function parseSimpleToml(content: string): ProxyConfig {
         const apiKey = fields['api_key'] ?? fields['key'] ?? '';
         const entry: string[] = [target, baseUrl, apiKey, mode];
         if (fields['transforms']) entry.push(fields['transforms']);
+        // index 5: optional per-entry max_tokens (used when the request omits it)
+        if (fields['max_tokens'] !== undefined) {
+          while (entry.length < 5) entry.push('');
+          entry.push(fields['max_tokens']);
+        }
         const category = config.models[currentCategory] as ModelCategoryConfig;
         category[cleanKey] = entry as [string, string, string, string, string];
         continue;

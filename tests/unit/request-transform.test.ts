@@ -1531,3 +1531,139 @@ describe('Tier-2 builtin: assemble_sse_chunks', () => {
     assert.deepEqual(body['choices'], []);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-entry max_tokens cap (route.maxTokens applied at before_upstream)
+// ---------------------------------------------------------------------------
+
+describe('per-entry max_tokens cap', () => {
+  function capCtx(upstreamMode: string, maxTokens: number): HookContext {
+    const ctx = makeCtx([]);
+    ctx.route = { ...ctx.route, maxTokens };
+    ctx.upstreamMode = upstreamMode;
+    return ctx;
+  }
+
+  it('clamps anthropic-messages max_tokens down to the cap', () => {
+    const result = runHook('before_upstream', payload({ max_tokens: 100000 }), capCtx('anthropic-messages', 8192));
+    assert.equal(result.body.max_tokens, 8192);
+  });
+
+  it('leaves smaller client values unchanged (anthropic-messages)', () => {
+    const result = runHook('before_upstream', payload({ max_tokens: 1024 }), capCtx('anthropic-messages', 8192));
+    assert.equal(result.body.max_tokens, 1024);
+  });
+
+  it('clamps openai-completions max_completion_tokens (post-rename form)', () => {
+    const result = runHook('before_upstream', payload({ max_completion_tokens: 50000 }), capCtx('openai-completions', 16384));
+    assert.equal(result.body.max_completion_tokens, 16384);
+  });
+
+  it('clamps openai-completions max_tokens (pre-rename form)', () => {
+    const result = runHook('before_upstream', payload({ max_tokens: 50000 }), capCtx('openai-completions', 16384));
+    assert.equal(result.body.max_tokens, 16384);
+  });
+
+  it('clamps openai-responses max_output_tokens', () => {
+    const result = runHook('before_upstream', payload({ max_output_tokens: 99999 }), capCtx('openai-responses', 4096));
+    assert.equal(result.body.max_output_tokens, 4096);
+  });
+
+  it('clamps gemini generation_config.max_output_tokens (converted form)', () => {
+    const body = { generation_config: { max_output_tokens: 100000 } };
+    const result = runHook('before_upstream', payload(body), capCtx('gemini', 8192));
+    assert.equal((result.body.generation_config as Record<string, unknown>).max_output_tokens, 8192);
+  });
+
+  it('clamps gemini generationConfig.maxOutputTokens (native camelCase form)', () => {
+    const body = { generationConfig: { maxOutputTokens: 100000 } };
+    const result = runHook('before_upstream', payload(body), capCtx('gemini', 8192));
+    assert.equal((result.body.generationConfig as Record<string, unknown>).maxOutputTokens, 8192);
+  });
+
+  it('is a no-op when the route sets no cap', () => {
+    const result = runHook('before_upstream', payload({ max_tokens: 1000000 }), makeCtx([]));
+    assert.equal(result.body.max_tokens, 1000000);
+  });
+
+  it('applies after transforms: a transform-set value above the cap is still clamped', () => {
+    const set: TransformSet = {
+      name: 'force_big',
+      schema: 'anthropic-messages',
+      before_upstream: { ops: [{ op: 'set', path: 'max_tokens', value: 100000 }] },
+    } as unknown as TransformSet;
+    const ctx = capCtx('anthropic-messages', 8192);
+    ctx.route = { ...ctx.route, transforms: [set] };
+    const result = runHook('before_upstream', payload({}), ctx);
+    assert.equal(result.body.max_tokens, 8192);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tier-2 builtin: strip_fresh_thinking
+// ---------------------------------------------------------------------------
+
+describe('Tier-2 builtin: strip_fresh_thinking', () => {
+  const set: TransformSet = {
+    name: 'strip_fresh',
+    schema: 'anthropic-messages',
+    before_upstream: { builtins: ['strip_fresh_thinking'] },
+  };
+
+  function ctx(): HookContext {
+    return {
+      hook: 'before_upstream',
+      route: makeRoute([set]),
+      upstreamMode: 'anthropic-messages',
+      clientModel: 'test-model',
+      requestId: 'req-1',
+      streaming: false,
+      logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } as any,
+    };
+  }
+
+  it('strips thinking:enabled on a fresh conversation (no assistant turns)', () => {
+    const body = {
+      thinking: { type: 'enabled', budget_tokens: 10000 },
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+    };
+    const result = runHook('before_upstream', payload(body), ctx());
+    assert.equal('thinking' in result.body, false);
+  });
+
+  it('strips thinking:adaptive on a fresh conversation', () => {
+    const body = {
+      thinking: { type: 'adaptive' },
+      messages: [{ role: 'user', content: 'hi' }],
+    };
+    const result = runHook('before_upstream', payload(body), ctx());
+    assert.equal('thinking' in result.body, false);
+  });
+
+  it('keeps thinking:enabled when prior assistant thinking blocks exist', () => {
+    const body = {
+      thinking: { type: 'enabled', budget_tokens: 10000 },
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [{ type: 'thinking', thinking: '...' }, { type: 'text', text: 'hello' }] },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), ctx());
+    assert.deepEqual(result.body.thinking, { type: 'enabled', budget_tokens: 10000 });
+  });
+
+  it('keeps thinking when disabled (never touches it)', () => {
+    const body = {
+      thinking: { type: 'disabled' },
+      messages: [{ role: 'user', content: 'hi' }],
+    };
+    const result = runHook('before_upstream', payload(body), ctx());
+    assert.deepEqual(result.body.thinking, { type: 'disabled' });
+  });
+
+  it('leaves a body without thinking untouched', () => {
+    const body = { messages: [{ role: 'user', content: 'hi' }] };
+    const result = runHook('before_upstream', payload(body), ctx());
+    assert.equal('thinking' in result.body, false);
+  });
+});

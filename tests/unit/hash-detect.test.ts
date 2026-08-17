@@ -89,8 +89,9 @@ describe('detectHashPriority', () => {
   });
 
   it('returns HASH_HIGH for 16-char high-entropy hex (MD5-shaped)', () => {
-    // Real MD5-like: 16 chars, %8==0, high entropy
-    const md5 = 'd41d8cd98f00b204';
+    // Real MD5 prefix ("The quick brown fox jumps over the lazy dog"):
+    // 16 chars, %8==0, entropy ~3.38 (above the 3.3 default threshold)
+    const md5 = '9e107d9d372bb682';
     assert.equal(detectHashPriority(md5), HASH_HIGH);
   });
 
@@ -203,7 +204,7 @@ describe('findHashSpans', () => {
   });
 
   it('finds an MD5 hash embedded in text', () => {
-    const md5 = 'd41d8cd98f00b204';
+    const md5 = '9e107d9d372bb682';
     const text = `the hash is ${md5} yes`;
     const spans = findHashSpans(text);
     assert.equal(spans.length, 1);
@@ -213,7 +214,7 @@ describe('findHashSpans', () => {
   });
 
   it('finds multiple hashes left-to-right', () => {
-    const a = 'd41d8cd98f00b204';
+    const a = '9e107d9d372bb682';
     const b = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
     const text = `${a} ... ${b}`;
     const spans = findHashSpans(text);
@@ -260,15 +261,17 @@ describe('findHashSpans', () => {
   });
 
   it('returns spans whose slice reconstructs the token', () => {
-    const md5 = 'd41d8cd98f00b204';
+    const md5 = '9e107d9d372bb682';
     const text = `prefix${md5}suffix`;
-    for (const s of findHashSpans(text)) {
+    const spans = findHashSpans(text);
+    assert.ok(spans.length >= 1, 'at least one span must be found for the slice check');
+    for (const s of spans) {
       assert.equal(text.slice(s.start, s.end), s.token);
     }
   });
 
   it('finds both a hex hash and a nearby base64url key', () => {
-    const md5 = 'd41d8cd98f00b204';
+    const md5 = '9e107d9d372bb682';
     const key = 'ouV7bwSqBiabj9kei4_ZiIl';
     const text = `${md5} and ${key}`;
     const spans = findHashSpans(text);

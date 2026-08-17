@@ -43,37 +43,25 @@ export async function handleClaudeRequest(
         requestBody.model = modelId;
     }
 
-    // Ensure max_tokens has a default value (required by Anthropic API and some compatible endpoints)
-    if (requestBody.max_tokens === undefined || requestBody.max_tokens === null) {
-        const defaultMaxTokens = parseInt(env?.DEFAULT_MAX_TOKENS || '8192', 10);
-        requestBody.max_tokens = isNaN(defaultMaxTokens) ? 8192 : defaultMaxTokens;
+    // max_tokens passthrough: when the entry sets no per-entry max_tokens, the
+    // field is never set, modified, or capped — a request that omits it is
+    // forwarded as-is (a strictly-conformant Anthropic upstream will reject it).
+    // When omitted and the entry DOES set max_tokens: fill it with that value.
+    // After before_upstream: clamp down to route.maxTokens if the client/transform sent a larger value.
+    if ((requestBody.max_tokens === undefined || requestBody.max_tokens === null)
+        && route?.maxTokens !== undefined) {
+        requestBody.max_tokens = route.maxTokens;
         activeLogger.debug(requestId, `max_tokens missing, defaulting to ${requestBody.max_tokens}`);
     }
 
     // Some upstreams (e.g., DeepSeek Anthropic-compatible API) default to thinking mode
     // and require prior thinking blocks in conversation. Explicitly disable thinking
     // when the client hasn't set it to avoid 400 errors on first requests.
-    // Also handle the case where thinking is enabled but no prior thinking blocks exist
-    // in the conversation history (e.g., first request in a conversation).
+    // (Stripping thinking-enabled on conversations without prior thinking blocks is
+    // opt-in per target via the `strip_fresh_thinking` transform builtin.)
     if (requestBody.thinking === undefined || requestBody.thinking === null) {
         requestBody.thinking = { type: 'disabled' };
         activeLogger.debug(requestId, 'thinking not set, defaulting to disabled');
-    } else if (typeof requestBody.thinking === 'object') {
-        const thinkingObj = requestBody.thinking as Record<string, unknown>;
-        const thinkingType = thinkingObj.type;
-        const isEnabled = thinkingType === 'enabled' || thinkingType === true || thinkingType === 'adaptive';
-        if (isEnabled) {
-            // Check if there are any prior assistant thinking blocks in the conversation
-            const messages = requestBody.messages as any[] | undefined;
-            const hasPriorThinking = Array.isArray(messages) && messages.some(msg =>
-                msg.role === 'assistant' && Array.isArray(msg.content) &&
-                msg.content.some((c: any) => c.type === 'thinking')
-            );
-            if (!hasPriorThinking) {
-                activeLogger.debug(requestId, 'thinking enabled but no prior thinking blocks found, disabling');
-                delete requestBody.thinking;
-            }
-        }
     }
 
     activeLogger.debug(requestId, `Claude native upstream: ${targetUrl}`);
@@ -127,6 +115,8 @@ export async function handleClaudeRequest(
         };
         ({ body: upstreamBody, headers: authHeaders } = runHook('before_upstream', { body: upstreamBody, headers: authHeaders }, hookCtx));
     }
+    // Per-entry max_tokens cap is applied centrally inside runHook('before_upstream')
+    // (see applyMaxTokensCap in utils/request-transform.ts).
 
     // Pass through to native Claude API
     activeLogger.debug(requestId, `Sending to upstream: ${JSON.stringify(upstreamBody).substring(0, 500)}`);

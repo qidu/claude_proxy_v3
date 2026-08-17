@@ -165,6 +165,13 @@ deepseek-v4-pro = {target = "deepseek-v4-pro", base_url = "https://api.qnaigc.co
 # `mode` overrides the section's `upstream_mode` for just this entry.
 minimax-m3 = {target = "MiniMax-M3", base_url = "https://api.minimaxi.com", api_key = "sk-cp-p_i6lDK", mode = "openai-completions"}
 minimax-m2.7 = {target = "MiniMax-M2.7-HighSpeed", base_url = "https://api.minimaxi.com/anthropic", api_key = "sk-cp-p_i6lDK"}
+# Per-entry `max_tokens` (bare integer, not a quoted string): fills the value
+# when the request omits `max_tokens` (required by the Anthropic API and some
+# compatible upstreams — e.g. DeepSeek's Anthropic-compatible endpoint rejects
+# requests without it) and caps larger client values. When unset, the proxy
+# never sets, modifies, or caps the field: a request that omits `max_tokens`
+# is forwarded as-is. Configure it on every target whose upstream requires it.
+# deepseek-v4-anth = {target = "deepseek-v4-flash", base_url = "https://api.deepseek.com/anthropic", api_key = "sk-...", max_tokens = 8192}
 # Reverse override: the section default is `anthropic-messages`, but these entries
 # target an OpenAI-completions upstream — per-entry `mode` switches protocol for
 # just these models while all other entries stay on the section default.
@@ -183,7 +190,7 @@ minimax-m2.7 = {target = "MiniMax-M2.7-HighSpeed", base_url = "https://api.minim
 # with empty override strings falling back to the section defaults.
 # The optional `mode` field overrides `upstream_mode` for just that entry.
 #
-# Unlike the `free` section, the auth key sent by the caller on the inbound
+# Unlike the `FREE` section, the auth key sent by the caller on the inbound
 # request takes priority over ALL configured `api_key` values on this tier,
 # including per-entry overrides. The `api_key` field is therefore
 # intentionally left unset by admins in practice — it only acts as a
@@ -198,13 +205,13 @@ api_key = "sk-56db1e204bf459" # NEVER defined in production.
 # Exact matches. Each entry overrides `base_url` (and optionally `api_key`)
 # for its specific upstream. The caller's auth key from header wins over ALL
 # configured `api_key` values on this tier, including per-entry overrides —
-# unlike the `free` section where per-entry keys take priority over the caller.
+# unlike the `FREE` section where per-entry keys take priority over the caller.
 max-m3 = {target = "MiniMax-M3", base_url = "https://api.minimaxi.com", api_key = "sk-cp-p_i6lDK-pZdeY2CvwuT"}
 "max-m2.7-high" = {target = "MiniMax-M2.7-highspeed", base_url = "https://api.minimaxi.com", api_key = "sk-cp-p_i6lDK-pZdeY2CvwuT"}
 deepseek-v4-flash = {base_url = "https://api.deepseek.com", api_key = "sk-66c13986be87488"}
 deepseek-v4-pro = {base_url = "https://api.deepseek.com", api_key = "sk-66c13986be87488"}
 # General wildcard fallback. Catches any model name that no specific section
-# (claude / free / gemini / etc.) and no entry above claimed. The `*` in the
+# (claude / FREE / gemini / etc.) and no entry above claimed. The `*` in the
 # upstream name is replaced with whatever model name the caller sent, so the
 # request is forwarded verbatim to the upstream named in the request, using
 # the section's `upstream_mode` and `base_url` and the caller's auth key.
@@ -407,9 +414,12 @@ base_url = "https://openrouter.ai/api"
 # DeepSeek anthropic-messages compat:
 #   - synthesize placeholder tool_result blocks for unmatched tool_use ids
 #     (DeepSeek enforces that every tool_use.id has a matching tool_result)
+#   - strip thinking-enabled when the conversation has no prior assistant
+#     thinking blocks (DeepSeek rejects it on fresh conversations with
+#     400 "The content[].thinking in the thinking mode must be passed back to the API")
 # [transforms.deepseek_v4_anthropic_compat]
 # schema = "anthropic-messages"
-# before_upstream.builtins = ["inject_missing_tool_results"]
+# before_upstream.builtins = ["inject_missing_tool_results", "strip_fresh_thinking"]
 
 # MiniMax openai-completions compat:
 #   - rewrite assistant content "" → null when tool_calls present

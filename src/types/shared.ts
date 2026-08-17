@@ -129,13 +129,6 @@ export interface Env {
     UPSTREAM_BODY_TIMEOUT_MS?: string;
 
     /**
-     * Default max_tokens value when the request doesn't include it.
-     * Some upstreams (e.g., DeepSeek Anthropic-compatible API) require max_tokens.
-     * Default: "8192"
-     */
-    DEFAULT_MAX_TOKENS?: string;
-
-    /**
      * Enable stateful conversation caching for /v1/responses with openai-completions upstream.
      * When "true", the proxy stores each response's output items in memory and
      * automatically prepends prior conversation history for requests that carry

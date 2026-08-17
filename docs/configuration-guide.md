@@ -105,9 +105,11 @@ Key ideas:
 > `thinking` field through as-is. If the client sends `{"type": "adaptive"}` the upstream
 > model will respond with thinking blocks; if the client omits `thinking` entirely, the proxy
 > injects `{"type": "disabled"}` as a safe default (needed for DeepSeek-compatible endpoints
-> that otherwise default to thinking mode). On a **fresh conversation** (no prior assistant
-> turns containing thinking blocks), a client-sent `{"type": "enabled"}` will be silently
-> dropped — use `"adaptive"` instead, which the model handles autonomously.
+> that otherwise default to thinking mode). DeepSeek's Anthropic-compatible endpoint also
+> **rejects a client-sent `{"type": "enabled"}` on a fresh conversation** (no prior assistant
+> turns containing thinking blocks) — attach the `strip_fresh_thinking` builtin (part of the
+> `deepseek_v4_anthropic_compat` set) to such targets to drop the flag in that case, or use
+> `"adaptive"` client-side, which the model handles autonomously.
 
 > **Note — synthetic thinking-block signatures (Claude→OpenAI→Claude only):**
 > Anthropic's spec marks `signature` as REQUIRED on thinking content blocks, and clients such

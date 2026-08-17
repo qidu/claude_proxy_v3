@@ -257,7 +257,15 @@ Incoming model names resolve through three stacked logic levels (see the
 
 - **Level 1 — `[models.*]`** — exact key → `prefix-*` wildcard → `*` catch-all lookup,
   with `base_url` / `api_key` / `upstream_mode` inherited per-entry → section →
-  `[default_upstream]`. `[models.FREE]` and `[models.EMBEDDING]` are exact-only;
+  `[default_upstream]`. An optional per-entry `max_tokens` (e.g.
+  `"m" = {target = "...", max_tokens = 8192}`) fills the value when the request omits
+  `max_tokens` (`anthropic-messages`) and caps larger client values at the
+  `before_upstream` hook (all modes); when unset, the field is strict passthrough —
+  the proxy never sets, modifies, or caps it. **Some upstreams require `max_tokens`**
+  (e.g. DeepSeek's Anthropic-compatible API rejects requests without it) — configure
+  `max_tokens` on those target entries, since the proxy no longer injects a default.
+  See [`docs/configuration-reference.md`](./docs/configuration-reference.md).
+  `[models.FREE]` and `[models.EMBEDDING]` are exact-only;
   in `[models.FREE]` the configured key always wins, elsewhere the caller's key wins
   by default (`auth_passthrough_with`).
 - **Level 2 — `[composite]`** aliases:

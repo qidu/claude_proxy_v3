@@ -50,17 +50,34 @@ quick-reference cheat sheet and `docs/design_request_transform_hooks.md` for the
 
 ```toml
 # Inline-table form (recommended for readability):
-"deepseek-v4-anth" = {target = "deepseek-v4-flash", base_url = "https://...", api_key = "sk-...", mode = "anthropic-messages", transforms = "my_set"}
+"deepseek-v4-anth" = {target = "deepseek-v4-flash", base_url = "https://...", api_key = "sk-...", mode = "anthropic-messages", transforms = "my_set", max_tokens = 8192}
 
 # Positional-array form (legacy):
-"deepseek-v4-anth" = ["deepseek-v4-flash", "https://...", "sk-...", "anthropic-messages", "my_set"]
-#                      [0] target           [1] base_url   [2] api_key [3] upstream_mode   [4] transforms CSV
+"deepseek-v4-anth" = ["deepseek-v4-flash", "https://...", "sk-...", "anthropic-messages", "my_set", "8192"]
+#                      [0] target           [1] base_url   [2] api_key [3] upstream_mode   [4] transforms CSV  [5] max_tokens
 ```
 
 In the positional form, every element is optional from the right — a 3-element array
 `[target, base_url, api_key]` inherits `upstream_mode` from the section and attaches no
 transforms. An empty element (`""`) falls back to the section/default value for that slot.
 The `transforms` field (index 4) is always a comma-separated string of named set names.
+
+**`max_tokens` (optional, inline-table `max_tokens = 8192` or positional index 5)** — a bare
+integer, not a quoted string. Two effects:
+
+- **Fill** (`anthropic-messages` only, where the field is required): when the request omits
+  `max_tokens`, the proxy fills this value.
+- **Cap** (all upstream modes): at the `before_upstream` hook — after transforms run — the
+  upstream body's max-output-tokens field is clamped down to this value when the client (or a
+  transform) sent a larger one. Smaller client values pass through unchanged. Field resolved
+  per upstream schema: `max_tokens` (`anthropic-messages`), `max_tokens` /
+  `max_completion_tokens` (`openai-completions`), `max_output_tokens` (`openai-responses`),
+  `generation_config.max_output_tokens` / `generationConfig.maxOutputTokens` (`gemini`).
+
+**Unset → strict passthrough**: the proxy never sets, modifies, or caps the request's
+max-output-tokens field on any endpoint — a request that omits it is forwarded as-is (a
+strictly-conformant Anthropic upstream will reject it with HTTP 400). The old
+`DEFAULT_MAX_TOKENS` env var (fill `8192` when omitted) was removed.
 
 **Default transforms** — the example config (`proxy_config.example.toml`) ships a
 `[transform_defaults]` block that wires `max_tokens_rename` as a mode-level default for
@@ -102,6 +119,7 @@ Paths: bare field name for top-level (`max_tokens`); `messages[].field` for all 
 | `lowercase_tool_schema_types` | Recursively lowercases every `type` value in `tools[].function.parameters` / `tools[].input_schema`. Required for strict upstreams (e.g. DeepSeek) when the client sends uppercase `"STRING"`. |
 | `recover_tool_message_name` | Backfills missing `name` on `role:"tool"` messages by looking up the matching `tool_call_id` in the preceding assistant turn's `tool_calls`. |
 | `inject_missing_tool_results` | Synthesizes placeholder `tool_result` blocks for any `tool_use.id` that has no matching `tool_result` in the next user message, and appends a consolidated `user(tool_result)` message when an assistant `tool_use` is the **last** message in the array (e.g. when Codex replays the model's prior `function_call` as its final input item). Also merges consecutive per-call `tool` messages into one user message and reorders text-only assistant turns after the `tool_result`. Required by DeepSeek's Anthropic-format endpoint, which rejects trailing or unmatched `tool_use` with `tool_use ids were found without tool_result blocks immediately after`. |
+| `strip_fresh_thinking` | Deletes `thinking` (enabled / `true` / adaptive) when the conversation history contains no prior assistant `thinking` blocks — e.g. the first request of a conversation. Required by DeepSeek's Anthropic-compatible endpoint, which rejects explicit thinking-enabled requests without prior thinking blocks with `400 "The content[].thinking in the thinking mode must be passed back to the API"`. Schema-gated to `anthropic-messages`. |
 | `ensure_tool_config_cache_ttl` | Translates the Anthropic-native `system[]` block-level `cache_control` (e.g. `{type:"ephemeral", ttl?:"1h"}`) into the LiteLLM/Bedrock-bridge convention `cache_control_injection_points: [{location:"tool_config", control:{...}}]`. Reads the first usable `cache_control` from a `system` content-block array (plain-string `system` is ignored), appends a `{location:"tool_config"}` entry unless one already exists (caller-provided entries win), and rebuilds body key order so the injection-points field lands after `tools`. Use when forwarding to an upstream that expects the Bedrock-style injection shape. |
 | `filter_anthropic_beta` | Filters and optionally renames entries in the `anthropic-beta` request header using the owning set's `anthropic_beta_map` (a `[name → mapped_name \| null]` table, mirroring LiteLLM's `anthropic_beta_headers_config.json` semantics). Input is the real Claude-Code comma-separated form (`a,b,c`), not the JSON-array form `beta-features.ts` handles. For each entry: not in map → drop; mapped to `null`/`""` → drop; mapped to a non-empty string → emit the mapped name. Requires an `anthropic_beta_map` field on the transform set; without one the header passes through unchanged. |
 
@@ -222,7 +240,6 @@ is rewritten before the upstream fetch to append a placeholder `tool_result`:
 | `PORT` | `8788` | Listen port (Node server) |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `ALLOWED_ORIGINS` | `*` | CORS origins |
-| `DEFAULT_MAX_TOKENS` | `8192` | `max_tokens` for requests that omit it |
 | `TUI` | unset | `true` launches the terminal dashboard + enables stat persistence |
 | `DUMP` | unset | `true` enables token-log persistence without the TUI |
 | `DEV_MODE` | unset | `true` enables development behaviors |

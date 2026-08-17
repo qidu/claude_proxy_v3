@@ -258,6 +258,27 @@ describe('parseSimpleToml', () => {
     assert.equal(entry[4], 't1,t2');
   });
 
+  it('parses inline-table entry with bare-number max_tokens (index 5)', () => {
+    const cfg = parseSimpleToml(`
+      [models.free]
+      "m" = {target = "deepseek-v4", base_url = "https://x", api_key = "k", max_tokens = 16384}
+    `);
+    const entry = (cfg.models?.free as Record<string, unknown>)['m'] as string[];
+    assert.equal(entry[3], '', 'mode is empty (unset)');
+    assert.equal(entry[4], '', 'transforms slot padded when only max_tokens set');
+    assert.equal(entry[5], '16384');
+  });
+
+  it('parses inline-table entry with both transforms and max_tokens', () => {
+    const cfg = parseSimpleToml(`
+      [models.free]
+      "m" = {base_url = "https://x", api_key = "k", transforms = "t1", max_tokens = 4096}
+    `);
+    const entry = (cfg.models?.free as Record<string, unknown>)['m'] as string[];
+    assert.equal(entry[4], 't1');
+    assert.equal(entry[5], '4096');
+  });
+
   it('accepts upstream_mode / url / key aliases in inline-table entries', () => {
     const cfg = parseSimpleToml(`
       [models.free]
@@ -716,6 +737,32 @@ describe('getModelRouteConfig', () => {
     assert.equal(r.targetUrl, 'https://override');
     assert.equal(r.apiKey, 'sk-override');
     assert.equal(r.upstreamMode, 'anthropic-messages');
+  });
+
+  it('exposes per-entry maxTokens on the resolved route', () => {
+    const cfg: ProxyConfig = {
+      models: {
+        free: {
+          base_url: 'https://x',
+          'm1': ['m1-alias', '', '', 'anthropic-messages', '', '16384'],
+        } as any,
+      },
+    };
+    const r = getModelRouteConfig('m1', cfg);
+    assert.equal(r.maxTokens, 16384);
+  });
+
+  it('leaves maxTokens undefined when the entry omits it', () => {
+    const cfg: ProxyConfig = {
+      models: {
+        free: {
+          base_url: 'https://x',
+          'm1': ['m1-alias', '', ''],
+        } as any,
+      },
+    };
+    const r = getModelRouteConfig('m1', cfg);
+    assert.equal(r.maxTokens, undefined);
   });
 
   it('falls back to default model route when no entry matches', () => {
@@ -1434,5 +1481,18 @@ budget_to_effort_high = 20000
       budget_to_effort_low: 4000,
       budget_to_effort_high: 20000,
     });
+  });
+
+  it('preserves per-entry max_tokens across parse→serialize→parse', () => {
+    const parsed = parseSimpleToml(`
+      [models.free]
+      "m1" = {base_url = "https://x", api_key = "k", max_tokens = 16384}
+      "m2" = {target = "t2", transforms = "t1", max_tokens = 4096}
+    `);
+    const roundTripped = parseSimpleToml(serializeProxyConfigToml(parsed));
+    const cat = roundTripped.models?.free as Record<string, unknown>;
+    assert.equal((cat['m1'] as string[])[5], '16384');
+    assert.equal((cat['m2'] as string[])[5], '4096');
+    assert.equal((cat['m2'] as string[])[4], 't1', 'transforms slot preserved alongside max_tokens');
   });
 });

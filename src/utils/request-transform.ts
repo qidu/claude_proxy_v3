@@ -257,6 +257,28 @@ function applyBuiltin(
     return;
   }
 
+  if (name === 'strip_fresh_thinking') {
+    // DeepSeek's Anthropic-compatible endpoint rejects an explicit
+    // thinking-enabled request whose conversation has no prior assistant
+    // thinking blocks (e.g. the first request of a conversation) with
+    // 400 "The content[].thinking in the thinking mode must be passed back
+    // to the API". Deleting the flag lets the upstream fall back to its
+    // internal default, which tolerates a thinking-less history.
+    const thinking = body.thinking;
+    if (typeof thinking !== 'object' || thinking === null) return;
+    const type = (thinking as Record<string, unknown>).type;
+    const isEnabled = type === 'enabled' || type === true || type === 'adaptive';
+    if (!isEnabled) return;
+    const messages = body.messages;
+    if (!Array.isArray(messages)) return;
+    const hasPriorThinking = (messages as Array<Record<string, unknown>>).some(msg =>
+      msg.role === 'assistant' && Array.isArray(msg.content) &&
+      (msg.content as Array<Record<string, unknown>>).some(b => b.type === 'thinking'),
+    );
+    if (!hasPriorThinking) delete body.thinking;
+    return;
+  }
+
   if (name === 'ensure_tool_config_cache_ttl') {
     // Translate the Anthropic-native system-block cache_control into the
     // litellm/Bedrock-bridge convention cache_control_injection_points.
@@ -513,6 +535,47 @@ export function formatTransformsDebug(transforms: TransformSet[]): string {
 }
 
 /**
+ * Per-entry `max_tokens` cap paths per upstream mode, checked in order.
+ * openai-completions checks both names because the `max_tokens_rename`
+ * transform may have renamed the field at this hook; gemini bodies may carry
+ * the snake_case converted form or a camelCase native-client form.
+ */
+const MAX_OUTPUT_TOKENS_PATHS: Record<string, string[]> = {
+  'anthropic-messages': ['max_tokens'],
+  'openai-completions': ['max_completion_tokens', 'max_tokens'],
+  'openai-responses': ['max_output_tokens'],
+  'gemini': ['generation_config.max_output_tokens', 'generationConfig.maxOutputTokens'],
+};
+
+/**
+ * Clamp the upstream body's max-output-tokens field down to the per-entry
+ * `route.maxTokens` cap when the client (or a transform) requested a larger
+ * value. Smaller client values pass through unchanged. No-op when the entry
+ * sets no cap or the mode has no known field path.
+ */
+function applyMaxTokensCap(body: Record<string, unknown>, ctx: HookContext): void {
+  const cap = ctx.route.maxTokens;
+  if (cap === undefined) return;
+  const paths = MAX_OUTPUT_TOKENS_PATHS[ctx.upstreamMode];
+  if (!paths) return;
+  for (const path of paths) {
+    const parts = path.split('.');
+    let node: Record<string, unknown> = body;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const next = node[parts[i]];
+      if (typeof next !== 'object' || next === null) { node = {} as Record<string, unknown>; break; }
+      node = next as Record<string, unknown>;
+    }
+    const leaf = parts[parts.length - 1];
+    const current = node[leaf];
+    if (typeof current === 'number' && current > cap) {
+      ctx.logger.debug(ctx.requestId, `max output tokens ${current} exceeds per-entry cap ${cap} (${path}), clamping`);
+      node[leaf] = cap;
+    }
+  }
+}
+
+/**
  * Run all transforms declared for `hook` across the resolved transform list.
  * Folds left-to-right: each set sees the output of the previous.
  */
@@ -522,12 +585,18 @@ export function runHook(
   ctx: HookContext,
 ): HookBodyPayload {
   const transforms = ctx.route.transforms;
-  if (!transforms || transforms.length === 0) return payload;
+  const needsCap = hook === 'before_upstream' && ctx.route.maxTokens !== undefined;
+  if (!transforms || transforms.length === 0) {
+    if (!needsCap) return payload;
+    applyMaxTokensCap(payload.body, ctx);
+    return payload;
+  }
 
   let { body, headers } = payload;
   for (const set of transforms) {
     ({ body, headers } = applyTransformSet(set, hook, body, headers));
   }
+  if (needsCap) applyMaxTokensCap(body, ctx);
   return { body, headers };
 }
 
