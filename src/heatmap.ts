@@ -17,10 +17,16 @@ export interface TuiOptions {
 const ROW_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 const EMPTY_COLOR = '\x1b[38;2;22;27;34m';
 const VALUE_COLORS = [
-  '\x1b[38;2;144;202;249m',
-  '\x1b[38;2;66;165;245m',
-  '\x1b[38;2;30;136;229m',
-  '\x1b[38;2;21;101;192m',
+  '\x1b[38;2;8;48;107m',    // #08306B darkest blue
+  '\x1b[38;2;13;71;161m',   // #0D47A1
+  '\x1b[38;2;21;101;192m',  // #1565C0
+  '\x1b[38;2;25;118;210m',  // #1976D2
+  '\x1b[38;2;30;136;229m',  // #1E88E5
+  '\x1b[38;2;66;165;245m',  // #42A5F5
+  '\x1b[38;2;144;202;249m', // #90CAF9
+  '\x1b[38;2;187;222;251m', // #BBDEFB
+  '\x1b[38;2;227;242;253m', // #E3F2FD
+  '\x1b[38;2;255;255;255m', // white
 ] as const;
 const RESET = '\x1b[0m';
 const ALT_SCREEN = '\x1b[?1049h';
@@ -49,20 +55,8 @@ export function getAnsiColor(value: number, maxValue: number): string {
   }
 
   const ratio = value / maxValue;
-
-  if (ratio < 0.25) {
-    return VALUE_COLORS[0];
-  }
-
-  if (ratio < 0.5) {
-    return VALUE_COLORS[1];
-  }
-
-  if (ratio < 0.75) {
-    return VALUE_COLORS[2];
-  }
-
-  return VALUE_COLORS[3];
+  const tier = Math.min(VALUE_COLORS.length - 1, Math.floor(ratio * VALUE_COLORS.length));
+  return VALUE_COLORS[tier];
 }
 
 function fg(code: number, text: string): string {
@@ -70,6 +64,7 @@ function fg(code: number, text: string): string {
 }
 function bold(text: string): string { return fg(1, text); }
 function dim(text: string): string { return fg(2, text); }
+function boldWhite(text: string): string { return `\u001b[1;97m${text}\u001b[0m`; }
 
 export function buildHeatmap(records: HeatmapRecord[]): HeatmapData {
   const cells: HeatmapCell[][] = Array.from({ length: 7 }, () =>
@@ -204,13 +199,22 @@ export function renderMonthlyHeatmapPanel(heatmap: HeatmapData, options: TuiOpti
   const maxValue = getMetricMax(heatmap);
   const currentDay = new Date().getDate();
 
-  // Show odd days (1, 3, 5, ..., 31) like the weekly view shows even hours
+  // Show odd days (1, 3, 5, ..., 31) like the weekly view shows even hours.
+  // Current day: bold white when shown (odd), or a '·' marker in the header
+  // separator at its position when not shown (even).
   const headerLabels = heatmap.columns.map((col, index) => {
     const dayNum = index + 1;
-    return dayNum === currentDay ? bold(col) : dim(col);
+    return dayNum === currentDay ? boldWhite(col) : dim(col);
   });
   const oddLabels = headerLabels.filter((_, index) => index % 2 === 0); // days 1, 3, 5, ...
-  const headerStr = oddLabels.join('  ') + '  ';
+  let headerStr = oddLabels.join('  ') + '  ';
+
+  if (currentDay % 2 === 0) {
+    // Odd day D starts at visual position 2D-2, so the separator before the
+    // next odd label (day currentDay+1) occupies positions 2d-2 and 2d-1;
+    // mark the second space with '·'.
+    headerStr = replaceVisualChar(headerStr, 2 * currentDay - 1, '·');
+  }
 
   const lines: string[] = [];
   lines.push(`  ${title} (${total} total)`);

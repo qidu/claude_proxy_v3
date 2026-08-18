@@ -385,8 +385,12 @@ function green(text: string): string { return fg(32, text); }
 function yellow(text: string): string { return fg(33, text); }
 function red(text: string): string { return fg(31, text); }
 function lightWhite(text: string): string { return fg(97, text); }
+function gray(text: string): string { return fg(90, text); }
+function darkGray(text: string): string { return rgbFg(110, 110, 110, text); } // #6e6e6e
 function lightBlue(text: string): string { return rgbFg(144, 202, 249, text); }  // #90caf9
 function mediumBlue(text: string): string { return rgbFg(66, 165, 245, text); }   // #42a5f5
+function lightGreen(text: string): string { return rgbFg(165, 214, 167, text); }  // #a5d6a7
+function mediumGreen(text: string): string { return rgbFg(102, 187, 106, text); } // #66bb6a
 function clip(text: string, width: number): string {
   return width <= 0 ? '' : truncateToWidth(text, width, '');
 }
@@ -1060,7 +1064,7 @@ class DashboardView implements Component {
       this.lastTime = now;
     }
     const sec = date.getSeconds();
-    const secColors = [lightWhite, lightBlue, mediumBlue];
+    const secColors = [lightWhite, gray, darkGray];
     const secColor = secColors[sec % 3];
     const hourminTime = this.lastTime.slice(0, -2);
     const secondsTime = secColor(this.lastTime.slice(-2));
@@ -1261,6 +1265,7 @@ class DashboardApp {
   private pendingMutationRefresh = false;
   private renderPending = false;
   private renderTimer: ReturnType<typeof setTimeout> | null = null;
+  private titleTimer: ReturnType<typeof setInterval> | null = null;
   // Cached unsanitized ProxyConfig (includes api_key). The snapshot config
   // is the sanitized dashboard payload which strips api_key, so we keep
   // the raw config here for test-request auth header construction.
@@ -1289,6 +1294,10 @@ class DashboardApp {
     this.refreshTimer = setInterval(() => {
       void this.refresh();
     }, 500);
+    // Dedicated 1s ticker for the terminal title activity dot — independent of
+    // the debounced render loop so the '·'/'.' alternation always updates
+    // exactly once per second while requests are in flight.
+    this.titleTimer = setInterval(() => this.updateTerminalTitle(), 1000);
     this.hourlyDumpTimer = setInterval(() => {  // every 30 min
       const today = new Date().toISOString().slice(0, 10);
       const dayChanged = today !== this.lastDumpedDate;
@@ -1318,17 +1327,22 @@ class DashboardApp {
     this.scheduleRender();
   }
 
+  private updateTerminalTitle(): void {
+    const inflight = getActiveRequestCount();
+    // Alternate the activity dot every second while requests are in flight:
+    // '·' on even seconds, '.' on odd, matching the in-TUI header indicator.
+    // When idle, fall back to the plain title.
+    const activityChar = inflight > 0 ? (new Date().getSeconds() % 2 === 0 ? '·' : '.') : '';
+    stdout.write(activityChar ? `\x1b]0;Proxy V3 ${activityChar}\x07` : '\x1b]0;Proxy V3\x07');
+  }
+
   private scheduleRender(): void {
     if (this.renderPending) return;
     this.renderPending = true;
     if (this.renderTimer) clearTimeout(this.renderTimer);
     this.renderTimer = setTimeout(() => {
       this.renderPending = false;
-      const inflight = getActiveRequestCount();
-      // Blink the dot: only show it on even seconds, matching the in-TUI header
-      // indicator. On odd seconds (or when idle) fall back to the plain title.
-      const showDot = inflight > 0 && new Date().getSeconds() % 2 === 0;
-      stdout.write(showDot ? '\x1b]0;Proxy V3 \u25cf\x07' : '\x1b]0;Proxy V3\x07');
+      this.updateTerminalTitle();
       this.tui.requestRender();
     }, 100);
   }
@@ -2821,6 +2835,8 @@ class DashboardApp {
     this.stopped = true;
     if (this.refreshTimer) clearInterval(this.refreshTimer);
     this.refreshTimer = null;
+    if (this.titleTimer) clearInterval(this.titleTimer);
+    this.titleTimer = null;
     if (this.hourlyDumpTimer) clearInterval(this.hourlyDumpTimer);
     this.hourlyDumpTimer = null;
     if (this.modelTestTimer) clearInterval(this.modelTestTimer);
