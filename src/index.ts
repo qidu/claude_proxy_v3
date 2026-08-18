@@ -111,6 +111,16 @@ export function decayEffectiveCompositeShare(alias: string, targetModel: string,
   return { previous, next, floor };
 }
 
+export function recoverEffectiveCompositeShare(alias: string, targetModel: string, configuredShare: number): { previous: number; next: number; cap: number } {
+  const normalizedShare = configuredShare > 0 ? configuredShare : 1;
+  const previous = getEffectiveCompositeShare(alias, targetModel, normalizedShare);
+  const next = Math.min(normalizedShare, previous * 2);
+  if (next !== previous) {
+    compositeEffectiveShares.set(compositeShareKey(alias, targetModel), next);
+  }
+  return { previous, next, cap: normalizedShare };
+}
+
 export function resetEffectiveCompositeSharesForTest(): void {
   compositeEffectiveShares.clear();
 }
@@ -2396,6 +2406,23 @@ export default {
           try {
             logger.info(requestId, `${new URL(attempt.request.url).pathname} for ${scheduleAliasName ?? compositeAliasName ?? attempt.modelId} to ${attempt.targetUrl} (${attempt.upstreamMode})`);
             const response = await runAttempt(attempt);
+            // Gradual share recovery: a successful primary or fallback attempt
+            // doubles its effective share back toward the configured value
+            // (symmetric with the halving on failure), so a healthy-again
+            // target regains traffic instead of staying decayed until restart.
+            if (attempt.compositeTargetConfig && compositeAliasName && attempt.compositeTargetName) {
+              const isPrimary = attempt.compositeTargetConfig.primary === true;
+              const fallbackNum = attempt.compositeTargetConfig.fallback;
+              const isFallback = typeof fallbackNum === 'number' && fallbackNum > 0;
+              if (isPrimary || isFallback) {
+                const configuredShare = getConfiguredCompositeShare(attempt.compositeTargetConfig);
+                const { previous, next } = recoverEffectiveCompositeShare(compositeAliasName, attempt.compositeTargetName, configuredShare);
+                if (next > previous) {
+                  const role = isPrimary ? 'primary' : `fallback(${fallbackNum})`;
+                  logger.info(requestId, `Composite ${role} ${compositeAliasName}.${attempt.compositeTargetName} succeeded; effective share ${previous} -> ${next} (cap ${configuredShare})`);
+                }
+              }
+            }
             recordRequestTiming(path, Date.now() - requestStartTime);
             return applyCorsHeaders(await restorePrivacyResponse(response, piiMapping, requestId, logger), attempt.request, env);
           } catch (error) {

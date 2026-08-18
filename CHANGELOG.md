@@ -5,6 +5,16 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### feat(routing): effective-share recovery on success for primary and fallback targets
+
+A successful request through a composite alias's primary or fallback target
+now doubles its effective share back toward the configured value
+(`recoverEffectiveCompositeShare`, `src/index.ts`), symmetric with the
+halving-on-failure decay. Previously a decayed target (e.g. after transient
+upstream errors) stayed decayed until process restart; recovery is gradual so
+a flapping target does not ping-pong back to full traffic on one success.
+Recovery logs when the share actually increases.
+
 ### refactor(transforms): thinking-strip on fresh conversations is now an opt-in builtin
 
 The unconditional drop of `thinking: {type: "enabled"}` when the conversation

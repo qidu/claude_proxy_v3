@@ -8,7 +8,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildUpstreamUrl } from '../../src/utils/routing.js';
-import { decayEffectiveCompositeShare, getEffectiveCompositeShare, resetEffectiveCompositeSharesForTest } from '../../src/index.js';
+import { decayEffectiveCompositeShare, getEffectiveCompositeShare, recoverEffectiveCompositeShare, resetEffectiveCompositeSharesForTest } from '../../src/index.js';
 
 describe('composite primary effective share decay', () => {
   it('halves primary share down to one tenth of configured share', () => {
@@ -108,6 +108,66 @@ describe('composite fallback effective share decay', () => {
 
     assert.deepEqual(targetConfig, { share: 10, fallback: 1 });
     assert.equal(getEffectiveCompositeShare('alias', 'fallback1', targetConfig.share), 5);
+  });
+});
+
+describe('composite primary effective share recovery', () => {
+  it('doubles primary share back up to the configured share', () => {
+    resetEffectiveCompositeSharesForTest();
+    decayEffectiveCompositeShare('alias', 'primary', 10);
+    decayEffectiveCompositeShare('alias', 'primary', 10);
+    assert.equal(getEffectiveCompositeShare('alias', 'primary', 10), 2.5);
+
+    assert.deepEqual(recoverEffectiveCompositeShare('alias', 'primary', 10), { previous: 2.5, next: 5, cap: 10 });
+    assert.deepEqual(recoverEffectiveCompositeShare('alias', 'primary', 10), { previous: 5, next: 10, cap: 10 });
+    // capped at configured share
+    assert.deepEqual(recoverEffectiveCompositeShare('alias', 'primary', 10), { previous: 10, next: 10, cap: 10 });
+    assert.equal(getEffectiveCompositeShare('alias', 'primary', 10), 10);
+  });
+
+  it('is a no-op when the primary has never decayed', () => {
+    resetEffectiveCompositeSharesForTest();
+
+    const result = recoverEffectiveCompositeShare('alias', 'primary', 10);
+    assert.deepEqual(result, { previous: 10, next: 10, cap: 10 });
+    assert.equal(getEffectiveCompositeShare('alias', 'primary', 10), 10);
+  });
+
+  it('recovers from the 0.1 floor when configured share defaults to 1', () => {
+    resetEffectiveCompositeSharesForTest();
+    for (let i = 0; i < 5; i++) decayEffectiveCompositeShare('alias', 'primary', 1);
+    assert.equal(getEffectiveCompositeShare('alias', 'primary', 1), 0.1);
+
+    let result = recoverEffectiveCompositeShare('alias', 'primary', 1);
+    assert.equal(result.next, 0.2);
+    result = recoverEffectiveCompositeShare('alias', 'primary', 1);
+    assert.equal(result.next, 0.4);
+    result = recoverEffectiveCompositeShare('alias', 'primary', 1);
+    assert.equal(result.next, 0.8);
+    result = recoverEffectiveCompositeShare('alias', 'primary', 1);
+    assert.equal(result.next, 1);
+    assert.equal(getEffectiveCompositeShare('alias', 'primary', 1), 1);
+  });
+
+  it('recovers a fully decayed primary back to the configured share', () => {
+    resetEffectiveCompositeSharesForTest();
+    for (let i = 0; i < 5; i++) decayEffectiveCompositeShare('alias', 'primary', 10);
+    assert.equal(getEffectiveCompositeShare('alias', 'primary', 10), 1);
+
+    for (let i = 0; i < 4; i++) recoverEffectiveCompositeShare('alias', 'primary', 10);
+    assert.equal(getEffectiveCompositeShare('alias', 'primary', 10), 10);
+  });
+
+  it('keeps recovery state separate per alias and target', () => {
+    resetEffectiveCompositeSharesForTest();
+    decayEffectiveCompositeShare('alias-a', 'primary', 10);
+    decayEffectiveCompositeShare('alias-a', 'primary', 10);
+
+    recoverEffectiveCompositeShare('alias-a', 'primary', 10);
+    recoverEffectiveCompositeShare('alias-a', 'other', 10);
+
+    assert.equal(getEffectiveCompositeShare('alias-a', 'primary', 10), 5);
+    assert.equal(getEffectiveCompositeShare('alias-b', 'primary', 10), 10);
   });
 });
 
