@@ -14,14 +14,14 @@ npm run test:unit           # runs tsx --test tests/unit/**/*.test.ts
 
 #### Unit test coverage map
 
-23 files, 698 test cases. Every test imports `./src` directly (no HTTP). The table maps each source module to the unit tests that exercise it; "via handler" marks modules covered only through `index.ts`/handler entry points rather than a dedicated unit test.
+36 files, 992 test cases. Every test imports `./src` directly (no HTTP). The table maps each source module to the unit tests that exercise it; "via handler" marks modules covered only through `index.ts`/handler entry points rather than a dedicated unit test.
 
 | Source module | Direct unit coverage |
 |---|---|
-| `converters/claude-to-openai.ts` | `thinking-roundtrip`, `token-usage` |
-| `converters/streaming.ts` | `token-usage` |
-| `converters/gemini-streaming.ts` | `token-usage` |
-| `converters/openai-to-claude.ts` | `token-usage` (`extractTokenCounts`) |
+| `converters/claude-to-openai.ts` | `claude-to-openai` (schema cleaning, message/tool/tool_choice mapping, thinking→`reasoning_effort` thresholds, streaming usage flag, token-counting variant), `thinking-roundtrip`, `token-usage` |
+| `converters/streaming.ts` | `streaming` (OpenAI→Claude SSE: lifecycle framing, text/tool/thinking deltas, split tool-arg stitching, stop_reason mapping, upstream+cache usage capture, unexpected-end flush), `token-usage` |
+| `converters/gemini-streaming.ts` | `token-usage`, `chat-completions-gemini-streaming` (via handler) |
+| `converters/openai-to-claude.ts` | `openai-to-claude` (usage extraction standard/QNAIGC/cache, `<think>` + `reasoning_content` blocks, tool_calls, stop_reason fixups, synthetic signature, models/token-count converters), `token-usage` |
 | `converters/gemini-to-claude.ts` | `gemini-to-claude` (response + generateContent shapes, stop-reason mapping, citations, image/tool/thinking blocks) |
 | `converters/claude-to-gemini.ts` | `claude-to-gemini` (role mapping, text/image blocks, system_instruction, generation_config, cached_content) |
 | `converters/openai-to-gemini.ts` | `openai-to-gemini` (text/tool_calls/thinking/reasoning_content, schema-aware arg coercion, empty-chunk handling) |
@@ -31,8 +31,8 @@ npm run test:unit           # runs tsx --test tests/unit/**/*.test.ts
 | `utils/config-loader.ts` | `transforms-config`, `coordinator`, `request-transform`, plus in-process `testcases/15_config_parse` and `16_security/config_loader_pollution` |
 | `utils/coordinator.ts` | `coordinator` |
 | `utils/routing.ts` | `routing` (`buildUpstreamUrl`) |
-| `utils/token-counting.ts` | `token-usage` |
-| `utils/dashboard-stats.ts` | `token-usage` (usage-tracking stream) |
+| `utils/token-counting.ts` | `token-counting` (estimation overhead/whitespace, tiktoken exact counts + fallback, message/system/block counting for every block type, `countClaudeRequestTokens`, env config, tokenizer caching — feeds usage accounting and 413 limits), `token-usage` |
+| `utils/dashboard-stats.ts` | `dashboard-stats` (token-limit windowing: `parseWindowSpec` sliding `Nh`/`Nd` vs calendar `1w`/`1m`, `getWindowCutoff`; composite alias token-limit event log, pruning), `token-usage` (usage-tracking stream) |
 | `utils/model-usage-recorder.ts` | `token-usage` |
 | `utils/conversation-store.ts` | `responses-conversation-state` (threads, stored response objects, retrieval, stateful `handleAsCompletions` + GET routing under `CONVERSATION_STATE=true`, mocked upstream), plus `testcases/16_security/conversation_store` (dist-import basics) |
 | `utils/errors.ts` | `errors` (all 7 error classes, transport classification, validation helpers) |
@@ -41,6 +41,8 @@ npm run test:unit           # runs tsx --test tests/unit/**/*.test.ts
 | `utils/beta-features.ts` | `beta-features` (header parse/validate — unknown-feature drop, invalid-JSON→null, `hasBetaFeature`/`createBetaHeader` round-trip) |
 | `utils/validation.ts` | `validation` |
 | `utils/hash-detect.ts` | `hash-detect` |
+| `utils/privacy-filter.ts` | `privacy-filter` (config precedence + sidecar URL/SSRF validation, local hash redaction with sentinel dedup, block-type skipping incl. Gemini `inlineData`, maxChars guard, fail-closed sidecar paths, `restoreText`, streaming split-sentinel restore) |
+| `utils/kompress.ts` | `kompress` (config defaults/validation, endpoint-path matching, CJK detection, selective fragment compression — user/tool text + tool descriptions only, minChars/maxChars guards, fail-open vs fail-closed, saved-chars accounting) |
 | `utils/tool-blocklist.ts` | `tests/infra/tool-blocklist.ts` (`eraseBlockedTools`) |
 | `utils/sdk-handler.ts` | via handler (integration testcases only) |
 | `handlers/messages.ts`, `responses.ts`, `openai.ts` | via handler + `auth-with-model`, `responses-gemini-url`, `openai-gemini-role-default`, `think-tag-extraction` |
