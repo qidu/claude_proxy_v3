@@ -335,6 +335,42 @@ docker run --network host -p 8788:8788 -v $(pwd)/proxy_config.toml:/app/proxy_co
 For higher throughput, run several containers behind an nginx reverse proxy that load-balances across them.
 Refer to docs/nginx_conf/ for nginx configuration examples.
 
+### npm
+
+The published package ships only the compiled output — `dist/` plus `package.json`,
+`README.md`, and `LICENSE` (whitelisted via the `files` field in `package.json`;
+`.npmignore` is a backup blocklist). No tests, docs, configs, or source are included.
+
+```bash
+# Preview the exact tarball contents (no publish, no side effects):
+npm pack --dry-run
+
+# Publish. `prepublishOnly` runs `npm run build` + `npm run test:unit` first,
+# so dist/ is always fresh and green in the tarball:
+npm publish
+```
+
+What the published package gives consumers:
+
+| Field | Value | Meaning |
+|---|---|---|
+| `main` | `dist/index.js` | ESM entry — the compiled `src/index.ts` fetch handler. |
+| `bin` | `model-proxy-v3` → `dist/server.js` | Runnable via `npx model-proxy-v3` or a global install. |
+| `files` | `["dist"]` | Only compiled JS is packed. |
+| `dependencies` | runtime-only | `typescript` and all agent/test SDKs live in `devDependencies` and are never installed by consumers. |
+| `engines` | `node >= 19` | Web Crypto (`crypto.randomUUID()`) requirement. |
+
+Running the published package:
+
+```bash
+npx model-proxy-v3                      # or: npm i -g model-proxy-v3 && model-proxy-v3
+PORT=8788 model-proxy-v3                # default port is 8788
+```
+
+> The server reads `proxy_config.toml` from the **current working directory**.
+> When running from elsewhere, point it at the config with
+> `PROXY_CONFIG_PATH=/path/to/proxy_config.toml npx model-proxy-v3`.
+
 ### Node response compression headers
 
 The Node server adapter normalizes response headers before writing them to the
