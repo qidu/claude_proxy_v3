@@ -5,6 +5,15 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### fix(tui): terminal-title activity dot no longer flickers
+
+Identical `OSC 0` title writes are now skipped (dedupe cache in
+`updateTerminalTitle`), so the once-per-second `·`/`.` activity alternation
+only writes when the title actually changes. Note: the dot requires a terminal
+that repaints its title on every OSC 0 write (iTerm2, Terminal.app); Warp
+intercepts title sequences and may not show it — the in-TUI header `●`
+indicator is unaffected.
+
 ### feat(responses): `conversation` param, retrieval endpoints, `store:false` honored; CONVERSATION → CONVERSATION_STATE
 
 The stateful mode for `POST /v1/responses` with `openai-completions` upstream

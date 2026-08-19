@@ -13,6 +13,7 @@ import { resolveImageEncodeConfig, setImageEncodeConfig } from './image-fetch.js
 import { buildConsulKvUrl, parseConsulConfig } from './consul-loader.js';
 import type { ConsulKvEntry } from './consul-loader.js';
 import { parseApolloFile, fetchApolloConfig } from './apollo-loader.js';
+import { createLogger } from './logger.js';
 
 // Check if we're running in Node.js environment
 const isNodeEnvironment = (typeof process !== 'undefined' && process.versions?.node) ||
@@ -2440,7 +2441,7 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
   const configConsul = env.PROXY_CONFIG_CONSUL;
   const configApollo = env.PROXY_CONFIG_APOLLO;
 
-  console.log(`[INFO] Config source: apollo=${configApollo ?? '-'}, consul=${configConsul ?? '-'}, path=${configPath ?? '-'}`);
+  createLogger(env).info('config', `Config source: apollo=${configApollo ?? '-'}, consul=${configConsul ?? '-'}, path=${configPath ?? '-'}`);
   if (configApollo) {
     // No Apollo long-poll / notification subscription: portal changes are
     // picked up only when /config-reload is called (or the process restarts).
@@ -2532,6 +2533,7 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
 
     cachedConfig = cleanedConfig;
 
+    const startupLogger = createLogger(env);
     // Privacy filter activation summary (once, at startup). Per-request
     // redaction events are still logged separately by index.ts.
     {
@@ -2540,7 +2542,7 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
         const modeDetail = startupPrivacy.mode === 'sidecar'
           ? `url=${startupPrivacy.url}`
           : `entropyThreshold=${startupPrivacy.entropyThreshold}`;
-        console.log(`[INFO] Privacy filter active: mode=${startupPrivacy.mode} ${modeDetail}`);
+        startupLogger.info('config', `Privacy filter active: mode=${startupPrivacy.mode} ${modeDetail}`);
       }
     }
 
@@ -2551,7 +2553,7 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
       const startupImageEncode = resolveImageEncodeConfig(env, cleanedConfig.fetch);
       setImageEncodeConfig(startupImageEncode);
       if (startupImageEncode) {
-        console.log(`[INFO] Image-encode sidecar active: url=${startupImageEncode.url} timeoutMs=${startupImageEncode.timeoutMs}`);
+        startupLogger.info('config', `Image-encode sidecar active: url=${startupImageEncode.url} timeoutMs=${startupImageEncode.timeoutMs}`);
       }
     }
 

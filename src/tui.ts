@@ -1327,13 +1327,21 @@ class DashboardApp {
     this.scheduleRender();
   }
 
+  private lastTerminalTitle: string | null = null;
+
   private updateTerminalTitle(): void {
     const inflight = getActiveRequestCount();
     // Alternate the activity dot every second while requests are in flight:
     // '·' on even seconds, '.' on odd, matching the in-TUI header indicator.
     // When idle, fall back to the plain title.
     const activityChar = inflight > 0 ? (new Date().getSeconds() % 2 === 0 ? '·' : '.') : '';
-    stdout.write(activityChar ? `\x1b]0;Proxy V3 ${activityChar}\x07` : '\x1b]0;Proxy V3\x07');
+    const title = activityChar ? `Proxy V3 ${activityChar}` : 'Proxy V3';
+    // Terminals repaint the title bar on every OSC 0 write, even when the
+    // content is unchanged — skip identical writes so rapid renders (this is
+    // called from both the 1s ticker and every scheduled render) don't flicker.
+    if (title === this.lastTerminalTitle) return;
+    this.lastTerminalTitle = title;
+    stdout.write(`\x1b]0;${title}\x07`);
   }
 
   private scheduleRender(): void {
@@ -2846,6 +2854,7 @@ class DashboardApp {
     if (this.modelTestAbortController) this.modelTestAbortController.abort();
     this.closeOverlay();
     stdout.write('\x1b]0;\x07'); // clear terminal title on exit
+    this.lastTerminalTitle = null;
     this.tui.stop();
   }
 
