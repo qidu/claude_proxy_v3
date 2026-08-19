@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * Node.js HTTP server adapter for running in containers
  * Wraps the Workers fetch handler with a native HTTP server

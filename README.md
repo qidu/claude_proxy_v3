@@ -128,6 +128,12 @@ cd model_proxy_v3
 npm install
 ```
 
+> **Do not use `npm install --dry-run --omit=dev` (or `--production`) to preview a production install.**
+> Despite `--dry-run`, npm **actually prunes devDependencies from the local `node_modules`** —
+> `typescript`, `tsx`, and every agent-SDK dev dep disappear, and the next `npm run build`
+> fails with `sh: tsc: command not found`. Fix it by running `npm install` again.
+> To verify what a consumer would install, use `npm pack --dry-run` instead.
+
 > **Node ≥ 19 recommended.** The proxy uses the Web Crypto global (`crypto.randomUUID()`)
 > available natively in Node ≥ 19. On Node 18.17–18.x, either:
 > - export `NODE_OPTIONS=--experimental-global-webcrypto` before running any command

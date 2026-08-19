@@ -1,0 +1,22 @@
+# Never publish these (belt-and-suspenders alongside the "files" whitelist,
+# and authoritative for any future pack without "files").
+tests/
+testcases/
+docs/
+submodules/
+logs/
+src/
+*.test.ts
+*.toml
+*.toml.bak
+*.md
+!README.md
+run-tests.js
+tsconfig*.json
+wrangler.*
+Dockerfile
+.dockerignore
+.venv*/
+node_modules/
+.git*
+.claude/

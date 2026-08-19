@@ -1,8 +1,14 @@
 {
   "name": "model-proxy-v3",
-  "version": "3.2.0",
-  "description": "Model API Proxy v3.2 - Claude,Gemini,GPT Compatibale API Proxy",
-  "main": "src/index.ts",
+  "version": "3.3.0",
+  "description": "Model Proxy V3 - Claude, GPT, Gemini, DeepSeek, GLM, Kimi models compatibale API Proxy",
+  "main": "dist/index.js",
+  "bin": {
+    "model-proxy-v3": "dist/server.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
@@ -11,14 +17,14 @@
     "build": "tsc -p tsconfig.server.json",
     "start": "node dist/server.js",
     "server": "tsx src/server.ts",
-    "test:unit": "node --experimental-global-webcrypto --import tsx --test tests/unit/**/*.test.ts"
+    "test:unit": "node --experimental-global-webcrypto --import tsx --test tests/unit/**/*.test.ts",
+    "prepublishOnly": "npm run build && npm run test:unit"
   },
   "dependencies": {
     "fast-safe-stringify": "^2.1.1",
     "js-tiktoken": "^1.0.21",
     "safe-stable-stringify": "^2.5.0",
-    "tiktoken": "^1.0.15",
-    "typescript": "^5.9.3"
+    "tiktoken": "^1.0.15"
   },
   "type": "module",
   "engines": {
@@ -36,7 +42,8 @@
     "@opencode-ai/sdk": "^1.18.4",
     "@types/node": "^25.1.0",
     "ai": "^7.0.52",
-    "tsx": "^4.23.1"
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.3"
   },
   "peerDependencies": {
     "wrangler": "^4.60.0"
