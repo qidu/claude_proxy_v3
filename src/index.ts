@@ -12,7 +12,7 @@ import { createLogger, type Logger } from './utils/logger.js';
 import { handleModelsRequest, getModelCount } from './handlers/models.js';
 import { handleTokenCountingRequest } from './handlers/token-counting.js';
 import { handleMessagesRequest } from './handlers/messages.js';
-import { handleResponsesRequest, handleResponsesCompactRequest, handleResponsesInputTokensRequest } from './handlers/responses.js';
+import { handleResponsesRequest, handleResponsesCompactRequest, handleResponsesInputTokensRequest, handleResponsesRetrievalRequest } from './handlers/responses.js';
 import { handleGeminiRequest, handleGeminiRequestForMessages } from './handlers/gemini.js';
 import { handleOpenAIRequest } from './handlers/openai.js';
 import { handleClaudeRequest } from './handlers/claude.js';
@@ -1003,6 +1003,22 @@ export default {
       if (authUrl && !authWithModel && !authWithBody) {
         const authError = await doAuthRequest();
         if (authError) return authError;
+      }
+
+      // GET /v1/responses/{id} and GET /v1/responses/{id}/input_items —
+      // retrieval served from the in-process conversation store (no upstream
+      // call). Only intercepted when CONVERSATION_STATE is enabled; otherwise
+      // the request falls through to normal routing. Auth-server validation
+      // for deferred-auth configs runs here since GETs have no parsed body.
+      if (request.method === 'GET' && (env.CONVERSATION_STATE === 'true' || env.CONVERSATION_STATE === '1')) {
+        const retrievalMatch = path.match(/^\/v1\/responses\/([^/?]+?)(\/input_items)?$/);
+        if (retrievalMatch && retrievalMatch[1] !== 'compact' && retrievalMatch[1] !== 'input_tokens') {
+          if (authUrl && (authWithModel || authWithBody)) {
+            const authError = await doAuthRequest();
+            if (authError) return authError;
+          }
+          return handleResponsesRetrievalRequest(retrievalMatch[1], retrievalMatch[2] !== undefined, requestId, env, logger);
+        }
       }
 
       const useConfigKey = proxyConfig.remote?.authentication?.auth_passthrough_with === 'config_key';

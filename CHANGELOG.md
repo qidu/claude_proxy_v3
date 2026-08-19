@@ -5,6 +5,33 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### feat(responses): `conversation` param, retrieval endpoints, `store:false` honored; CONVERSATION → CONVERSATION_STATE
+
+The stateful mode for `POST /v1/responses` with `openai-completions` upstream
+(env renamed `CONVERSATION` → `CONVERSATION_STATE`, same `true`/`1` gating)
+now covers the full stateful Responses API surface:
+
+- **`conversation`** (string or `{"id": ...}`): the conversation thread's
+  accumulated items are prepended to the request's `input`; this turn's new
+  input items and output items are appended to the thread afterwards. The
+  conversation ID is echoed in the response body. Combining
+  `previous_response_id` and `conversation` in one request is rejected with
+  `400` (spec forbids the combination) — previously `conversation` was
+  silently ignored.
+- **Retrieval**: `GET /v1/responses/{id}` returns the stored response object
+  and `GET /v1/responses/{id}/input_items` returns the merged input items,
+  both served from the in-process store (no upstream call, auth checks apply,
+  only intercepted while `CONVERSATION_STATE` is enabled). Unknown, expired,
+  or unstored IDs return `404`.
+- **`store: false`**: such responses are no longer saved — they cannot be
+  continued via `previous_response_id`/`conversation` nor retrieved.
+- Both streaming and non-streaming responses now store the serialized
+  response object for retrieval; conversation threads share the same TTL
+  (3600s) and `CONVERSATION_MAX_ENTRIES` cap as response entries.
+
+Docs: `docs/README_DETAILS.md` Known Limitations #4 rewritten for the new
+behavior; `docs/configuration-reference.md` env table updated.
+
 ### feat(routing): effective-share recovery on success for primary and fallback targets
 
 A successful request through a composite alias's primary or fallback target

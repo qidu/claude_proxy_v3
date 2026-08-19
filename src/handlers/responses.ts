@@ -8,14 +8,14 @@
 import { Env } from '../types/shared.js';
 import { Logger, createLogger, logPipelineStage, logPipelineHeaders } from '../utils/logger.js';
 import { OpenAIRequest, OpenAIResponse } from '../types/openai.js';
-import { handleTargetApiError } from '../utils/errors.js';
+import { handleTargetApiError, createErrorResponse } from '../utils/errors.js';
 import { addForwardedHeaders, normalizeOpenAIAuthHeaders } from '../utils/routing.js';
 import { runHook, applyAfterUpstream, type HookContext } from '../utils/request-transform.js';
 import type { ModelRouteConfig } from '../utils/config-loader.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { convertResponsesToChatCompletions } from '../converters/responses-to-completions.js';
 import { convertCompletionsToResponses, convertCompletionsToCompactedResponse } from '../converters/completions-to-responses.js';
-import { getConversation, saveConversation, normalizeInputToItems } from '../utils/conversation-store.js';
+import { getConversation, saveConversation, normalizeInputToItems, getConversationThreadItems, appendConversationThreadItems } from '../utils/conversation-store.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
 import { handleGeminiRequestForMessages } from './gemini.js';
 import { completionsToClaudeBody } from './openai.js';
@@ -97,6 +97,56 @@ export async function handleResponsesRequest(
 
   // Default: Pass through to OpenAI Responses API upstream
   return handleAsPassthrough(request, targetUrl, authHeaders, requestId, activeLogger, requestBody, isStreaming, env, route);
+}
+
+/**
+ * Handle GET /v1/responses/{response_id} and GET /v1/responses/{response_id}/input_items.
+ *
+ * Served entirely from the in-memory conversation store (no upstream call).
+ * Only available when CONVERSATION_STATE is enabled; otherwise 404. Unknown,
+ * expired, or unstored (store: false) response IDs also return 404.
+ */
+export function handleResponsesRetrievalRequest(
+  responseId: string,
+  wantInputItems: boolean,
+  requestId: string,
+  env?: Env,
+  logger?: Logger,
+): Response {
+  const conversationEnabled = env?.CONVERSATION_STATE === 'true' || env?.CONVERSATION_STATE === '1';
+  const notFound = (message: string): Response => new Response(
+    JSON.stringify({ error: { message, type: 'invalid_request_error', param: null, code: null } }),
+    { status: 404, headers: { 'Content-Type': 'application/json', 'x-request-id': requestId } }
+  );
+
+  if (!conversationEnabled) {
+    logger?.debug(requestId, `[conversation] GET retrieval for ${responseId} but CONVERSATION_STATE is not enabled`);
+    return notFound(`Response ${responseId} not found (conversation state is not enabled on this proxy instance).`);
+  }
+
+  const entry = getConversation(responseId);
+  if (!entry) {
+    logger?.debug(requestId, `[conversation] GET retrieval for ${responseId}: not found in store (expired, unknown, or store: false)`);
+    return notFound(`Response ${responseId} not found.`);
+  }
+
+  if (wantInputItems) {
+    const body = { object: 'response.input_items.list', data: entry.inputItems };
+    logPipelineStage(logger ?? createLogger({}), requestId, 'outbound', '/v1/responses/{id}/input_items', body);
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+    });
+  }
+
+  if (!entry.response) {
+    return notFound(`Response ${responseId} has no stored response object.`);
+  }
+  logPipelineStage(logger ?? createLogger({}), requestId, 'outbound', '/v1/responses/{id}', entry.response);
+  return new Response(JSON.stringify(entry.response), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json', 'x-request-id': requestId },
+  });
 }
 
 /**
@@ -612,11 +662,28 @@ async function handleAsCompletions(
   route?: ModelRouteConfig,
   upstreamMode?: string,
 ): Promise<Response> {
-  const conversationEnabled = env?.CONVERSATION === 'true' || env?.CONVERSATION === '1';
+  const conversationEnabled = env?.CONVERSATION_STATE === 'true' || env?.CONVERSATION_STATE === '1';
   const previousResponseId = requestBody.previous_response_id as string | undefined;
+  // `conversation`: string (ConversationID) or { id } (ResponseConversationParam).
+  const conversationParam = requestBody.conversation as string | { id?: string } | undefined;
+  const conversationId = typeof conversationParam === 'string'
+    ? conversationParam
+    : conversationParam?.id;
+  // Spec: `previous_response_id` "Cannot be used in conjunction with `conversation`".
+  if (previousResponseId && conversationId) {
+    return createErrorResponse(
+      new Error('previous_response_id and conversation cannot be used together.'),
+      requestId,
+      400
+    );
+  }
+  // Spec default: store=true. store=false → the response is not stored for
+  // retrieval or continuation, so skip all conversation-state saves below.
+  const storeResponse = requestBody.store !== false;
 
   // Normalize current input to an item array so we can prepend prior history
-  let mergedInput: unknown[] = normalizeInputToItems(requestBody.input);
+  const newInputItems = normalizeInputToItems(requestBody.input);
+  let mergedInput: unknown[] = newInputItems;
 
   // If conversation caching is on and client references a prior response,
   // prepend [prior_input_items, prior_output_items] before the new input.
@@ -630,10 +697,22 @@ async function handleAsCompletions(
     }
   }
 
-  // Build effective request body: use merged input, drop previous_response_id
-  // (Chat Completions upstream does not understand it)
+  // Conversation mode: prepend the accumulated thread items to the new input.
+  if (conversationEnabled && conversationId) {
+    const threadItems = getConversationThreadItems(conversationId);
+    if (threadItems) {
+      mergedInput = [...threadItems, ...mergedInput];
+      logger.debug(requestId, `[conversation] loaded thread=${conversationId} (${threadItems.length} items prepended)`);
+    } else {
+      logger.debug(requestId, `[conversation] starting new thread=${conversationId}`);
+    }
+  }
+
+  // Build effective request body: use merged input, drop stateful fields
+  // (Chat Completions upstream does not understand them)
   let effectiveBody: Record<string, unknown> = { ...requestBody, input: mergedInput };
   delete effectiveBody.previous_response_id;
+  delete effectiveBody.conversation;
 
   // before_conversion: client-schema transforms before format conversion
   if (route) {
@@ -721,14 +800,17 @@ async function handleAsCompletions(
   }
 
   if (isStreaming) {
-    // onComplete saves the conversation entry after the stream finishes
-    const onComplete = conversationEnabled
-      ? (responseId: string, outputItems: unknown[]) => {
-          saveConversation(responseId, mergedInput, outputItems);
+    // onComplete saves the conversation state after the stream finishes
+    const onComplete = conversationEnabled && storeResponse
+      ? (responseId: string, outputItems: unknown[], completedResponse?: Record<string, unknown>) => {
+          saveConversation(responseId, mergedInput, outputItems, completedResponse);
+          if (conversationId) {
+            appendConversationThreadItems(conversationId, [...newInputItems, ...outputItems]);
+          }
           logger.debug(requestId, `[conversation] saved responseId=${responseId} (${mergedInput.length} input + ${outputItems.length} output items)`);
         }
       : undefined;
-    return streamCompletionsAsResponses(response, model, requestId, logger, onComplete);
+    return streamCompletionsAsResponses(response, model, requestId, logger, onComplete, conversationId);
   }
 
   // Convert Chat Completions response back to Responses API format
@@ -737,11 +819,17 @@ async function handleAsCompletions(
   logPipelineStage(logger, requestId, 'upstream-response', targetUrl, responseText);
   const completionsResponse = JSON.parse(responseText) as OpenAIResponse;
   const responsesResponse = convertCompletionsToResponses(completionsResponse, model);
+  if (conversationId) {
+    (responsesResponse as unknown as Record<string, unknown>).conversation = conversationId;
+  }
   logPipelineStage(logger, requestId, 'outbound', '/v1/responses', responsesResponse);
 
-  // Save conversation entry for next turn
-  if (conversationEnabled) {
-    saveConversation(responsesResponse.id, mergedInput, responsesResponse.output);
+  // Save conversation state for next turn
+  if (conversationEnabled && storeResponse) {
+    saveConversation(responsesResponse.id, mergedInput, responsesResponse.output, responsesResponse as unknown as Record<string, unknown>);
+    if (conversationId) {
+      appendConversationThreadItems(conversationId, [...newInputItems, ...responsesResponse.output]);
+    }
     logger.debug(requestId, `[conversation] saved responseId=${responsesResponse.id} (${mergedInput.length} input + ${responsesResponse.output.length} output items)`);
   }
 
@@ -770,7 +858,8 @@ function streamCompletionsAsResponses(
   model: string,
   requestId: string,
   logger?: Logger,
-  onComplete?: (responseId: string, outputItems: unknown[]) => void
+  onComplete?: (responseId: string, outputItems: unknown[], completedResponse?: Record<string, unknown>) => void,
+  conversationId?: string
 ): Response {
   const responseId = `resp_${crypto.randomUUID().replace(/-/g, '')}`;
   const itemId = `msg_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
@@ -1122,22 +1211,28 @@ function streamCompletionsAsResponses(
         input_tokens_details: { cached_tokens: usageData.prompt_cache_hit_tokens ?? usageData.prompt_tokens_details?.cached_tokens ?? 0 },
       } : undefined;
 
-      // Save conversation entry before emitting the completed event
-      onComplete?.(responseId, outputItems);
+      // Build the completed response object once; it is both emitted in the
+      // response.completed event and passed to onComplete for the store
+      // (GET /v1/responses/{id} retrieval).
+      const completedResponse: Record<string, unknown> = {
+        id: responseId,
+        object: 'response',
+        created_at,
+        status: 'completed',
+        model: upstreamModel,
+        output: outputItems,
+        usage,
+        ...(conversationId ? { conversation: conversationId } : {}),
+      };
+
+      // Save conversation state before emitting the completed event
+      onComplete?.(responseId, outputItems, completedResponse);
 
       // Emit response.completed
       await writer.write(encoder.encode(sseEvent('response.completed', {
         type: 'response.completed',
         sequence_number: nextSeq(),
-        response: {
-          id: responseId,
-          object: 'response',
-          created_at,
-          status: 'completed',
-          model: upstreamModel,
-          output: outputItems,
-          usage,
-        },
+        response: completedResponse,
       })));
 
       await writer.write(encoder.encode('data: [DONE]\n\n'));

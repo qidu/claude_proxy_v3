@@ -6,8 +6,8 @@
  * conversation-store.ts itself has no inertness gate (unlike privacy-filter.ts
  * / kompress.ts, which are no-ops unless a *_URL env var is set) — the gate
  * lives entirely in its sole consumer, src/handlers/responses.ts, via
- * `env?.CONVERSATION === 'true' || env?.CONVERSATION === '1'`. That gated
- * behavior (previous_response_id silently dropped when CONVERSATION is
+ * `env?.CONVERSATION_STATE === 'true' || env?.CONVERSATION_STATE === '1'`. That gated
+ * behavior (previous_response_id silently dropped when CONVERSATION_STATE is
  * unset) is already covered live by 11_responses/responses_api.test.js
  * TC1906 ("stateful fields dropped"), so this file does not duplicate a live
  * end-to-end test and instead focuses entirely on the store's own logic:

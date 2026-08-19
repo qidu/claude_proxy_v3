@@ -71,6 +71,7 @@ const MODELS = [
   "deepseek-v4-anth",               // deepseek via anthropic-messages
   "max-m3-comp",                    // minimax via openai-completions
   "max-m3-anth",                    // minimax via anthropic-messages
+  "glm-5.3-comp",                   // z-ai glm via openai-completions (stateful /v1/responses)
 ];
 
 // Each task targets a different AI-coding / agent capability so model

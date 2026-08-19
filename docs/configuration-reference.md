@@ -318,8 +318,8 @@ entry can set `base_url = "sdk://chatjimmy.ai/api"` and keep the appropriate
 | `GENERATE_CONTENT_UPSTREAM_MODE` | `native` | Default `upstream_mode` for `POST /v1beta/models/{model}:generateContent` (+ `:streamGenerateContent`, `:countTokens`). `native` = forward to Gemini; `openai-completions` = indirect transform via Chat Completions. |
 | `JSON_STRINGIFY_METHOD` | `json` | Serialization method for outgoing bodies. Accepted: `json` (default, native `JSON.stringify`), `safe-stable` ([safe-stable-stringify](https://www.npmjs.com/package/safe-stable-stringify), deterministic key order), `fast-safe` ([fast-safe-stringify](https://www.npmjs.com/package/fast-safe-stringify), cycle-safe). |
 | `DEV_NO_KEY` | `false` | `true` (or `1`) skips the auth-header presence check on non-exempt model API paths. Only the presence check is disabled — `auth_server` still applies, and `/v1/models` plus dashboard/admin paths remain exempt regardless. Intended for local development behind another gateway that has already authenticated the caller. |
-| `CONVERSATION` | unset | `true` enables experimental in-process stateful conversation cache |
-| `CONVERSATION_MAX_ENTRIES` | `10000` | Cap on the in-process conversation cache size (entries per instance). Only meaningful when `CONVERSATION=true`. Eviction is lazy + opportunistic; no cross-process sharing. |
+| `CONVERSATION_STATE` | unset | `true` (or `1`) enables experimental in-process stateful conversation mode for `/v1/responses` with `openai-completions` upstream: stores each response and serves `previous_response_id` / `conversation` continuation plus `GET /v1/responses/{id}` and `GET /v1/responses/{id}/input_items` retrieval. Requests with `store: false` are not stored. |
+| `CONVERSATION_MAX_ENTRIES` | `10000` | Cap on the in-process conversation store size (response entries + conversation threads per instance). Only meaningful when `CONVERSATION_STATE=true`. Eviction is lazy + opportunistic; no cross-process sharing. |
 | `IMAGE_BLOCK_DATA_MAX_SIZE` | `10485760` | Max inline image bytes accepted |
 | `ALLOWED_HOSTS` | `127.0.0.1,localhost` | SSRF allowlist for dynamic per-request upstream hosts |
 

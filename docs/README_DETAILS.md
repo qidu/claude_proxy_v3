@@ -997,9 +997,13 @@ OpenAI Responses API support with format conversion to/from Chat Completions.
 
 3. **`developer` role may cause upstream errors**: The `developer` role is passed through as-is; most OpenAI-compatible upstreams do not support it and will return a validation error (`responses-to-completions.ts`).
 
-4. **Stateful conversation not supported (`previous_response_id`, `conversation`, `store`)**: The proxy is stateless by design — it does not store or cache responses between requests, and it will not implement a conversation store. `previous_response_id` is silently dropped; the upstream receives only the current `input` with no prior history. The result is a context-free response that ignores all previous turns. This applies to both `openai-completions` and `openai-responses` modes (in the latter, the field is forwarded to the upstream, but non-OpenAI upstreams such as LiteLLM also have no conversation store and will silently ignore it).
+4. **Stateful conversation (`previous_response_id`, `conversation`, `store`)**: By default the proxy is stateless — `previous_response_id` is silently dropped; the upstream receives only the current `input` with no prior history. This applies to both `openai-completions` and `openai-responses` modes (in the latter, the field is forwarded to the upstream, but non-OpenAI upstreams such as LiteLLM also have no conversation store and will silently ignore it).
 
-**Notice**: set `CONVERSATION=true` in environment to enable stateful conversation experimental feature, it just cache conversion inner a proxy process instance.
+**Notice**: set `CONVERSATION_STATE=true` (or `1`) in environment to enable the stateful conversation experimental feature for `openai-completions` upstream mode. The proxy then caches each response in memory (TTL 3600s, single process instance) and:
+   - `previous_response_id`: prior input + output items are prepended to the new request's `input`.
+   - `conversation` (string or `{ "id": ... }`): the conversation's accumulated items are prepended; this turn's new input items and output items are appended to the conversation afterwards. Using both `previous_response_id` and `conversation` in one request is rejected with `400` (spec forbids the combination).
+   - `store: false`: the response is not stored (no continuation, not retrievable).
+   - Retrieval: `GET /v1/responses/{id}` returns the stored response object; `GET /v1/responses/{id}/input_items` returns the merged input items. Unknown/expired/unstored IDs return `404`.
 
    **Required client-side fix**: set `store: false` and pass the full conversation history in `input` on every request. This is the correct stateless usage pattern per the Responses API spec:
    ```json
@@ -1272,10 +1276,12 @@ LOG_LEVEL = "info"
 # Some upstreams (e.g. DeepSeek Anthropic-compatible API) require max_tokens
 # DEFAULT_MAX_TOKENS = "8192"
 
-# Stateful conversation caching for /v1/responses (experimental)
+# Stateful conversation mode for /v1/responses (experimental)
 # When "true", stores each response in memory and auto-prepends history
-# for requests with previous_response_id. TTL: 3600s. In-memory only.
-# CONVERSATION = "false"
+# for requests with previous_response_id / conversation. Also serves
+# GET /v1/responses/{id} and /input_items retrieval. Requests with
+# store:false are not stored. TTL: 3600s. In-memory only.
+# CONVERSATION_STATE = "false"
 
 # Privacy Filter (PII redaction) plugin — see "Privacy Filter" section below.
 # Entirely inert unless PRIVACY_FILTER_URL is set (points at the local sidecar).
@@ -1329,7 +1335,7 @@ node dist/server.js
 | `PORT` | — (Node.js only) | `"8788"` |
 | `DEV_PASS_THROUGH` | `DEV_PASS_THROUGH` | `"false"` |
 | `DEFAULT_MAX_TOKENS` | `DEFAULT_MAX_TOKENS` | unset |
-| `CONVERSATION` | `CONVERSATION` | unset |
+| `CONVERSATION_STATE` | `CONVERSATION_STATE` | unset |
 | `UPSTREAM_BODY_TIMEOUT_MS` | `UPSTREAM_BODY_TIMEOUT_MS` | unset |
 | `MODELS_CACHE_TTL` | `MODELS_CACHE_TTL` | unset |
 | `JSON_STRINGIFY_METHOD` | `JSON_STRINGIFY_METHOD` | unset |
