@@ -23,3 +23,8 @@ Tests must verify meaningful properties (values, structure, side effects, error 
 
 ## 8. Fail Loud
 Errors must be thrown, returned, or reported — never swallowed or hidden behind default values. When batch jobs or loops skip records, report skip counts and reasons in the output. If you cannot confirm 100% success, say so — silent "default success" is forbidden.
+
+## 9. Notification for choices or decisions
+```zsh
+terminal-notifier -title 'Claude' -message '<choices_or_decisions>'
+``
