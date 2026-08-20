@@ -5,6 +5,44 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### fix(config): 5/6-element model entries rejected by `validateProxyConfig` and dashboard PUT
+
+The per-entry `transforms` (index 4) and `max_tokens` (index 5) fields were
+supported by the TOML parser, serializer, and route resolution, but two other
+validation sites still only accepted lengths 1/3/4 — so any config that used
+them failed:
+
+- `validateProxyConfig` (`src/utils/config-loader.ts`) rejected model entries
+  longer than 4 elements with
+  `must be [target] or [target, base_url, api_key] or [target, base_url, api_key, mode] (got 6 elements)`
+  at proxy startup / dashboard load, despite the config being valid. The 5- and
+  6-element forms now validate (`max_tokens` at index 5 must be a number or
+  digit string, mirroring the parser's `/^\d+$/` check).
+- `isSafeModelArray` (dashboard PUT path, `validateAndNormalizeDashboardModels`)
+  rejected 5/6-element arrays with `400 Invalid model entry`, so saving a
+  config containing `transforms`/`max_tokens` via the dashboard/TUI or raw
+  `PUT /dashboard/api/config` failed. Now accepts lengths 1/3/4/5/6. The PUT
+  path still trims entries to the dashboard's 3-tuple display shape
+  `[target, base_url, mode]` (mirroring `sanitizeDashboardCategoryConfig` on
+  GET) — `transforms`/`max_tokens` remain config-file-only fields; a raw PUT
+  including them is silently truncated (documented in code comments).
+
+Root cause: parser, serializer, and validator each evolved and were unit-tested
+independently, so their shared accepted-shapes contract drifted. Regression
+guards added at three layers:
+
+- Unit (`tests/unit/config-loader.test.ts`): 6-element entries accepted with
+  number and digit-string `max_tokens`, rejected with non-numeric.
+- Integration boot test (`testcases/08_regression` TC817): PUTs a category
+  using all 6 documented array lengths at once, asserts zero `config_errors`.
+  This test independently rediscovered the `isSafeModelArray` drift above.
+- Integration behavior test (`testcases/15_config_parse` TC1519): a 6-element
+  entry's `max_tokens` survives parse → `getModelRouteConfig().maxTokens`
+  (the shape consumed by request building), not just the raw array shape.
+
+`tests/README.md` gained a warning documenting this bug class (test
+cross-function contracts, not each function in isolation).
+
 ### fix(tui): terminal-title activity dot no longer flickers
 
 Identical `OSC 0` title writes are now skipped (dedupe cache in

@@ -1920,8 +1920,9 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
           if (typeof mode !== 'string') {
             errors.push({ path: `models.${categoryName}.${key}`, message: `mode must be a string` });
           }
-        } else if (value.length === 5) {
+        } else if (value.length === 5 || value.length === 6) {
           // 5 elements = target + base_url + api_key + mode + transforms CSV
+          // 6 elements = ... + per-entry max_tokens (bare number, index 5)
           const target = value[0] as unknown;
           const baseUrl = value[1] as unknown;
           const apiKey = value[2] as unknown;
@@ -1946,8 +1947,15 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
           if (typeof transformsCsv !== 'string') {
             errors.push({ path: `models.${categoryName}.${key}`, message: `transforms must be a comma-separated string` });
           }
+          if (value.length === 6) {
+            const maxTokens = value[5] as unknown;
+            // max_tokens is a bare number (unquoted) in TOML, but tolerant of digit strings
+            if (typeof maxTokens !== 'number' && !(typeof maxTokens === 'string' && /^\d+$/.test(maxTokens))) {
+              errors.push({ path: `models.${categoryName}.${key}`, message: `max_tokens must be a number` });
+            }
+          }
         } else {
-          errors.push({ path: `models.${categoryName}.${key}`, message: `must be [target] or [target, base_url, api_key] or [target, base_url, api_key, mode] (got ${value.length} elements)` });
+          errors.push({ path: `models.${categoryName}.${key}`, message: `must be [target] or [target, base_url, api_key] or [target, base_url, api_key, mode] or [target, base_url, api_key, mode, transforms] or [target, base_url, api_key, mode, transforms, max_tokens] (got ${value.length} elements)` });
         }
       }
     }
@@ -3159,6 +3167,13 @@ export interface DashboardConfigPayload {
   global_token_limit?: string;
 }
 
+/**
+ * sanitizeDashboardCategoryConfig (the GET side) maps the internal model-entry
+ * array [target, base_url, api_key, mode, transforms, max_tokens] to the
+ * dashboard's 3-tuple display shape [target, base_url, mode] — index 2
+ * (api_key) is skipped and indices 4/5 (transforms/max_tokens) are never
+ * surfaced to the dashboard UI; they are config-file-only fields.
+ */
 function sanitizeDashboardCategoryConfig(categoryConfig: ModelCategoryConfig): DashboardModelCategoryConfig {
   const sanitized: DashboardModelCategoryConfig = {};
 
@@ -3316,10 +3331,12 @@ export function toDashboardConfigPayload(config: ProxyConfig): DashboardConfigPa
 }
 
 function isSafeModelArray(value: unknown): value is DashboardModelArrayConfig {
-  // Accept 1, 3, or 4 elements. Dashboard GET returns 3-element arrays (api_key
-  // stripped, mode preserved). PUT callers normalize to 1 or 3 elements before
-  // sending (see TC1214), and 4 elements when mode is included.
-  if (!Array.isArray(value) || (value.length !== 1 && value.length !== 3 && value.length !== 4)) {
+  // Accept 1, 3, 4, 5, or 6 elements. Dashboard GET returns 3-element arrays
+  // (api_key stripped, mode preserved). PUT callers normalize to 1 or 3 elements
+  // before sending (see TC1214), 4 elements when mode is included, 5 with
+  // transforms, and 6 with per-entry max_tokens — the same lengths the TOML
+  // parser emits and validateProxyConfig accepts.
+  if (!Array.isArray(value) || ![1, 3, 4, 5, 6].includes(value.length)) {
     return false;
   }
   return typeof value[0] === 'string' && value[0].trim() !== '';
@@ -3572,8 +3589,13 @@ function validateAndNormalizeDashboardModels(payload: unknown): Record<string, D
       }
 
       if (isSafeModelArray(value)) {
-        // Pass through raw array (1-3 or 4 elements) so it gets re-validated
-        // but trimmed to 3 for display: api_key stripped, mode preserved
+        // On PUT in validateAndNormalizeDashboardModels: accepts 1/3/4/5/6-element
+        // arrays (same lengths as the TOML parser / validateProxyConfig) but
+        // trims to the dashboard's 3-tuple display shape [target, base_url, mode]
+        // (mirroring sanitizeDashboardCategoryConfig on GET). Dashboard/TUI
+        // clients PUT back the same 3-element tuples they GET, so the trim is a
+        // no-op for them; a raw PUT that includes index 4/5 (transforms /
+        // max_tokens) is silently truncated — those fields are config-file-only.
         category[key] = value.slice(0, 3) as DashboardModelArrayConfig;
         continue;
       }

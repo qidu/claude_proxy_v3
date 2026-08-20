@@ -42,7 +42,7 @@ api_key = "test"
 budget_to_effort_low = 32768
 budget_to_effort_medium = 65536
 budget_to_effort_high = 128000
-# Sliding duration (1h-23h, 1d-6d): rolling window from "now".
+# Sliding duration (1h, 1d): rolling window from "now".
 # Calendar duration (1w, 1m): anchored to week_start_day / first-of-month.
 global_token_limit = "700M 1w"
 # Anchor day for the `1w` calendar window. Default is "monday".
@@ -267,9 +267,8 @@ base_url = "https://openrouter.ai/api"
 # Alias with a per-alias `token_limit` (consumed across all targets under
 # this alias within the given `duration`). The actual upstream call is
 # routed via the rules for `deepseek-v4-flash`. Duration follows the same
-# vocabulary as global_token_limit: sliding (1h-23h, 1d-6d) or calendar
-# (1w, 1m). The example below uses a 6-hour sliding window.
-"claude-haiku-4-5-20251001" = {token_limit = {num = 1000000, duration = "6h"}, "deepseek-v4-flash" = {}}
+# vocabulary as global_token_limit: sliding (1h, 1d) or calendar (1w, 1m).
+"claude-haiku-4-5-20251001" = {token_limit = {num = 1000000, duration = "1h"}, "deepseek-v4-flash" = {}}
 # Multi-target composite with a per-alias `token_limit`, weighted `share`
 # distribution, and a single `primary` target (`max-m3`). Remaining targets
 # with `fallback = 0` are not used as fallbacks; targets with `share = 0` are
