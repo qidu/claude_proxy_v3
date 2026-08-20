@@ -579,14 +579,12 @@ this proxy implements claude and gemini API formats for multiple models:
 
 For detailed routing behavior, see `docs/routing_refactor.md`.
 
-#### `DEV_PASS_THROUGH` — `/v1/chat/completions` passthrough
+#### `/v1/chat/completions` — always-on passthrough
 
-`/v1/chat/completions` is **rejected** by default (`Use /v1/messages instead`). It is the
-**only** endpoint and the **only** upstream mode (`openai-completions`) that `DEV_PASS_THROUGH`
-affects — all other endpoints and modes are untouched by the flag.
-
-Set `DEV_PASS_THROUGH=true` (or `1`) to unlock it as a passthrough: the request body is forwarded
-to the resolved upstream with no format conversion.
+`POST /v1/chat/completions` is **always served** as a per-model routed passthrough — the
+`DEV_PASS_THROUGH` env var was removed (2026-08); the endpoint behaves as if
+`DEV_PASS_THROUGH=true` were always set. The request body is forwarded to the resolved
+upstream with no format conversion.
 
 What is **bypassed**:
 - **Schema conversion** — the client speaks raw OpenAI chat-completions; no Claude→OpenAI conversion runs.
@@ -598,8 +596,7 @@ What **applies** for routing:
 - **Falls back** to `parseFixedRoute` / `[upstream] default_base_url` only when no per-model route is found.
 
 What still **applies**: request validation (openai-completions schema), privacy-filter / Kompress
-/ blocked-tool erasure, upstream auth-header transformation, and dashboard stats. A startup
-`[WARN]` is emitted. **Dev only — do not use in production.**
+/ blocked-tool erasure, upstream auth-header transformation, and dashboard stats.
 
 ### Models API
 
@@ -1265,13 +1262,6 @@ IMAGE_BLOCK_DATA_MAX_SIZE = "10485760"
 # Log level: "debug" | "info" | "warn" | "error"
 LOG_LEVEL = "info"
 
-# Passthrough mode for /v1/chat/completions (OpenAI-compatible clients)
-# When "true", /v1/chat/completions forwards requests as-is to the default upstream
-# without format conversion. Requests are validated against the openai-completions
-# schema and request/response are logged. A startup warning is emitted. Do not
-# use in production. Dashboard stats are still recorded.
-# DEV_PASS_THROUGH = "false"
-
 # Default max_tokens for requests that don't include it (default: 8192)
 # Some upstreams (e.g. DeepSeek Anthropic-compatible API) require max_tokens
 # DEFAULT_MAX_TOKENS = "8192"
@@ -1333,7 +1323,6 @@ node dist/server.js
 | `PROXY_CONFIG_CONSUL` | `PROXY_CONFIG_CONSUL` | unset |
 | `PROXY_CONFIG_APOLLO` | `PROXY_CONFIG_APOLLO` | unset |
 | `PORT` | — (Node.js only) | `"8788"` |
-| `DEV_PASS_THROUGH` | `DEV_PASS_THROUGH` | `"false"` |
 | `DEFAULT_MAX_TOKENS` | `DEFAULT_MAX_TOKENS` | unset |
 | `CONVERSATION_STATE` | `CONVERSATION_STATE` | unset |
 | `UPSTREAM_BODY_TIMEOUT_MS` | `UPSTREAM_BODY_TIMEOUT_MS` | unset |

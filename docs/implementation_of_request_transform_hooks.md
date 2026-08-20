@@ -245,7 +245,7 @@ concern at the layer where the format vocabulary already lives.
 
 ### Live verification
 
-Direct curl against `PORT=7777 DEV_NO_KEY=true DEV_PASS_THROUGH=true`:
+Direct curl against `PORT=7777 DEV_NO_KEY=true` (/v1/chat/completions passthrough is always on; the former `DEV_PASS_THROUGH=true` flag was removed):
 
 - `POST /v1/messages` to `deepseek-v4-comp` with `thinking.budget_tokens=1024`
   and a 3-turn history (turn-2 assistant has `{type:"thinking"}` and

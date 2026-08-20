@@ -1,8 +1,9 @@
 /**
- * DEV_PASS_THROUGH + openai-responses upstream unit tests.
+ * /v1/chat/completions passthrough (always on, formerly DEV_PASS_THROUGH)
+ * + openai-responses upstream unit tests.
  *
  * Covers the two changes made to support per-model routing on
- * /v1/chat/completions when DEV_PASS_THROUGH=true:
+ * /v1/chat/completions:
  *
  * 1. handleChatCompletionsPassthrough converts the completions body to
  *    Responses API format (input, max_output_tokens) when upstreamMode is
@@ -243,7 +244,7 @@ module.exports = {
 
 if (require.main === module) {
   loadModule().then(() =>
-    runTestSuite('DEV_PASS_THROUGH + openai-responses', [
+    runTestSuite('/v1/chat/completions passthrough + openai-responses', [
       { name: 'TC3101: passthrough openai-responses converts body to Responses format', fn: testPassthroughConvertsToResponsesBody },
       { name: 'TC3102: passthrough openai-completions forwards body as-is', fn: testPassthroughCompletionsBodyForwardedAsIs },
       { name: 'TC3103: completionsToResponsesBody converts system to instructions', fn: testCompletionsToResponsesBodySystemToInstructions },

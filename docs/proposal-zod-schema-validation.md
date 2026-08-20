@@ -41,7 +41,7 @@ that with Zod schemas that are:
 |---|---|---|
 | `/v1/messages` request | `validateClaudeMessagesRequest` (hand-rolled, ~300 LOC) | Duplicates the `ClaudeMessagesRequest` type; rules drift from spec |
 | `/v1/messages/count_tokens` | `validateClaudeTokenCountingRequest` | Same |
-| `/v1/chat/completions` (passthrough) | `validateOpenAICompletionsRequest` | Only fires in `DEV_PASS_THROUGH` mode; conversion path is unchecked |
+| `/v1/chat/completions` (passthrough) | `validateOpenAICompletionsRequest` | Fires on the always-on passthrough path (formerly `DEV_PASS_THROUGH`-gated); conversion path is unchecked |
 | `/v1/responses`, `/v1/responses/compact`, `/v1/responses/input_tokens` | none — `await request.json() as Record<string, unknown>` | No validation at all |
 | `/v1/interactions` (Gemini) | none | Relies entirely on upstream rejection |
 | `/v1beta/.../generateContent`, `streamGenerateContent` | none | Same |
@@ -134,7 +134,7 @@ Legend:
 - **Inbound**: `OpenAIRequestSchema` (already partly specified in
   `validateOpenAICompletionsRequest`; extend to cover `tools`, `tool_choice`,
   `response_format`, `reasoning_effort`).
-- **Upstream**: usually passthrough (`DEV_PASS_THROUGH`) or converted to Claude/Gemini.
+- **Upstream**: usually passthrough (`/v1/chat/completions`, always on since `DEV_PASS_THROUGH` was removed) or converted to Claude/Gemini.
 - **Streaming**: chunk schema is `loose` — OpenAI-compatible providers emit many
   proprietary keys (`reasoning_content`, `prompt_filter_results`, …).
 
@@ -373,7 +373,7 @@ explosions.
 - **`z.prettifyError()`** — official pretty-printer; saves us pulling
   `zod-validation-error` or writing our own for log lines.
 - **`z.stringbool()`** — env-style boolean coercion. Maps neatly onto
-  `Env` parsing (the `DEV_MODE`, `DEV_PASS_THROUGH`, `CONVERSATION`, etc. flags
+  `Env` parsing (the `DEV_MODE`, `CONVERSATION`, etc. flags
   in `src/types/shared.ts` are all "true"/"1"-style strings).
 
 **Cons / migration friction:**

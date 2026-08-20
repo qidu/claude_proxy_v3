@@ -233,10 +233,13 @@ async function testInvalidTool() {
 }
 
 /**
- * TC311: Chat Completions Blocked
- * Tests /v1/chat/completions returns error
+ * TC311: Chat Completions Served (passthrough)
+ * /v1/chat/completions is always served as a per-model routed passthrough
+ * (DEV_PASS_THROUGH was removed 2026-08; the endpoint behaves as if it were
+ * always true). Asserts the old "blocked" response is gone: the request is
+ * routed upstream instead of being rejected with 500 "not allowed".
  */
-async function testChatCompletionsBlocked() {
+async function testChatCompletionsServed() {
   const response = await fetch('http://localhost:7777/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -250,17 +253,19 @@ async function testChatCompletionsBlocked() {
     })
   });
 
-  // Blocked path: src/index.ts parseFixedRoute() throws a plain `Error`
-  // (not a ClaudeProxyError) when DEV_PASS_THROUGH is disabled. The
-  // top-level catch (src/index.ts createErrorResponse(error, requestId))
-  // is called with no customStatus, which defaults to 500
-  // (src/utils/errors.ts: `let responseStatus = customStatus ?? 500;`).
-  // This is a known gap (README documents this as "blocked" but the actual
-  // status is a 500, not a 4xx) — asserted here to catch regressions/fixes.
+  // Passthrough path: the request is routed to the model's upstream. With a
+  // reachable upstream this is 200; in the test environment the configured
+  // upstream is not reachable, so the proxy returns 502 upstream_unreachable.
+  // Either way it must NOT be the old 500 "not allowed" block.
   const text = await response.text();
   assert(
-    response.status === 500 && text.toLowerCase().includes('not allowed'),
-    `Expected 500 with "not allowed" message, got ${response.status}: ${text}`
+    (response.status === 200) ||
+    (response.status === 502 && text.includes('upstream_unreachable')),
+    `Expected passthrough routing (200 or 502 upstream_unreachable), got ${response.status}: ${text}`
+  );
+  assert(
+    !text.toLowerCase().includes('not allowed'),
+    `Old DEV_PASS_THROUGH block response still present: ${text}`
   );
 }
 
@@ -301,7 +306,7 @@ module.exports = {
   testWrongContentType,
   testInvalidStopSequences,
   testInvalidTool,
-  testChatCompletionsBlocked,
+  testChatCompletionsServed,
   testRateLimitError
 };
 
@@ -314,6 +319,6 @@ if (require.main === module) {
     { name: 'TC305: Temperature Range', fn: testTemperatureOutOfRange },
     { name: 'TC306: Missing Auth', fn: testMissingAuth },
     { name: 'TC307: Invalid JSON', fn: testInvalidJSON },
-    { name: 'TC311: Chat Blocked', fn: testChatCompletionsBlocked }
+    { name: 'TC311: Chat Served (passthrough)', fn: testChatCompletionsServed }
   ]);
 }

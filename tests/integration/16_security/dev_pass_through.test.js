@@ -1,24 +1,21 @@
 /**
- * DEV_PASS_THROUGH Passthrough Validation Unit Tests
+ * /v1/chat/completions Passthrough Validation Unit Tests
  *
- * When DEV_PASS_THROUGH is enabled ('true' | '1'), /v1/chat/completions is
- * forwarded as-is to the upstream openai-completions target with NO format
- * conversion (src/index.ts:922-939). The only proxy-owned logic on that path
- * is validateOpenAICompletionsRequest (src/utils/validation.ts:439), which
- * guards the forwarded body before the plain fetch() runs.
+ * /v1/chat/completions is always served as a per-model routed passthrough
+ * (formerly gated by DEV_PASS_THROUGH, removed 2026-08 — the endpoint now
+ * behaves as if DEV_PASS_THROUGH=true always). The request body is forwarded
+ * to the upstream openai-completions target with NO format conversion. The
+ * only proxy-owned logic on that path is validateOpenAICompletionsRequest
+ * (src/utils/validation.ts:439), which guards the forwarded body before the
+ * plain fetch() runs.
  *
- * The block path (DEV_PASS_THROUGH unset) is already covered by
- * 03_errors/validation.test.js TC311. This suite covers the *passthrough*
- * path's proxy-owned logic — the validator. Live e2e forwarding isn't tested
- * here because run-tests.js starts the proxy with DEV_PASS_THROUGH unset
- * (src/server.ts:37 default 'false') and the proxy cannot be restarted
- * mid-suite to toggle it.
+ * This suite covers the passthrough path's proxy-owned logic — the validator.
+ * Live e2e forwarding isn't tested here because it needs a reachable upstream
+ * for the forwarded fetch.
  *
  * Reference:
  *   src/utils/validation.ts:439  validateOpenAICompletionsRequest (exported)
  *   src/utils/errors.ts:29       ValidationError (exported)
- *   src/index.ts:922             passthrough condition
- *   src/server.ts:37            DEV_PASS_THROUGH default
  */
 
 const path = require('path');
@@ -123,7 +120,7 @@ module.exports = {
 
 if (require.main === module) {
   loadModule().then(() =>
-    runTestSuite('DEV_PASS_THROUGH Passthrough Validation', [
+    runTestSuite('/v1/chat/completions Passthrough Validation', [
       { name: 'TC2801: valid request does not throw', fn: testValidRequestDoesNotThrow },
       { name: 'TC2802: missing model throws', fn: testMissingModelThrows },
       { name: 'TC2803: missing messages throws', fn: testMissingMessagesThrows },
