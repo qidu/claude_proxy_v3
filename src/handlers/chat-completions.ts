@@ -127,6 +127,12 @@ export async function handleChatCompletionsPassthrough(
       const { readable, writable } = new TransformStream();
       const writer = writable.getWriter();
       const encoder = new TextEncoder();
+      // Per OpenAI spec, streaming usage is only emitted when the client asks
+      // for it via stream_options.include_usage, as a final chunk with an
+      // empty choices array just before [DONE].
+      const includeUsage = ((parsedBody.stream_options as Record<string, unknown> | undefined)?.include_usage === true);
+      let usagePromptTokens: number | undefined;
+      let usageCompletionTokens: number | undefined;
       (async () => {
         try {
           const reader = upstreamResponse.body!.getReader();
@@ -168,13 +174,26 @@ export async function handleChatCompletionsPassthrough(
                     logPipelineStage(logger, requestId, 'outbound', path, chunk);
                     await writer.write(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
                   }
+                } else if (parsed.type === 'message_start') {
+                  const usage = (parsed.message as Record<string, unknown> | undefined)?.usage as Record<string, unknown> | undefined;
+                  if (typeof usage?.input_tokens === 'number') usagePromptTokens = usage.input_tokens;
                 } else if (parsed.type === 'message_delta') {
                   const delta = parsed.delta as Record<string, unknown> | undefined;
+                  const usage = parsed.usage as Record<string, unknown> | undefined;
+                  // Some upstreams (e.g. GLM anthropic endpoint) report input_tokens: 0
+                  // in message_start and the real cumulative counts only in message_delta.
+                  if (typeof usage?.input_tokens === 'number' && usage.input_tokens > 0) usagePromptTokens = usage.input_tokens;
+                  if (typeof usage?.output_tokens === 'number') usageCompletionTokens = usage.output_tokens;
                   const finishReason = delta?.stop_reason === 'tool_use' ? 'tool_calls' : delta?.stop_reason === 'max_tokens' ? 'length' : 'stop';
                   const chunk = { id: `chatcmpl_${Date.now()}`, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model, choices: [{ index: 0, delta: {}, finish_reason: finishReason }] };
                   logPipelineStage(logger, requestId, 'outbound', path, chunk);
                   await writer.write(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
                 } else if (parsed.type === 'message_stop') {
+                  if (includeUsage && usagePromptTokens !== undefined && usageCompletionTokens !== undefined) {
+                    const usageChunk = { id: `chatcmpl_${Date.now()}`, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model, choices: [], usage: { prompt_tokens: usagePromptTokens, completion_tokens: usageCompletionTokens, total_tokens: usagePromptTokens + usageCompletionTokens } };
+                    logPipelineStage(logger, requestId, 'outbound', path, usageChunk);
+                    await writer.write(encoder.encode(`data: ${JSON.stringify(usageChunk)}\n\n`));
+                  }
                   await writer.write(encoder.encode('data: [DONE]\n\n'));
                 }
               } catch { /* skip unparseable events */ }

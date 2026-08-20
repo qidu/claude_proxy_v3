@@ -5,6 +5,32 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### feat(chat-completions): streaming usage chunk for anthropic-messages cross-mode
+
+The anthropic-messages SSE converter (`src/handlers/chat-completions.ts`) dropped
+usage entirely when translating Claude streams to OpenAI `chat.completion.chunk`
+SSE — `/v1/chat/completions` streams via e.g. `glm-5.3-anth` ended with
+`finish_reason` + `[DONE]` and no token counts, while the non-streaming response
+included usage.
+
+Per the OpenAI Chat Completions spec, a usage chunk is now emitted when the
+client sends `stream_options: {"include_usage": true}`: an extra final chunk
+with an empty `choices` array (`prompt_tokens`/`completion_tokens`/
+`total_tokens`) just before `[DONE]`. Without `stream_options`, the stream is
+unchanged (no usage).
+
+Token capture: `input_tokens` from `message_start`, with `message_delta`'s
+cumulative counts taking precedence when non-zero (GLM's anthropic endpoint
+reports `input_tokens: 0` in `message_start` and the real counts only in
+`message_delta`); `output_tokens` from `message_delta`.
+
+Note: this is the canonical OpenAI shape. The openai-completions passthrough
+path (e.g. `glm-5.3-comp`) is untouched — bigmodel attaches usage to the final
+chunk regardless of `stream_options`, which remains a passthrough deviation.
+
+Tests: `tests/unit/chat-completions-anthropic-streaming.test.ts` (both gating
+and token mapping).
+
 ### fix(config): 5/6-element model entries rejected by `validateProxyConfig` and dashboard PUT
 
 The per-entry `transforms` (index 4) and `max_tokens` (index 5) fields were
