@@ -2,13 +2,13 @@
 
 ## Test runner: custom lightweight
 
-This suite uses a **custom lightweight test runner — no Jest/Mocha/Vitest.** Tests are plain async functions exported from `.test.js` files; the runner at `run-tests.js` walks the `testcases/` tree, spawns each file as a child `node` process, and aggregates pass/fail counts. Shared helpers live in `testcases/utils/`.
+This suite uses a **custom lightweight test runner — no Jest/Mocha/Vitest.** Tests are plain async functions exported from `.test.js` files; the runner at `run-integration-tests.js` walks the `tests/integration/` tree, spawns each file as a child `node` process, and aggregates pass/fail counts. Shared helpers live in `tests/integration/utils/`.
 
 Why custom: the suite is integration-heavy (talks to a live proxy over HTTP), needs config isolation (copy `proxy_config.toml` → `test_proxy_config.toml` and clean it up on exit), and does not benefit from Jest/Vitest features (no mocking, no fixtures, no DOM). A bespoke runner keeps the test files dependency-free and trivial to run individually.
 
 ## Running All Tests
 
-The single entry point is **`run-tests.js`** at the project root — it spawns the proxy, isolates the config, runs every `*.test.js` under `testcases/`, and tears everything down on exit. Use `--all` for a full run; bare `node run-tests.js` only prints help.
+The single entry point is **`run-integration-tests.js`** at the project root — it spawns the proxy, isolates the config, runs every `*.test.js` under `tests/integration/`, and tears everything down on exit. Use `--all` for a full run; bare `node run-integration-tests.js` only prints help.
 
 ```bash
 # Start testing proxy server WITH PORT=7777
@@ -16,25 +16,25 @@ The single entry point is **`run-tests.js`** at the project root — it spawns t
 # DO NOT modify `proxy_config.toml`, modify the testing config at `${TEST_CONFIG}proxy_config.toml`
 
 # Single pass (all suites)
-node run-tests.js --all
+node run-integration-tests.js --all
 
 # With custom proxy URL and API key
-PROXY_URL=http://localhost:7777 API_KEY=sk-test node run-tests.js --all
+PROXY_URL=http://localhost:7777 API_KEY=sk-test node run-integration-tests.js --all
 ```
 
 ### Running a subset by index
 
-Pass one or more comma-separated indices as the first positional argument to run only those suites (by their position in the `suites` array in `run-tests.js`). Useful for fast iteration on a single file without editing source.
+Pass one or more comma-separated indices as the first positional argument to run only those suites (by their position in the `suites` array in `run-integration-tests.js`). Useful for fast iteration on a single file without editing source.
 
 ```bash
 # Run only suites[5]
-node run-tests.js 5
+node run-integration-tests.js 5
 
 # Run suites[0], suites[3], suites[7]
-node run-tests.js 0,3,7
+node run-integration-tests.js 0,3,7
 
 # An invalid index prints the full list and exits with code 2
-node run-tests.js 99
+node run-integration-tests.js 99
 # [cli] Invalid suite index: "99". Valid range: 0..26
 # [cli] Available suites:
 #   0: 01_endpoints/messages.test.js
@@ -53,29 +53,29 @@ The runner automatically isolates the proxy config so tests NEVER modify `proxy_
 3. Any `PUT /dashboard/api/config` mutations during the run target only the test file.
 4. At exit (including Ctrl-C and crashes), `test_proxy_config.toml` is **deleted**.
 
-The proxy is started by the runner itself with `TEST_CONFIG=test_` and `PORT=7777`. You do **not** need to launch it manually — `run-tests.js` does that and pipes its logs to your terminal.
+The proxy is started by the runner itself with `TEST_CONFIG=test_` and `PORT=7777`. You do **not** need to launch it manually — `run-integration-tests.js` does that and pipes its logs to your terminal.
 
 ```bash
 # Single command — runner spawns the proxy, runs all suites, restores config
-node run-tests.js --all
+node run-integration-tests.js --all
 ```
 
 ## Running Tests Individually
 
-Use the index flag on `run-tests.js` (see [Running a subset by index](#running-a-subset-by-index) above). The runner spawns the proxy, copies `proxy_config.toml` → `test_proxy_config.toml` for isolation, runs the selected suites sequentially, and restores the config on exit — so individual runs get the same lifecycle as the full pass.
+Use the index flag on `run-integration-tests.js` (see [Running a subset by index](#running-a-subset-by-index) above). The runner spawns the proxy, copies `proxy_config.toml` → `test_proxy_config.toml` for isolation, runs the selected suites sequentially, and restores the config on exit — so individual runs get the same lifecycle as the full pass.
 
 ```bash
 # Just suite 0
-node run-tests.js 0
+node run-integration-tests.js 0
 
 # A handful of suites by index
-node run-tests.js 0,7,12
+node run-integration-tests.js 0,7,12
 
 # With custom proxy URL / API key
-PROXY_URL=http://localhost:7777 API_KEY=sk-test node run-tests.js 0
+PROXY_URL=http://localhost:7777 API_KEY=sk-test node run-integration-tests.js 0
 ```
 
-**Why you can't just `node testcases/.../X.test.js`:** the project root `package.json` declares `"type": "module"`, so plain `node` treats `.js` as ESM and the test files (which use `require()`) would throw `ReferenceError: require is not defined`. The runner works around this by copying each test file into a temp directory with a `.test.cjs` extension and rewriting its `require('../utils/...')` paths to absolute temp-dir paths before spawning it — so it only runs correctly when launched through `run-tests.js` (or with a similar `.cjs` copy step).
+**Why you can't just `node tests/integration/.../X.test.js`:** the project root `package.json` declares `"type": "module"`, so plain `node` treats `.js` as ESM and the test files (which use `require()`) would throw `ReferenceError: require is not defined`. The runner works around this by copying each test file into a temp directory with a `.test.cjs` extension and rewriting its `require('../utils/...')` paths to absolute temp-dir paths before spawning it — so it only runs correctly when launched through `run-integration-tests.js` (or with a similar `.cjs` copy step).
 
 Environment variables honored by the runner:
 
@@ -183,7 +183,7 @@ Environment variables honored by the runner:
 - `free_fanout.test.js` — models.free auth-passthrough / fusion fan-out bound tests: TC2401/2402 live proxy confirms bogus client bearer token succeeds for `models.free` models (`opus48`) but 401s for non-free models — the `api_key` override is scoped to `route.section === 'free'`, not global. TC2403 `resolveFusionPlan` produces deterministic 1:1 panel call count (50 targets → 52 total calls, no multiplication). TC2404 nested alias-as-panel-target is NOT expanded (route resolution only looks in `models.*`, never `composite`). TC2405 self-referential panel target resolves flatly. TC2406 `route.section` is `'free'` only for entries under `[models.free]` in config.
 - `config_loader_pollution.test.js` — Config-loader prototype-pollution denylist unit tests: TC2501–2503 `__proto__`/`constructor`/`prototype` rejected as composite alias names, TC2504–2506 same three keys rejected as composite target keys, TC2507–2509 same three keys rejected as models category names, TC2510–2512 same three keys rejected as models entry keys — all via `applyDashboardConfigUpdate` from `dist/utils/config-loader.js` using `JSON.parse`-constructed payloads (matching real HTTP request-body semantics where `JSON.parse` creates genuine own enumerable `"__proto__"` properties, unlike JS object-literal syntax which invokes the setter and produces no own property). TC2513 control payload accepted. TC2514/2515 live `PUT /dashboard/api/config` with raw JSON string bodies cross-validates dist results against the actual HTTP handler.
 - `schedule_routing.test.js` — Schedule CRUD & resolution unit tests: TC2601–2605 `addScheduleAlias`/`removeScheduleAlias` basics, TC2606–2612 `upsertScheduleWindow` validation (from===to, from>to, from>24, to>24, empty-array fallback, unknown-target allowlist), TC2613–2615 `removeScheduleTarget`, TC2616–2620 `resolveScheduleTarget` (unknown alias, window match, fallback, no-match-no-fallback, days array), TC2621–2623 `applyDashboardConfigUpdate` schedule preservation/replacement/`__proto__` rejection. TC2628–2630 (live, `PROXY_RUN_LIVE=1`) round-trip the four dashboard schedule routes.
-- `dev_pass_through.test.js` — DEV_PASS_THROUGH passthrough validation unit tests: TC2801–2806 exercise `validateOpenAICompletionsRequest` (`src/utils/validation.ts:439`), the only proxy-owned logic on the `/v1/chat/completions` passthrough path before the plain-`fetch()` forward (`src/index.ts:922-939`). Covers valid request, missing `model`, missing/empty `messages`, invalid role, `max_tokens:0`. Live e2e passthrough isn't tested because `run-tests.js` starts the proxy with `DEV_PASS_THROUGH` unset and the proxy cannot be restarted mid-suite to toggle it; the block path is already covered by `03_errors/validation.test.js` TC311.
+- `dev_pass_through.test.js` — DEV_PASS_THROUGH passthrough validation unit tests: TC2801–2806 exercise `validateOpenAICompletionsRequest` (`src/utils/validation.ts:439`), the only proxy-owned logic on the `/v1/chat/completions` passthrough path before the plain-`fetch()` forward (`src/index.ts:922-939`). Covers valid request, missing `model`, missing/empty `messages`, invalid role, `max_tokens:0`. Live e2e passthrough isn't tested because `run-integration-tests.js` starts the proxy with `DEV_PASS_THROUGH` unset and the proxy cannot be restarted mid-suite to toggle it; the block path is already covered by `03_errors/validation.test.js` TC311.
 - `reasoning_effort_conversion.test.js` — Claude `thinking.budget_tokens` → OpenAI `reasoning_effort` conversion unit tests: TC2901–2903 legacy cutoffs (4096→high, 2048→medium, else low) via `budgetToReasoningEffort`, TC2904 `explicit_reasoning_effort` override, TC2905 disabled thinking → no effort, TC2906 undefined → empty, TC2907 custom thresholds, TC2908 `budget_to_effort_high:0` force-high special case, TC2909 adaptive behaves like enabled, TC2910 no-thresholds fallback returns thinking only (no `reasoning_effort`). Exercises `convertClaudeThinkingToOpenAI` and `budgetToReasoningEffort` from `dist/converters/claude-to-openai.js` directly — the functions wired into the live path at `src/handlers/messages.ts:132-134`.
 - `openai_responses_routing.test.js` — OpenAI Responses routing/conversion unit tests with `globalThis.fetch` stubbed (no live upstream): TC3001 `/v1/messages` Claude-format → `openai-responses` body (`input`, `max_output_tokens`, no `messages`), TC3002 Chat tools/tool_choice flatten to Responses shape, TC3003 Chat tool-call history → `function_call`/`function_call_output` input items, TC3004 upstream Responses SSE → Claude SSE events, TC3005/TC3006 handler wiring for `max_tokens` → `max_completion_tokens` except `api.qnaigc.com`, TC3007 TUI test requests choose the correct token field by upstream mode.
 - `dev_pass_through_responses.test.js` — DEV_PASS_THROUGH + `openai-responses` upstream unit tests with `globalThis.fetch` stubbed: TC3101 `handleChatCompletionsPassthrough` with `upstreamMode='openai-responses'` converts the completions body to Responses format (`input` array, `max_output_tokens`, no `messages`) and forwards to the model-specific Azure URL; TC3102 `upstreamMode='openai-completions'` still forwards the body as-is (no conversion, `messages` preserved); TC3103 `completionsToResponsesBody` extracts `system` message to `instructions` and excludes it from `input`; TC3104 `completionsToResponsesBody` flattens `tools[].function` to top-level `name`/`description`/`parameters` (Responses tool shape). Exercises the path fixed by the per-model routing bug where `DEV_PASS_THROUGH=true` on `/v1/chat/completions` was ignoring per-model `base_url`/`api_key`/`mode` from `[models.free]` and always using `[models.default]`.
@@ -368,7 +368,7 @@ The in-process subset is CI-friendly: it only needs `npm run build` and stubs `g
 
 ### Relationship to `tests/unit/`
 
-The unit suite (`tests/unit/*.test.ts`, see `tests/README.md`) provides field-level coverage of the converters, transform engine, config parser, error classes, and token accounting — the parts that HTTP integration tests can't pin precisely because they round-trip through a live upstream. The two suites are complementary: `tests/unit/` for exact shape correctness, `testcases/` for end-to-end wiring and behavioral regressions. Modules with **no** direct unit coverage (UI-bound `tui.ts`/`heatmap.ts`, IO-bound `logger.ts`/`fetch-timeout.ts`) are exercised here only implicitly through HTTP paths.
+The unit suite (`tests/unit/*.test.ts`, see `tests/README.md`) provides field-level coverage of the converters, transform engine, config parser, error classes, and token accounting — the parts that HTTP integration tests can't pin precisely because they round-trip through a live upstream. The two suites are complementary: `tests/unit/` for exact shape correctness, `tests/integration/` for end-to-end wiring and behavioral regressions. Modules with **no** direct unit coverage (UI-bound `tui.ts`/`heatmap.ts`, IO-bound `logger.ts`/`fetch-timeout.ts`) are exercised here only implicitly through HTTP paths.
 
 ## Logs
 

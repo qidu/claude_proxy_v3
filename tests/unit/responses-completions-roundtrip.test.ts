@@ -8,7 +8,7 @@ import type { OpenAIResponse } from '../../src/types/openai.js';
 
 /**
  * Round-trip tests for the completions <-> responses converters.
- * These converters had only indirect HTTP coverage through testcases/11_responses.
+ * These converters had only indirect HTTP coverage through tests/integration/11_responses.
  */
 
 function baseCompletion(overrides: Partial<OpenAIResponse> = {}): OpenAIResponse {

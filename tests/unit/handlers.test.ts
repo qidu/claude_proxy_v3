@@ -3,7 +3,7 @@
  * handlers (claude.ts, openai.ts, gemini.ts, responses.ts).
  *
  * The full request/response cycles in these handlers are exercised end-to-end
- * by ./testcases (integration). Here we cover the exported pure functions
+ * by ./tests/integration (integration). Here we cover the exported pure functions
  * that contain the testable conversion/decision logic:
  *   - openai.ts: completionsToClaudeBody, completionsToResponsesBody,
  *                claudeJsonToSyntheticCompletions

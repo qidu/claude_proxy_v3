@@ -417,7 +417,7 @@ Also see [`proxy_config.example.toml`](./proxy_config.example.toml) and
 
 ```bash
 # Coverage testcases: run from the project root; the runner builds an isolated test config.
-node run-tests.js --all
+node tests/run-integration-tests.js --all
 
 # Agent SDK / provider tests live under ./tests and need the proxy running first.
 node tests/multi-agents-test.ts
@@ -425,10 +425,10 @@ node tests/multi-agents-composite.ts
 npm run test:unit
 
 # Point testcases at a specific proxy / key
-PROXY_URL=http://localhost:8788 API_KEY=sk-test node run-tests.js --all
+PROXY_URL=http://localhost:8788 API_KEY=sk-test node tests/run-integration-tests.js --all
 ```
 
-- Coverage test cases live in [`testcases/`](./testcases/README.md); use `node run-tests.js --all` or selected suite indices.
+- Coverage test cases live in [`tests/integration/`](./tests/integration/README.md); use `node tests/run-integration-tests.js --all` or selected suite indices.
 - Agent-SDK and provider tests live in [`tests/`](./tests/README.md).
 
 ## Documentation

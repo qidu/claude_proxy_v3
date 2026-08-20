@@ -20,8 +20,8 @@ npm run test:unit           # runs tsx --test tests/unit/**/*.test.ts
 > | Guard | Where | Catches |
 > |---|---|---|
 > | `validateProxyConfig` length tests (1/3/4/5/6, `max_tokens` number / digit-string / non-numeric) | `tests/unit/config-loader.test.ts` | parser↔validator shape drift |
-> | TC817 — PUT a category using all 6 documented array lengths, assert zero `config_errors` | `testcases/08_regression/regression.test.js` | any startup/dashboard-save-breaking divergence, whichever function drifted (this test independently rediscovered a second drift site, `isSafeModelArray` on the dashboard PUT path) |
-> | TC1519 — 6-element entry's `max_tokens` survives parse → `getModelRouteConfig().maxTokens` | `testcases/15_config_parse/config_parse.test.js` | shape valid but value lost between parse and route resolution |
+> | TC817 — PUT a category using all 6 documented array lengths, assert zero `config_errors` | `tests/integration/08_regression/regression.test.js` | any startup/dashboard-save-breaking divergence, whichever function drifted (this test independently rediscovered a second drift site, `isSafeModelArray` on the dashboard PUT path) |
+> | TC1519 — 6-element entry's `max_tokens` survives parse → `getModelRouteConfig().maxTokens` | `tests/integration/15_config_parse/config_parse.test.js` | shape valid but value lost between parse and route resolution |
 
 #### Unit test coverage map
 
@@ -39,13 +39,13 @@ npm run test:unit           # runs tsx --test tests/unit/**/*.test.ts
 | `converters/completions-to-responses.ts` | `responses-completions-roundtrip` (text/tool_calls/reasoning, compacted shape) |
 | `converters/responses-to-completions.ts` | `responses-completions-roundtrip` (input→messages, tool format flattening, tool_choice mapping, reasoning threading) |
 | `utils/request-transform.ts` | `request-transform` (hook plumbing, ops, builtins incl. `filter_anthropic_beta`) |
-| `utils/config-loader.ts` | `transforms-config`, `coordinator`, `request-transform`, `config-loader` (incl. `validateProxyConfig` model-entry lengths 1/3/4/5/6 with `max_tokens` number/digit-string/non-numeric), plus in-process `testcases/15_config_parse` and `16_security/config_loader_pollution` |
+| `utils/config-loader.ts` | `transforms-config`, `coordinator`, `request-transform`, `config-loader` (incl. `validateProxyConfig` model-entry lengths 1/3/4/5/6 with `max_tokens` number/digit-string/non-numeric), plus in-process `tests/integration/15_config_parse` and `16_security/config_loader_pollution` |
 | `utils/coordinator.ts` | `coordinator` |
 | `utils/routing.ts` | `routing` (`buildUpstreamUrl`) |
 | `utils/token-counting.ts` | `token-counting` (estimation overhead/whitespace, tiktoken exact counts + fallback, message/system/block counting for every block type, `countClaudeRequestTokens`, env config, tokenizer caching — feeds usage accounting and 413 limits), `token-usage` |
 | `utils/dashboard-stats.ts` | `dashboard-stats` (token-limit windowing: `parseWindowSpec` sliding `Nh`/`Nd` vs calendar `1w`/`1m`, `getWindowCutoff`; composite alias token-limit event log, pruning), `token-usage` (usage-tracking stream) |
 | `utils/model-usage-recorder.ts` | `token-usage` |
-| `utils/conversation-store.ts` | `responses-conversation-state` (threads, stored response objects, retrieval, stateful `handleAsCompletions` + GET routing under `CONVERSATION_STATE=true`, mocked upstream), plus `testcases/16_security/conversation_store` (dist-import basics) |
+| `utils/conversation-store.ts` | `responses-conversation-state` (threads, stored response objects, retrieval, stateful `handleAsCompletions` + GET routing under `CONVERSATION_STATE=true`, mocked upstream), plus `tests/integration/16_security/conversation_store` (dist-import basics) |
 | `utils/errors.ts` | `errors` (all 7 error classes, transport classification, validation helpers) |
 | `utils/stringify.ts` | `stringify` |
 | `utils/thinking.ts` | `thinking` (OpenAI↔Claude + boolean/string normalization, budget validate/adjust/estimate, merge, token-counting validation) |
@@ -57,20 +57,22 @@ npm run test:unit           # runs tsx --test tests/unit/**/*.test.ts
 | `utils/tool-blocklist.ts` | `tests/infra/tool-blocklist.ts` (`eraseBlockedTools`) |
 | `utils/sdk-handler.ts` | via handler (integration testcases only) |
 | `handlers/messages.ts`, `responses.ts`, `openai.ts` | via handler + `auth-with-model`, `responses-gemini-url`, `openai-gemini-role-default`, `think-tag-extraction` |
-| `handlers/gemini.ts`, `chat-completions.ts`, `claude.ts`, `models.ts`, `embeddings.ts`, `dashboard.ts`, `token-counting.ts` | integration only (`testcases/`) |
+| `handlers/gemini.ts`, `chat-completions.ts`, `claude.ts`, `models.ts`, `embeddings.ts`, `dashboard.ts`, `token-counting.ts` | integration only (`tests/integration/`) |
 | `index.ts` (handler entry) | `auth-with-model`, `routing`, `responses-gemini-url`, `think-tag-extraction`, `openai-gemini-role-default` |
 | `tui.ts`, `heatmap.ts`, `utils/logger.ts`, `utils/fetch-timeout.ts` | not unit-tested (UI / IO-bound; low unit-test value) |
 
-### 2. Integration / coverage testcases — `testcases/` via `run-tests.js`
+### 2. Integration / coverage testcases — `tests/integration/` via `run-integration-tests.js`
 
 Scenario-level tests that spin up an isolated proxy process per suite. Run from the project root.
 
+Note: some suites (`15_config_parse`, most of `16_security` in `integration`) are dist-import in-process tests with no live proxy — they stay here rather than in `tests/unit/` because they verify the **built** `dist/` output (catching tsc/emit drift that src-importing unit tests cannot) and share the `run-integration-tests.js` suite registration; several also mix in live-proxy tests that cross-validate the same invariants over HTTP.
+
 ```bash
-node run-tests.js           # show help
-node run-tests.js --list    # list all suites
-node run-tests.js --all     # run every suite
-node run-tests.js 5         # run suite index 5 only
-node run-tests.js 0,3       # run suites 0 and 3
+node run-integration-tests.js           # show help
+node run-integration-tests.js --list    # list all suites
+node run-integration-tests.js --all     # run every suite
+node run-integration-tests.js 5         # run suite index 5 only
+node run-integration-tests.js 0,3       # run suites 0 and 3
 ```
 
 ### 3. Multi-agent SDK tests — `tests/multi-agents-test.ts` / `.py`
@@ -384,9 +386,9 @@ The two `multi-agents-test.*` runners exercise **8 distinct agent SDKs** end-to-
 - **Tool-calling loops**: every agent runs a real multi-turn tool loop (Glob/Read against `./tests/`), exercising streaming SSE, `tool_use`/`tool_result` round-trips, and `tool_choice` handling — the same surface the unit tests in `tests/unit/` cover field-by-field.
 - **Auth flows**: the matrix implicitly covers `x-api-key` (Claude/Pi), `Authorization: Bearer` (Codex/LangGraph/CrewAI/OpenCode), `x-goog-api-key` (Gemini/Antigravity-Gemini), and `auth_passthrough_with = "config_key"` (Antigravity-OpenAI).
 
-### Relationship to `tests/unit/` and `testcases/`
+### Relationship to `tests/unit/` and `tests/integration/`
 
-The multi-agent runners are **end-to-end smoke tests**, not regression suites: they prove the proxy composes correctly with real-world agent SDKs but cannot pin exact conversion shapes (an upstream model's free-form text is in the loop). Precise field-level coverage of the converters and handlers lives in `tests/unit/` (see [Unit test coverage map](#unit-test-coverage-map)); HTTP-level behavioral coverage of routing, validation, and error paths lives in `testcases/` (see `testcases/README.md` → Coverage Summary). A failing multi-agent run usually points at a wiring or format-conversion bug worth reproducing as a focused unit or testcase.
+The multi-agent runners are **end-to-end smoke tests**, not regression suites: they prove the proxy composes correctly with real-world agent SDKs but cannot pin exact conversion shapes (an upstream model's free-form text is in the loop). Precise field-level coverage of the converters and handlers lives in `tests/unit/` (see [Unit test coverage map](#unit-test-coverage-map)); HTTP-level behavioral coverage of routing, validation, and error paths lives in `tests/integration/` (see `tests/integration/README.md` → Coverage Summary). A failing multi-agent run usually points at a wiring or format-conversion bug worth reproducing as a focused unit or testcase.
 
 ---
 

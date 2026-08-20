@@ -3,10 +3,11 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
+import { suites } from './integration/suites.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TEST_DIR = './testcases';
-const TESTS_OUT_DIR = './tests';
+const TEST_DIR = './tests/integration';
+const TESTS_OUT_DIR = './tests/logs/results';
 
 const TEST_CONFIG = process.env.TEST_CONFIG || 'test_';
 const NORMAL_CONFIG_PATH = './proxy_config.toml';
@@ -59,27 +60,6 @@ for (const hf of helperFiles) {
     helperPaths[hf] = dst;
   }
 }
-
-const suites = [
-  '01_endpoints/messages.test.js',
-  '01_endpoints/messages_streaming.test.js',
-  '01_endpoints/interactions.test.js',
-  '01_endpoints/generateContent.test.js',
-  '02_features/thinking.test.js',
-  '02_features/tool_use.test.js',
-  '02_features/image_input.test.js',
-  '03_errors/validation.test.js',
-  '04_models/models.test.js',
-  '05_upstream_modes/upstream_modes.test.js',
-  '06_integration/integration.test.js',
-  '07_dashboard/dashboard_api.test.js',
-  '08_regression/regression.test.js',
-  '09_composite/composite.test.js',
-  '10_auth/auth_headers.test.js',
-  '11_responses/responses_api.test.js',
-  '12_config_validation/config_validation.test.js',
-  '13_fusion/fusion.test.js',
-];
 
 function replaceRequire(src, baseName, dstPath) {
   const escaped = dstPath.replace(/\\/g, '\\\\');
@@ -180,6 +160,7 @@ log(`Cases: ${casesPassed} passed, ${casesFailed} failed`);
 log(`${'='.repeat(60)}`);
 
 // Write results file
+fs.mkdirSync(TESTS_OUT_DIR, { recursive: true });
 const now = new Date();
 const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
 const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '-'); // HH-MM-SS

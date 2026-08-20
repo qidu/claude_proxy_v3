@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import readline from 'readline';
+import { suites } from './integration/suites.js';
 
 // -------------------------------------------------------------------
 // Required environment variables
@@ -15,7 +16,7 @@ import readline from 'readline';
 // API_KEY=xxx      — bearer token the test runner uses to talk to the
 //                    proxy (matches the API_KEY the proxy is started with,
 //                    typically the one configured at `default_base_url`).
-// These three are ALWAYS required when running tests in testcases/.
+// These three are ALWAYS required when running tests in tests/integration/.
 // PROXY_URL / TEST_TIMEOUT have sensible defaults below.
 // -------------------------------------------------------------------
 
@@ -34,63 +35,32 @@ if (!process.env.TEST_CONFIG) process.env.TEST_CONFIG = 'test_';
 const TEST_CONFIG = process.env.TEST_CONFIG;
 const CONFIG_PATH = `./${TEST_CONFIG}proxy_config.toml`;
 const NORMAL_CONFIG_PATH = './proxy_config.toml';
-const TEST_DIR = './testcases';
+const TEST_DIR = './tests/integration';
 
 // -------------------------------------------------------------------
 // Test suite registry + CLI: --list / -l
 // -------------------------------------------------------------------
-// Defined up here so `--list` can print and exit *before* we copy the
-// test config or spawn the proxy. Otherwise running `node run-tests.js
-// -l` on a stale port-7777 would crash with EADDRINUSE.
-const suites = [
-  '01_endpoints/messages.test.js',
-  '01_endpoints/messages_streaming.test.js',
-  '01_endpoints/interactions.test.js',
-  '01_endpoints/generateContent.test.js',
-  '02_features/thinking.test.js',
-  '02_features/tool_use.test.js',
-  '02_features/image_input.test.js',
-  '03_errors/validation.test.js',
-  '04_models/models.test.js',
-  '05_upstream_modes/upstream_modes.test.js',
-  '06_integration/integration.test.js',
-  '07_dashboard/dashboard_api.test.js',
-  '08_regression/regression.test.js',
-  '09_composite/composite.test.js',
-  '10_auth/auth_headers.test.js',
-  '11_responses/responses_api.test.js',
-  '12_config_validation/config_validation.test.js',
-  '13_fusion/fusion.test.js',
-  '14_routing/routing.test.js',
-  '15_config_parse/config_parse.test.js',
-  '16_security/ssrf_dynamic_route.test.js',
-  '16_security/privacy_filter.test.js',
-  '16_security/kompress.test.js',
-  '16_security/conversation_store.test.js',
-  '16_security/free_fanout.test.js',
-  '16_security/config_loader_pollution.test.js',
-  '16_security/schedule_routing.test.js',
-  '16_security/dev_pass_through.test.js',
-  '16_security/reasoning_effort_conversion.test.js',
-  '16_security/openai_responses_routing.test.js',
-  '16_security/dev_pass_through_responses.test.js',
-];
+// The registry lives in ./integration/suites.js (shared with the loop
+// wrapper) and is imported above so `--list` can print and exit *before* we
+// copy the test config or spawn the proxy. Otherwise running `node
+// run-integration-tests.js -l` on a stale port-7777 would crash with
+// EADDRINUSE.
 
 // Parse CLI:
-//   node run-tests.js            → show help
-//   node run-tests.js --all      → test all suites
-//   node run-tests.js 5          → only suites[5]
-//   node run-tests.js 0,3,7      → suites[0], suites[3], suites[7]
-//   node run-tests.js -help      → show helps and examples
-//   node run-tests.js -h         → shorthand for --help
+//   node run-integration-tests.js            → show help
+//   node run-integration-tests.js --all      → test all suites
+//   node run-integration-tests.js 5          → only suites[5]
+//   node run-integration-tests.js 0,3,7      → suites[0], suites[3], suites[7]
+//   node run-integration-tests.js -help      → show helps and examples
+//   node run-integration-tests.js -h         → shorthand for --help
 function printHelp() {
   console.log('[cli] Examples:');
-  console.log('  node run-tests.js          # show this help');
-  console.log('  node run-tests.js --help   # show this help');
-  console.log('  node run-tests.js --list   # list all suites');
-  console.log('  node run-tests.js --all    # run all suites');
-  console.log('  node run-tests.js 5        # only suites[5]');
-  console.log('  node run-tests.js 0,3      # suites[0] and suites[3]');
+  console.log('  node run-integration-tests.js          # show this help');
+  console.log('  node run-integration-tests.js --help   # show this help');
+  console.log('  node run-integration-tests.js --list   # list all suites');
+  console.log('  node run-integration-tests.js --all    # run all suites');
+  console.log('  node run-integration-tests.js 5        # only suites[5]');
+  console.log('  node run-integration-tests.js 0,3      # suites[0] and suites[3]');
 }
 
 if (process.argv.length <= 2 || process.argv.includes('--help') || process.argv.includes('-h')) {
@@ -98,8 +68,8 @@ if (process.argv.length <= 2 || process.argv.includes('--help') || process.argv.
   process.exit(0);
 }
 
-//   node run-tests.js --list     → print each suite's index + path, then exit
-//   node run-tests.js -l         → shorthand for --list
+//   node run-integration-tests.js --list     → print each suite's index + path, then exit
+//   node run-integration-tests.js -l         → shorthand for --list
 if (process.argv.includes('--list') || process.argv.includes('-l')) {
   console.log('[cli] Available suites:');
   const pad = String(suites.length - 1).length;
