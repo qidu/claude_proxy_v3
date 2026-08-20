@@ -8,6 +8,7 @@
  * - Config item schema validation (fix: 18a1db8)
  * - Token stats day rollover
  * - Malformed streaming responses
+ * - Model-entry array length validation drift (all documented lengths 1/3/4/5/6 boot clean)
  */
 
 const {
@@ -497,6 +498,69 @@ async function testUnknownBetaHeader() {
   );
 }
 
+/**
+ * TC817: Every documented model-entry array length boots without config_errors
+ * Regression: `validateProxyConfig` rejected the documented 6-element form
+ * (target, base_url, api_key, mode, transforms, max_tokens) with
+ * "must be [target] or [target, base_url, api_key] or [target, base_url,
+ * api_key, mode] (got 6 elements)" even though the parser/serializer already
+ * supported it (config-loader.ts index 5 = per-entry max_tokens). The 5- and
+ * 6-element forms were never exercised by validateProxyConfig's own tests,
+ * so the drift between the parser and the validator shipped silently.
+ *
+ * This PUTs a throwaway category exercising all 6 documented array lengths
+ * at once and asserts none of them produce a config_errors entry.
+ *
+ * Reference: README §"Per-Model Configuration Array Format"
+ */
+async function testAllModelEntryLengthsBootClean() {
+  const PROXY_URL_LOCAL = process.env.PROXY_URL || 'http://localhost:7777';
+  const API_KEY_LOCAL = process.env.API_KEY || 'sk-test-key';
+
+  const getRes = await sendRequest({
+    method: 'GET',
+    endpoint: '/dashboard/api/config',
+    headers: { 'Authorization': `Bearer ${API_KEY_LOCAL}` }
+  });
+  const liveModels = getRes.body?.config?.models || {};
+  const liveComposite = getRes.body?.config?.composite || {};
+
+  const testCategory = '__test_all_entry_lengths__';
+  const payload = {
+    models: {
+      ...liveModels,
+      [testCategory]: {
+        base_url: 'https://api.example.com',
+        m1: ['target-1'],                                              // 1 element
+        m3: ['target-3', '', ''],                                      // 3 elements
+        m4: ['target-4', '', '', 'openai-completions'],                 // 4 elements
+        m5: ['target-5', '', '', '', 't1,t2'],                          // 5 elements (+ transforms)
+        m6: ['target-6', '', '', '', '', 16384],                        // 6 elements (+ max_tokens)
+      }
+    },
+    composite: liveComposite
+  };
+
+  const putRes = await fetch(`${PROXY_URL_LOCAL}/dashboard/api/config`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${API_KEY_LOCAL}`
+    },
+    body: JSON.stringify(payload)
+  });
+  const putBody = await putRes.json().catch(() => null);
+
+  assert(putRes.status === 200, `PUT with all documented entry lengths should return 200 (got ${putRes.status}: ${JSON.stringify(putBody)})`);
+
+  const configErrors = putBody?.config?.config_errors || [];
+  const entryErrors = configErrors.filter(e => typeof e.path === 'string' && e.path.startsWith(`models.${testCategory}.`));
+  assert(
+    entryErrors.length === 0,
+    `No config_errors expected for documented entry lengths, got: ${JSON.stringify(entryErrors)}`
+  );
+}
+
 module.exports = {
   testHeaderWriteAfterException,
   testModelTestWithToolAuto,
@@ -513,7 +577,8 @@ module.exports = {
   testZeroMaxTokens,
   testClientIpHeaderForwarding,
   testDefaultMaxTokensApplied,
-  testUnknownBetaHeader
+  testUnknownBetaHeader,
+  testAllModelEntryLengthsBootClean
 };
 
 if (require.main === module) {
@@ -530,6 +595,7 @@ if (require.main === module) {
     { name: 'TC813: Zero MaxTokens', fn: testZeroMaxTokens },
     { name: 'TC814: Client IP Forwarding', fn: testClientIpHeaderForwarding },
     { name: 'TC815: Default max_tokens', fn: testDefaultMaxTokensApplied },
-    { name: 'TC816: Unknown Beta Header', fn: testUnknownBetaHeader }
+    { name: 'TC816: Unknown Beta Header', fn: testUnknownBetaHeader },
+    { name: 'TC817: All model-entry lengths boot clean', fn: testAllModelEntryLengthsBootClean }
   ]);
 }

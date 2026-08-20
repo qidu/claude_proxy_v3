@@ -12,9 +12,20 @@ Fast, no proxy required. Covers the transform engine, config parsing, routing lo
 npm run test:unit           # runs tsx --test tests/unit/**/*.test.ts
 ```
 
+> **⚠️ Warning: test cross-function contracts, not just each function in isolation.**
+> When two functions must accept the same shapes (e.g. the config parser produces model-entry arrays and `validateProxyConfig` must accept every array the parser or serializer can emit), unit tests that pin each function separately will pass while the real pipeline is broken. Real incident (2026-08): the parser/serializer/roundtrip tests all covered the 6-element model entry (per-entry `max_tokens` at index 5), but `validateProxyConfig` tests only exercised lengths 1/2/3 — so any config using `max_tokens` failed at proxy startup with `must be [target] ... (got 6 elements)` while the whole unit suite was green. When you add a new config shape: update the parser, the serializer, **and** the validator together, and add a test that feeds the parsed/serialized output into `validateProxyConfig` (or whichever function consumes it next in the pipeline).
+>
+> **Guards now in place for this incident class** (each layer catches a different drift direction):
+>
+> | Guard | Where | Catches |
+> |---|---|---|
+> | `validateProxyConfig` length tests (1/3/4/5/6, `max_tokens` number / digit-string / non-numeric) | `tests/unit/config-loader.test.ts` | parser↔validator shape drift |
+> | TC817 — PUT a category using all 6 documented array lengths, assert zero `config_errors` | `testcases/08_regression/regression.test.js` | any startup/dashboard-save-breaking divergence, whichever function drifted (this test independently rediscovered a second drift site, `isSafeModelArray` on the dashboard PUT path) |
+> | TC1519 — 6-element entry's `max_tokens` survives parse → `getModelRouteConfig().maxTokens` | `testcases/15_config_parse/config_parse.test.js` | shape valid but value lost between parse and route resolution |
+
 #### Unit test coverage map
 
-36 files, 992 test cases. Every test imports `./src` directly (no HTTP). The table maps each source module to the unit tests that exercise it; "via handler" marks modules covered only through `index.ts`/handler entry points rather than a dedicated unit test.
+36 files, 995 test cases. Every test imports `./src` directly (no HTTP). The table maps each source module to the unit tests that exercise it; "via handler" marks modules covered only through `index.ts`/handler entry points rather than a dedicated unit test.
 
 | Source module | Direct unit coverage |
 |---|---|
@@ -28,7 +39,7 @@ npm run test:unit           # runs tsx --test tests/unit/**/*.test.ts
 | `converters/completions-to-responses.ts` | `responses-completions-roundtrip` (text/tool_calls/reasoning, compacted shape) |
 | `converters/responses-to-completions.ts` | `responses-completions-roundtrip` (input→messages, tool format flattening, tool_choice mapping, reasoning threading) |
 | `utils/request-transform.ts` | `request-transform` (hook plumbing, ops, builtins incl. `filter_anthropic_beta`) |
-| `utils/config-loader.ts` | `transforms-config`, `coordinator`, `request-transform`, plus in-process `testcases/15_config_parse` and `16_security/config_loader_pollution` |
+| `utils/config-loader.ts` | `transforms-config`, `coordinator`, `request-transform`, `config-loader` (incl. `validateProxyConfig` model-entry lengths 1/3/4/5/6 with `max_tokens` number/digit-string/non-numeric), plus in-process `testcases/15_config_parse` and `16_security/config_loader_pollution` |
 | `utils/coordinator.ts` | `coordinator` |
 | `utils/routing.ts` | `routing` (`buildUpstreamUrl`) |
 | `utils/token-counting.ts` | `token-counting` (estimation overhead/whitespace, tiktoken exact counts + fallback, message/system/block counting for every block type, `countClaudeRequestTokens`, env config, tokenizer caching — feeds usage accounting and 413 limits), `token-usage` |

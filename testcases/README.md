@@ -144,7 +144,7 @@ Environment variables honored by the runner:
 
 ### 08_regression
 
-- `regression.test.js` — Header write crash on exception (fix 3e05fb7), tool_choice auto (fix fdad843), config schema validation (fix 18a1db8), heatmap structure, malformed JSON, empty content, long system prompts, unicode, rapid requests/rate limiting, OpenAI format system, mixed content blocks, zero max_tokens
+- `regression.test.js` — Header write crash on exception (fix 3e05fb7), tool_choice auto (fix fdad843), config schema validation (fix 18a1db8), heatmap structure, malformed JSON, empty content, long system prompts, unicode, rapid requests/rate limiting, OpenAI format system, mixed content blocks, zero max_tokens, all documented model-entry array lengths (1/3/4/5/6) boot clean via dashboard PUT with zero config_errors (TC817 — 5/6-element `transforms`/`max_tokens` drift regression)
 
 ### 09_composite
 
@@ -172,7 +172,7 @@ Environment variables honored by the runner:
 
 ### 15_config_parse
 
-- `config_parse.test.js` — Config parse / serialize / route-resolution unit tests (no proxy required; imports `dist/utils/config-loader.js` directly): TC1501 `"*"={}` catch-all parses and routes unknown model as passthrough, TC1502 `"*"={target="*"}` is equivalent, TC1503 `"claude-*"={}` wildcard routes any `claude-X` model to itself, TC1504 `"claude-*"={target="claude-*"}` is equivalent, TC1505 rename alias (`claude-1-2={target="claude-4-5-haiku"}`) routes to different upstream model, TC1506–TC1508 round-trip (serialize → reparse) preserves all three forms, TC1509–TC1510 empty `{}` and explicit `{target=key}` produce identical parsed entries and routes
+- `config_parse.test.js` — Config parse / serialize / route-resolution unit tests (no proxy required; imports `dist/utils/config-loader.js` directly): TC1501 `"*"={}` catch-all parses and routes unknown model as passthrough, TC1502 `"*"={target="*"}` is equivalent, TC1503 `"claude-*"={}` wildcard routes any `claude-X` model to itself, TC1504 `"claude-*"={target="claude-*"}` is equivalent, TC1505 rename alias (`claude-1-2={target="claude-4-5-haiku"}`) routes to different upstream model, TC1506–TC1508 round-trip (serialize → reparse) preserves all three forms, TC1509–TC1510 empty `{}` and explicit `{target=key}` produce identical parsed entries and routes, TC1519 6-element entry's `max_tokens` (index 5) survives parse → `getModelRouteConfig().maxTokens` (the shape consumed by request building)
 
 ### 16_security
 

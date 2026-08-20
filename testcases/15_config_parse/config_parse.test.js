@@ -23,6 +23,7 @@
  * - TC1515: array value with trailing # comment parses correctly
  * - TC1516: comment text containing a quote char does not corrupt the value
  * - TC1517: full [privacy_filter] block with inline comments on every line parses all fields
+ * - TC1519: 6-element entry's max_tokens (index 5) reaches getModelRouteConfig().maxTokens
  *
  * Reference: README §"Per-Model Configuration Array Format", §"Model Routing Priority"
  */
@@ -526,6 +527,34 @@ whitelist_remove = []         # built-in whitelist tokens to remove
     `whitelist_remove: expected [""], got ${JSON.stringify(pf?.whitelist_remove)}`);
 }
 
+// ---------------------------------------------------------------------------
+// TC1519: 6-element entry's max_tokens (index 5) survives parse → route
+// Regression: validateProxyConfig rejected 5/6-element entries even though
+// the parser already produced them (max_tokens at index 5). This asserts
+// the value is not just parsed into the right array slot (already covered
+// by TC1517/round-trip tests elsewhere) but actually reaches
+// getModelRouteConfig()'s returned route — the shape consumed by the
+// request-building code that sets the outbound max_tokens default.
+// ---------------------------------------------------------------------------
+async function testSixElementMaxTokensReachesRoute() {
+  const cfg = parse(`
+[models.example]
+base_url = "https://api.example.com"
+"m6" = {target = "target-6", max_tokens = 16384}
+`);
+
+  const entry = cfg.models?.example?.['m6'];
+  assert(Array.isArray(entry) && entry.length === 6, `entry should have 6 elements, got ${JSON.stringify(entry)}`);
+  assert(entry[5] === '16384' || entry[5] === 16384, `entry[5] (max_tokens) should be 16384, got "${entry[5]}"`);
+
+  const route = getModelRouteConfig('m6', cfg);
+  assert(route !== undefined, 'Route should be found for m6');
+  assert(
+    route.maxTokens === 16384,
+    `route.maxTokens should be 16384, got ${route.maxTokens}`
+  );
+}
+
 async function testModelUsageRoundTrip() {
   const cfg = parse(`
 [remote.recording]
@@ -567,6 +596,7 @@ const tests = [
   { name: 'TC1516: comment containing quote char does not corrupt string value', fn: testInlineCommentWithQuoteChar },
   { name: 'TC1517: full [privacy_filter] block with inline comments on every line', fn: testPrivacyFilterBlockWithComments },
   { name: 'TC1518: [remote.recording] record_server round-trip', fn: testModelUsageRoundTrip },
+  { name: 'TC1519: 6-element entry max_tokens reaches getModelRouteConfig()', fn: testSixElementMaxTokensReachesRoute },
 ];
 
 module.exports = {
@@ -588,6 +618,7 @@ module.exports = {
   testInlineCommentWithQuoteChar,
   testPrivacyFilterBlockWithComments,
   testModelUsageRoundTrip,
+  testSixElementMaxTokensReachesRoute,
 };
 
 if (require.main === module) {

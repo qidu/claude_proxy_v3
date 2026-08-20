@@ -873,6 +873,30 @@ describe('validateProxyConfig', () => {
     assert.ok(!r.errors.some(e => e.path === 'models.claude.m1'));
   });
 
+  it('accepts 6-element entry with per-entry max_tokens (number)', () => {
+    const cfg: ProxyConfig = {
+      models: { claude: { base_url: 'https://x', 'm1': ['m1', '', '', '', '', 8192] } as any },
+    };
+    const r = validateProxyConfig(cfg);
+    assert.ok(!r.errors.some(e => e.path === 'models.claude.m1'), `unexpected errors: ${JSON.stringify(r.errors)}`);
+  });
+
+  it('accepts 6-element entry with per-entry max_tokens (digit string)', () => {
+    const cfg: ProxyConfig = {
+      models: { claude: { base_url: 'https://x', 'm1': ['m1', '', '', '', '', '4096'] } as any },
+    };
+    const r = validateProxyConfig(cfg);
+    assert.ok(!r.errors.some(e => e.path === 'models.claude.m1'), `unexpected errors: ${JSON.stringify(r.errors)}`);
+  });
+
+  it('flags 6-element entry with non-numeric max_tokens', () => {
+    const cfg: ProxyConfig = {
+      models: { claude: { base_url: 'https://x', 'm1': ['m1', '', '', '', '', 'big'] } as any },
+    };
+    const r = validateProxyConfig(cfg);
+    assert.ok(r.errors.some(e => e.path === 'models.claude.m1' && e.message.includes('max_tokens')));
+  });
+
   it('flags non-array model value', () => {
     const cfg: ProxyConfig = {
       models: { claude: { base_url: 'https://x', 'm1': 'not-an-array' } as any },
