@@ -86,6 +86,7 @@ function applyBuiltin(
   body: Record<string, unknown>,
   headers: Record<string, string>,
   set: TransformSet,
+  trace?: { logger: Logger; requestId: string },
 ): void {
   if (name === 'lowercase_tool_schema_types') {
     if (!Array.isArray(body.tools)) return;
@@ -338,6 +339,33 @@ function applyBuiltin(
     return;
   }
 
+  if (name === 'ensure_trailing_user_message') {
+    // Some Anthropic-compatible upstreams reject a `messages` array that
+    // doesn't end on role:"user" — including both real "assistant message
+    // prefill" (ending on role:"assistant" to force a specific continuation,
+    // which Anthropic's own API allows) and a trailing role:"system" message
+    // (Claude Code sometimes emits an inline agent-definitions block as
+    // role:"system" in `messages`, alongside the normal top-level `system`
+    // field; real Anthropic tolerates this, some upstreams don't). Either
+    // case gets reported by these upstreams as the same generic 400
+    // "This model does not support assistant message prefill. The
+    // conversation must end with a user message." error.
+    //
+    // Strip trailing non-user messages outright (repeatedly, in case more
+    // than one is stacked at the tail) so the conversation ends on a user
+    // turn. No-op if messages is empty/absent or already ends with a user
+    // message.
+    if (!Array.isArray(body.messages)) return;
+    const msgs = body.messages as Record<string, unknown>[];
+    while (msgs.length > 0 && msgs[msgs.length - 1].role !== 'user') {
+      const last = msgs.pop()!;
+      if (trace) {
+        trace.logger.trace(trace.requestId, `[ensure_trailing_user_message] stripped trailing ${String(last.role)} message: ${JSON.stringify(last)}`);
+      }
+    }
+    return;
+  }
+
   // assemble_sse_chunks is handled at the Response level in applyAfterUpstream,
   // not here (it operates on a stream, not a buffered JSON body).
   if (name === 'assemble_sse_chunks') return;
@@ -481,13 +509,14 @@ function applyTransformSet(
   hook: HookPoint,
   body: Record<string, unknown>,
   headers: Record<string, string>,
+  trace?: { logger: Logger; requestId: string },
 ): { body: Record<string, unknown>; headers: Record<string, string> } {
   const slot = set[hook];
   if (!slot) return { body, headers };
 
   // Tier-2 built-ins first
   for (const b of slot.builtins ?? []) {
-    applyBuiltin(b, body, headers, set);
+    applyBuiltin(b, body, headers, set, trace);
   }
 
   // Tier-1 ops in declared order
@@ -594,7 +623,7 @@ export function runHook(
 
   let { body, headers } = payload;
   for (const set of transforms) {
-    ({ body, headers } = applyTransformSet(set, hook, body, headers));
+    ({ body, headers } = applyTransformSet(set, hook, body, headers, { logger: ctx.logger, requestId: ctx.requestId }));
   }
   if (needsCap) applyMaxTokensCap(body, ctx);
   return { body, headers };

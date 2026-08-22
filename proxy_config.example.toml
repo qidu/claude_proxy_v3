@@ -428,6 +428,21 @@ base_url = "https://openrouter.ai/api"
 #   {op = "map_value", path = "messages[role=assistant].content", when_sibling = "tool_calls", from = "", to = null},
 # ]
 
+# Claude Code anthropic-messages compat:
+#   - while `messages` ends on a non-`user` role, pop that message outright
+#     (no fold, no synthetic append), repeating until the array ends on
+#     `role: "user"` (or is empty). Covers both real "assistant message
+#     prefill" (trailing role:"assistant") and a trailing inline
+#     role:"system" message (Claude Code emits an agent-definitions block
+#     this way, alongside the normal top-level `system` field). Some
+#     Anthropic-compatible upstreams reject either case with 400 "This
+#     model does not support assistant message prefill. The conversation
+#     must end with a user message." Logs one LOG_LEVEL=trace line per
+#     stripped message showing exactly what was removed.
+# [transforms.claude_anthropic_compat]
+# schema = "anthropic-messages"
+# before_upstream.builtins = ["ensure_trailing_user_message"]
+
 # DEFAULT TRANSFORM — applied automatically to every openai-completions and
 # openai-responses route. Renames max_tokens → max_completion_tokens, which is
 # required by most modern OpenAI-compatible upstreams (DeepSeek, MiniMax, etc.).

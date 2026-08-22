@@ -66,7 +66,7 @@ export function logPipelineStage(
   stage: PipelineStage,
   endpoint: string,
   body: unknown,
-  maxLen = 128000,
+  maxLen = 2000000,
 ): void {
   const text = typeof body === 'string' ? body : (() => { try { return JSON.stringify(body); } catch { return String(body); } })();
   const preview = text.length > maxLen ? `${text.slice(0, maxLen)}... (${text.length} bytes total)` : text;

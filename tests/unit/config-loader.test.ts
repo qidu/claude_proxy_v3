@@ -555,6 +555,25 @@ describe('validateTransformSet', () => {
     };
     assert.equal(validateTransformSet('s', set).length, 0);
   });
+
+  it('accepts ensure_trailing_user_message on anthropic-messages schema', () => {
+    const set: TransformSet = {
+      name: 's',
+      schema: 'anthropic-messages',
+      before_upstream: { builtins: ['ensure_trailing_user_message'] },
+    };
+    assert.equal(validateTransformSet('s', set).length, 0);
+  });
+
+  it('rejects ensure_trailing_user_message on a non-anthropic schema', () => {
+    const set: TransformSet = {
+      name: 's',
+      schema: 'openai-completions',
+      before_upstream: { builtins: ['ensure_trailing_user_message'] },
+    };
+    const errs = validateTransformSet('s', set);
+    assert.ok(errs.some(e => e.message.includes('requires schema')));
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -1667,3 +1667,151 @@ describe('Tier-2 builtin: strip_fresh_thinking', () => {
     assert.equal('thinking' in result.body, false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tier-2 builtin: ensure_trailing_user_message
+// ---------------------------------------------------------------------------
+
+describe('Tier-2 builtin: ensure_trailing_user_message', () => {
+  const set: TransformSet = {
+    name: 'trailing_user',
+    schema: 'anthropic-messages',
+    before_upstream: { builtins: ['ensure_trailing_user_message'] },
+  };
+
+  function ctx(traceLog?: string[]): HookContext {
+    return {
+      hook: 'before_upstream',
+      route: makeRoute([set]),
+      upstreamMode: 'anthropic-messages',
+      clientModel: 'test-model',
+      requestId: 'req-1',
+      streaming: false,
+      logger: {
+        debug: () => {}, info: () => {}, warn: () => {}, error: () => {},
+        trace: (_requestId: string, message: string) => { traceLog?.push(message); },
+      } as any,
+    };
+  }
+
+  it('strips a trailing assistant message (array content)', () => {
+    const body = {
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'Write a poem.' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'Here is' }] },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), ctx());
+    const msgs = result.body.messages as Record<string, unknown>[];
+    assert.equal(msgs.length, 1);
+    assert.equal(msgs[0].role, 'user');
+  });
+
+  it('strips a trailing assistant message (string content)', () => {
+    const body = {
+      messages: [
+        { role: 'user', content: 'Write a poem.' },
+        { role: 'assistant', content: 'Here is' },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), ctx());
+    const msgs = result.body.messages as Record<string, unknown>[];
+    assert.equal(msgs.length, 1);
+    assert.deepEqual(msgs[0], { role: 'user', content: 'Write a poem.' });
+  });
+
+  it('strips a trailing assistant message with no preceding user message', () => {
+    const body = {
+      messages: [
+        { role: 'assistant', content: [{ type: 'text', text: 'partial answer' }] },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), ctx());
+    const msgs = result.body.messages as Record<string, unknown>[];
+    assert.equal(msgs.length, 0);
+  });
+
+  it('logs a trace line showing the stripped message', () => {
+    const traceLog: string[] = [];
+    const body = {
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'partial answer' }] },
+      ],
+    };
+    runHook('before_upstream', payload(body), ctx(traceLog));
+    assert.equal(traceLog.length, 1);
+    assert.match(traceLog[0], /\[ensure_trailing_user_message\] stripped trailing assistant message/);
+    assert.match(traceLog[0], /partial answer/);
+  });
+
+  it('strips a trailing system message', () => {
+    const body = {
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+        { role: 'system', content: 'Available agent types for the Agent tool: ...' },
+      ],
+    };
+    const traceLog: string[] = [];
+    const result = runHook('before_upstream', payload(body), ctx(traceLog));
+    const msgs = result.body.messages as Record<string, unknown>[];
+    assert.equal(msgs.length, 1);
+    assert.equal(msgs[0].role, 'user');
+    assert.equal(traceLog.length, 1);
+    assert.match(traceLog[0], /\[ensure_trailing_user_message\] stripped trailing system message/);
+  });
+
+  it('strips multiple stacked trailing non-user messages', () => {
+    const body = {
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'partial' }] },
+        { role: 'system', content: 'agent list' },
+      ],
+    };
+    const traceLog: string[] = [];
+    const result = runHook('before_upstream', payload(body), ctx(traceLog));
+    const msgs = result.body.messages as Record<string, unknown>[];
+    assert.equal(msgs.length, 1);
+    assert.equal(msgs[0].role, 'user');
+    assert.equal(traceLog.length, 2);
+    assert.match(traceLog[0], /stripped trailing system message/);
+    assert.match(traceLog[1], /stripped trailing assistant message/);
+  });
+
+  it('does not log a trace line when there is no trailing assistant message', () => {
+    const traceLog: string[] = [];
+    const body = {
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+      ],
+    };
+    runHook('before_upstream', payload(body), ctx(traceLog));
+    assert.equal(traceLog.length, 0);
+  });
+
+  it('leaves messages already ending with user untouched', () => {
+    const body = {
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+        { role: 'user', content: [{ type: 'text', text: 'again' }] },
+      ],
+    };
+    const result = runHook('before_upstream', payload(body), ctx());
+    const msgs = result.body.messages as Record<string, unknown>[];
+    assert.equal(msgs.length, 3);
+  });
+
+  it('no-ops on an empty messages array', () => {
+    const body = { messages: [] };
+    const result = runHook('before_upstream', payload(body), ctx());
+    assert.deepEqual(result.body.messages, []);
+  });
+
+  it('no-ops when messages is absent', () => {
+    const body = { model: 'test' };
+    const result = runHook('before_upstream', payload(body), ctx());
+    assert.equal('messages' in result.body, false);
+  });
+});

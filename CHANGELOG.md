@@ -5,6 +5,112 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### fix(transforms): `codestrong` 500s on Claude Code requests ending in a non-user turn
+
+Claude Code routes through the `auditor` composite (`codesmall`/`codestrong`,
+`codestrong` primary) to `codestrong`/`codesmall` → `code-strong-pi`/
+`code-small-pi`, `anthropic-messages`-mode upstreams. Failing requests had a
+`messages` array that did not end on `role: "user"`, and the proxy forwarded
+that array to upstream unchanged. The upstream rejects any non-`user`-terminated
+`messages` array with the same generic 400, regardless of which role is
+actually trailing:
+
+```
+[ERROR] Upstream error response (500): {"type":"error","error":{"type":"api_error",
+"message":"400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",
+\"message\":\"This model does not support assistant message prefill. The
+conversation must end with a user message.\"} ..."}}
+[WARN] Composite primary auditor.codestrong returned 500
+```
+
+The 400 is wrapped as a 500 by the auditor composite's failover logging, but
+the underlying condition is a request-shape mismatch, not an upstream outage
+— retrying or failing over doesn't fix it, since the same bad `messages` tail
+gets replayed to the fallback too.
+
+**Confirmed root cause** (via full `LOG_LEVEL=trace` capture with an adequate
+truncation cap — see below): the error text is misleading. The actual
+trigger for the reproducing traffic was **not** real assistant-prefill at
+all — it was a trailing `role: "system"` message inside `messages`:
+
+```json
+{
+  "model": "code-strong-pi",
+  "messages": [
+    { "role": "user", "content": [{ "type": "text", "text": "hi" }] },
+    { "role": "system", "content": "Available agent types for the Agent tool:\n- claude: ...\n- Explore: ...\n..." }
+  ]
+}
+```
+
+Claude Code emits this `role: "system"` message inline in `messages` (an
+agent-definitions block for the `Agent` tool), in addition to the normal
+top-level `system` field — confirmed present already at the `request_ingress`
+stage, i.e. sent by the client as-is, not introduced by any proxy conversion
+step. Real Anthropic tolerates a `role: "system"` entry inside `messages`;
+this upstream does not, and reports the rejection using the same
+"assistant message prefill" error text it uses for a genuinely-trailing
+`role: "assistant"` message — the two failure modes are indistinguishable
+from the error string alone.
+
+Diagnosing this required two visibility fixes along the way, both now
+permanent: (1) `LOG_LEVEL` must be `trace` to get full pipeline body/header
+logs via `logPipelineStage` (the default `info` level and the always-on
+500-char `claude.ts` debug preview are both insufficient to see the tail of a
+large `messages` array); (2) `logPipelineStage`'s truncation cap
+(`src/utils/logger.ts`) was raised from 128000 to 2,000,000 bytes — the
+128000 cap was itself hiding the real tail of `messages` for
+request bodies over ~128KB, which is why earlier `LOG_LEVEL=trace` captures
+still didn't show the actual failing shape.
+
+Fixed at the routing edge instead of patching a third-party dependency
+in-place: a new Tier-2 `before_upstream` builtin,
+`ensure_trailing_user_message`. **Revised three times** during testing
+against the live upstream, the first two revisions built on the (incorrect)
+assumption that a trailing `role: "assistant"` message was the only cause:
+- First cut appended a synthetic `{role: "user", content: [...text:
+  "Continue."]}` turn — still hit the same 400.
+- Second cut folded the trailing assistant text into the preceding user
+  message under a `[Previous assistant context]` prefix and dropped the
+  assistant message — also still 400'd against the real upstream.
+- Third cut stripped the trailing assistant message outright (no fold, no
+  append) — still 400'd, because the actual reproducing traffic's trailing
+  message was `role: "system"`, not `role: "assistant"`, so the builtin's
+  `last.role === 'assistant'` check never matched and the builtin never ran.
+- **Current (confirmed) behavior**: generalized to pop *any* trailing
+  non-`user` message, looping until `messages` ends on `role: "user"` (or is
+  empty) — covers both a trailing `role: "assistant"` (real prefill) and a
+  trailing `role: "system"` (this incident), plus any other stacked
+  combination. One `LOG_LEVEL=trace` line is emitted per stripped message
+  (`[ensure_trailing_user_message] stripped trailing <role> message: ...`),
+  recording exactly what was removed.
+
+**Verified fixed** against live Claude Code v2.1.239 traffic through the
+`auditor` composite (`codestrong`/`codesmall` → `code-strong-pi`/
+`code-small-pi`) after rebuilding and restarting the proxy — the 500s no
+longer occur.
+
+No-op when `messages` is empty/absent or already ends with `role: "user"`.
+Schema-gated to `anthropic-messages` (`BUILTIN_SCHEMA` in
+`config-loader.ts`) since this shape constraint doesn't apply to
+`openai-completions` bodies.
+
+Applied to the `codestrong` and `codesmall` routes via a new
+`[transforms.claude_anthropic_compat]` set (`proxy_config.toml`) — no other
+route or model is affected. A transform-based fix was chosen over
+patching the `@earendil-works/pi-ai` dependency in `node_modules` because it:
+survives `npm install`/dependency version bumps untouched, stays scoped to
+the one broken route via config rather than a global capability check, and
+needs no upstream fix or `patch-package` machinery to take effect.
+
+Tests: `tests/unit/request-transform.test.ts` (strip trailing assistant for
+string and array content, strip trailing system message, strip multiple
+stacked trailing non-user messages, strip-with-no-preceding-message, trace
+log emitted per stripped message, no trace log when nothing stripped, no-op
+on empty/absent/already-user-terminated messages),
+`tests/unit/config-loader.test.ts` (schema-gate accept/reject for the new
+builtin). See `docs/transforms-reference.md` for the builtin reference entry.
+
 ### feat(chat-completions): streaming usage chunk for anthropic-messages cross-mode
 
 The anthropic-messages SSE converter (`src/handlers/chat-completions.ts`) dropped

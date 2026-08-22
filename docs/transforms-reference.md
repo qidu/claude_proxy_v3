@@ -107,6 +107,7 @@ Built-ins are declared in the `builtins` list of a hook slot. They run **before*
 | `inject_missing_tool_results` | `anthropic-messages` | Enforces three DeepSeek-Anthropic invariants: (A) reorders text-only assistant turns that appear between a tool_use assistant and its tool_result user message; (B) merges consecutive pure-tool user messages into one; (C) synthesizes a placeholder `tool_result` block for any `tool_use` id that has no matching result. |
 | `filter_anthropic_beta` | any | Filters and optionally renames entries in the `anthropic-beta` request header using the set's `anthropic_beta_map`. Entries not in the map, or mapped to `null`/`""`, are dropped; others are emitted under their mapped name. See [anthropic-beta header filtering](#filter_anthropic_beta--anthropic-beta-header-filtering) below. |
 | `ensure_tool_config_cache_ttl` | `anthropic-messages` | Translates Anthropic-native prompt caching on the system prompt into the litellm/Bedrock-bridge convention. Reads `cache_control` from `body.system` content blocks (the array-of-blocks shape — a plain-string `system` is ignored), then appends `{location:"tool_config", control:{...}}` to `body.cache_control_injection_points` when no `tool_config` entry already exists (caller-provided entries win). The serialized body is reordered so `cache_control_injection_points` lands after `tools`. No-op when `system` is absent, is a plain string, or carries no block-level `cache_control`. |
+| `ensure_trailing_user_message` | `anthropic-messages` | While `body.messages` ends with a non-`user` role (`assistant`, `system`, or anything else), pops that message outright, repeating until the array ends on `user` (or is empty). Covers both real Anthropic "assistant message prefill" (trailing `role:"assistant"`) and a trailing inline `role:"system"` message (some clients emit an agent-definitions block as a `system`-role message in `messages`, in addition to the normal top-level `system` field). Some Anthropic-compatible upstreams reject either case with the same 400 "This model does not support assistant message prefill." Emits one `LOG_LEVEL=trace` line per stripped message (`[ensure_trailing_user_message] stripped trailing <role> message: ...`) showing exactly what was removed. No-op when `messages` is empty/absent or already ends with `role:"user"`. |
 
 ### Built-in example
 
@@ -120,6 +121,71 @@ before_upstream.builtins = ["recover_tool_message_name"]
 before_upstream.ops = [
   { op = "rename", path = "max_tokens", to = "max_completion_tokens" },
 ]
+```
+
+### `ensure_trailing_user_message` — trailing non-user message guard
+
+Some Anthropic-compatible upstreams reject a `messages` array that doesn't end
+on `role: "user"`, regardless of which non-`user` role is trailing:
+
+- **Real assistant prefill** — Anthropic's own API accepts a `messages` array
+  ending on `role: "assistant"` as a way to force a specific continuation.
+  Some upstreams don't support this. This can happen even without deliberate
+  prefill use — e.g. a client resending its history right after an
+  interrupted/aborted generation, before a new user turn has been appended.
+- **Trailing `role: "system"` message** — some clients (e.g. Claude Code) emit
+  an inline agent-definitions block as a `role: "system"` message inside
+  `messages`, in addition to the normal top-level `system` field. Real
+  Anthropic tolerates this; some upstreams don't.
+
+Both cases are reported by these upstreams with the same generic error:
+
+```
+400 {"type":"error","error":{"type":"invalid_request_error","message":
+"This model does not support assistant message prefill. The conversation
+must end with a user message."}}
+```
+
+The builtin pops trailing non-`user` messages outright — repeating until the
+array ends on `user` (or is empty) — it does not append a synthetic turn or
+fold content elsewhere:
+
+```json
+// before (rejected by upstream)
+{
+  "model": "code-strong-pi",
+  "messages": [
+    { "role": "user", "content": "Write a poem." },
+    { "role": "assistant", "content": "Here is" },
+    { "role": "system", "content": "Available agent types for the Agent tool: ..." }
+  ]
+}
+
+// after ensure_trailing_user_message (before_upstream)
+{
+  "model": "code-strong-pi",
+  "messages": [
+    { "role": "user", "content": "Write a poem." }
+  ]
+}
+```
+
+With `LOG_LEVEL=trace`, the proxy logs exactly what was removed, one line per
+stripped message (in this example, `system` then `assistant`):
+
+```
+[req_...] [TRACE] [ensure_trailing_user_message] stripped trailing system
+message: {"role":"system","content":"Available agent types for the Agent tool: ..."}
+[req_...] [TRACE] [ensure_trailing_user_message] stripped trailing assistant
+message: {"role":"assistant","content":"Here is"}
+```
+
+Attach it to routes hitting such upstreams:
+
+```toml
+[transforms.claude_anthropic_compat]
+schema = "anthropic-messages"
+before_upstream.builtins = ["ensure_trailing_user_message"]
 ```
 
 ### `filter_anthropic_beta` — anthropic-beta header filtering

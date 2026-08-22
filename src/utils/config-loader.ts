@@ -120,7 +120,7 @@ export type TransformOp =
   | { op: 'remove';    path: string }
   | { op: 'map_value'; path: string; from: unknown; to: unknown; when_sibling?: string };
 
-export type BuiltinName = 'lowercase_tool_schema_types' | 'recover_tool_message_name' | 'inject_missing_tool_results' | 'strip_fresh_thinking' | 'filter_anthropic_beta' | 'ensure_tool_config_cache_ttl' | 'assemble_sse_chunks';
+export type BuiltinName = 'lowercase_tool_schema_types' | 'recover_tool_message_name' | 'inject_missing_tool_results' | 'strip_fresh_thinking' | 'filter_anthropic_beta' | 'ensure_tool_config_cache_ttl' | 'ensure_trailing_user_message' | 'assemble_sse_chunks';
 
 /** A named transform set declared under [transforms.<name>] */
 export interface TransformSet {
@@ -181,7 +181,7 @@ const SCHEMA_PATHS: Record<TransformSchema, Set<string>> = {
   ]),
 };
 
-const BUILTIN_NAMES: Set<BuiltinName> = new Set(['lowercase_tool_schema_types', 'recover_tool_message_name', 'inject_missing_tool_results', 'strip_fresh_thinking', 'filter_anthropic_beta', 'ensure_tool_config_cache_ttl', 'assemble_sse_chunks']);
+const BUILTIN_NAMES: Set<BuiltinName> = new Set(['lowercase_tool_schema_types', 'recover_tool_message_name', 'inject_missing_tool_results', 'strip_fresh_thinking', 'filter_anthropic_beta', 'ensure_tool_config_cache_ttl', 'ensure_trailing_user_message', 'assemble_sse_chunks']);
 
 /**
  * Backward-compatible hook name aliases.
@@ -288,6 +288,7 @@ export function validateTransformSet(name: string, set: TransformSet): Transform
       const BUILTIN_SCHEMA: Partial<Record<BuiltinName, TransformSchema[]>> = {
         'assemble_sse_chunks': ['openai-completions'],
         'strip_fresh_thinking': ['anthropic-messages'],
+        'ensure_trailing_user_message': ['anthropic-messages'],
       };
       const allowed = BUILTIN_SCHEMA[b];
       if (allowed && !allowed.includes(set.schema)) {
