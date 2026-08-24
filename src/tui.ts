@@ -1064,11 +1064,22 @@ class DashboardView implements Component {
       this.lastTime = now;
     }
     const sec = date.getSeconds();
-    const secColors = [lightWhite, gray, darkGray];
-    const secColor = secColors[sec % 3];
     const hourminTime = this.lastTime.slice(0, -2);
-    const secondsTime = secColor(this.lastTime.slice(-2));
-    const inflightIndicator = getActiveRequestCount() > 0 && Math.floor(sec % 2) == 0 ? ` ${green('●')}` : '  ';
+    const activeRequests = getActiveRequestCount();
+    let secondsTime: string;
+    let inflightIndicator: string;
+    if (activeRequests > 0) {
+      // Cycle through shading blocks (light -> solid) while requests are in
+      // flight, instead of the idle color-cycling seconds display.
+      const shadeFrames = ['░', '▒', '▓', '█'];
+      const shade = shadeFrames[Math.floor(sec) % shadeFrames.length];
+      secondsTime = lightWhite(this.lastTime.slice(-2));
+      inflightIndicator = ` ${green(shade)}`;
+    } else {
+      // Idle: seconds display resets to the normal (non-blinking) color.
+      secondsTime = lightWhite(this.lastTime.slice(-2));
+      inflightIndicator = '  ';
+    }
     const lines: string[] = [];
     lines.push(bold('Proxy TUI') + dim(`  ${hourminTime}`) + `${secondsTime}${inflightIndicator}` + dim(`  ${this.app.getVersion()}`));
     lines.push(dim('─'.repeat(Math.max(0, width))));
