@@ -3166,6 +3166,9 @@ export interface DashboardConfigPayload {
   config_errors: ConfigValidationError[];
   config_warnings: ConfigValidationError[];
   global_token_limit?: string;
+  remote_auth_active: boolean;
+  remote_recording_active: boolean;
+  privacy_filter_active: boolean;
 }
 
 /**
@@ -3328,6 +3331,9 @@ export function toDashboardConfigPayload(config: ProxyConfig): DashboardConfigPa
     config_errors: (config as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors ?? [],
     config_warnings: (config as unknown as { _validationWarnings?: ConfigValidationError[] })._validationWarnings ?? [],
     global_token_limit: config.general?.global_token_limit,
+    remote_auth_active: !!config.remote?.authentication?.auth_server,
+    remote_recording_active: !!config.remote?.recording?.record_server,
+    privacy_filter_active: !!config.privacy_filter?.filter_mode,
   };
 }
 

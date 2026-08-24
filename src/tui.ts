@@ -684,10 +684,10 @@ class CompositeAliasesOverlay implements Component, Focusable {
       // request and would otherwise show a stale value right after an edit.
       const windowDuration = aliasLimit?.duration ?? '';
       const aliasSummary = aliasLimit !== undefined && aliasLimit.num > 0
-        ? ` ${dim(fmt(windowUsed))} ${dim('/')} ${dim('L')} ${dim(fmt(aliasLimit.num) + '/' + windowDuration)}`
+        ? ` ${dim(fmt(windowUsed))} ${dim('/')} ${dim('(')}${dim(fmt(aliasLimit.num) + '/' + windowDuration)}${dim(')')}${dim(bold('└'))}`
         : '';
       const aliasMode = snap.config ? getCompositeAliasMode(alias, snap.config) : undefined;
-      const aliasTag = aliasMode === 'fusion' ? dim(' [F]') : aliasMode === 'coordinator' ? dim(' [O]') : dim(' [C]');
+      const aliasTag = aliasMode === 'fusion' ? dim(' ƒ') : aliasMode === 'coordinator' ? dim(' Ö') : dim(' Ç');
       const hasError = compositeErrors.some((e) => e.path === `composite.${alias}`);
       const errorMark = hasError ? red(' x') : '';
       // Record this alias's line index for selections array
@@ -1120,15 +1120,20 @@ class DashboardView implements Component {
         if (ratio >= 1) limitColor = red;
         else if (ratio >= 0.8) limitColor = yellow;
       }
-      globalLimitSuffix = ` ${limitColor('L')} ${limitColor(globalLimitDisplay)}]`;
+      globalLimitSuffix = ` ${limitColor('(')}${limitColor(globalLimitDisplay)}${limitColor(')')}${limitColor(bold('└'))}]`;
     }
+    const configFlagParts: string[] = [];
+    if (snap.config.remote_auth_active) configFlagParts.push(bold('Ä'));
+    if (snap.config.remote_recording_active) configFlagParts.push(bold('®'));
+    if (snap.config.privacy_filter_active) configFlagParts.push(bold('℗'));
+    const configFlagsSuffix = configFlagParts.length ? ` ${configFlagParts.join(' ')}` : '';
     const live = getActiveRequestCount() > 0 ? getLiveTokens() : null;
     const liveParts = live ? [
       live.input > 0 ? `${dim('↑')} ${fmt(live.input)}` : '',
       live.output > 0 ? `${dim('↓')} ${fmt(live.output)}` : '',
     ].filter(Boolean) : [];
     const liveSuffix = liveParts.join(' ');
-    const tokenHeader = `${bold('Tokens Panel')} [${fmt(tokenHeatmap.totalValues)}${globalLimitSuffix}${globalLimitSuffix ? '' : ']'}`;
+    const tokenHeader = `${bold('Tokens Panel')} [${fmt(tokenHeatmap.totalValues)}${globalLimitSuffix}${globalLimitSuffix ? '' : ']'}${configFlagsSuffix}`;
     const tokenPanelWidth = Math.max(...tokenHeatmapLines.map((line) => visibleWidth(line)));
     tokenHeatmapLines[0] = liveSuffix
       ? `${tokenHeader}${' '.repeat(Math.max(1, tokenPanelWidth - 1 - visibleWidth(tokenHeader) - visibleWidth(liveSuffix)))}${liveSuffix}`
@@ -1153,7 +1158,7 @@ class DashboardView implements Component {
       const shownModels = customModels.slice(0, maxCustomModelRows);
       const hiddenCount = customModels.length - shownModels.length;
       for (const row of shownModels) {
-        const tag = row.category === 'fusion' ? '[F]' : row.category === 'coordinator' ? '[O]' : row.category === 'composite' ? '[C]' : dim(titleCase(row.category));
+        const tag = row.category === 'fusion' ? 'ƒ' : row.category === 'coordinator' ? 'Ö' : row.category === 'composite' ? 'Ç' : dim(titleCase(row.category));
         const extra = row.description ? ` ${dim(row.description)}` : '';
         const timing = modelTimingMap.get(row.routeModel ?? row.modelId);
         const timingStr = timing ? ` ${dim('[')}${dim(fmtSeconds(timing.min_time_ms))}${dim('/')}${dim(fmtSeconds(timing.avg_time_ms))}${dim('/')}${dim(fmtSeconds(timing.max_time_ms))}${dim('s]')}` : '';
@@ -1435,9 +1440,9 @@ class DashboardApp {
 
   openModePicker(alias: string, onPicked: (mode: 'composite' | 'fusion' | 'coordinator' | null) => void): void {
     const choices: SelectItem[] = [
-      { value: 'composite', label: 'composite  [C]', description: 'share / primary / fallback routing' },
-      { value: 'fusion', label: 'fusion  [F]', description: 'panel / judge / synth with fusion_options' },
-      { value: 'coordinator', label: 'coordinator  [O]', description: 'planner / executor stages with coord weight' },
+      { value: 'composite', label: 'composite  Ç', description: 'share / primary / fallback routing' },
+      { value: 'fusion', label: 'fusion  ƒ', description: 'panel / judge / synth with fusion_options' },
+      { value: 'coordinator', label: 'coordinator  Ö', description: 'planner / executor stages with coord weight' },
     ];
     this.hideOverlay();
     const overlay = new ListOverlay(
@@ -1674,10 +1679,10 @@ class DashboardApp {
 
   openHelpOverlay(): void {
     const items: SelectItem[] = [
-      { value: 'help\0c', label: `  ${bold('C(c)').padEnd(6)} ${dim('Manage composite and fusion aliases')}` },
-      { value: 'help\0s', label: `  ${bold('S(s)').padEnd(6)} ${dim('Manage schedule aliases')}` },
+      { value: 'help\0c', label: `  ${bold('C(c)').padEnd(6)} ${dim('Manage composite')} ${bold('Ç')}${dim(' and fusion')} ${bold('ƒ')}${dim(' aliases')}` },
+      { value: 'help\0s', label: `  ${bold('S(s)').padEnd(6)} ${dim('Manage schedule aliases')} ${bold('$')}` },
       { value: 'help\0t', label: `  ${bold('T(t)').padEnd(6)} ${dim('Test custom models')}` },
-      { value: 'help\0l', label: `  ${bold('L(l)').padEnd(6)} ${dim('Edit global token limit')}` },
+      { value: 'help\0l', label: `  ${bold('L(l)').padEnd(6)} ${dim('Edit global token limit')} ${bold('└')}` },
       { value: 'help\0d', label: `  ${bold('D(d)').padEnd(6)} ${dim('View detailed statistics')}` },
       { value: 'help\0p', label: `  ${bold('P(p)').padEnd(6)} ${dim('Block or unblock tools')}` },
       { value: 'help\0u', label: `  ${bold('Shift+u').padEnd(6)} ${dim('Toggle weekly and monthly heatmap')}` },
@@ -1691,8 +1696,18 @@ class DashboardApp {
       { value: 'help\0m', label: `  ${bold('m').padEnd(6)} ${dim('Add target model to alias')}` },
       { value: 'help\0f', label: `  ${bold('f').padEnd(6)} ${dim('Edit fusion options for alias')}` },
       { value: 'help\0e', label: `  ${bold('e').padEnd(6)} ${dim('Edit composite target config')}` },
-      { value: 'help\0cl', label: `  ${bold('l').padEnd(6)} ${dim('Set token limit for alias')}` },
+      { value: 'help\0cl', label: `  ${bold('l').padEnd(6)} ${dim('Set token limit for alias')} ${bold('└')}` },
       { value: 'help\0cd', label: `  ${bold('d').padEnd(6)} ${dim('Delete alias or target model')}` },
+      { value: 'help\0sep2', label: dim('─'.repeat(50)) },
+      { value: 'help\0hdr2', label: dim('Markers') },
+      { value: 'help\0mk_limit', label: `  ${bold('└')}${dim('     Token limit (global / alias)')}` },
+      { value: 'help\0mk_composite', label: `  ${bold('Ç')}${dim('     Composite alias')}` },
+      { value: 'help\0mk_fusion', label: `  ${bold('ƒ')}${dim('     Fusion alias')}` },
+      { value: 'help\0mk_coordinator', label: `  ${bold('Ö')}${dim('     Coordinator alias')}` },
+      { value: 'help\0mk_auth', label: `  ${bold('Ä')}${dim('     Remote authentication active (auth_server)')}` },
+      { value: 'help\0mk_recording', label: `  ${bold('®')}${dim('     Remote recording active (record_server)')}` },
+      { value: 'help\0mk_privacy', label: `  ${bold('℗')}${dim('     Privacy filter active (filter_mode)')}` },
+      { value: 'help\0mk_schedule', label: `  ${bold('$')}${dim('     Schedule alias')}` },
     ];
 
     if (this.overlay) this.hideOverlay();
@@ -2070,7 +2085,7 @@ class DashboardApp {
   }
 
   async runModelTest(modelId: string): Promise<void> {
-    const displayId = / \[[CF]\]$/.test(modelId) ? modelId.replace(/ \[[CF]\]$/, '').trim() : modelId;
+    const displayId = / [ÇƒÖ]$/.test(modelId) ? modelId.replace(/ [ÇƒÖ]$/, '').trim() : modelId;
     const snap = this.viewSnapshot();
     const cfg = snap ? resolveModelTestConfig(snap.config, displayId, snap.compositeResolved) : undefined;
     const target = cfg?.directModel && cfg.directModel !== displayId ? `(${cfg.directModel})` : '';
@@ -2097,8 +2112,8 @@ class DashboardApp {
     usage: string;
     detail: string;
   } | null> {
-    // Strip [C]/[F] suffix if present (used only for duplicate disambiguation in the picker)
-    const actualModelId = / \[[CF]\]$/.test(modelId) ? modelId.replace(/ \[[CF]\]$/, '').trim() : modelId;
+    // Strip Ç/ƒ/Ö marker suffix if present (used only for duplicate disambiguation in the picker)
+    const actualModelId = / [ÇƒÖ]$/.test(modelId) ? modelId.replace(/ [ÇƒÖ]$/, '').trim() : modelId;
     const port = this.source.env.PORT || '8788';
     const endpoint = `http://127.0.0.1:${port}${TEST_ENDPOINT}`;
     const snapshot = this.viewSnapshot();
@@ -3007,14 +3022,14 @@ class DashboardApp {
       }
     }
 
-    // Add composite aliases — if same name as a model, add with "[C]" suffix to differentiate
+    // Add composite aliases — if same name as a model, add with a marker suffix (Ç/ƒ/Ö) to differentiate
     if (snapshot.compositeResolved) {
       for (const alias of snapshot.compositeResolved) {
         if (alias.targets.length === 0) continue;
         const aliasMode = snapshot.config ? getCompositeAliasMode(alias.alias, snapshot.config) : undefined;
         const isFusion = aliasMode === 'fusion';
         const isCoordinator = aliasMode === 'coordinator';
-        const modeTag = isFusion ? '[F]' : isCoordinator ? '[O]' : '[C]';
+        const modeTag = isFusion ? 'ƒ' : isCoordinator ? 'Ö' : 'Ç';
         const category = isCoordinator ? 'coordinator' : isFusion ? 'fusion' : 'composite';
         const isDuplicate = seenNames.has(alias.alias);
         const aliasConfig = snapshot.config.composite?.[alias.alias] as Record<string, unknown> | undefined;
@@ -3032,11 +3047,11 @@ class DashboardApp {
           : '';
         const description = `${avgPrefix}${targets}`;
         if (isDuplicate) {
-          // Same name already added as a model — add composite with [C] suffix to make value unique
+          // Same name already added as a model — add marker suffix (Ç/ƒ/Ö) to make value unique
           choices.push({
             category,
             modelId: alias.alias,
-            value: `${alias.alias} [C]`,
+            value: `${alias.alias} ${modeTag}`,
             label: `${alias.alias} ${modeTag}`,
             description,
           });

@@ -504,9 +504,9 @@ export function handleDashboardPage(env: Env): Response {
           <input type="text" id="wiz-alias-name" placeholder="e.g. gpt-all" autocomplete="off" />
           <label>Mode</label>
           <div class="mode-options" id="wiz-mode-options">
-            <div class="mode-option selected" data-mode="composite" id="wiz-mode-composite">[C] composite<br /><span style="font-size:11px;color:#666;">share / primary / fallback</span></div>
-            <div class="mode-option" data-mode="fusion" id="wiz-mode-fusion">[F] fusion<br /><span style="font-size:11px;color:#666;">panel / judge / synth</span></div>
-            <div class="mode-option" data-mode="coordinator" id="wiz-mode-coordinator">[O] coordinator<br /><span style="font-size:11px;color:#666;">planner / executor stages</span></div>
+            <div class="mode-option selected" data-mode="composite" id="wiz-mode-composite"><b>Ç</b> composite<br /><span style="font-size:11px;color:#666;">share / primary / fallback</span></div>
+            <div class="mode-option" data-mode="fusion" id="wiz-mode-fusion"><b>ƒ</b> fusion<br /><span style="font-size:11px;color:#666;">panel / judge / synth</span></div>
+            <div class="mode-option" data-mode="coordinator" id="wiz-mode-coordinator"><b>Ö</b> coordinator<br /><span style="font-size:11px;color:#666;">planner / executor stages</span></div>
           </div>
         </div>
         <div class="modal-status" id="wiz-status"></div>
@@ -860,9 +860,9 @@ export function handleDashboardPage(env: Env): Response {
             '<input type="text" id="wiz-alias-name" placeholder="e.g. gpt-all" autocomplete="off" />' +
             '<label>Mode</label>' +
             '<div class="mode-options" id="wiz-mode-options">' +
-              '<div class="mode-option" data-mode="composite">[C] composite<br /><span style="font-size:11px;color:#666;">share / primary / fallback</span></div>' +
-              '<div class="mode-option" data-mode="fusion">[F] fusion<br /><span style="font-size:11px;color:#666;">panel / judge / synth</span></div>' +
-              '<div class="mode-option" data-mode="coordinator">[O] coordinator<br /><span style="font-size:11px;color:#666;">planner / executor stages</span></div>' +
+              '<div class="mode-option" data-mode="composite"><b>Ç</b> composite<br /><span style="font-size:11px;color:#666;">share / primary / fallback</span></div>' +
+              '<div class="mode-option" data-mode="fusion"><b>ƒ</b> fusion<br /><span style="font-size:11px;color:#666;">panel / judge / synth</span></div>' +
+              '<div class="mode-option" data-mode="coordinator"><b>Ö</b> coordinator<br /><span style="font-size:11px;color:#666;">planner / executor stages</span></div>' +
             '</div>';
           bodyEl.querySelectorAll('#wiz-mode-options .mode-option').forEach(function (el) {
             el.addEventListener('click', function () {
@@ -1101,9 +1101,9 @@ export function handleDashboardPage(env: Env): Response {
           bodyEl.innerHTML =
             '<label>Mode</label>' +
             '<div class="mode-options" id="ctgt-mode-options">' +
-              '<div class="mode-option" data-mode="composite">[C] composite<br /><span style="font-size:11px;color:#666;">share / primary / fallback</span></div>' +
-              '<div class="mode-option" data-mode="fusion">[F] fusion<br /><span style="font-size:11px;color:#666;">panel / judge / synth</span></div>' +
-              '<div class="mode-option" data-mode="coordinator">[O] coordinator<br /><span style="font-size:11px;color:#666;">planner / executor stages</span></div>' +
+              '<div class="mode-option" data-mode="composite"><b>Ç</b> composite<br /><span style="font-size:11px;color:#666;">share / primary / fallback</span></div>' +
+              '<div class="mode-option" data-mode="fusion"><b>ƒ</b> fusion<br /><span style="font-size:11px;color:#666;">panel / judge / synth</span></div>' +
+              '<div class="mode-option" data-mode="coordinator"><b>Ö</b> coordinator<br /><span style="font-size:11px;color:#666;">planner / executor stages</span></div>' +
             '</div>';
           bodyEl.querySelectorAll('#ctgt-mode-options .mode-option').forEach(function (el) {
             el.addEventListener('click', function () {
@@ -1695,6 +1695,30 @@ export function handleDashboardPage(env: Env): Response {
         return String(num);
       }
 
+      // Client-side mirror of the backend's parseHumanTokenLimit
+      // (src/utils/config-loader.ts). Parses "<num[K|M|B|T]> <1h|1d|1w|1m>"
+      // into { num, duration }, or returns null on invalid input.
+      function parseHumanTokenLimit(raw) {
+        const trimmed = (raw || '').trim();
+        if (!trimmed) return null;
+        const match = trimmed.match(/^([\d.]+)\s*([kKmMbBtT]?)\s+(\d{1,2})([hHdDwWmM])$/);
+        if (!match) return null;
+        let num = parseFloat(match[1]);
+        if (!Number.isFinite(num) || num < 0) return null;
+        const suffix = match[2].toLowerCase();
+        if (suffix === 'k') num *= 1e3;
+        else if (suffix === 'm') num *= 1e6;
+        else if (suffix === 'b') num *= 1e9;
+        else if (suffix === 't') num *= 1e12;
+        if (num < 0 || !Number.isFinite(num)) return null;
+        const count = parseInt(match[3], 10);
+        const unit = match[4].toLowerCase();
+        if (unit === 'h' && (count < 1 || count > 23)) return null;
+        if (unit === 'd' && (count < 1 || count > 6)) return null;
+        if ((unit === 'w' || unit === 'm') && count !== 1) return null;
+        return { num: num, duration: count + unit };
+      }
+
       function wildcardRoutes(config) {
         const routes = [];
         Object.values(config.models || {}).forEach((category) => {
@@ -1988,7 +2012,7 @@ export function handleDashboardPage(env: Env): Response {
           const aliasKeys = Object.keys(targets || {}).filter((k) => k !== 'token_limit' && k !== 'fusion_options');
           const isCoordHead = aliasKeys.some((k) => { const c = (targets || {})[k] || {}; return typeof c.coord === 'number' && c.coord > 0; });
           const isFusionHead = !isCoordHead && !!targets.fusion_options;
-          const aliasTypeTag = isCoordHead ? ' <span style="font-size:11px;color:#555;">[O]</span>' : isFusionHead ? ' <span style="font-size:11px;color:#555;">[F]</span>' : ' <span style="font-size:11px;color:#555;">[C]</span>';
+          const aliasTypeTag = isCoordHead ? ' <span style="font-size:11px;color:#555;"><b>Ö</b></span>' : isFusionHead ? ' <span style="font-size:11px;color:#555;"><b>ƒ</b></span>' : ' <span style="font-size:11px;color:#555;"><b>Ç</b></span>';
           return '<div class="config-block"><h3>composite.' + escapeHtml(aliasName) + aliasTypeTag + errorMark + '</h3>' + rows + '</div>';
         }).join('');
 
