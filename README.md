@@ -95,8 +95,10 @@ full wire-level contract.
   `[models.*]` category; provider wildcards (`claude-*`) and the final catch-all
   (`*`) are scoped as described in [Model Routing & Aliases](#model-routing--aliases).
 - **Composite aliases** — group several models under one name with weighted-random,
-  primary/fallback (with runtime share decay on failure), fusion fan-out, or a
-  planner→executor coordinator that hands off once a trigger tool appears.
+  primary/fallback (with runtime share decay on failure), fusion fan-out, a
+  planner→executor coordinator that hands off once a trigger tool appears, or a
+  best-of-N verifier mode that samples N candidates from a target model and ranks
+  them with an external scorer sidecar (see [`docs/plan-llm-as-a-verifier-plugin.md`](./docs/plan-llm-as-a-verifier-plugin.md)).
 - **Schedule aliases** — timetable-based routing: pick which model (or composite)
   serves a request based on server-local hour-of-day and day-of-week, with a
   fallback target for any time outside the configured windows.
@@ -115,7 +117,11 @@ full wire-level contract.
 - **Token limits** — global and per-alias token caps over a configurable window (sliding `Nh`/`Nd` or calendar `1w`/`1m`). Returns HTTP 413 when exceeded.
 - **Sidecars** — optional privacy-filter (sidecar or local hash-only mode),
   compression, and image-encode sidecars for redacting, shrinking, or fetching
-  request payloads before they reach the upstream.
+  request payloads before they reach the upstream; and a best-of-N verifier
+  sidecar (`llm-as-a-verifier`) that holds no credentials of its own — it
+  authenticates its generation/scoring callbacks with a short-lived one-time
+  auth code minted per dispatch, redeemed for the original caller's own
+  credentials.
 - **Runs anywhere** — Node.js server or Docker.
 
 ## Quick Start
@@ -280,6 +286,12 @@ Incoming model names resolve through three stacked logic levels (see the
   - **fusion** — fan-out to parallel panel models with an optional judge and synth.
   - **coordinator** — planner → executor hand-off: routes to the planner until a trigger
     tool call (`ExitPlanMode`, `Edit`, `Write`, …) appears in the conversation history.
+  - **verifier** — samples N candidates from a `role = "target"` model and ranks them
+    via a Probabilistic Pivot Tournament run by the `llm-as-a-verifier` sidecar
+    (`role = "scorer"`, must be an `openai-completions` route for logprob scoring).
+    Requires `VERIFIER_URL`; fails open to one plain call to the target model on
+    sidecar outage, timeout, or misconfiguration (`VERIFIER_FAIL_OPEN=false` to
+    fail closed instead). See [`docs/plan-llm-as-a-verifier-plugin.md`](./docs/plan-llm-as-a-verifier-plugin.md).
 - **Level 3 — `[schedule]`** aliases — pick one target by server-local hour-of-day /
   day-of-week windows, with an empty-window fallback target.
 - **Token limits** — global (`general.global_token_limit`) and per-alias caps over
@@ -300,7 +312,7 @@ level below* gets to serve this request:
    Level 3 (top)        │  [schedule]                   │  ← timetable (hour-of-day, day-of-week)
                         │  "what should serve *now*?"   │
                         ├────────────────────────────────┤
-   Level 2 (middle)     │  [composite]                  │  ← share / primary+fallback / fusion fan-out / coordinator
+   Level 2 (middle)     │  [composite]                  │  ← share / primary+fallback / fusion fan-out / coordinator / verifier
                         │  "split or sequence across N?" │
                         ├────────────────────────────────┤
    Level 1 (base)       │  [models.*]                   │  ← exact name / prefix-* wildcard / * catch-all
@@ -314,6 +326,7 @@ level below* gets to serve this request:
 | 2 | `[composite]` (share / primary+fallback) | Weighted random or fallback order | 1 → 1 | Level 1 |
 | 2 | `[composite]` (fusion) | Role + `fusion_options` | 1 → N → 1 (panel×N + judge + synth) | Level 1 |
 | 2 | `[composite]` (coordinator) | Stage detection via `toolset` in messages history | 1 → 1 (planner → executor, one-way) | Level 1 |
+| 2 | `[composite]` (verifier) | Role (`target`/`scorer`) + `verifier_options` | 1 → N → 1 (N samples + PPT tournament → 1 winner) | Level 1 |
 | 1 | `[models.*]` | Exact / `prefix-*` / `*` catch-all | 1 → 1 (one upstream) | — (sends) |
 
 
@@ -408,7 +421,9 @@ The full field-by-field reference lives in
   `[dashboard]`.
 - **Environment variables** — core/server (`PORT`, `LOG_LEVEL`, …), config source
   (`PROXY_CONFIG_PATH` / `PROXY_CONFIG_CONSUL` / `PROXY_CONFIG_APOLLO`), token counting &
-  upstream, and the privacy-filter / compression / image-encode sidecars.
+  upstream, and the privacy-filter / compression / image-encode / verifier sidecars
+  (`VERIFIER_URL`, `VERIFIER_SIDECAR_IPS`, `VERIFIER_TIMEOUT_MS`, `VERIFIER_CALL_MARGIN`,
+  `VERIFIER_FAIL_OPEN`, `VERIFIER_CRITERIA`).
 
 Also see [`proxy_config.example.toml`](./proxy_config.example.toml) and
 [`docs/README_DETAILS.md`](./docs/README_DETAILS.md).
@@ -445,6 +460,7 @@ The [`docs/`](./docs/) folder has deep-dives on specific topics:
 - **Thinking / reasoning** — `docs/claude-extended-thinking.md`, `docs/claude-adaptive-thinking.md`
 - **API formats** — `docs/claude-api-reference.md`, `docs/gemini-api-reference.md`, `docs/openai-api-reference.md`
 - **Fusion & composite design** — `docs/design_fusion_composite_alias.md`
+- **Best-of-N verifier plugin** — `docs/plan-llm-as-a-verifier-plugin.md` (composite `verifier` mode, OTAC grant lifecycle, `src/utils/verifier.ts`, the `llm-as-a-verifier` / `serve.py` sidecar contract) + `docs/verifier-logprobs-requirements.md` (scorer logprobs request parameters, supported backends, how to probe a candidate scorer)
 - **Request/response transform hooks** — `docs/design_request_transform_hooks.md` (design) + `docs/implementation_of_request_transform_hooks.md` (implementation log) — per-model/per-upstream field & header rewriting via 5 lifecycle hooks; `[transforms.*]` / `[transform_defaults]` config
 - **Agent harness integrations** — [`docs/agents/`](./docs/agents/) (per-agent guides; e.g. [using this proxy as an LLM provider for deepseek-harness](./docs/agents/proxy-as-provider-for-deepseek-harness.md))
 

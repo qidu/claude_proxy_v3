@@ -428,20 +428,42 @@ export interface FusionOptions {
   max_concurrent?: number;   // max simultaneous panel calls; default = panel size (full fan-out)
 }
 
+// Level-2 "best of N" strategy: sample `samples` candidates from the target
+// model, score them via llm-as-a-verifier's Probabilistic Pivot Tournament,
+// return the winner verbatim. See docs/plan-llm-as-a-verifier-plugin.md.
+export type VerifierRole = 'target' | 'scorer';
+
+export interface VerifierOptions {
+  samples: number;              // N candidates. Flagged (report-only) if < 2.
+  temperature?: number;         // sampling spread. Flagged (report-only) if 0. Default 1.0.
+  n_evaluations?: number;       // K repeated verifications per comparison. Default 4.
+  pivots?: number;              // PPT pivot count k. Default 2.
+  criteria?: string;            // benchmark name or criteria-file path, passed to select().
+  seed?: number;
+  // Upper clamp on the OTAC grant's remainingCalls. Optional; omit to use the
+  // derived bound (samples + tournament comparisons, times VERIFIER_CALL_MARGIN).
+  // A value below the derived bound is a misconfiguration — reported by config
+  // validation, enforced by the pre-dispatch admission check, never a mid-flight
+  // cutoff. See "The ceiling is an admission check, never a mid-flight cutoff".
+  otac_max_reuse?: number;
+}
+
 export interface CompositeTargetConfig {
   share?: number;
   primary?: boolean;
   fallback?: number;
   fusion?: number;           // > 0 marks target as panel member (weight reserved for future use)
   coord?: number;            // > 0 marks target as coordinator participant (planner or executor)
-  role?: FusionRole;         // explicit stage: 'panel' | 'judge' | 'synth' | 'planner' | 'executor'
+  verifier?: number;         // > 0 marks target as a verifier participant (target or scorer)
+  role?: FusionRole | VerifierRole;  // explicit stage; verifier adds 'target' | 'scorer'
 }
 
 export interface CompositeModelConfig {
   token_limit?: TokenLimitConfig;
   fusion_options?: FusionOptions;
+  verifier_options?: VerifierOptions;
   toolset?: string[];        // coordinator trigger tool names; absent = default set; [] = any tool
-  [modelName: string]: CompositeTargetConfig | TokenLimitConfig | FusionOptions | string[] | undefined;
+  [modelName: string]: CompositeTargetConfig | TokenLimitConfig | FusionOptions | VerifierOptions | string[] | undefined;
 }
 
 export interface CoordinatorPlan {
@@ -471,6 +493,17 @@ export interface FusionPlan {
   options: Required<FusionOptions>;
 }
 
+// Level-2 "best of N" plan: sample from `target`, score with `scorer` (defaults
+// to `target`'s own route when no separate role="scorer" entry is given). See
+// docs/plan-llm-as-a-verifier-plugin.md, Component 2.
+export interface VerifierPlan {
+  alias: string;
+  target: { modelName: string; route: ModelRouteConfig };
+  scorer: { modelName: string; route: ModelRouteConfig };
+  options: Required<Omit<VerifierOptions, 'criteria' | 'seed' | 'otac_max_reuse'>> &
+    Pick<VerifierOptions, 'criteria' | 'seed' | 'otac_max_reuse'>;
+}
+
 // 'weekday' = Mon-Fri (day 1-5), 'weekend' = Sat/Sun (day 0,6), string[] = lowercase 3-letter day
 // names (e.g. ['mon','tue']). Default (undefined) = every day.
 export type ScheduleDaysSpec = 'weekday' | 'weekend' | string[];
@@ -485,7 +518,7 @@ export interface ScheduleWindow {
 // (always eligible, used when no other target's windows match "now").
 export type ScheduleConfig = Record<string, ScheduleWindow[]>;
 
-const COMPOSITE_META_KEYS = new Set(['token_limit', 'fusion_options', 'toolset']);
+const COMPOSITE_META_KEYS = new Set(['token_limit', 'fusion_options', 'verifier_options', 'toolset']);
 
 function getCompositeTargetEntries(config: CompositeModelConfig | undefined): Array<[string, CompositeTargetConfig]> {
   return Object.entries(config || {}).filter(([key]) => !COMPOSITE_META_KEYS.has(key)) as Array<[string, CompositeTargetConfig]>;
@@ -821,7 +854,7 @@ export function getCompositeRouteCandidates(
   }));
 }
 
-export type CompositeAliasMode = 'coordinator' | 'fusion' | 'fallback' | 'share';
+export type CompositeAliasMode = 'coordinator' | 'fusion' | 'verifier' | 'fallback' | 'share';
 
 export function getCompositeAliasMode(
   modelName: string,
@@ -835,6 +868,15 @@ export function getCompositeAliasMode(
   // Coordinator takes precedence — detected first
   const isCoordinator = entries.some(([, cfg]) => typeof cfg.coord === 'number' && cfg.coord > 0);
   if (isCoordinator) return 'coordinator';
+
+  // Verifier is checked before fusion — role='target'/'scorer' and fusion's
+  // role='panel'/'judge'/'synth' are disjoint vocabularies, but checking here
+  // first keeps verifier detection independent of fusion's marker fields.
+  const isVerifier = entries.some(([, cfg]) =>
+    cfg.role === 'target' || cfg.role === 'scorer' ||
+    (typeof cfg.verifier === 'number' && cfg.verifier > 0)
+  );
+  if (isVerifier) return 'verifier';
 
   const isFusion = entries.some(([, cfg]) =>
     cfg.role === 'panel' || cfg.role === 'judge' || cfg.role === 'synth' ||
@@ -904,6 +946,60 @@ export function resolveFusionPlan(
   };
 
   return { alias: modelName, panel, judge, synth, options };
+}
+
+export function resolveVerifierPlan(
+  modelName: string,
+  proxyConfig: ProxyConfig,
+  visited: Set<string> = new Set(),
+): VerifierPlan | undefined {
+  const compositeConfig = proxyConfig.composite?.[modelName];
+  if (!compositeConfig) return undefined;
+
+  const nextVisited = new Set(visited);
+  nextVisited.add(modelName);
+
+  const entries = getCompositeTargetEntries(compositeConfig);
+
+  let target: { modelName: string; route: ModelRouteConfig } | undefined;
+  let scorer: { modelName: string; route: ModelRouteConfig } | undefined;
+
+  for (const [targetName, cfg] of entries) {
+    const route = getModelRouteConfig(targetName, proxyConfig, nextVisited);
+    const resolvedRoute = { ...route, modelAlias: route.modelAlias || targetName };
+
+    if (cfg.role === 'scorer') {
+      if (scorer) throw new Error(`Verifier alias "${modelName}" has multiple targets with role = "scorer"; only one is allowed`);
+      scorer = { modelName: targetName, route: resolvedRoute };
+    } else {
+      // role === 'target', or verifier > 0 with no role (treated as target)
+      if (target) throw new Error(`Verifier alias "${modelName}" has multiple targets with role = "target"; only one is allowed`);
+      target = { modelName: targetName, route: resolvedRoute };
+    }
+  }
+
+  if (!target) return undefined;
+
+  // No separate scorer entry: the target's own route is reused for scoring
+  // (same model generates and scores — the plan's preferred configuration).
+  if (!scorer) scorer = target;
+
+  const rawOpts = compositeConfig.verifier_options as VerifierOptions | undefined;
+  if (typeof rawOpts?.samples !== 'number') {
+    throw new Error(`Verifier alias "${modelName}" is missing required verifier_options.samples`);
+  }
+
+  const options: VerifierPlan['options'] = {
+    samples: rawOpts.samples,
+    temperature: rawOpts.temperature ?? 1.0,
+    n_evaluations: rawOpts.n_evaluations ?? 4,
+    pivots: rawOpts.pivots ?? 2,
+    criteria: rawOpts.criteria,
+    seed: rawOpts.seed,
+    otac_max_reuse: rawOpts.otac_max_reuse,
+  };
+
+  return { alias: modelName, target, scorer, options };
 }
 
 export function resolveCoordinatorPlan(
@@ -1174,9 +1270,19 @@ function parseCompositeTargetConfig(value: string): CompositeTargetConfig {
       continue;
     }
 
+    if (key === 'verifier') {
+      const numeric = Number(rawValue);
+      if (!Number.isNaN(numeric) && numeric >= 0) {
+        (config as any).verifier = numeric;
+      } else if (rawValue !== '') {
+        (config as any)._invalidVerifier = true;
+      }
+      continue;
+    }
+
     if (key === 'role') {
       const v = rawValue.replace(/^"|"$/g, '');
-      if (v === 'panel' || v === 'judge' || v === 'synth' || v === 'planner' || v === 'executor') {
+      if (v === 'panel' || v === 'judge' || v === 'synth' || v === 'planner' || v === 'executor' || v === 'target' || v === 'scorer') {
         (config as any).role = v;
       } else {
         (config as any)._invalidRole = true;
@@ -1353,6 +1459,32 @@ function parseCompositeModelConfig(rawValue: string): CompositeModelConfig {
           }
           config.fusion_options = opts;
         } catch { /* ignore malformed fusion_options */ }
+      } else if (match[1].trim() === 'verifier_options') {
+        // Parse verifier_options object: {samples, temperature, n_evaluations, pivots, criteria, seed, otac_max_reuse}
+        try {
+          const inner = match[2].trim().slice(1, -1);
+          const opts: Partial<VerifierOptions> = {};
+          const fields: string[] = [];
+          let cur = ''; let d = 0; let iq = false;
+          for (let i = 0; i < inner.length; i++) {
+            const c = inner[i];
+            if (c === '"') { iq = !iq; cur += c; continue; }
+            if (!iq) { if (c === '{') d++; else if (c === '}') d--; else if (c === ',' && d === 0) { if (cur.trim()) fields.push(cur.trim()); cur = ''; continue; } }
+            cur += c;
+          }
+          if (cur.trim()) fields.push(cur.trim());
+          for (const f of fields) {
+            const kv = f.match(/^"?(\w+)"?\s*[=:]\s*(.+)$/);
+            if (!kv) continue;
+            const k = kv[1]; const rv = kv[2].trim().replace(/,$/, '').replace(/^"|"$/g, '');
+            if (k === 'samples' || k === 'temperature' || k === 'n_evaluations' || k === 'pivots' || k === 'seed' || k === 'otac_max_reuse') {
+              const n = Number(rv); if (Number.isFinite(n)) (opts as any)[k] = n;
+            } else if (k === 'criteria') {
+              opts.criteria = rv;
+            }
+          }
+          if (typeof opts.samples === 'number') config.verifier_options = opts as VerifierOptions;
+        } catch { /* ignore malformed verifier_options */ }
       } else if (match[1].trim() === 'token_limit') {
         // Parse the nested token_limit object: {num = ..., duration = "..."} or {"num": ..., "duration": "..."}
         const inner = match[2].trim().slice(1, -1);
@@ -1633,6 +1765,9 @@ function serializeCompositeTargetConfig(config: CompositeTargetConfig): string {
   if (config.coord !== undefined) {
     fields.push(`coord = ${config.coord}`);
   }
+  if (config.verifier !== undefined) {
+    fields.push(`verifier = ${config.verifier}`);
+  }
   if (config.role !== undefined) {
     fields.push(`role = "${config.role}"`);
   }
@@ -1649,6 +1784,18 @@ function serializeFusionOptions(opts: FusionOptions): string {
   return `{${fields.join(', ')}}`;
 }
 
+function serializeVerifierOptions(opts: VerifierOptions): string {
+  const fields: string[] = [];
+  if (opts.samples !== undefined) fields.push(`samples = ${opts.samples}`);
+  if (opts.temperature !== undefined) fields.push(`temperature = ${opts.temperature}`);
+  if (opts.n_evaluations !== undefined) fields.push(`n_evaluations = ${opts.n_evaluations}`);
+  if (opts.pivots !== undefined) fields.push(`pivots = ${opts.pivots}`);
+  if (opts.criteria !== undefined) fields.push(`criteria = ${JSON.stringify(opts.criteria)}`);
+  if (opts.seed !== undefined) fields.push(`seed = ${opts.seed}`);
+  if (opts.otac_max_reuse !== undefined) fields.push(`otac_max_reuse = ${opts.otac_max_reuse}`);
+  return `{${fields.join(', ')}}`;
+}
+
 function serializeCompositeModelConfig(config: CompositeModelConfig): string {
   const entries: string[] = [];
   if (config.token_limit && typeof config.token_limit === 'object') {
@@ -1656,6 +1803,9 @@ function serializeCompositeModelConfig(config: CompositeModelConfig): string {
   }
   if (config.fusion_options && typeof config.fusion_options === 'object') {
     entries.push(`fusion_options = ${serializeFusionOptions(config.fusion_options as FusionOptions)}`);
+  }
+  if (config.verifier_options && typeof config.verifier_options === 'object') {
+    entries.push(`verifier_options = ${serializeVerifierOptions(config.verifier_options as VerifierOptions)}`);
   }
   if (Array.isArray(config.toolset)) {
     entries.push(`toolset = [${config.toolset.map(t => JSON.stringify(t)).join(', ')}]`);
@@ -1998,6 +2148,71 @@ export function validateProxyConfig(config: ProxyConfig): ValidationResult {
         }
         if ('_invalidFallback' in typedTarget) {
           errors.push({ path: `composite.${alias}.${targetModel}`, message: `fallback must be a number` });
+        }
+      }
+
+      // Verifier-specific checks. Self-reference and routing cycles are
+      // already caught by the generic getModelRouteConfig cycle-detection
+      // loop below — nothing verifier-specific needed there.
+      if (getCompositeAliasMode(alias, config) === 'verifier') {
+        const verifierOpts = (targets as CompositeModelConfig).verifier_options as VerifierOptions | undefined;
+        const samples = verifierOpts?.samples;
+        const pivots = verifierOpts?.pivots ?? 2;
+        const nEvaluations = verifierOpts?.n_evaluations ?? 4;
+
+        if (typeof samples !== 'number' || samples < 2) {
+          // Report-only: a single sample makes the tournament a no-op (there's
+          // nothing to compare), but resolveVerifierPlan still works — this
+          // never blocks routing, only flags the likely misconfiguration.
+          warnings.push({
+            path: `composite.${alias}.verifier_options.samples`,
+            message: `samples should be >= 2 — with fewer, the verifier has nothing to compare and best-of-N degenerates to a single plain call`,
+          });
+        }
+        if (verifierOpts?.temperature === 0 && typeof samples === 'number' && samples > 1) {
+          warnings.push({
+            path: `composite.${alias}.verifier_options.temperature`,
+            message: `temperature = 0 with samples > 1 will produce near-identical candidates — the tournament has little to select between`,
+          });
+        }
+
+        // Scorer route must resolve to openai-completions upstream mode (the
+        // tournament needs per-token logprobs). Report-only here — the
+        // pre-dispatch admission check in verifier.ts is the actual
+        // enforcement (fails open to a single plain call).
+        try {
+          const plan = resolveVerifierPlan(alias, config, new Set());
+          if (plan && plan.scorer.route.upstreamMode !== 'openai-completions') {
+            errors.push({
+              path: `composite.${alias}.${plan.scorer.modelName}`,
+              message: `verifier scorer must resolve to upstream_mode = "openai-completions" (logprobs required for scoring); got "${plan.scorer.route.upstreamMode}"`,
+            });
+          }
+
+          if (plan && typeof samples === 'number' && samples >= 2) {
+            // PPT comparison bound: N + k(N-k) + C(k,2), repeated n_evaluations
+            // times per comparison. otac_max_reuse is an upper clamp on the
+            // OTAC grant's remainingCalls — never a widener — so a configured
+            // value below this derived bound would starve the tournament
+            // mid-flight. Caught here at config-validate time (report-only);
+            // the actual enforcement is verifier.ts's pre-dispatch admission
+            // check, which refuses to dispatch rather than cut off mid-flight.
+            const k = Math.min(pivots, samples);
+            const comparisons = samples + k * (samples - k) + (k * (k - 1)) / 2;
+            const derivedBound = Math.ceil(comparisons * nEvaluations);
+            const maxReuse = plan.options.otac_max_reuse;
+            if (typeof maxReuse === 'number' && maxReuse < derivedBound) {
+              errors.push({
+                path: `composite.${alias}.verifier_options.otac_max_reuse`,
+                message: `otac_max_reuse (${maxReuse}) is below the derived call bound (${derivedBound} = samples + pivots·(samples-pivots) + C(pivots,2), ×n_evaluations) — this would starve the tournament mid-flight; raise otac_max_reuse or omit it to use the derived bound`,
+              });
+            }
+          }
+        } catch {
+          // resolveVerifierPlan throws on structural issues (missing target,
+          // duplicate roles) — already surfaced by the generic per-field
+          // checks above and by the cycle-detection loop below; avoid
+          // duplicate reporting here.
         }
       }
     }
@@ -3225,6 +3440,21 @@ function sanitizeCompositeConfig(composite: ProxyConfig['composite']): Record<st
       safeTargets.fusion_options = opts;
     }
 
+    // Preserve verifier_options
+    const rawVerifierOpts = (targets as CompositeModelConfig).verifier_options;
+    if (rawVerifierOpts && typeof rawVerifierOpts === 'object' && !Array.isArray(rawVerifierOpts)) {
+      const vo = rawVerifierOpts as unknown as Record<string, unknown>;
+      const opts: Partial<VerifierOptions> = {};
+      if (typeof vo.samples === 'number') opts.samples = vo.samples;
+      if (typeof vo.temperature === 'number') opts.temperature = vo.temperature;
+      if (typeof vo.n_evaluations === 'number') opts.n_evaluations = vo.n_evaluations;
+      if (typeof vo.pivots === 'number') opts.pivots = vo.pivots;
+      if (typeof vo.criteria === 'string') opts.criteria = vo.criteria;
+      if (typeof vo.seed === 'number') opts.seed = vo.seed;
+      if (typeof vo.otac_max_reuse === 'number') opts.otac_max_reuse = vo.otac_max_reuse;
+      if (typeof opts.samples === 'number') safeTargets.verifier_options = opts as VerifierOptions;
+    }
+
     for (const [targetModel, config] of Object.entries(targets || {})) {
       if (COMPOSITE_META_KEYS.has(targetModel)) {
         continue;
@@ -3263,11 +3493,15 @@ function sanitizeCompositeConfig(composite: ProxyConfig['composite']): Record<st
       if (typeof targetCfg.coord === 'number' && Number.isFinite(targetCfg.coord)) {
         safeTarget.coord = targetCfg.coord;
       }
+      if (typeof targetCfg.verifier === 'number' && Number.isFinite(targetCfg.verifier)) {
+        safeTarget.verifier = targetCfg.verifier;
+      }
       if (
         targetCfg.role === 'panel' || targetCfg.role === 'judge' || targetCfg.role === 'synth' ||
-        targetCfg.role === 'planner' || targetCfg.role === 'executor'
+        targetCfg.role === 'planner' || targetCfg.role === 'executor' ||
+        targetCfg.role === 'target' || targetCfg.role === 'scorer'
       ) {
-        safeTarget.role = targetCfg.role as FusionRole;
+        safeTarget.role = targetCfg.role as FusionRole | VerifierRole;
       }
       safeTargets[targetModel] = safeTarget;
     }
@@ -3398,6 +3632,22 @@ function validateAndNormalizeComposite(payload: unknown): Record<string, Composi
         targetConfig.fusion_options = opts;
         continue;
       }
+      if (key === 'verifier_options') {
+        if (!isPlainObject(rawValue)) throw new Error(`Invalid verifier_options for alias: ${alias}`);
+        const vo = rawValue as Record<string, unknown>;
+        if (typeof vo.samples !== 'number' || !Number.isFinite(vo.samples)) {
+          throw new Error(`Invalid verifier_options.samples for: ${alias} — required, must be a number`);
+        }
+        const opts: VerifierOptions = { samples: vo.samples };
+        if ('temperature' in vo) { if (typeof vo.temperature !== 'number') throw new Error(`Invalid verifier_options.temperature for: ${alias}`); opts.temperature = vo.temperature; }
+        if ('n_evaluations' in vo) { if (typeof vo.n_evaluations !== 'number') throw new Error(`Invalid verifier_options.n_evaluations for: ${alias}`); opts.n_evaluations = vo.n_evaluations; }
+        if ('pivots' in vo) { if (typeof vo.pivots !== 'number') throw new Error(`Invalid verifier_options.pivots for: ${alias}`); opts.pivots = vo.pivots; }
+        if ('criteria' in vo) { if (typeof vo.criteria !== 'string') throw new Error(`Invalid verifier_options.criteria for: ${alias}`); opts.criteria = vo.criteria; }
+        if ('seed' in vo) { if (typeof vo.seed !== 'number') throw new Error(`Invalid verifier_options.seed for: ${alias}`); opts.seed = vo.seed; }
+        if ('otac_max_reuse' in vo) { if (typeof vo.otac_max_reuse !== 'number') throw new Error(`Invalid verifier_options.otac_max_reuse for: ${alias}`); opts.otac_max_reuse = vo.otac_max_reuse; }
+        targetConfig.verifier_options = opts;
+        continue;
+      }
       if (key === 'token_limit') {
         // Support both new format {num, duration} and old format (number)
         if (typeof rawValue === 'object' && rawValue !== null && !Array.isArray(rawValue)) {
@@ -3456,11 +3706,17 @@ function validateAndNormalizeComposite(payload: unknown): Record<string, Composi
         }
         entry.fusion = rawValue.fusion;
       }
-      if ('role' in rawValue) {
-        if (!(['panel', 'judge', 'synth', 'planner', 'executor'] as string[]).includes(rawValue.role as string)) {
-          throw new Error(`Invalid role for: ${alias}.${key} — must be 'panel', 'judge', 'synth', 'planner', or 'executor'`);
+      if ('verifier' in rawValue) {
+        if (typeof rawValue.verifier !== 'number' || !Number.isFinite(rawValue.verifier)) {
+          throw new Error(`Invalid verifier for: ${alias}.${key}`);
         }
-        entry.role = rawValue.role as FusionRole;
+        entry.verifier = rawValue.verifier;
+      }
+      if ('role' in rawValue) {
+        if (!(['panel', 'judge', 'synth', 'planner', 'executor', 'target', 'scorer'] as string[]).includes(rawValue.role as string)) {
+          throw new Error(`Invalid role for: ${alias}.${key} — must be 'panel', 'judge', 'synth', 'planner', 'executor', 'target', or 'scorer'`);
+        }
+        entry.role = rawValue.role as FusionRole | VerifierRole;
       }
 
       targetConfig[key] = entry;
@@ -3678,7 +3934,8 @@ export interface CompositeTargetPatch {
   primary?: boolean;
   fusion?: number | null;
   coord?: number | null;
-  role?: FusionRole | null;
+  verifier?: number | null;
+  role?: FusionRole | VerifierRole | null;
 }
 
 function cloneCompositeConfig(composite: ProxyConfig['composite']): Record<string, CompositeModelConfig> {
@@ -3694,6 +3951,10 @@ function cloneCompositeConfig(composite: ProxyConfig['composite']): Record<strin
       const fusionOpts = (targets as CompositeModelConfig).fusion_options;
       if (fusionOpts && typeof fusionOpts === 'object') {
         nextTargets.fusion_options = { ...(fusionOpts as FusionOptions) };
+      }
+      const verifierOpts = (targets as CompositeModelConfig).verifier_options;
+      if (verifierOpts && typeof verifierOpts === 'object') {
+        nextTargets.verifier_options = { ...(verifierOpts as VerifierOptions) };
       }
       for (const [targetModel, config] of Object.entries(targets as Record<string, unknown>)) {
         if (COMPOSITE_META_KEYS.has(targetModel)) {
@@ -3953,11 +4214,21 @@ export function upsertCompositeTarget(
     }
   }
 
+  if (patch.verifier !== undefined) {
+    if (patch.verifier === null || patch.verifier === 0) {
+      delete nextTarget.verifier;
+    } else if (!Number.isFinite(patch.verifier) || patch.verifier < 0) {
+      throw new Error(`Invalid verifier weight for ${aliasName}.${targetName}`);
+    } else {
+      nextTarget.verifier = patch.verifier;
+    }
+  }
+
   if (patch.role !== undefined) {
     if (patch.role === null) {
       delete nextTarget.role;
-    } else if (!(['panel', 'judge', 'synth', 'planner', 'executor'] as string[]).includes(patch.role)) {
-      throw new Error(`Invalid role for ${aliasName}.${targetName} — must be panel, judge, synth, planner, or executor`);
+    } else if (!(['panel', 'judge', 'synth', 'planner', 'executor', 'target', 'scorer'] as string[]).includes(patch.role)) {
+      throw new Error(`Invalid role for ${aliasName}.${targetName} — must be panel, judge, synth, planner, executor, target, or scorer`);
     } else {
       nextTarget.role = patch.role;
     }

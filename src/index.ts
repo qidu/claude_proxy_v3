@@ -34,7 +34,7 @@ import {
   handleDashboardToolBlocklist,
   handleDashboardUpsertScheduleTarget,
 } from './handlers/dashboard.js';
-import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, getCompositeAliasMode, resolveFusionPlan, resolveCoordinatorPlan, FusionPlan, ModelRouteConfig, ProxyConfig, CompositeRouteCandidate, CompositeTargetConfig, parseHumanTokenLimit, getAllowedHostsFromConfig, resolveScheduleTarget } from './utils/config-loader.js';
+import { loadProxyConfig, clearProxyConfigCache, dumpProxyConfigToml, getConfiguredModelIds, getModelRouteConfig, getCompositeRouteCandidates, getCompositeAliasMode, resolveFusionPlan, resolveCoordinatorPlan, resolveVerifierPlan, FusionPlan, VerifierPlan, ModelRouteConfig, ProxyConfig, CompositeRouteCandidate, CompositeTargetConfig, parseHumanTokenLimit, getAllowedHostsFromConfig, resolveScheduleTarget } from './utils/config-loader.js';
 import { detectCoordinatorStage } from './utils/coordinator.js';
 import {
   extractToolNamesFromBody,
@@ -82,6 +82,7 @@ import {
   PiiMapping,
 } from './utils/privacy-filter.js';
 import { getKompressConfig, shouldCompressPath, compressBody } from './utils/kompress.js';
+import { getVerifierConfig, runVerifier, redeemVerifierGrant, VerifierConfig } from './utils/verifier.js';
 import { eraseBlockedTools } from './utils/tool-blocklist.js';
 import { buildModelUsageRecordPayload, recordModelUsageToRemote } from './utils/model-usage-recorder.js';
 import { runHook, applyWriteoutBody, pipeEventTransformer, formatTransformsDebug, type HookContext } from './utils/request-transform.js';
@@ -714,6 +715,51 @@ export default {
       }
     }
 
+    // Verifier sidecar callback: an inbound generation/scoring call from the
+    // llm-as-a-verifier sidecar, authenticated by a one-time auth code (OTAC)
+    // instead of the caller's own credentials. Detected purely by header
+    // presence — a request carrying one_time_auth_code is never a normal
+    // client request (clients authenticate via Authorization/x-api-key/
+    // x-goog-api-key), so this check runs unconditionally, before the
+    // "missing auth headers" gate below.
+    //
+    // All four checks (sidecar-origin via the unspoofable x-client-address,
+    // grant lookup, exhaustion/expiry, model allowlist) live in
+    // redeemVerifierGrant; this block only substitutes the grant's own
+    // authHeaders into the request so every downstream path — auth
+    // extraction, routing, accounting — sees a normally-authenticated
+    // request and needs no verifier-specific branching of its own.
+    const inboundOtac = request.headers.get('one_time_auth_code');
+    let verifierGrantIdentity: { requestId: string; aliasName: string; userKey: string } | undefined;
+    if (inboundOtac) {
+      const verdict = await redeemVerifierGrant(request, env, logger);
+      if (!verdict.ok) {
+        logger.warn(requestId, `Verifier callback rejected: ${verdict.error}`);
+        return new Response(JSON.stringify({ error: verdict.error || 'Forbidden' }), {
+          status: verdict.status,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      // The rule: every recorder on a redeemed callback uses the GRANT's
+      // identity (requestId, userKey, aliasName), never the callback's own.
+      // agent stats are suppressed entirely below to avoid double-counting.
+      verifierGrantIdentity = { requestId: verdict.requestId!, aliasName: verdict.aliasName!, userKey: verdict.userKey! };
+
+      // redeemVerifierGrant only reads the body via request.clone(), so the
+      // original stream is untouched here — safe to reuse the "new
+      // Request(request, {...})" precedent (see the body-buffering
+      // reconstruction below) without re-threading body/duplex by hand.
+      const rewrittenHeaders = new Headers(request.headers);
+      rewrittenHeaders.delete('one_time_auth_code');
+      rewrittenHeaders.delete('authorization');
+      rewrittenHeaders.delete('x-api-key');
+      rewrittenHeaders.delete('x-goog-api-key');
+      for (const [key, value] of Object.entries(verdict.authHeaders!)) {
+        rewrittenHeaders.set(key, value);
+      }
+      request = new Request(request, { headers: rewrittenHeaders } as RequestInit);
+    }
+
     if (path === '/config-reload') {
       logger.debug(requestId, `${path} Config path: ${configPath}, Consul: ${configConsul}, Apollo: ${configApollo}`);
       try {
@@ -1139,7 +1185,14 @@ export default {
 
       // Extract authentication headers early
       const authHeaders = extractAuthHeaders(request);
-      const endpointUserKey = getRawEndpointUserKey(authHeaders);
+      // The rule: on a redeemed verifier callback, accounting uses the
+      // GRANT's identity, never the callback's own — the callback's own
+      // Authorization header was already replaced by the grant's authHeaders
+      // above, so extractAuthHeaders(request) would otherwise report the
+      // original caller's key correctly by coincidence for the endpoint-user
+      // matching below; still, prefer the grant's userKey explicitly so this
+      // does not depend on that coincidence.
+      const endpointUserKey = verifierGrantIdentity?.userKey ?? getRawEndpointUserKey(authHeaders);
       const modelUsageRecordUrl = proxyConfig.remote?.recording?.record_server?.trim();
       const modelUsageRecordBody = proxyConfig.remote?.recording?.record_response_body === true;
       let modelAuthHeaders = authHeaders;
@@ -1165,8 +1218,15 @@ export default {
           // matches. Returns {prefix, ua} so we can display them separately
           // in the Tool Blocklist.
           agent = resolveAgentName(body, userAgentPrefix);
-          recordToolRequestChars(extractToolRequestCharLengthsFromBody(body), agent);
-          recordAgentStat(agent, requestToolNames);
+          // Agent stats are suppressed entirely on a redeemed verifier
+          // callback: the sidecar's N generation calls are internal to one
+          // /select dispatch, not independent user-agent-attributed
+          // requests, and counting them here would double-count the single
+          // request the caller actually made.
+          if (!verifierGrantIdentity) {
+            recordToolRequestChars(extractToolRequestCharLengthsFromBody(body), agent);
+            recordAgentStat(agent, requestToolNames);
+          }
 
           // Privacy filter: redact PII out of the request body before routing so
           // every downstream path (single/composite/fusion) operates on redacted
@@ -1338,6 +1398,53 @@ export default {
                 (request as any)._fusionBody = body;
                 // Fall through with empty compositeAttempts — fusion is handled at dispatch time below
                 compositeAttempts = [];
+              }
+            }
+
+            // ---- Verifier mode: sample N from target, rank via sidecar, return winner ----
+            if (!((request as any)._fusionPlan) && getCompositeAliasMode(modelName, proxyConfig) === 'verifier') {
+              const verifierPlan = resolveVerifierPlan(modelName, proxyConfig);
+              const verifierConfig = getVerifierConfig(env);
+              if (verifierPlan && verifierConfig) {
+                if (proxyConfig.composite?.[modelName]?.token_limit !== undefined) {
+                  const limitCfg = proxyConfig.composite[modelName].token_limit!;
+                  const allTargets = [
+                    verifierPlan.target.route.modelAlias || verifierPlan.target.modelName,
+                    verifierPlan.scorer.route.modelAlias || verifierPlan.scorer.modelName,
+                  ];
+                  const totalUsed = getCompositeAliasTokenUsage(modelName, allTargets);
+                  if (totalUsed >= limitCfg.num) {
+                    throw new OverLimitError(
+                      `exceed local token limit: composite alias '${modelName}' token limit (${limitCfg.num} ${limitCfg.duration}) reached (${totalUsed}).`
+                    );
+                  }
+                }
+                logger.info(requestId, `Verifier routing: ${modelName} → target(${verifierPlan.target.modelName}) scorer(${verifierPlan.scorer.modelName}) samples=${verifierPlan.options.samples}`);
+                compositeAliasName = modelName;
+                // runVerifier is called at dispatch time below (mirrors the fusion sentinel pattern).
+                (request as any)._verifierPlan = verifierPlan;
+                (request as any)._verifierConfig = verifierConfig;
+                (request as any)._verifierBody = body;
+                // Unlike fusion, we do NOT short-circuit compositeAttempts here.
+                // Instead we pre-seed _coordCandidate with the verifier's target
+                // model so the standard compositeCandidates-building block below
+                // (shared with every other composite mode) builds a single,
+                // fully-correct RouteAttempt for it — covering every endpoint
+                // format (messages/interactions/responses/Gemini generateContent
+                // variants, native vs openai-completions) without duplicating
+                // that routing logic here. This becomes the fail-open landing
+                // candidate: dispatch time tries the sidecar first via
+                // runVerifier, and only falls through to the normal
+                // compositeAttempts dispatch loop (which will run exactly this
+                // one candidate) if the sidecar attempt returns null.
+                (request as any)._coordCandidate = { modelName: verifierPlan.target.modelName, route: verifierPlan.target.route, targetConfig: {} } as CompositeRouteCandidate;
+              } else if (verifierPlan && !verifierConfig) {
+                // Configured as a verifier alias but VERIFIER_URL is unset: fail
+                // open to a plain call against the target model rather than
+                // erroring, consistent with kompress's "entirely inert unless
+                // configured" default.
+                logger.warn(requestId, `Verifier alias '${modelName}' has no VERIFIER_URL configured; falling back to a plain call to ${verifierPlan.target.modelName}`);
+                (request as any)._coordCandidate = { modelName: verifierPlan.target.modelName, route: verifierPlan.target.route, targetConfig: {} } as CompositeRouteCandidate;
               }
             }
 
@@ -2413,6 +2520,44 @@ export default {
         const fusionResp = await runFusion(_fusionPlan, _fusionBody);
         recordRequestTiming(path, Date.now() - requestStartTime);
         return applyCorsHeaders(await restorePrivacyResponse(fusionResp, piiMapping, requestId, logger), request, env);
+      }
+
+      // ---- Verifier dispatch ----
+      const _verifierPlan = (request as any)._verifierPlan as VerifierPlan | undefined;
+      const _verifierConfig = (request as any)._verifierConfig as VerifierConfig | undefined;
+      const _verifierBody = (request as any)._verifierBody as Record<string, unknown> | undefined;
+      if (_verifierPlan && _verifierConfig && _verifierBody) {
+        const verifierResp = await runVerifier(
+          _verifierConfig,
+          _verifierPlan,
+          _verifierBody,
+          requestId,
+          modelAuthHeaders,
+          endpointUserKey,
+          env,
+          logger,
+        );
+        if (verifierResp) {
+          recordModelStat(_verifierPlan.target.modelName);
+          recordRequestTiming(path, Date.now() - requestStartTime);
+          return applyCorsHeaders(await restorePrivacyResponse(verifierResp, piiMapping, requestId, logger), request, env);
+        }
+        // Fail open: sidecar unreachable, aborted tournament, or a scorer
+        // route that isn't openai-completions. Fall back to one plain call
+        // to the target model — the landing point for every aborted
+        // tournament (see verifier.ts's runVerifier doc comment). When
+        // VERIFIER_FAIL_OPEN is false, an explicit error is raised instead
+        // of silently continuing on to a degraded plain call.
+        if (!_verifierConfig.failOpen) {
+          throw new Error(`verifier_unavailable: alias '${_verifierPlan.alias}' verifier dispatch failed and VERIFIER_FAIL_OPEN is disabled`);
+        }
+        logger.warn(requestId, `Verifier alias '${_verifierPlan.alias}' failed open to a plain call against ${_verifierPlan.target.modelName}`);
+        // Deliberately no return here: the routing block above pre-seeded
+        // _coordCandidate with the verifier's target model, so compositeAttempts
+        // already holds exactly one fully-built RouteAttempt for it (correct for
+        // whatever endpoint format this request uses). Falling through hands the
+        // fail-open call to the standard composite dispatch loop below rather
+        // than re-deriving target URLs and auth headers here.
       }
 
       if (compositeAttempts && compositeAttempts.length > 0) {

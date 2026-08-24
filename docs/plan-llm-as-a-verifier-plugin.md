@@ -604,6 +604,13 @@ Underlying reason: **Claude can generate candidates but can never verify them** 
 returns no logprobs, so there is no distribution to take an expectation over. TurboAgent rejects an
 `anthropic/` verifier for the same reason.
 
+`openai-completions` is **necessary but not sufficient**. It only guarantees the proxy does not
+strip logprobs in transit; the model behind that route must actually emit them. Many hosted chat
+APIs accept `logprobs: true` and silently omit the field from the response, which degrades the same
+way. See [`verifier-logprobs-requirements.md`](./verifier-logprobs-requirements.md) for the exact
+request parameters the sidecar sends, the backends that support them (vLLM/SGLang, DeepSeek, Vertex
+AI), and how to probe a candidate scorer before wiring it in.
+
 Without a guard the failure mode is a tournament that scores every pair 0.5/0.5 and returns a
 *plausible* answer — indistinguishable from success. Three layers, in the order they actually bite:
 

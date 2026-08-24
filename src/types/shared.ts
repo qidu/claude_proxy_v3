@@ -219,6 +219,49 @@ export interface Env {
      * (compression saves nothing meaningful). Default: 200.
      */
     KOMPRESS_MIN_CHARS?: string;
+
+    /**
+     * Base URL of the llm-as-a-verifier best-of-N sidecar, e.g.
+     * "http://127.0.0.1:8790". When unset, the verifier composite alias mode
+     * is disabled (no behavior change).
+     */
+    VERIFIER_URL?: string;
+
+    /**
+     * Comma-separated list of addresses allowed to redeem verifier grants
+     * (matched against the unspoofable x-client-address, never
+     * x-forwarded-for/x-real-ip). Default: "127.0.0.1,::1".
+     */
+    VERIFIER_SIDECAR_IPS?: string;
+
+    /**
+     * Per-/select timeout in milliseconds. Covers N generations AND the full
+     * tournament, so this is far higher than kompress's per-fragment timeout.
+     * Default: 300000 (5 minutes).
+     */
+    VERIFIER_TIMEOUT_MS?: string;
+
+    /**
+     * Multiplier applied to the derived call bound (samples + tournament
+     * comparisons) when sizing a grant's remainingCalls, to absorb retries.
+     * Applies to every verifier alias; distinct from a per-alias
+     * otac_max_reuse. Default: 1.25.
+     */
+    VERIFIER_CALL_MARGIN?: string;
+
+    /**
+     * Fail-open behavior. Defaults to TRUE: a sidecar outage, timeout, or
+     * aborted tournament falls back to one plain call to the target model.
+     * Set to "false"/"0" to fail-closed (error the request instead).
+     */
+    VERIFIER_FAIL_OPEN?: string;
+
+    /**
+     * Default criteria (benchmark name or criteria-file path) passed to the
+     * sidecar's select() call when a verifier alias does not set its own
+     * verifier_options.criteria. Unset by default.
+     */
+    VERIFIER_CRITERIA?: string;
 }
 
 

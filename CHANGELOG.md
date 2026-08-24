@@ -5,6 +5,56 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### feat(composite): best-of-N `verifier` alias mode via the `llm-as-a-verifier` sidecar
+
+New fourth composite alias mode, alongside share/fallback, fusion, and
+coordinator: `verifier` samples N candidates from a `role = "target"` model
+and ranks them with a Probabilistic Pivot Tournament run by an external
+sidecar (`role = "scorer"`, must be an `openai-completions` route so scoring
+has logprobs to work with). See
+[`docs/plan-llm-as-a-verifier-plugin.md`](./docs/plan-llm-as-a-verifier-plugin.md)
+for the full design.
+
+- **`src/utils/verifier.ts`** — new plugin module. The sidecar holds no
+  credentials of its own: `runVerifier` mints a short-lived one-time auth
+  code (OTAC) per `/select` dispatch and registers a grant (target/scorer
+  models, the *caller's own* auth headers, an admission-bounded
+  `remainingCalls`, an expiry); the sidecar echoes the OTAC on every
+  generation/scoring callback, and `redeemVerifierGrant` exchanges it back
+  for those same caller credentials — never the sidecar's own. Sidecar-origin
+  is gated purely on the unspoofable `x-client-address` (never
+  `x-forwarded-for`/`x-real-ip`). `remainingCalls` is computed once at grant
+  mint time from the tournament's comparison bound (`N + k(N-k) + C(k,2)`
+  comparisons × `n_evaluations`, plus the N generations, ×
+  `VERIFIER_CALL_MARGIN`) and is never widened mid-flight; `otac_max_reuse`
+  only ever lowers it further. Constant-time OTAC comparison throughout.
+  Fails open by default (one plain call to the target model) on sidecar
+  outage, timeout, an aborted tournament, or a scorer route that isn't
+  `openai-completions`; `VERIFIER_FAIL_OPEN=false` raises instead of
+  degrading silently.
+- **`src/index.ts`** — new `verifier` composite dispatch branch alongside
+  fusion/coordinator; a sidecar-origin guard that redeems an inbound OTAC
+  callback and rewrites the request's auth headers to the grant's (so every
+  existing auth/routing/accounting code path — including the "missing auth
+  headers" gate — works unchanged); accounting on a redeemed callback uses
+  the grant's identity, not the callback's own, and per-agent stats are
+  suppressed entirely (the sidecar's N generation calls are internal to one
+  dispatch, not independent user-agent-attributed requests). The fail-open
+  fallback reuses the same composite-candidate-building machinery as every
+  other composite mode (via a pre-seeded `_coordCandidate`), so it correctly
+  handles every endpoint format (`/v1/messages`, `/v1/interactions`,
+  `/v1/responses`, Gemini `generateContent`/`streamGenerateContent`, native
+  vs. `openai-completions`) rather than a hand-rolled subset.
+- **New env vars**: `VERIFIER_URL` (unset = feature disabled, no behavior
+  change), `VERIFIER_SIDECAR_IPS` (default `127.0.0.1,::1`),
+  `VERIFIER_TIMEOUT_MS` (default 300000), `VERIFIER_CALL_MARGIN` (default
+  1.25), `VERIFIER_FAIL_OPEN` (default true), `VERIFIER_CRITERIA`.
+- **Tests** — `tests/unit/verifier.test.ts`: config validation, the OTAC
+  grant lifecycle (mint/redeem/exhaust/expire), the sidecar-origin guard
+  (including that `x-forwarded-for`/`x-real-ip` are never trusted), the
+  model allowlist, and `runVerifier` against a mocked sidecar (winner
+  unwrapping, every fail-open path).
+
 ### fix(transforms): `codestrong` 500s on Claude Code requests ending in a non-user turn
 
 Claude Code routes through the `auditor` composite (`codesmall`/`codestrong`,
