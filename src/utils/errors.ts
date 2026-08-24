@@ -198,7 +198,7 @@ export function createErrorResponse(
  * Checks `error.message` (Anthropic/OpenAI format) then top-level `message`.
  * Returns undefined if no parseable message is found.
  */
-function extractUpstreamMessage(rawBody: string | undefined): string | undefined {
+export function extractUpstreamMessage(rawBody: string | undefined): string | undefined {
   if (!rawBody) return undefined;
   try {
     const parsed = JSON.parse(rawBody);
@@ -253,7 +253,9 @@ export function handleTargetApiError(
       break;
     case 401:
       errorType = 'authentication_error';
-      errorMessage = upstreamMessage ?? `Authentication failed for ${targetApiName}`;
+      errorMessage = upstreamMessage
+        ? `Upstream (${targetApiName}) rejected the API key: ${upstreamMessage}`
+        : `Upstream (${targetApiName}) rejected the API key (HTTP 401) — check the configured api_key for this route.`;
       break;
     case 403:
       errorType = 'permission_error';

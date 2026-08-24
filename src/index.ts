@@ -7,7 +7,7 @@
 
 import { Env } from './types/shared.js';
 import { extractAuthHeaders, transformAuthHeadersForUpstream, formatApiKeyForUpstream, parseDynamicRoute, isHostAllowed, getHandlerType, buildTargetUrl, buildUpstreamUrl, sanitizeUpstreamResponseHeaders, getSidecarForwardedHeaders } from './utils/routing.js';
-import { createErrorResponse, OverLimitError, ClaudeProxyError, classifyTransportError } from './utils/errors.js';
+import { createErrorResponse, OverLimitError, ClaudeProxyError, classifyTransportError, extractUpstreamMessage } from './utils/errors.js';
 import { createLogger, type Logger } from './utils/logger.js';
 import { handleModelsRequest, getModelCount } from './handlers/models.js';
 import { handleTokenCountingRequest } from './handlers/token-counting.js';
@@ -977,6 +977,7 @@ export default {
         if (sendBody) authForwardHeaders['Content-Type'] = 'application/json';
 
         let authStatus: number;
+        let authRespBodyText: string | undefined;
         try {
           const authResp = await fetch(authUrl, {
             method: sendBody ? 'POST' : 'GET',
@@ -986,14 +987,30 @@ export default {
           });
           authStatus = authResp.status;
           modelUsageOneTimeAuthCode = authResp.headers.get('one_time_auth_code') || undefined;
+          // Read the auth service's response body so a rejection (4xx/5xx) can
+          // surface its reason to the client instead of a bare "Authentication
+          // failed." — mirrors handleTargetApiError's upstream-message passthrough.
+          try {
+            authRespBodyText = await authResp.text();
+          } catch {
+            // best-effort; body read failures fall back to the generic message below
+          }
         } catch (err) {
-          logger.warn(requestId, `Auth URL fetch failed: ${(err as Error).message}`);
-          return createErrorResponse(new Error('Authentication service unavailable.'), requestId, 503);
+          logger.warn(requestId, `Auth server (${authUrl}) unreachable: ${(err as Error).message}`);
+          return createErrorResponse(
+            new Error(`Authentication service unavailable: could not reach remote auth server (${authUrl}). ${(err as Error).message}`),
+            requestId,
+            503,
+          );
         }
 
         if (authStatus !== 200) {
-          logger.warn(requestId, `Auth URL rejected request with status ${authStatus} for ${path}`);
-          return createErrorResponse(new Error('Authentication failed.'), requestId, 401);
+          const authServiceMessage = extractUpstreamMessage(authRespBodyText);
+          logger.warn(requestId, `Remote auth server (${authUrl}) rejected request with status ${authStatus} for ${path}${authServiceMessage ? `: ${authServiceMessage}` : ''}`);
+          const detail = authServiceMessage
+            ? `Remote auth server rejected the request (HTTP ${authStatus}): ${authServiceMessage}`
+            : `Remote auth server rejected the request (HTTP ${authStatus}). This is a failure from the configured remote auth_server.`;
+          return createErrorResponse(new Error(detail), requestId, 401);
         }
         return null;
       };
