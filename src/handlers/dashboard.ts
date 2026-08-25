@@ -2890,7 +2890,7 @@ function buildTestToolRequest(upstreamMode: string): Record<string, unknown> {
         parameters: TEST_TOOL_SCHEMA,
       },
     }],
-    tool_choice: { type: 'function', function: { name: TEST_TOOL_NAME } },
+    tool_choice: 'auto',
   };
 
   if (upstreamMode === 'openai-completions' ||

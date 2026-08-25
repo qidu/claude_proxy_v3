@@ -76,3 +76,76 @@ Additionally, in the Turn 2 request, we still pass the `reasoning_content` gener
 The sample output of this code is as follows:
 
 `Turn 1.1reasoning_content="The user is asking about the weather in Hangzhou tomorrow. I need to get tomorrow's date first, then call the weather function."content="Let me check tomorrow's weather in Hangzhou for you. First, let me get tomorrow's date."tool_calls=[ChatCompletionMessageFunctionToolCall(id='call_00_kw66qNnNto11bSfJVIdlV5Oo', function=Function(arguments='{}', name='get_date'), type='function', index=0)]tool result for get_date: 2026-04-19Turn 1.2reasoning_content="Today is 2026-04-19, so tomorrow is 2026-04-20. Now I'll call the weather function for Hangzhou."content=''tool_calls=[ChatCompletionMessageFunctionToolCall(id='call_00_H2SCW6136vWJGq9SQlBuhVt4', function=Function(arguments='{"location": "Hangzhou", "date": "2026-04-20"}', name='get_weather'), type='function', index=0)]tool result for get_weather: Cloudy 7~13°CTurn 1.3reasoning_content='The weather result is in. Let me share this with the user.'content="Here's the weather forecast for **Hangzhou tomorrow (April 20, 2026)**:\n\n- 🌤 **Condition:** Cloudy  \n- 🌡 **Temperature:** 7°C ~ 13°C (45°F ~ 55°F)\n\nIt'll be on the cooler side, so you might want to bring a light jacket if you're heading out! Let me know if you need anything else."tool_calls=NoneTurn 2.1reasoning_content='The user is asking about the weather in Guangzhou tomorrow. Today is 2026-04-19, so tomorrow is 2026-04-20. I can directly call the weather function.'content=''tool_calls=[ChatCompletionMessageFunctionToolCall(id='call_00_8URkLt5NjmNkVKhDmMcNq9Mo', function=Function(arguments='{"location": "Guangzhou", "date": "2026-04-20"}', name='get_weather'), type='function', index=0)]tool result for get_weather: Cloudy 7~13°CTurn 2.2reasoning_content='The weather result for Guangzhou is the same as Hangzhou. Let me share this with the user.'content="Here's the weather forecast for **Guangzhou tomorrow (April 20, 2026)**:\n\n- 🌤 **Condition:** Cloudy  \n- 🌡 **Temperature:** 7°C ~ 13°C (45°F ~ 55°F)\n\nIt'll be cool and cloudy, so a light jacket would be a good idea if you're going out. Let me know if there's anything else you'd like to know!"tool_calls=None`
+
+---
+
+## Proxy notes: `tool_choice` and `thinking` in model-test requests
+
+Findings from reviewing the model-test request builders in `src/tui.ts` and
+`src/handlers/dashboard.ts`, both of which POST to the proxy's own
+`/v1/messages` endpoint (Anthropic-Messages shape) to probe a configured
+model/upstream. The proxy translates that body per `upstreamMode` before
+forwarding to the real upstream (`/v1/chat/completions` for
+`openai-completions`, native `/v1/messages` for `anthropic-messages`, etc.).
+
+### `tool_choice`
+
+- **TUI** (`buildOpenAIToolRequest`, `src/tui.ts`): OpenAI-mode test request
+  uses `tool_choice: 'auto'`.
+- **Dashboard** (`buildTestToolRequest`, `src/handlers/dashboard.ts`):
+  previously forced `tool_choice: { type: 'function', function: { name:
+  TEST_TOOL_NAME } }`. Synced to `tool_choice: 'auto'` to match the TUI.
+- Claude-mode (`anthropic-messages`) test requests in both files still force
+  `tool_choice: { type: 'tool', name: TEST_TOOL_NAME }` — unchanged, since
+  Anthropic's schema doesn't have an `'auto'` shorthand string form for tools
+  the same way OpenAI's does in this context, and the existing code depends
+  on the forced choice for the liveness probe there.
+
+### `thinking` field validity per upstream mode
+
+**`/v1/messages` (Anthropic native, `anthropic-messages` mode)** — `thinking`
+is a native field. When `tool_choice` is forced (non-`'auto'`), some
+Anthropic-compatible shims (e.g. DeepSeek's `/anthropic` endpoint) can reject
+the request with `400 "Thinking mode does not support this tool_choice"` if
+`thinking` is enabled/adaptive alongside a forced `tool_choice`. See existing
+comment at `src/tui.ts:346-353`. Rule of thumb: if `tool_choice` is not
+`'auto'`, `thinking` should be `{"type": "disabled"}` (or omitted) to avoid
+this class of error on non-native Anthropic shims.
+
+**`/v1/chat/completions` (`openai-completions` mode)** — Per
+`docs/openai-api-reference.md:51-74` (the request-body schema this repo
+documents for Chat Completions), **`thinking` is not a valid field** — it
+doesn't appear anywhere in the documented request schema, and no
+`docs/openai*` file lists it as valid.
+
+The proxy's own handling confirms this: `src/handlers/messages.ts:264-272`
+and `:571-577` explicitly strip `thinking` before forwarding to an
+`openai-completions` upstream, converting `budget_tokens` (if present and
+`thinking.enabled`) into the standard OpenAI `reasoning_effort` value via
+`budgetToReasoningEffort()`, then deleting `thinking` entirely. So sending
+`thinking: {"type": "enabled"}` (or `"disabled"`) to `/v1/messages` targeting
+an `openai-completions` upstream has **no effect on the upstream request** —
+it's translated/dropped before the real HTTP call is made. This is why the
+`tool_choice`-forces-`thinking:disabled` rule above does not apply to
+OpenAI-mode test requests.
+
+**DeepSeek's actual `/chat/completions` endpoint (real upstream, not this
+proxy's `/v1/messages`)** — as documented above, DeepSeek's own
+OpenAI-compatible endpoint is a special case: unlike standard OpenAI, it
+*does* accept a `thinking` field, but only via the OpenAI SDK's `extra_body`
+passthrough — it is not a top-level parameter in the OpenAI SDK's typed
+request:
+
+```json
+{
+  "reasoning_effort": "high",
+  "extra_body": { "thinking": { "type": "enabled" } }
+}
+```
+
+This is a DeepSeek API extension, not part of the standard OpenAI Chat
+Completions schema documented in `docs/openai-api-reference.md`. It does not
+change the proxy's behavior described above: this proxy's `/v1/messages`
+handler still strips `thinking` for any `openai-completions`-mode upstream
+(including DeepSeek ones) rather than passing it through as `extra_body`,
+converting only `budget_tokens` → `reasoning_effort` when present.
