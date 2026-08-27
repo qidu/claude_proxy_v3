@@ -56,6 +56,63 @@ Notes:
 - `package.json` gained an `allowScripts` field (npm 11+ install-script
   allowlist) covering the keytar install script.
 
+### feat(quota): read model usage/credits left for coding-plan providers
+
+New `src/utils/provider-quota.ts` fetches the remaining usage / balance for a
+model's route when its upstream is one of the supported coding-plan providers
+(endpoints + response schemas ported from the dsh musage plugin):
+
+| Provider | Route host(s) | Usage endpoint | Result |
+|---|---|---|---|
+| minimax | `api.minimaxi.com` / `api.minimax.io` | `/v1/api/openplatform/coding_plan/remains` | 5h + 7d used% (dual schema: percent-based + legacy count) |
+| deepseek | `api.deepseek.com` | `/user/balance` | balance (CNY/USD) |
+| kimi | `api.kimi.com` | `/coding/v1/usages` | 5h + 7d used% |
+| openrouter | `openrouter.ai` | `/api/v1/credits` | remaining USD credits |
+| zhipu | `open.bigmodel.cn` | `/api/monitor/usage/quota/limit` | 5h + 7d used% |
+
+The provider is detected from the model route's `targetUrl` host — no extra
+config. Zhipu is special: its `Authorization` header takes the raw key (no
+`Bearer ` prefix). Results are cached per `(provider, apiKey)` for 30s on
+success, with exponential backoff (5s → 30min) on failure.
+
+Anthropic-routed models have no usage endpoint, but Anthropic-compatible
+upstreams report the account-wide 5h-window used fraction (0-1) in the
+`anthropic-ratelimit-unified-5h-utilization` response header (same source as
+pi-proxy). The `anthropic-messages` passthrough now records this per model on
+real traffic (no polling — a value appears only after the first proxied
+request to that model) and derives a usage-left percent
+(`(1 - utilization)` clamped at 0%) as a fallback when the route has no usage
+provider.
+
+Surfaces:
+
+- **TUI**: new `Q` hotkey opens a model picker; every row carries a usage
+  suffix — `(58%)` (percent schema), `(7472/20000, 63%)` (remaining/limit +
+  used% for count schemas), `(¥43.97)`/`($6.50)` (balance), or `(58%)` from
+  the recorded anthropic 5h header — and moving ↑/↓ shows the highlighted
+  model's full quota (windows + reset time) on a status line at the bottom of
+  the panel; anthropic-routed models show the recorded 5h utilization left,
+  e.g. `58% 5h left`.
+- **TUI composite panel**: in 'Edit Composite Aliases Config', each target
+  row appends its usage-left after the timing suffix, e.g.
+  `[0.11/2.12/63.93s] (58% left)` — percent (minimax percent schema /
+  anthropic 5h header), count as `remaining/limit, used%` e.g.
+  `6930/12000, 42%` (kimi/zhipu/minimax count schema), or balance
+  (deepseek/openrouter), refreshed with each config
+  refresh (the 30s provider cache bounds the load).
+- **Dashboard API**: `GET /dashboard/api/quota?model=<id>` (dashboard
+  `api_key` auth) returns the normalized JSON result — `200` on success,
+  `404` for unconfigured/unsupported routes, `502` for provider errors.
+  A `?base_url=<origin>` variant (matching the stats table's
+  `upstream_base_url` values) reuses the first configured route's api key on
+  that origin and falls back to the host-keyed anthropic 5h utilization;
+  all success responses include a preformatted `left` string.
+- **Web dashboard**: the 'Upstream Base URL' table (Request Statistic →
+  Status Count) has a new "Usage Left" column — per-origin quota polled from
+  the `base_url` quota endpoint (60s client cache on top of the 30s server
+  cache; counts render as `6930/12000, 42%`); anthropic-compatible origins
+  show the recorded 5h left percent.
+
 ### fix(transforms): `codestrong` 500s on Claude Code requests ending in a non-user turn
 
 Claude Code routes through the `auditor` composite (`codesmall`/`codestrong`,

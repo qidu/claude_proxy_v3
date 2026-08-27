@@ -24,6 +24,7 @@ import {
   handleDashboardGetConfig,
   handleDashboardGlobalTokenLimit,
   handleDashboardModelStats,
+  handleDashboardModelQuota,
   handleDashboardPage,
   handleDashboardPutConfig,
   handleDashboardRemoveScheduleAlias,
@@ -837,6 +838,11 @@ export default {
 
       if (path === '/dashboard/api/test-model' && request.method === 'POST') {
         const response = await handleDashboardTestModel(request, env, proxyConfig);
+        return applyCorsHeaders(response, request, env);
+      }
+
+      if (path === '/dashboard/api/quota' && request.method === 'GET') {
+        const response = await handleDashboardModelQuota(request, proxyConfig);
         return applyCorsHeaders(response, request, env);
       }
 

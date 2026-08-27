@@ -12,6 +12,7 @@ import { runHook, applyAfterUpstream, type HookContext } from '../utils/request-
 import type { ModelRouteConfig } from '../utils/config-loader.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount, createUsageTrackingTransformStream, extractUsageFromResponsePayload, recordModelUsage, extractToolNamesFromResponsePayload, recordUpstreamResponseToolNames } from '../utils/dashboard-stats.js';
+import { recordUpstreamRateLimit } from '../utils/provider-quota.js';
 
 /**
  * Handle native Claude API request (pass-through)
@@ -162,6 +163,10 @@ export async function handleClaudeRequest(
     const contentType = response.headers.get('content-type') || '';
     const isEventStream = contentType.includes('text/event-stream');
     const accountingModel = modelId || (typeof requestBody.model === 'string' ? requestBody.model : undefined);
+    // Anthropic-compatible upstreams report the account-wide 5h-window used
+    // fraction in this header (same source as pi-proxy) — capture it for the
+    // usage-left readouts. No-op when the upstream doesn't send it.
+    recordUpstreamRateLimit(accountingModel, (name) => response.headers.get(name), targetUrl);
 
     if (isEventStream && response.body) {
         activeLogger.debug(requestId, `[UPSTREAM-RESP] ${targetUrl}: <streaming SSE, pass-through — see accompanying SSE chunk logs if enabled>`);

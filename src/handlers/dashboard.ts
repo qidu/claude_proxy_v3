@@ -50,6 +50,7 @@ import {
   getPrivacyKeysDetected,
 } from '../utils/dashboard-stats.js';
 import { formatApiKeyForUpstream } from '../utils/routing.js';
+import { getModelQuota, formatQuotaLeft, getUpstreamRateLimitLeftForUrl, type QuotaResult } from '../utils/provider-quota.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -648,7 +649,7 @@ export function handleDashboardPage(env: Env): Response {
       <div class="request-submodule">
         <h3>Status Count</h3>
         <table id="requestUpstreamStats">
-          <thead><tr><th>Upstream Base URL</th><th class="num">Responses</th></tr></thead>
+          <thead><tr><th>Upstream Base URL</th><th class="num">Usage Left</th><th class="num">Responses</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -2520,6 +2521,29 @@ export function handleDashboardPage(env: Env): Response {
         tbody.innerHTML = rows.map(mapper).join('');
       }
 
+      // Usage-left cells for the Upstream Base URL table. Client-side cache
+      // (60s) keeps the 10s stats re-render from re-hammering the quota
+      // endpoint; the server-side 30s quota cache bounds provider load.
+      const quotaCellCache = new Map();
+      async function fillQuotaCells() {
+        document.querySelectorAll('.quota-cell').forEach(async (cell) => {
+          const base = decodeURIComponent(cell.dataset.base);
+          let cached = quotaCellCache.get(base);
+          if (!cached || Date.now() - cached.at > 60000) {
+            let text = '—';
+            try {
+              const res = await dashboardFetch('/dashboard/api/quota?base_url=' + encodeURIComponent(base));
+              const json = await res.json();
+              if (res.ok && json.left) text = json.left;
+              else if (!res.ok && json.kind && json.kind !== 'unsupported' && json.kind !== 'unconfigured') text = '⚠ ' + (json.kind || '');
+            } catch (e) { /* leave '—' */ }
+            cached = { text, at: Date.now() };
+            quotaCellCache.set(base, cached);
+          }
+          cell.textContent = cached.text;
+        });
+      }
+
       async function loadModelStats() {
         const modelsRes = await dashboardFetch('/dashboard/api/stats/models');
         const modelsJson = await modelsRes.json();
@@ -2660,8 +2684,9 @@ export function handleDashboardPage(env: Env): Response {
         if (privacyEl) privacyEl.textContent = fmtStat(json.privacy_keys_detected || 0);
 
         renderRows('#requestUpstreamStats', json.upstreams || [], (row) =>
-          '<tr><td>' + row.upstream_base_url + '</td><td class="num">' + row.responses + '</td></tr>'
+          '<tr><td>' + row.upstream_base_url + '</td><td class="num quota-cell" data-base="' + encodeURIComponent(row.upstream_base_url) + '">…</td><td class="num">' + row.responses + '</td></tr>'
         );
+        fillQuotaCells();
 
         renderRows('#requestStatusCodeFromUpstreamStats', json.status_codes_from_upstreams || [], (row) =>
           '<tr><td>' + row.status_code + '</td><td class="num">' + row.responses + '</td></tr>'
@@ -2988,6 +3013,79 @@ function compact(value: unknown): string {
     return text.length > 80 ? `${text.slice(0, 80)}…` : text;
   } catch {
     return String(value);
+  }
+}
+
+/**
+ * GET /dashboard/api/quota?model=<id>  |  ?base_url=<origin>
+ *
+ * Resolves the model's route (targetUrl + api_key from the unsanitized
+ * config), detects the provider from the route host and returns the
+ * remaining usage / credits as JSON. Supported providers: minimax
+ * (api.minimaxi.com / api.minimax.io), deepseek, kimi, openrouter, zhipu.
+ *
+ * `base_url=<origin>` variant (matching the stats table's
+ * `upstream_base_url` values): finds the first configured route on that
+ * origin, uses its api_key, and falls back to the passively recorded
+ * anthropic 5h utilization when the origin has no usage provider. All
+ * success responses include a preformatted `left` string for display.
+ */
+export async function handleDashboardModelQuota(
+  request: Request,
+  proxyConfig: ProxyConfig,
+): Promise<Response> {
+  const params = new URL(request.url).searchParams;
+  const modelId = params.get('model');
+  const baseUrl = params.get('base_url');
+  try {
+    if (modelId) {
+      const route = getModelRouteConfig(modelId, proxyConfig);
+      const result = await getModelQuota(route);
+      return quotaResponse(result, formatQuotaLeft(result));
+    }
+    if (baseUrl) {
+      // Find the first configured route whose target URL lives on this
+      // origin and reuse its api_key (the stats table only records origins).
+      let apiKey: string | undefined;
+      for (const id of getConfiguredModelIds(proxyConfig)) {
+        const route = getModelRouteConfig(id, proxyConfig);
+        if (originOf(route.targetUrl) === baseUrl) {
+          apiKey = route.apiKey;
+          break;
+        }
+      }
+      const result = await getModelQuota({ targetUrl: baseUrl, apiKey });
+      if (!result.ok && result.kind === 'unsupported') {
+        // Anthropic-compatible origins have no usage endpoint; fall back to
+        // the 5h utilization recorded from proxied response headers.
+        const headerLeft = getUpstreamRateLimitLeftForUrl(baseUrl);
+        if (headerLeft) {
+          return jsonResponse({
+            ok: true, provider: 'anthropic-5h', source: 'response-header',
+            left: headerLeft, fetchedAt: Date.now(),
+          }, 200);
+        }
+      }
+      return quotaResponse(result, formatQuotaLeft(result));
+    }
+    return jsonResponse({ error: 'model or base_url query parameter is required' }, 400);
+  } catch (e) {
+    return jsonResponse({ error: (e as Error).message }, 500);
+  }
+}
+
+function quotaResponse(result: QuotaResult, left: string | null): Response {
+  const status = result.ok ? 200
+    : result.kind === 'unconfigured' || result.kind === 'unsupported' ? 404
+    : 502;
+  return jsonResponse(left != null ? { ...result, left } : result, status);
+}
+
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url;
   }
 }
 

@@ -37,6 +37,8 @@ import type { ProxyConfig, FusionRole, FusionOptions } from './utils/config-load
 import { parseHumanTokenLimit, formatTokenLimit } from './utils/config-loader.js';
 import { formatApiKeyForUpstream } from './utils/routing.js';
 import { KEY_STORE_SERVICE, listSystemKeychainAccounts } from './utils/key-store.js';
+import { getModelRouteConfig } from './utils/config-loader.js';
+import { getModelQuota, formatQuota, formatQuotaLeft, getUpstreamRateLimitLeft, type QuotaResult } from './utils/provider-quota.js';
 
 const TEST_ENDPOINT = '/v1/messages';
 const TEST_TOOL_NAME = 'test_tool';
@@ -482,9 +484,52 @@ class PromptOverlay implements Component, Focusable {
   }
 }
 
+/** Strip the Ç/ƒ/Ö marker suffix used for duplicate disambiguation. */
+function stripModelMarker(value: string): string {
+  return / [ÇƒÖ]$/.test(value) ? value.replace(/ [ÇƒÖ]$/, '').trim() : value;
+}
+
+/** Per-row quota data for the 'Model Quota' picker, keyed by choice value. */
+interface QuotaPickerEntry {
+  result?: QuotaResult;
+  /** Anthropic 5h utilization left (e.g. "58%") when passively recorded. */
+  headerLeft?: string | null;
+}
+
+/** Row suffix for the quota picker list, e.g. " (7472/20000, 63%)". */
+function quotaListSuffix(entry: QuotaPickerEntry): string {
+  if (entry.result?.ok && entry.result.balance) {
+    const symbol = entry.result.balance.currency === 'CNY' ? '¥' : '$';
+    return ` (${symbol}${entry.result.balance.amount.toFixed(2)})`;
+  }
+  const w = entry.result?.ok ? entry.result.windows?.fiveHour ?? entry.result.windows?.weekly : undefined;
+  if (w) {
+    if (w.remainingPercent != null) return ` (${w.remainingPercent}%)`;
+    if (w.remaining != null) {
+      const usage = typeof w.limit === 'number' && w.limit > 0 ? `/${w.limit}` : '';
+      const pct = w.usedPercent != null ? `, ${w.usedPercent}%` : '';
+      return ` (${w.remaining}${usage}${pct})`;
+    }
+  }
+  return entry.headerLeft ? ` (${entry.headerLeft})` : '';
+}
+
+/** Bottom status line for the currently highlighted picker row. */
+function quotaStatusLine(entry: QuotaPickerEntry): string {
+  const r = entry.result;
+  if (r?.ok) return `${green('Quota:')} ${formatQuota(r)}`;
+  if (r && !r.ok && r.kind !== 'unsupported') {
+    return `${green('Quota:')} ${yellow(`⚠ ${r.kind}: ${(r.message ?? '').slice(0, 60)}`)}`;
+  }
+  // unsupported / unresolvable — fall back to the anthropic 5h header value.
+  if (entry.headerLeft) return `${green('Quota:')} ${entry.headerLeft} 5h left`;
+  return `${green('Quota:')} ${dim('no usage data')}`;
+}
+
 class ListOverlay implements Component {
   private readonly list: SelectList;
   private readonly onExtraKey: ((data: string) => boolean) | undefined;
+  private status: string | null = null;
 
   constructor(
     title: string,
@@ -495,7 +540,8 @@ class ListOverlay implements Component {
     maxVisible = 8,
     onExtraKey?: (data: string) => boolean,
     layout?: SelectListLayoutOptions,
-    private readonly maxWidth = 78,
+    maxWidth = 78,
+    onSelectionChange?: (item: SelectItem) => void,
   ) {
     // Default layout matches the prior inline config so non-test callers
     // (delete confirms, schedule windows, …) keep their existing column
@@ -507,16 +553,25 @@ class ListOverlay implements Component {
     });
     this.list.onSelect = onSelect;
     this.list.onCancel = onCancel;
+    if (onSelectionChange) this.list.onSelectionChange = onSelectionChange;
     this.title = title;
     this.subtitle = subtitle;
     this.onExtraKey = onExtraKey;
+    this.maxWidth = maxWidth;
   }
 
   private readonly title: string;
   private subtitle: string;
+  private readonly maxWidth: number;
 
   setSubtitle(subtitle: string): void {
     this.subtitle = subtitle;
+    this.invalidate();
+  }
+
+  /** Optional status line rendered below the list (e.g. live quota preview). */
+  setStatus(status: string | null): void {
+    this.status = status;
     this.invalidate();
   }
 
@@ -533,7 +588,9 @@ class ListOverlay implements Component {
     const innerWidth = Math.max(1, Math.min(width - 2, this.maxWidth));
     const bodyWidth = Math.max(1, innerWidth - 2);
     const listLines = this.list.render(bodyWidth).map((line) => clip(line, bodyWidth));
-    return frame(this.title, [clip(this.subtitle, bodyWidth), ...listLines], innerWidth, this.maxWidth);
+    const body = [clip(this.subtitle, bodyWidth), ...listLines];
+    if (this.status !== null) body.push(clip(this.status, bodyWidth));
+    return frame(this.title, body, innerWidth, this.maxWidth);
   }
 }
 
@@ -545,6 +602,15 @@ class CompositeAliasesOverlay implements Component, Focusable {
   private scrollOffset = 0;
 
   constructor(private readonly app: DashboardApp) {}
+
+  // Usage-left suffix per target model (e.g. "58%", "72", "¥43.97"),
+  // computed by DashboardApp.refreshCompositeQuota; only targets whose
+  // route hits a supported usage provider get an entry.
+  private quotaLeft = new Map<string, string>();
+
+  setQuotaLeft(left: Map<string, string>): void {
+    this.quotaLeft = left;
+  }
 
   setSnapshot(snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null): void {
     this.snapshot = snapshot;
@@ -719,9 +785,11 @@ class CompositeAliasesOverlay implements Component, Focusable {
         const timingKey = targetRouteModel.get(target) ?? target;
         const timing = modelTimingMap.get(timingKey);
         const timingStr = timing ? ` ${dim('[')}${dim(fmtSeconds(timing.min_time_ms))}${dim('/')}${dim(fmtSeconds(timing.avg_time_ms))}${dim('/')}${dim(fmtSeconds(timing.max_time_ms))}${dim('s]')}` : '';
+        const left = this.quotaLeft.get(target);
+        const leftStr = left !== undefined ? ` ${dim(`(${left} left)`)}` : '';
         // Record this target's line index for selections array
         selectionLineIndex.push(bodyLines.length);
-        bodyLines.push(`  ${dim('│')} ${mark} ${clip(target, 22)} ${dim(summary)}${timingStr}`);
+        bodyLines.push(`  ${dim('│')} ${mark} ${clip(target, 22)} ${dim(summary)}${timingStr}${leftStr}`);
       }
     }
 
@@ -997,8 +1065,6 @@ class DashboardView implements Component {
     this.invalidate();
   }
 
-  // holdMs > 0: timed hold (default 1000ms is the minimum display time)
-  // holdMs = -1: sticky — survives refresh until explicitly cleared or overwritten
   setMessage(message: string, holdMs = 1000): void {
     this.message = message;
     this.messageUntil = holdMs === -1 ? -1 : holdMs > 0 ? Date.now() + holdMs : 0;
@@ -1053,6 +1119,10 @@ class DashboardView implements Component {
     if (matchesKey(data, 'shift+u')) {
       this.heatmapView = this.heatmapView === 'weekly' ? 'monthly' : 'weekly';
       this.invalidate();
+      return;
+    }
+    if (matchesKey(data, 'q') || matchesKey(data, 'shift+q')) {
+      this.app.openQuotaPicker();
       return;
     }
     if (matchesKey(data, 'h')) {
@@ -1214,7 +1284,7 @@ class DashboardView implements Component {
     }
 
     lines.push('');
-    lines.push(`C ${dim('composite,fusion')}  S ${dim('schedule')}  T ${dim('models test')}  L ${dim('token limit')}  D ${dim('stats')}  P ${dim('tools block')}  h ${dim('help')}  ↑↓ ${dim('move')}`);
+    lines.push(`C ${dim('composite,fusion')}  S ${dim('schedule')}  T ${dim('models test')}  L ${dim('token limit')}  D ${dim('stats')}  P ${dim('tools list')}  h ${dim('help')}  ↑↓ ${dim('move')}`);
     lines.push(this.message ? yellow(this.message) : dim('Ready'));
 
     return lines.map((line) => clip(line, width));
@@ -1274,6 +1344,7 @@ class DashboardApp {
   private hourlyDumpTimer: ReturnType<typeof setInterval> | null = null;
   private modelTestTimer: ReturnType<typeof setInterval> | null = null;
   private modelTestTimerActive = false;
+  private compositeQuotaRefreshing = false;
   private modelTestInProgress = false;
   // Set by togglePeriodicModelTest / stop() to abort an in-flight test-all
   // batch. The for-loop in runAllCustomModelTests checks it between models;
@@ -1399,6 +1470,7 @@ class DashboardApp {
       this.view.setSnapshot(snapshot);
       this.compositeOverlay?.setSnapshot(snapshot);
       this.scheduleOverlay?.setSnapshot(snapshot);
+      void this.refreshCompositeQuota(proxyConfig);
       if (fromMutation) this.view.setConfigStatus('saved');
       // When this refresh is triggered by a save action, don't override the
       // success message the save flow sets right after this returns. The
@@ -1748,9 +1820,10 @@ class DashboardApp {
       { value: 'help\0c', label: `  ${bold('C(c)').padEnd(6)} ${dim('Manage composite')} ${bold('Ç')}${dim(' and fusion')} ${bold('ƒ')}${dim(' aliases')}` },
       { value: 'help\0s', label: `  ${bold('S(s)').padEnd(6)} ${dim('Manage schedule aliases')} ${bold('$')}` },
       { value: 'help\0t', label: `  ${bold('T(t)').padEnd(6)} ${dim('Test custom models')}` },
+      { value: 'help\0q', label: `  ${bold('Q(q)').padEnd(6)} ${dim('Show model quota / usage left')}` },
       { value: 'help\0l', label: `  ${bold('L(l)').padEnd(6)} ${dim('Edit global token limit')} ${bold('└')}` },
       { value: 'help\0d', label: `  ${bold('D(d)').padEnd(6)} ${dim('View detailed statistics')}` },
-      { value: 'help\0p', label: `  ${bold('P(p)').padEnd(6)} ${dim('Block or unblock tools')}` },
+      { value: 'help\0p', label: `  ${bold('P(p)').padEnd(6)} ${dim('Tools list and blocking')}` },
       { value: 'help\0k', label: `  ${bold('K(k)').padEnd(6)} ${dim('List api keys stored in system keychain')} ${bold('🔒')}` },
       { value: 'help\0u', label: `  ${bold('Shift+u').padEnd(6)} ${dim('Toggle weekly and monthly heatmap')}` },
       { value: 'help\0ctrlu', label: `  ${bold('Ctrl+u').padEnd(6)} ${dim('Dump today tokens to file')}` },
@@ -2129,6 +2202,111 @@ class DashboardApp {
     );
     this.overlay = this.tui.showOverlay(overlay, { width: '70%', maxHeight: '50%', anchor: 'center' });
     this.overlay.focus();
+  }
+
+  /**
+   * Fetch quota data for every model in the picker (getModelQuota's 30s cache
+   * keeps provider load bounded). Keyed by choice value — including the
+   * Ç/ƒ/Ö duplicate marker — so lookup from onSelectionChange is direct.
+   */
+  private async buildQuotaData(choices: { value: string }[]): Promise<Map<string, QuotaPickerEntry>> {
+    const data = new Map<string, QuotaPickerEntry>();
+    if (!this.proxyConfig) return data;
+    const seen = new Set<string>();
+    for (const choice of choices) {
+      const modelId = stripModelMarker(choice.value);
+      if (seen.has(modelId)) continue;
+      seen.add(modelId);
+      const entry: QuotaPickerEntry = { headerLeft: getUpstreamRateLimitLeft(modelId) };
+      try {
+        entry.result = await getModelQuota(getModelRouteConfig(modelId, this.proxyConfig));
+      } catch { /* route resolution failure — header-based value only */ }
+      data.set(choice.value, entry);
+    }
+    return data;
+  }
+
+  async openQuotaPicker(): Promise<void> {
+    const choices = this.modelChoices(false);
+    if (choices.length === 0) {
+      this.view.setMessage('no custom models configured');
+      this.requestRender();
+      return;
+    }
+    this.hideOverlay();
+    this.view.setMessage('loading quota …', -1);
+    this.requestRender();
+    const quotaData = await this.buildQuotaData(choices);
+    this.view.setMessage('');
+    for (const choice of choices) {
+      choice.description += quotaListSuffix(quotaData.get(choice.value) ?? {});
+    }
+    const overlay = new ListOverlay(
+      'Model Quota (usage left)',
+      `↑/↓ ${dim('move')}  Esc ${dim('close')}`,
+      choices,
+      () => {
+        this.hideOverlay();
+        this.requestRender();
+      },
+      () => {
+        this.hideOverlay();
+        this.view.setMessage('quota cancelled');
+        this.requestRender();
+      },
+      8,
+      undefined,
+      { minPrimaryColumnWidth: 25, maxPrimaryColumnWidth: 25 },
+      undefined,
+      (item) => {
+        overlay.setStatus(quotaStatusLine(quotaData.get(item.value) ?? {}));
+      },
+    );
+    // Show the initially highlighted row's quota without waiting for a move.
+    const first = choices[0];
+    if (first) overlay.setStatus(quotaStatusLine(quotaData.get(first.value) ?? {}));
+    this.overlay = this.tui.showOverlay(overlay, { width: '70%', maxHeight: '50%', anchor: 'center' });
+    this.overlay.focus();
+  }
+
+  /**
+   * Compute the usage-left suffix map for every target model referenced by
+   * composite aliases and push it into the Composite Aliases overlay. Called
+   * from refresh() — getModelQuota's 30s cache keeps provider load bounded
+   * even though refresh runs every 500ms.
+   */
+  private async refreshCompositeQuota(proxyConfig: ProxyConfig): Promise<void> {
+    const overlay = this.compositeOverlay;
+    if (!overlay || this.compositeQuotaRefreshing) return;
+    const targets = new Set<string>();
+    for (const aliasConfig of Object.values(proxyConfig.composite ?? {})) {
+      for (const [key, value] of Object.entries(aliasConfig ?? {})) {
+        if (key === 'token_limit' || key === 'fusion_options' || key.startsWith('_') || value === null || typeof value !== 'object') continue;
+        targets.add(key);
+      }
+    }
+    if (targets.size === 0) return;
+    this.compositeQuotaRefreshing = true;
+    try {
+      const left = new Map<string, string>();
+      for (const target of targets) {
+        try {
+          const result = await getModelQuota(getModelRouteConfig(target, proxyConfig));
+          // Usage-provider quota first; anthropic-routed models without one
+          // fall back to the passively recorded 5h utilization header.
+          const text = formatQuotaLeft(result) ?? getUpstreamRateLimitLeft(target);
+          if (text) left.set(target, text);
+        } catch (e) {
+          // Route resolution failure (e.g. alias cycle) — surface once per
+          // target rather than dropping it silently.
+          left.set(target, `⚠ ${(e as Error).message.slice(0, 20)}`);
+        }
+      }
+      overlay.setQuotaLeft(left);
+      this.requestRender();
+    } finally {
+      this.compositeQuotaRefreshing = false;
+    }
   }
 
   private testPickerSubtitle(): string {
@@ -3035,7 +3213,7 @@ class DashboardApp {
     this.overlay.focus();
   }
 
-  private modelChoices(): ModelChoice[] {
+  private modelChoices(includeTiming = true): ModelChoice[] {
     const snapshot = this.viewSnapshot();
     if (!snapshot) return [];
     const seenNames = new Set<string>();
@@ -3077,7 +3255,7 @@ class DashboardApp {
         // Leading stat prefix in the description (e.g. "[2.50s] ") when
         // this model has at least one observed timing sample. Keeps the rest
         // of the description (category · mode · base URL) unchanged.
-        const avgPrefix = timing && timing.count > 0
+        const avgPrefix = includeTiming && timing && timing.count > 0
           ? `[${(timing.avg_time_ms / 1000).toFixed(2)}s] `
           : '';
         choices.push({

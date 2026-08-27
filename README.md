@@ -195,7 +195,17 @@ TUI=true npm run server
 ```
 
 You get a live view of configured models, token usage, response times, and tool stats;
-a web dashboard is also available at `GET /dashboard`. The TUI key bindings, the
+a web dashboard is also available at `GET /dashboard`. The `Q` key (documented in the
+`h` help panel) opens a model picker with a per-row usage suffix — `(58%)`,
+`(7472/20000, 63%)` (remaining/limit + used%), `(¥43.97)` — and shows the highlighted
+model's full quota on a status line at the bottom of the panel when moving through the
+list (minimax, deepseek, kimi, openrouter, zhipu coding plans — see
+`GET /dashboard/api/quota`); anthropic-routed models instead show the 5h-window left
+percent recorded from the `anthropic-ratelimit-unified-5h-utilization` response header
+on proxied traffic. In the
+composite-aliases panel each target model shows its usage left after the timing suffix,
+e.g. `[0.11/2.12/63.93s] (58% left)` or `(6930/12000, 42% left)` for count-based
+providers. The TUI key bindings, the
 `model_proxy_tokens.jsonl` usage-dump format, and the startup stats-restoration rules
 are documented in [`docs/live-stats.md`](./docs/live-stats.md).
 
@@ -213,6 +223,7 @@ are documented in [`docs/live-stats.md`](./docs/live-stats.md).
 | `POST /v1/embeddings` | Embeddings (proxied to an OpenAI-compatible upstream) |
 | `GET /v1/models` | List available models (no auth required) |
 | `GET /dashboard` | Web dashboard for config + stats |
+| `GET /dashboard/api/quota?model=<id>` | Remaining usage/credits for a model's route (minimax, deepseek, kimi, openrouter, zhipu coding plans; provider detected from the route host). `?base_url=<origin>` variant serves the web dashboard's per-URL "Usage Left" column, falling back to the recorded anthropic 5h percent. Dashboard `api_key` auth. |
 | `GET /config-reload` | Reload config from `PROXY_CONFIG_CONSUL` or `PROXY_CONFIG_APOLLO`. Only meaningful when a remote config source is set; returns `400`/`500` otherwise. Clears the config cache and re-fetches. |
 | `GET /health` (also `GET /`) | Health check. Probes the resolved default-category / `[default_upstream]` upstream `/v1/models`; returns `{status:"ok", models, cached, version}` on success or `404` when no models are reachable. No auth required. |
 | `GET /favicon.ico` | Returns `204 No Content` (browser plumbing). |
