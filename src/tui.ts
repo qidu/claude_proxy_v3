@@ -2217,10 +2217,19 @@ class DashboardApp {
       const modelId = stripModelMarker(choice.value);
       if (seen.has(modelId)) continue;
       seen.add(modelId);
-      const entry: QuotaPickerEntry = { headerLeft: getUpstreamRateLimitLeft(modelId) };
+      // The 5h utilization header is recorded under the upstream model name
+      // (route.modelAlias, e.g. codelite → code-lite-pi), not the config key,
+      // so resolve the route once and look the recording up by that name.
+      let route: ReturnType<typeof getModelRouteConfig> | undefined;
       try {
-        entry.result = await getModelQuota(getModelRouteConfig(modelId, this.proxyConfig));
+        route = getModelRouteConfig(modelId, this.proxyConfig);
       } catch { /* route resolution failure — header-based value only */ }
+      const entry: QuotaPickerEntry = { headerLeft: getUpstreamRateLimitLeft(route?.modelAlias || modelId) };
+      if (route) {
+        try {
+          entry.result = await getModelQuota(route);
+        } catch { /* quota fetch failure — header-based value only */ }
+      }
       data.set(choice.value, entry);
     }
     return data;
@@ -2291,10 +2300,12 @@ class DashboardApp {
       const left = new Map<string, string>();
       for (const target of targets) {
         try {
-          const result = await getModelQuota(getModelRouteConfig(target, proxyConfig));
+          const route = getModelRouteConfig(target, proxyConfig);
+          const result = await getModelQuota(route);
           // Usage-provider quota first; anthropic-routed models without one
-          // fall back to the passively recorded 5h utilization header.
-          const text = formatQuotaLeft(result) ?? getUpstreamRateLimitLeft(target);
+          // fall back to the passively recorded 5h utilization header (keyed
+          // by the upstream model name, e.g. codelite → code-lite-pi).
+          const text = formatQuotaLeft(result) ?? getUpstreamRateLimitLeft(route.modelAlias || target);
           if (text) left.set(target, text);
         } catch (e) {
           // Route resolution failure (e.g. alias cycle) — surface once per

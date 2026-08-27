@@ -5,6 +5,28 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### fix(quota): usage-left lookup keyed by upstream model name, not config key
+
+The anthropic 5h utilization header (`anthropic-ratelimit-unified-5h-utilization`)
+IS returned by anthropic-compatible upstreams (verified against a local pi proxy)
+and recorded by the claude handler — but under the upstream model name
+(`route.modelAlias`, e.g. `codelite` → `code-lite-pi`), while every model-keyed
+display looked up the config key (`codelite`). Result: aliased models on hosts
+without a usage-provider API (pi proxies, etc.) never showed usage-left, while
+provider-hosted models (zhipu/minimax/deepseek/…) worked because the active
+quota fetch is host-keyed. Fixed on the display side (recording stays keyed by
+the upstream name, consistent with the stats tables):
+
+- TUI quota picker (`buildQuotaData`) and composite-alias overlay
+  (`refreshCompositeQuota`) now look up `route.modelAlias || modelId`.
+- `GET /dashboard/api/quota?model=<id>` now falls back to the recorded header
+  value when the route host has no usage provider, mirroring the existing
+  `base_url=` variant (returns `provider:"anthropic-5h", source:"response-header"`).
+
+The `base_url=` variant (dashboard upstreams table) was already correct; its
+value is in-memory only — present after ≥1 successful proxied response since
+process start.
+
 ### docs: `store_key_in_system` addon install & recovery instructions
 
 README ("Configuration Reference") and `docs/configuration-reference.md` now document

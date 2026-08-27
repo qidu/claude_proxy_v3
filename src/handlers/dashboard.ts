@@ -50,7 +50,7 @@ import {
   getPrivacyKeysDetected,
 } from '../utils/dashboard-stats.js';
 import { formatApiKeyForUpstream } from '../utils/routing.js';
-import { getModelQuota, formatQuotaLeft, getUpstreamRateLimitLeftForUrl, type QuotaResult } from '../utils/provider-quota.js';
+import { getModelQuota, formatQuotaLeft, getUpstreamRateLimitLeft, getUpstreamRateLimitLeftForUrl, type QuotaResult } from '../utils/provider-quota.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -3027,8 +3027,11 @@ function compact(value: unknown): string {
  * `base_url=<origin>` variant (matching the stats table's
  * `upstream_base_url` values): finds the first configured route on that
  * origin, uses its api_key, and falls back to the passively recorded
- * anthropic 5h utilization when the origin has no usage provider. All
- * success responses include a preformatted `left` string for display.
+ * anthropic 5h utilization when the origin has no usage provider. The
+ * `model=<id>` variant applies the same fallback, looked up under the
+ * upstream model name (route.modelAlias) — the key the header recording
+ * uses. All success responses include a preformatted `left` string for
+ * display.
  */
 export async function handleDashboardModelQuota(
   request: Request,
@@ -3041,6 +3044,18 @@ export async function handleDashboardModelQuota(
     if (modelId) {
       const route = getModelRouteConfig(modelId, proxyConfig);
       const result = await getModelQuota(route);
+      if (!result.ok && result.kind === 'unsupported') {
+        // Anthropic-compatible origins have no usage endpoint; fall back to
+        // the 5h utilization recorded from proxied response headers (keyed by
+        // the upstream model name, e.g. codelite → code-lite-pi).
+        const headerLeft = getUpstreamRateLimitLeft(route.modelAlias || modelId);
+        if (headerLeft) {
+          return jsonResponse({
+            ok: true, provider: 'anthropic-5h', source: 'response-header',
+            left: headerLeft, fetchedAt: Date.now(),
+          }, 200);
+        }
+      }
       return quotaResponse(result, formatQuotaLeft(result));
     }
     if (baseUrl) {
