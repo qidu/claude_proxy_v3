@@ -492,7 +492,7 @@ export function handleDashboardPage(env: Env): Response {
     </style>
   </head>
   <body>
-    <h1>Proxy Dashboard <span style="color:#9e9e9e;font-size:14px;font-weight:normal;">${env.VERSION || 'dev'}</span></h1>
+    <h1>Proxy Dashboard <span id="keyStoreLock" hidden title="All config api_keys are STORE_KEY_IN_SYSTEM (stored in the system keychain)" style="font-size:16px;">🔒</span> <span style="color:#9e9e9e;font-size:14px;font-weight:normal;">${env.VERSION || 'dev'}</span></h1>
 
     <div id="compositeAliasWizard" class="modal-overlay" hidden>
       <div class="modal" role="dialog" aria-labelledby="wizTitle" aria-modal="true">
@@ -2447,6 +2447,8 @@ export function handleDashboardPage(env: Env): Response {
         const res = await dashboardFetch(forceReload === true ? '/dashboard/api/config?reload=1' : '/dashboard/api/config');
         const json = await res.json();
         isReadOnly = json.config.read_only === true;
+        const keyStoreLock = document.getElementById('keyStoreLock');
+        if (keyStoreLock) keyStoreLock.hidden = json.config.api_keys_in_system_store !== true;
         currentConfig = {
           models: json.config.models || {},
           composite: json.config.composite || {},

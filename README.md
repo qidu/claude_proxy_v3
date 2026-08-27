@@ -406,6 +406,14 @@ The full field-by-field reference lives in
 - **TOML sections** — `[general]`, `[default_upstream]`, `[remote.authentication]`,
   `[remote.recording]`, `[transforms.*]` / `[transform_defaults]`, `[privacy_filter]`,
   `[dashboard]`.
+- **OS keychain key storage** — `[general] store_key_in_system = true` moves every
+  config `api_key` into the OS keychain (accounts `<target_model_id>/<base_url>` under
+  the `model_proxy_v3` service) and rewrites the config file to `STORE_KEY_IN_SYSTEM`
+  sentinels; sentinels are resolved from the keychain on every later load. Scope:
+  configured api_keys of `[models.*]` targets in the local `proxy_config.toml` only —
+  ignored for Consul/Apollo sources, N/A for composite aliases, and caller/user keys
+  from request headers are never stored. Local/dev-host feature only — fails loud when
+  no OS keychain is available (Docker, Cloudflare Workers).
 - **Environment variables** — core/server (`PORT`, `LOG_LEVEL`, …), config source
   (`PROXY_CONFIG_PATH` / `PROXY_CONFIG_CONSUL` / `PROXY_CONFIG_APOLLO`), token counting &
   upstream, and the privacy-filter / compression / image-encode sidecars.

@@ -14,6 +14,7 @@ import { buildConsulKvUrl, parseConsulConfig } from './consul-loader.js';
 import type { ConsulKvEntry } from './consul-loader.js';
 import { parseApolloFile, fetchApolloConfig } from './apollo-loader.js';
 import { createLogger } from './logger.js';
+import { applySystemKeyStore, findSentinelApiKeys, KeyStoreError, STORE_KEY_IN_SYSTEM } from './key-store.js';
 
 // Check if we're running in Node.js environment
 const isNodeEnvironment = (typeof process !== 'undefined' && process.versions?.node) ||
@@ -26,6 +27,8 @@ export interface ProxyConfig {
     budget_to_effort_high?: number | string;
     global_token_limit?: string;
     week_start_day?: 'monday' | 'sunday';
+    /** Store config api_keys in the OS keychain (see src/utils/key-store.ts). */
+    store_key_in_system?: boolean;
   };
   remote?: {
     authentication?: {
@@ -2515,6 +2518,30 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
       return {};
     }
 
+    // System keychain store ([general] store_key_in_system): store plaintext
+    // api_keys into the OS keychain, rewrite the config file to sentinels,
+    // and resolve existing sentinels back to real keys. LOCAL FILE SOURCE
+    // ONLY (PROXY_CONFIG_PATH) — the feature is skipped for Consul/Apollo
+    // configs, which cannot be rewritten and must not touch the keychain.
+    // Throws a fatal error when the keychain is unavailable or a sentinel
+    // cannot be resolved — no silent fallback.
+    if (configPath && !configConsul && !configApollo) {
+      config = await applySystemKeyStore(config, { configPath });
+    } else {
+      if (config.general?.store_key_in_system === true) {
+        console.warn('[key-store] store_key_in_system is only supported for local PROXY_CONFIG_PATH configs — ignoring it (Consul/Apollo source)');
+      }
+      // A sentinel reaching this point could never be resolved and would be
+      // forwarded upstream as a literal key — refuse to load instead.
+      const sentinels = findSentinelApiKeys(config);
+      if (sentinels.length > 0) {
+        throw new KeyStoreError(
+          `api_key sentinel "${STORE_KEY_IN_SYSTEM}" found at ${sentinels.join(', ')} ` +
+          `in a Consul/Apollo config — sentinels can only be resolved from a local PROXY_CONFIG_PATH file`,
+        );
+      }
+    }
+
     // Strip conflicting aliases (composite/schedule names that collide with
     // a [models.*] entry). Log a fatal error for each stripped alias and
     // cache the stripped config so the proxy refuses to route on it. The
@@ -2568,6 +2595,11 @@ export async function loadProxyConfig(env: Env): Promise<ProxyConfig> {
 
     return cachedConfig;
   } catch (error) {
+    // Fatal errors (e.g. system-keychain failures) must not degrade to an
+    // empty config — rethrow so startup fails loud.
+    if ((error as { fatal?: boolean }).fatal) {
+      throw error;
+    }
     console.warn(`Failed to load proxy config: ${(error as Error).message}`);
     return {};
   }
@@ -3169,6 +3201,8 @@ export interface DashboardConfigPayload {
   remote_auth_active: boolean;
   remote_recording_active: boolean;
   privacy_filter_active: boolean;
+  /** True when every configured api_key in the local file is a STORE_KEY_IN_SYSTEM sentinel. */
+  api_keys_in_system_store?: boolean;
 }
 
 /**
@@ -3331,6 +3365,7 @@ export function toDashboardConfigPayload(config: ProxyConfig): DashboardConfigPa
     config_errors: (config as unknown as { _validationErrors?: ConfigValidationError[] })._validationErrors ?? [],
     config_warnings: (config as unknown as { _validationWarnings?: ConfigValidationError[] })._validationWarnings ?? [],
     global_token_limit: config.general?.global_token_limit,
+    api_keys_in_system_store: !!(config as ProxyConfig & { _api_keys_in_system_store?: boolean })._api_keys_in_system_store,
     remote_auth_active: !!config.remote?.authentication?.auth_server,
     remote_recording_active: !!config.remote?.recording?.record_server,
     privacy_filter_active: !!config.privacy_filter?.filter_mode,

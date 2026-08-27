@@ -47,6 +47,17 @@ budget_to_effort_high = 128000
 global_token_limit = "700M 1w"
 # Anchor day for the `1w` calendar window. Default is "monday".
 week_start_day = "monday"
+# Store config api_keys in the OS keychain (local/dev-host use only — not for
+# Docker or Cloudflare Workers). Applies only to configured api_keys of
+# [models.*] targets (and [default_upstream].default_api_key) in this local
+# file — ignored for Consul/Apollo config sources, N/A for composite aliases,
+# and caller/user keys from request headers are never stored. On the first
+# load every plaintext api_key is saved under the `model_proxy_v3` service
+# with account "<target_model_id>/<base_url>" and this file is rewritten
+# (backup: .bak) with those keys replaced by the literal STORE_KEY_IN_SYSTEM
+# sentinel; every later load resolves the sentinels back from the keychain.
+# Startup fails loud when the keychain is unavailable.
+# store_key_in_system = true
 
 [default_upstream]
 # `default_base_url` is the *global* upstream endpoint applied **only** to models

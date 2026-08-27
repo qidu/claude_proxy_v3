@@ -5,6 +5,57 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### feat(config): `store_key_in_system` — store api_keys in the OS keychain
+
+New `[general] store_key_in_system = true` flag. On config load (Node server,
+file-based `PROXY_CONFIG_PATH` only), every plaintext `api_key` in `[models.*]`
+(section-level, per-entry, and `[default_upstream].default_api_key`) is stored
+into the OS keychain via the vendored `@github/keytar` native addon
+(`submodules/node-keytar`) under service `model_proxy_v3` with account
+`<target_model_id>/<base_url>`. The config file is then rewritten in place —
+backup at `<config>.bak` — with those keys replaced by the literal
+`STORE_KEY_IN_SYSTEM` sentinel (targeted text replacement; comments and layout
+preserved). On every later load, sentinels are resolved back to real keys from
+the keychain into the in-memory config, so routing and the dashboard are
+unchanged (`api_key` stays non-editable there, preventing re-leaks).
+
+Scope limits: the feature is skipped entirely for Consul/Apollo config-center
+sources (flag ignored with a warning; a sentinel reaching such a config is a
+fatal load error, since it could never be resolved and would leak upstream as
+a literal key). Composite/schedule aliases carry no api_key of their own and
+are not touched. Caller/user keys from request headers (auth passthrough via
+empty api_key) are never stored.
+
+Sentinel resolution is exact-account first; on miss it falls back to a
+best-effort match over all keychain accounts under `model_proxy_v3`, scored
+by base_url similarity (prefix relation; base_url dominates, target-name
+similarity tiebreaks) — e.g. a wanted `glm-5.3-anth/https://…/api/anthropic`
+resolves from a stored `glm-5.3/https://…/api`. Every fallback use logs a
+warning; no similar account at all is still a fatal load error.
+
+TUI additions: a 🔒 marker is shown on the "Proxy TUI" header line (before
+the version) when every configured api_key in the local config file is a
+`STORE_KEY_IN_SYSTEM` sentinel, and a new hotkey `K(k)` opens a "System
+Keychain Keys" overlay
+listing the stored `<target_model_id>/<base_url>` accounts (passwords are
+never displayed). The hotkey is introduced in the help panel only — it is not
+added to the footer hotkey line; 🔒 is also documented in the help markers
+section. The web dashboard header shows the same 🔒 beside "Proxy Dashboard"
+when `api_keys_in_system_store` is set (updated live on each config load).
+
+Fail-loud semantics: if the flag is set but the keychain/native addon is
+unavailable (Docker, Cloudflare Workers, headless Linux without libsecret), or
+a sentinel has no keychain entry, startup aborts instead of degrading to an
+empty config.
+
+Notes:
+- The addon must be built once inside the submodule:
+  `cd submodules/node-keytar && npm install && npm run build` (a git checkout
+  ships no prebuilds). After that the parent `npm install` symlinks
+  `@github/keytar` to the submodule.
+- `package.json` gained an `allowScripts` field (npm 11+ install-script
+  allowlist) covering the keytar install script.
+
 ### fix(transforms): `codestrong` 500s on Claude Code requests ending in a non-user turn
 
 Claude Code routes through the `auditor` composite (`codesmall`/`codestrong`,

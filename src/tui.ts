@@ -36,6 +36,7 @@ import type { ConfigValidationError } from './utils/config-loader.js';
 import type { ProxyConfig, FusionRole, FusionOptions } from './utils/config-loader.js';
 import { parseHumanTokenLimit, formatTokenLimit } from './utils/config-loader.js';
 import { formatApiKeyForUpstream } from './utils/routing.js';
+import { KEY_STORE_SERVICE, listSystemKeychainAccounts } from './utils/key-store.js';
 
 const TEST_ENDPOINT = '/v1/messages';
 const TEST_TOOL_NAME = 'test_tool';
@@ -1045,6 +1046,10 @@ class DashboardView implements Component {
       this.app.openToolBlocklistOverlay();
       return;
     }
+    if (matchesKey(data, 'k') || matchesKey(data, 'shift+k')) {
+      void this.app.openSystemKeysOverlay();
+      return;
+    }
     if (matchesKey(data, 'shift+u')) {
       this.heatmapView = this.heatmapView === 'weekly' ? 'monthly' : 'weekly';
       this.invalidate();
@@ -1081,7 +1086,10 @@ class DashboardView implements Component {
       inflightIndicator = '  ';
     }
     const lines: string[] = [];
-    lines.push(bold('Proxy TUI') + dim(`  ${hourminTime}`) + `${secondsTime}${inflightIndicator}` + dim(`  ${this.app.getVersion()}`));
+    // 🔒 — every api_key in the local config file is a STORE_KEY_IN_SYSTEM
+    // sentinel (keys live in the OS keychain; see help markers).
+    const lockSuffix = snap?.config.api_keys_in_system_store ? '🔒 ' : '';
+    lines.push(bold('Proxy TUI') + dim(`  ${hourminTime}`) + `${secondsTime}${inflightIndicator}` + ` ${lockSuffix}` + dim(`${this.app.getVersion()}`));
     lines.push(dim('─'.repeat(Math.max(0, width))));
 
     if (!snap) {
@@ -1688,6 +1696,53 @@ class DashboardApp {
     this.overlay.focus();
   }
 
+  /** 'K' — list api-key accounts stored in the system keychain (TUI-only hotkey). */
+  async openSystemKeysOverlay(): Promise<void> {
+    let accounts: string[];
+    try {
+      accounts = await listSystemKeychainAccounts();
+    } catch (err) {
+      this.view.setMessage((err as Error).message, 4000);
+      this.requestRender();
+      return;
+    }
+    if (accounts.length === 0) {
+      this.view.setMessage(`no keys stored in system keychain (service ${KEY_STORE_SERVICE})`, 4000);
+      this.requestRender();
+      return;
+    }
+    const items: SelectItem[] = accounts.map((account) => {
+      const slash = account.indexOf('/');
+      const target = account.slice(0, slash);
+      const baseUrl = slash === -1 ? '' : account.slice(slash + 1);
+      return { value: `syskey\0${account}`, label: `  ${target.padEnd(28)} ${dim(baseUrl)}` };
+    });
+    if (this.overlay) this.hideOverlay();
+    const overlay = new ListOverlay(
+      `System Keychain Keys (${KEY_STORE_SERVICE})`,
+      `Esc/k ${dim('close')}`,
+      items,
+      () => {},
+      () => {
+        this.hideOverlay();
+        this.requestRender();
+      },
+      14,
+      (data) => {
+        if (matchesKey(data, 'k')) {
+          this.hideOverlay();
+          this.requestRender();
+          return true;
+        }
+        return false;
+      },
+      undefined,
+      60,
+    );
+    this.overlay = this.tui.showOverlay(overlay, { width: '60%', maxHeight: '70%', anchor: 'center' });
+    this.overlay.focus();
+  }
+
   openHelpOverlay(): void {
     const items: SelectItem[] = [
       { value: 'help\0c', label: `  ${bold('C(c)').padEnd(6)} ${dim('Manage composite')} ${bold('Ç')}${dim(' and fusion')} ${bold('ƒ')}${dim(' aliases')}` },
@@ -1696,6 +1751,7 @@ class DashboardApp {
       { value: 'help\0l', label: `  ${bold('L(l)').padEnd(6)} ${dim('Edit global token limit')} ${bold('└')}` },
       { value: 'help\0d', label: `  ${bold('D(d)').padEnd(6)} ${dim('View detailed statistics')}` },
       { value: 'help\0p', label: `  ${bold('P(p)').padEnd(6)} ${dim('Block or unblock tools')}` },
+      { value: 'help\0k', label: `  ${bold('K(k)').padEnd(6)} ${dim('List api keys stored in system keychain')} ${bold('🔒')}` },
       { value: 'help\0u', label: `  ${bold('Shift+u').padEnd(6)} ${dim('Toggle weekly and monthly heatmap')}` },
       { value: 'help\0ctrlu', label: `  ${bold('Ctrl+u').padEnd(6)} ${dim('Dump today tokens to file')}` },
       { value: 'help\0h', label: `  ${bold('h').padEnd(6)} ${dim('Show this help')}` },
@@ -1718,6 +1774,7 @@ class DashboardApp {
       { value: 'help\0mk_auth', label: `  ${bold('Ä')}${dim('     Remote authentication active (auth_server)')}` },
       { value: 'help\0mk_recording', label: `  ${bold('®')}${dim('     Remote recording active (record_server)')}` },
       { value: 'help\0mk_privacy', label: `  ${bold('℗')}${dim('     Privacy filter active (filter_mode)')}` },
+      { value: 'help\0mk_lock', label: `  ${bold('🔒')}${dim('     All config api_keys stored in system keychain (store_key_in_system)')}` },
       { value: 'help\0mk_schedule', label: `  ${bold('$')}${dim('     Schedule alias')}` },
     ];
 

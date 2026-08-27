@@ -7,3 +7,6 @@
 [submodule "submodules/kompress"]
 	path = submodules/kompress
 	url = git@github.com:qidu/kompress.git
+[submodule "submodules/node-keytar"]
+	path = submodules/node-keytar
+	url = git@github.com:github/node-keytar.git
