@@ -119,10 +119,15 @@ export function findSentinelApiKeys(config: ProxyConfig): string[] {
   return collectKeySlots(config).filter((slot) => slot.get() === STORE_KEY_IN_SYSTEM).map((slot) => slot.location);
 }
 
+/** Module specifier kept non-literal on purpose: tsc must not require the
+ *  keytar addon to be linked at build time (fresh checkouts / Docker don't
+ *  build the submodule); absence is a runtime KeyStoreError instead. */
+const KEYTAR_MODULE = '@github/keytar';
+
 async function loadKeytar(opts: { keytarImpl?: KeytarLike }): Promise<KeytarLike> {
   if (opts.keytarImpl) return opts.keytarImpl;
   try {
-    const mod = await import('@github/keytar');
+    const mod = await import(KEYTAR_MODULE);
     return ((mod as { default?: KeytarLike }).default ?? mod) as KeytarLike;
   } catch (err) {
     throw new KeyStoreError(
