@@ -132,6 +132,9 @@ npm install
 > Despite `--dry-run`, npm **actually prunes devDependencies from the local `node_modules`** —
 > `typescript`, `tsx`, and every agent-SDK dev dep disappear, and the next `npm run build`
 > fails with `sh: tsc: command not found`. Fix it by running `npm install` again.
+> Such runs can also strip the `optionalDependencies` block from `package.json` — then the
+> `@github/keytar` link is never restored by reinstalling alone; see "OS keychain key storage"
+> under Configuration Reference for the recovery steps.
 > To verify what a consumer would install, use `npm pack --dry-run` instead.
 
 > **Node ≥ 19 recommended.** The proxy uses the Web Crypto global (`crypto.randomUUID()`)
@@ -424,7 +427,18 @@ The full field-by-field reference lives in
   configured api_keys of `[models.*]` targets in the local `proxy_config.toml` only —
   ignored for Consul/Apollo sources, N/A for composite aliases, and caller/user keys
   from request headers are never stored. Local/dev-host feature only — fails loud when
-  no OS keychain is available (Docker, Cloudflare Workers).
+  no OS keychain is available (Docker, Cloudflare Workers). Requires the `@github/keytar`
+  native addon — vendored as the `submodules/node-keytar` git submodule and declared an
+  `optionalDependency`, so `npm install` links it (and builds the native binding via
+  node-gyp) only when the submodule is checked out. Setup: `git submodule update --init
+  submodules/node-keytar && npm install`. If startup fails with `Cannot find package
+  '@github/keytar'`, first check `git diff package.json`: npm prune-style runs
+  (`--dry-run --omit=dev`, `--production` — see the warning in Quick Start) can strip
+  the `optionalDependencies` block, after which no `npm install` ever re-links the
+  addon; restore it with `git checkout -- package.json && npm install`. Band-aid when
+  the submodule is unavailable: `npm i @github/keytar --no-save` (registry copy with a
+  prebuilt binary; `--no-save` keeps the `file:submodules/node-keytar` pin in
+  `package.json`).
 - **Environment variables** — core/server (`PORT`, `LOG_LEVEL`, …), config source
   (`PROXY_CONFIG_PATH` / `PROXY_CONFIG_CONSUL` / `PROXY_CONFIG_APOLLO`), token counting &
   upstream, and the privacy-filter / compression / image-encode sidecars.

@@ -5,6 +5,26 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### docs: `store_key_in_system` addon install & recovery instructions
+
+README ("Configuration Reference") and `docs/configuration-reference.md` now document
+how to install the `@github/keytar` addon and how to recover from the startup error
+`Cannot find package '@github/keytar'`. Two facts established while verifying the
+instructions (fresh-clone repro, npm 11 / Node 24 / macOS):
+
+- The parent `npm install` builds the native binding automatically — the submodule's
+  install script falls through to `node-gyp rebuild` — so the earlier note's manual
+  `cd submodules/node-keytar && npm install && npm run build` is only needed when the
+  node-gyp toolchain is missing or the automatic build fails.
+- Root cause of the error seen on the dev host: a prune-style npm run
+  (`npm install --dry-run --omit=dev` / `--production`) stripped the
+  `optionalDependencies` block from `package.json` (and the untracked
+  `package-lock.json`), after which no later `npm install` ever re-links the addon —
+  npm only installs what `package.json` still declares. Durable fix:
+  `git checkout -- package.json && npm install`. Band-aid without the submodule:
+  `npm i @github/keytar --no-save` (registry copy with a prebuilt binary; `--no-save`
+  keeps the `file:submodules/node-keytar` pin).
+
 ### feat(config): `store_key_in_system` — store api_keys in the OS keychain
 
 New `[general] store_key_in_system = true` flag. On config load (Node server,
@@ -52,7 +72,9 @@ Notes:
 - The addon must be built once inside the submodule:
   `cd submodules/node-keytar && npm install && npm run build` (a git checkout
   ships no prebuilds). After that the parent `npm install` symlinks
-  `@github/keytar` to the submodule.
+  `@github/keytar` to the submodule. (Verified later: when the node-gyp
+  toolchain is present, the parent `npm install` runs that build automatically —
+  see the docs entry above; the manual build is the fallback.)
 - `package.json` gained an `allowScripts` field (npm 11+ install-script
   allowlist) covering the keytar install script.
 
