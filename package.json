@@ -14,6 +14,7 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "build-chatjimmy": "cd submodules/chatjimmy && npm run build",
+    "postinstall": "git submodule update --init submodules/node-keytar && cd submodules/node-keytar && npm install --ignore-scripts && npx node-gyp rebuild",
     "build": "tsc -p tsconfig.server.json",
     "start": "node dist/server.js",
     "server": "tsx src/server.ts",
@@ -58,6 +59,11 @@
   "peerDependenciesMeta": {
     "wrangler": {
       "optional": true
+    }
+  },
+  "lavamoat": {
+    "allowScripts": {
+      "@github/keytar": true
     }
   }
 }
