@@ -38,7 +38,7 @@ import { parseHumanTokenLimit, formatTokenLimit } from './utils/config-loader.js
 import { formatApiKeyForUpstream } from './utils/routing.js';
 import { KEY_STORE_SERVICE, listSystemKeychainAccounts } from './utils/key-store.js';
 import { getModelRouteConfig } from './utils/config-loader.js';
-import { getModelQuota, formatQuota, formatQuotaLeft, getUpstreamRateLimitLeft, type QuotaResult } from './utils/provider-quota.js';
+import { getModelQuota, formatQuota, formatQuotaLeft, getUpstreamRateLimitLeft, getUpstreamRateLimitLeftForUrl, type QuotaResult } from './utils/provider-quota.js';
 
 const TEST_ENDPOINT = '/v1/messages';
 const TEST_TOOL_NAME = 'test_tool';
@@ -517,13 +517,14 @@ function quotaListSuffix(entry: QuotaPickerEntry): string {
 /** Bottom status line for the currently highlighted picker row. */
 function quotaStatusLine(entry: QuotaPickerEntry): string {
   const r = entry.result;
-  if (r?.ok) return `${green('Quota:')} ${formatQuota(r)}`;
+  const label = lightWhite('Quota:');
+  if (r?.ok) return `${label} ${green(formatQuota(r))}`;
   if (r && !r.ok && r.kind !== 'unsupported') {
-    return `${green('Quota:')} ${yellow(`⚠ ${r.kind}: ${(r.message ?? '').slice(0, 60)}`)}`;
+    return `${label} ${yellow(`⚠ ${r.kind}: ${(r.message ?? '').slice(0, 60)}`)}`;
   }
   // unsupported / unresolvable — fall back to the anthropic 5h header value.
-  if (entry.headerLeft) return `${green('Quota:')} ${entry.headerLeft} 5h left`;
-  return `${green('Quota:')} ${dim('no usage data')}`;
+  if (entry.headerLeft) return `${label} ${green(`${entry.headerLeft} 5h left`)}`;
+  return `${label} ${dim('no usage data')}`;
 }
 
 class ListOverlay implements Component {
@@ -2224,11 +2225,16 @@ class DashboardApp {
       // The 5h utilization header is recorded under the upstream model name
       // (route.modelAlias, e.g. codelite → code-lite-pi), not the config key,
       // so resolve the route once and look the recording up by that name.
+      // Models sharing (targetUrl, apiKey) share the same quota pool, so fall
+      // back to the host-keyed recording when this specific alias hasn't been
+      // hit recently (same fallback the dashboard's per-base-URL column uses).
       let route: ReturnType<typeof getModelRouteConfig> | undefined;
       try {
         route = getModelRouteConfig(modelId, this.proxyConfig);
       } catch { /* route resolution failure — header-based value only */ }
-      const entry: QuotaPickerEntry = { headerLeft: getUpstreamRateLimitLeft(route?.modelAlias || modelId) };
+      const headerLeft = getUpstreamRateLimitLeft(route?.modelAlias || modelId)
+        ?? (route ? getUpstreamRateLimitLeftForUrl(route.targetUrl) : null);
+      const entry: QuotaPickerEntry = { headerLeft };
       if (route) {
         const credentialKey = `${route.targetUrl}:${route.apiKey ?? ''}`;
         try {
@@ -2324,8 +2330,12 @@ class DashboardApp {
           const result = await pending;
           // Usage-provider quota first; anthropic-routed models without one
           // fall back to the passively recorded 5h utilization header (keyed
-          // by the upstream model name, e.g. codelite → code-lite-pi).
-          const text = formatQuotaLeft(result) ?? getUpstreamRateLimitLeft(route.modelAlias || target);
+          // by the upstream model name, e.g. codelite → code-lite-pi), then
+          // to the host-keyed recording shared by all models on that
+          // (targetUrl, apiKey) pair.
+          const text = formatQuotaLeft(result)
+            ?? getUpstreamRateLimitLeft(route.modelAlias || target)
+            ?? getUpstreamRateLimitLeftForUrl(route.targetUrl);
           if (text) left.set(target, text);
         } catch (e) {
           // Route resolution failure (e.g. alias cycle) — surface once per

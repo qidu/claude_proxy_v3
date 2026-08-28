@@ -5,6 +5,20 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### fix(tui): quota picker falls back to shared host-level usage when a model alias has no recording
+
+Models sharing the same `(target_url, api_key)` (e.g. `codelite`, `codesmall`,
+`codestrong` all routed through the same upstream) share one quota pool, but
+the TUI's "usage left" was keyed only by model alias (`getUpstreamRateLimitLeft`),
+so aliases that hadn't been used recently showed no quota even though a
+sibling model on the same credential had a fresh recording. The dashboard's
+per-base-URL column already aggregated this correctly via
+`getUpstreamRateLimitLeftForUrl`.
+
+The TUI's quota picker (`buildQuotaData`) and composite quota refresh
+(`refreshCompositeQuota`) now fall back to `getUpstreamRateLimitLeftForUrl(route.targetUrl)`
+when the model-keyed recording is missing, matching the dashboard's behavior.
+
 ### feat(transforms): `restore_client_model_alias` builtin to echo the requested alias back in responses
 
 The proxy rewrites the request body's `model` field from the client's alias to
