@@ -1105,6 +1105,11 @@ export default {
       let targetUrl: string = '';
       let handlerType: 'models' | 'token-counting' | 'messages' | 'interactions' | 'generateContent' | 'responses' | 'responses-compact' | 'responses-input-tokens' | 'embeddings' | 'chat-completions' = 'messages';
       let modelId: string | undefined;
+      // Client-requested model name (pre-alias, from body.model as sent by the
+      // caller) — carried into the final runAttempt call for the non-composite/
+      // default-route path so response_egress can restore it (modelId gets
+      // overwritten with the resolved upstream model id further down).
+      let clientRequestedModel: string | undefined;
       let upstreamMode: string | undefined;
       let forceStreaming: boolean = false;
       // Route resolved in the passthrough/fixed path, threaded into the final
@@ -1132,6 +1137,9 @@ export default {
         targetUrl: string;
         handlerType: RouteAttemptHandlerType;
         modelId?: string;
+        /** Client-requested model name (pre-alias, e.g. body.model as sent by
+         *  the caller) — used to restore the alias in response_egress hooks. */
+        clientModel?: string;
         upstreamMode?: string;
         forceStreaming: boolean;
         authHeaders: Record<string, string>;
@@ -1291,6 +1299,7 @@ export default {
             }
             handlerType = fixedRoute.handlerType;
             modelId = modelName; // Use extracted model name for dashboard stats
+            clientRequestedModel = modelName;
             forceStreaming = fixedRoute.forceStreaming || false;
 
             // Resolve composite/alias model id: if the configured route resolves to a
@@ -1320,6 +1329,7 @@ export default {
               modelAuthHeaders = { ...modelAuthHeaders, ...formatApiKeyForUpstream(modelRoute.apiKey, upstreamMode || 'openai-completions') };
             }
           } else if (modelName && proxyConfig.models) {
+            clientRequestedModel = modelName;
             // ---- Coordinator mode: route to planner or executor based on stage ----
             if (getCompositeAliasMode(modelName, proxyConfig) === 'coordinator') {
               const coordPlan = resolveCoordinatorPlan(modelName, proxyConfig);
@@ -1560,6 +1570,7 @@ export default {
                 targetUrl: candidateTargetUrl,
                 handlerType: candidateHandlerType,
                 modelId: upstreamModelName,
+                clientModel: modelName,
                 upstreamMode: candidateUpstreamMode,
                 forceStreaming: candidateForceStreaming,
                 authHeaders: candidateAuthHeaders,
@@ -1856,6 +1867,7 @@ export default {
           targetUrl: candidateTargetUrl,
           handlerType: candidateHandlerType,
           modelId: upstreamModelName,
+          clientModel: clientRequestedModel,
           upstreamMode: candidateUpstreamMode,
           forceStreaming: candidateForceStreaming,
           authHeaders: candidateAuthHeaders,
@@ -2121,6 +2133,7 @@ export default {
         const attemptTargetUrl = attempt.targetUrl;
         const attemptHandlerType = attempt.handlerType;
         const attemptModelId = attempt.modelId;
+        const attemptClientModel = attempt.clientModel;
         const attemptUpstreamMode = attempt.upstreamMode;
         const attemptForceStreaming = attempt.forceStreaming;
         let attemptAuthHeaders = attempt.authHeaders;
@@ -2383,7 +2396,7 @@ export default {
             hook: 'response_egress',
             route: attemptRoute,
             upstreamMode: attemptUpstreamMode || 'openai-completions',
-            clientModel: attemptModelId || 'unknown',
+            clientModel: attemptClientModel || attemptModelId || 'unknown',
             requestId,
             streaming: writeoutContentType.includes('text/event-stream'),
             logger,
@@ -2505,6 +2518,7 @@ export default {
         targetUrl,
         handlerType,
         modelId,
+        clientModel: clientRequestedModel,
         upstreamMode,
         forceStreaming,
         authHeaders: modelAuthHeaders,

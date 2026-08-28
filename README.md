@@ -299,6 +299,16 @@ Incoming model names resolve through three stacked logic levels (see the
 - **Token limits** — global (`general.global_token_limit`) and per-alias caps over
   sliding (`1h`–`6d`) or calendar (`1w`/`1m`) windows; HTTP 413 when exceeded.
 
+> **Note — response `model` field reflects the real upstream model, not the
+> alias.** The proxy rewrites the *request* body's `model` field from the
+> client's alias to the real target model id before forwarding, but the
+> *response* body's `model` field (JSON and streaming `chat.completion.chunk`
+> events alike) is passthrough by default — clients see whatever the real
+> upstream model returns, not the alias they requested. To echo the requested
+> alias back instead, attach the `restore_client_model_alias` transform
+> built-in to the route — see
+> [`docs/transforms-reference.md`](./docs/transforms-reference.md#restore_client_model_alias--echo-the-requested-alias-back-to-the-client).
+
 The full reference — category lookup priority tables, `base_url`/`api_key` override and
 "who wins" rules, every composite/fusion/coordinator/schedule option, the token-limit
 windowing engine, and worked examples — lives in
@@ -478,7 +488,7 @@ The [`docs/`](./docs/) folder has deep-dives on specific topics:
 - **Thinking / reasoning** — `docs/claude-extended-thinking.md`, `docs/claude-adaptive-thinking.md`
 - **API formats** — `docs/claude-api-reference.md`, `docs/gemini-api-reference.md`, `docs/openai-api-reference.md`
 - **Fusion & composite design** — `docs/design_fusion_composite_alias.md`
-- **Request/response transform hooks** — `docs/design_request_transform_hooks.md` (design) + `docs/implementation_of_request_transform_hooks.md` (implementation log) — per-model/per-upstream field & header rewriting via 5 lifecycle hooks; `[transforms.*]` / `[transform_defaults]` config
+- **Request/response transform hooks** — `docs/transforms-reference.md` (current reference: hooks, Tier-1 ops, Tier-2 built-ins incl. `restore_client_model_alias`, `[transforms.*]` / `[transform_defaults]` config) — plus `docs/design_request_transform_hooks.md` (original design) and `docs/implementation_of_request_transform_hooks.md` (implementation log)
 - **Agent harness integrations** — [`docs/agents/`](./docs/agents/) (per-agent guides; e.g. [using this proxy as an LLM provider for deepseek-harness](./docs/agents/proxy-as-provider-for-deepseek-harness.md))
 
 ## 🤝 Contributing

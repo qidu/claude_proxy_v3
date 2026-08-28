@@ -108,6 +108,7 @@ Built-ins are declared in the `builtins` list of a hook slot. They run **before*
 | `filter_anthropic_beta` | any | Filters and optionally renames entries in the `anthropic-beta` request header using the set's `anthropic_beta_map`. Entries not in the map, or mapped to `null`/`""`, are dropped; others are emitted under their mapped name. See [anthropic-beta header filtering](#filter_anthropic_beta--anthropic-beta-header-filtering) below. |
 | `ensure_tool_config_cache_ttl` | `anthropic-messages` | Translates Anthropic-native prompt caching on the system prompt into the litellm/Bedrock-bridge convention. Reads `cache_control` from `body.system` content blocks (the array-of-blocks shape — a plain-string `system` is ignored), then appends `{location:"tool_config", control:{...}}` to `body.cache_control_injection_points` when no `tool_config` entry already exists (caller-provided entries win). The serialized body is reordered so `cache_control_injection_points` lands after `tools`. No-op when `system` is absent, is a plain string, or carries no block-level `cache_control`. |
 | `ensure_trailing_user_message` | `anthropic-messages` | While `body.messages` ends with a non-`user` role (`assistant`, `system`, or anything else), pops that message outright, repeating until the array ends on `user` (or is empty). Covers both real Anthropic "assistant message prefill" (trailing `role:"assistant"`) and a trailing inline `role:"system"` message (some clients emit an agent-definitions block as a `system`-role message in `messages`, in addition to the normal top-level `system` field). Some Anthropic-compatible upstreams reject either case with the same 400 "This model does not support assistant message prefill." Emits one `LOG_LEVEL=trace` line per stripped message (`[ensure_trailing_user_message] stripped trailing <role> message: ...`) showing exactly what was removed. No-op when `messages` is empty/absent or already ends with `role:"user"`. |
+| `restore_client_model_alias` | any (`response_egress` only) | Rewrites the response body's `model` field back to the alias the client originally requested, undoing the request-side alias→target rewrite. Applies to both the buffered JSON body and each `chat.completion.chunk` SSE event. **Opt-in per route** — see [restore_client_model_alias](#restore_client_model_alias--echo-the-requested-alias-back-to-the-client) below for why this isn't a default. |
 
 ### Built-in example
 
@@ -226,6 +227,38 @@ If every entry is dropped, the `anthropic-beta` header is removed entirely
 > `routing.ts` and only for `anthropic-messages` upstreams. This built-in is a
 > second-stage filter on top of that base; it does not add the header for
 > non-anthropic upstreams.
+
+### `restore_client_model_alias` — echo the requested alias back to the client
+
+**By default the proxy does not do this.** The request body's `model` field is
+rewritten from the client's alias to the real upstream model id before
+forwarding (e.g. `my-fast-model` → `claude-haiku-4-5-20251001`), but the
+*response* body's `model` field is left as pure passthrough — whatever the
+real upstream model returns is what the client sees, in both the JSON body
+and every SSE `chat.completion.chunk` event. This means a client that sent
+`model: "my-fast-model"` will see `model: "claude-haiku-4-5-20251001"` in the
+response, not the alias it requested.
+
+Attach this built-in to a route to restore the alias in the response instead:
+
+```toml
+[transforms.restore_alias]
+schema = "openai-completions"
+response_egress.builtins = ["restore_client_model_alias"]
+
+[models.my-fast-model]
+target = "claude-haiku-4-5-20251001"
+transforms = "restore_alias"
+```
+
+Routes that don't reference a set with this built-in keep the default
+passthrough behavior — enabling it is per-route, not global. This also
+applies to composite/coordinator/fusion aliases: the value restored is always
+the top-level alias the client sent, not the name of whichever internal
+sub-target actually served the request.
+
+No-op when the response body has no `model` field, or when the resolving
+context has no client-requested model name to restore.
 
 ---
 

@@ -1815,3 +1815,55 @@ describe('Tier-2 builtin: ensure_trailing_user_message', () => {
     assert.equal('messages' in result.body, false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tier-2 builtin: restore_client_model_alias
+// ---------------------------------------------------------------------------
+
+describe('Tier-2 builtin: restore_client_model_alias', () => {
+  const set: TransformSet = {
+    name: 'restore_alias',
+    schema: 'openai-completions',
+    response_egress: { builtins: ['restore_client_model_alias'] },
+  };
+
+  it('rewrites the JSON response body model field to the client-requested alias', async () => {
+    // makeWriteoutCtx fixture sets clientModel: 'test-model'.
+    const ctx = makeWriteoutCtx([set]);
+    const original = makeJsonResponse({ id: '1', model: 'claude-haiku-4-5-20251001', choices: [] });
+    const result = await applyWriteoutBody(original, ctx);
+    const body = JSON.parse(await result.text());
+    assert.equal(body.model, 'test-model');
+    assert.equal(body.id, '1', 'unrelated fields must be untouched');
+  });
+
+  it('leaves the body untouched when clientModel is not set on the context', async () => {
+    const ctx = { ...makeWriteoutCtx([set]), clientModel: '' };
+    const original = makeJsonResponse({ id: '1', model: 'claude-haiku-4-5-20251001' });
+    const result = await applyWriteoutBody(original, ctx);
+    const body = JSON.parse(await result.text());
+    assert.equal(body.model, 'claude-haiku-4-5-20251001');
+  });
+
+  it('rewrites the model field on each SSE chat.completion.chunk event', async () => {
+    const ctx = makeWriteoutCtx([set]);
+    const input = 'data: {"id":"1","model":"claude-haiku-4-5-20251001","choices":[]}\n\ndata: [DONE]\n\n';
+    const stream = new ReadableStream({
+      start(c) { c.enqueue(new TextEncoder().encode(input)); c.close(); },
+    });
+    const out = pipeEventTransformer(stream, ctx);
+    assert.ok(out !== null);
+    const text = await new Response(out!).text();
+    assert.ok(text.includes('"model":"test-model"'), 'chunk model field should be rewritten to the alias');
+    assert.ok(!text.includes('claude-haiku-4-5-20251001'), 'real upstream model id should not leak to the client');
+    assert.ok(text.includes('[DONE]'), 'sentinel should pass through unchanged');
+  });
+
+  it('does not touch response bodies with no model field', async () => {
+    const ctx = makeWriteoutCtx([set]);
+    const original = makeJsonResponse({ id: '1', choices: [] });
+    const result = await applyWriteoutBody(original, ctx);
+    const body = JSON.parse(await result.text());
+    assert.equal('model' in body, false);
+  });
+});

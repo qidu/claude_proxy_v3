@@ -395,6 +395,18 @@ base_url = "https://openrouter.ai/api"
 # schema = "openai-completions"
 # response_egress.ops = [{op = "set", path = "$response.model", value = "proxy-model"}]
 
+# Example: echo the client's requested alias back in the response `model` field
+# instead of the real upstream model id. By default the response `model` field
+# is passthrough (whatever the real upstream model returns) — a client that
+# requested "my-fast-model" sees "claude-haiku-4-5-20251001" in the response
+# unless this builtin is attached. Works for both the JSON body and each SSE
+# chat.completion.chunk event. See docs/transforms-reference.md for details.
+# [transforms.restore_alias]
+# schema = "openai-completions"
+# response_egress.builtins = ["restore_client_model_alias"]
+#
+# "my-fast-model" = {target = "claude-haiku-4-5-20251001", transforms = "restore_alias"}
+
 # Example: attach transforms to a specific model entry.
 # In [models.gpt], add transforms = "strict_tools" to an entry:
 #   "gpt-4o" = {transforms = "strict_tools"}

@@ -86,7 +86,7 @@ function applyBuiltin(
   body: Record<string, unknown>,
   headers: Record<string, string>,
   set: TransformSet,
-  trace?: { logger: Logger; requestId: string },
+  trace?: { logger: Logger; requestId: string; clientModel?: string },
 ): void {
   if (name === 'lowercase_tool_schema_types') {
     if (!Array.isArray(body.tools)) return;
@@ -398,6 +398,17 @@ function applyBuiltin(
     }
     return;
   }
+
+  if (name === 'restore_client_model_alias') {
+    // Rewrite the response body's model field back to the alias the client
+    // requested, undoing the alias->target rewrite applied to the request
+    // (index.ts:1300-1304). Runs on response_egress only (buffered JSON body
+    // via applyWriteoutBody, and per-event via buildEventTransformer for SSE).
+    if (trace?.clientModel && typeof body.model === 'string') {
+      body.model = trace.clientModel;
+    }
+    return;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -509,7 +520,7 @@ function applyTransformSet(
   hook: HookPoint,
   body: Record<string, unknown>,
   headers: Record<string, string>,
-  trace?: { logger: Logger; requestId: string },
+  trace?: { logger: Logger; requestId: string; clientModel?: string },
 ): { body: Record<string, unknown>; headers: Record<string, string> } {
   const slot = set[hook];
   if (!slot) return { body, headers };
@@ -623,7 +634,7 @@ export function runHook(
 
   let { body, headers } = payload;
   for (const set of transforms) {
-    ({ body, headers } = applyTransformSet(set, hook, body, headers, { logger: ctx.logger, requestId: ctx.requestId }));
+    ({ body, headers } = applyTransformSet(set, hook, body, headers, { logger: ctx.logger, requestId: ctx.requestId, clientModel: ctx.clientModel }));
   }
   if (needsCap) applyMaxTokensCap(body, ctx);
   return { body, headers };
@@ -670,7 +681,7 @@ export async function applyAfterUpstream(
     let body = assembled;
     let headers: Record<string, string> = {};
     for (const set of activeSets) {
-      ({ body, headers } = applyTransformSet(set, 'after_upstream', body, headers));
+      ({ body, headers } = applyTransformSet(set, 'after_upstream', body, headers, { logger: ctx.logger, requestId: ctx.requestId, clientModel: ctx.clientModel }));
       void headers;
     }
     const responseHeaders = sanitizeUpstreamResponseHeaders(response);
@@ -839,7 +850,7 @@ export function buildEventTransformer(
     let body = event;
     let headers: Record<string, string> = {};
     for (const set of activeSets) {
-      ({ body, headers } = applyTransformSet(set, hook, body, headers));
+      ({ body, headers } = applyTransformSet(set, hook, body, headers, { logger: ctx.logger, requestId: ctx.requestId, clientModel: ctx.clientModel }));
       void headers; // headers not used on stream events
     }
     return body;
@@ -898,7 +909,7 @@ export async function applyWriteoutBody(
   for (const set of ctx.route.transforms!) {
     const slot = set['response_egress'];
     if (!slot) continue;
-    ({ body, headers } = applyTransformSet(set, 'response_egress', body, headers));
+    ({ body, headers } = applyTransformSet(set, 'response_egress', body, headers, { logger: ctx.logger, requestId: ctx.requestId, clientModel: ctx.clientModel }));
     void headers; // header ops on response_egress run in index.ts central wrap
   }
   void hookCtx;

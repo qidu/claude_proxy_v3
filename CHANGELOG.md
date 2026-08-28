@@ -5,6 +5,45 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### feat(transforms): `restore_client_model_alias` builtin to echo the requested alias back in responses
+
+The proxy rewrites the request body's `model` field from the client's alias to
+the real upstream model id before forwarding (`index.ts` composite/coordinator/
+fusion/default routing), but the response `model` field was pure passthrough —
+clients saw the real upstream model id, not the alias they requested, leaking
+routing internals and breaking any client-side `response.model === request.model`
+checks.
+
+Added an opt-in `response_egress` builtin, `restore_client_model_alias`, that
+rewrites the response body's `model` field (JSON, and each `chat.completion.chunk`
+SSE event) back to the client-requested alias. Enable it per-route via the
+existing transform config mechanism:
+
+```toml
+[transforms.restore_alias]
+schema = "openai-completions"
+response_egress.builtins = ["restore_client_model_alias"]
+
+[models.my-fast-model]
+target = "claude-haiku-4-5-20251001"
+transforms = "restore_alias"
+```
+
+Routes that don't list it keep today's passthrough behavior — this is the
+config "toggle." Implementation notes:
+
+- `RouteAttempt` gained a `clientModel?: string` field, set at every attempt
+  construction site (composite candidates, `buildRouteAttempt` for
+  coordinator/fusion sub-targets, and the default single-route path via a new
+  `clientRequestedModel` outer variable) — carries the true pre-alias name
+  since the existing `modelId` field gets overwritten with the resolved
+  upstream model id.
+- Fixed a latent bug: `HookContext.clientModel` at the `response_egress` hook
+  was wired to the resolved upstream model id (`attemptModelId`), not the
+  client's original alias, inconsistent with `request_ingress`'s correct
+  `parsedBody.model`-based wiring. Builtins now receive `clientModel` via the
+  `trace` param threaded through `applyTransformSet`/`applyBuiltin`.
+
 ### fix(quota): usage-left lookup keyed by upstream model name, not config key
 
 The anthropic 5h utilization header (`anthropic-ratelimit-unified-5h-utilization`)
