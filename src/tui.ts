@@ -2213,6 +2213,10 @@ class DashboardApp {
     const data = new Map<string, QuotaPickerEntry>();
     if (!this.proxyConfig) return data;
     const seen = new Set<string>();
+    // Models sharing the same (targetUrl, apiKey) hit the same provider
+    // account, so their quota is identical — fetch it once per credential
+    // pair and reuse the result instead of one getModelQuota call per model.
+    const quotaByCredential = new Map<string, Promise<QuotaResult> | QuotaResult>();
     for (const choice of choices) {
       const modelId = stripModelMarker(choice.value);
       if (seen.has(modelId)) continue;
@@ -2226,8 +2230,14 @@ class DashboardApp {
       } catch { /* route resolution failure — header-based value only */ }
       const entry: QuotaPickerEntry = { headerLeft: getUpstreamRateLimitLeft(route?.modelAlias || modelId) };
       if (route) {
+        const credentialKey = `${route.targetUrl}:${route.apiKey ?? ''}`;
         try {
-          entry.result = await getModelQuota(route);
+          let pending = quotaByCredential.get(credentialKey);
+          if (!pending) {
+            pending = getModelQuota(route);
+            quotaByCredential.set(credentialKey, pending);
+          }
+          entry.result = await pending;
         } catch { /* quota fetch failure — header-based value only */ }
       }
       data.set(choice.value, entry);
@@ -2298,10 +2308,20 @@ class DashboardApp {
     this.compositeQuotaRefreshing = true;
     try {
       const left = new Map<string, string>();
+      // Targets sharing the same (targetUrl, apiKey) hit the same provider
+      // account, so their quota is identical — fetch it once per credential
+      // pair and reuse the result instead of one getModelQuota call per target.
+      const quotaByCredential = new Map<string, Promise<QuotaResult> | QuotaResult>();
       for (const target of targets) {
         try {
           const route = getModelRouteConfig(target, proxyConfig);
-          const result = await getModelQuota(route);
+          const credentialKey = `${route.targetUrl}:${route.apiKey ?? ''}`;
+          let pending = quotaByCredential.get(credentialKey);
+          if (!pending) {
+            pending = getModelQuota(route);
+            quotaByCredential.set(credentialKey, pending);
+          }
+          const result = await pending;
           // Usage-provider quota first; anthropic-routed models without one
           // fall back to the passively recorded 5h utilization header (keyed
           // by the upstream model name, e.g. codelite → code-lite-pi).
@@ -3299,7 +3319,7 @@ class DashboardApp {
         const leadTarget = orderedTargets[0];
         const leadRouteModel = leadTarget?.routeModel ?? leadTarget?.model;
         const leadTiming = leadRouteModel ? modelTimingMap.get(leadRouteModel) : undefined;
-        const avgPrefix = leadTiming && leadTiming.count > 0
+        const avgPrefix = includeTiming && leadTiming && leadTiming.count > 0
           ? `[${(leadTiming.avg_time_ms / 1000).toFixed(2)}s] `
           : '';
         const description = `${avgPrefix}${targets}`;
