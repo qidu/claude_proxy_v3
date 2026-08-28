@@ -1,6 +1,6 @@
 {
   "name": "model-proxy-v3",
-  "version": "3.3.0",
+  "version": "3.3.1",
   "description": "Model Proxy V3 - Claude, GPT, Gemini, DeepSeek, GLM, Kimi models compatibale API Proxy",
   "main": "dist/index.js",
   "bin": {
