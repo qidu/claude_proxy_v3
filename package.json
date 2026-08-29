@@ -14,7 +14,6 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "build-chatjimmy": "cd submodules/chatjimmy && npm run build",
-    "postinstall": "git submodule update --init submodules/node-keytar && cd submodules/node-keytar && npm install --ignore-scripts && npx node-gyp rebuild",
     "build": "tsc -p tsconfig.server.json",
     "start": "node dist/server.js",
     "server": "tsx src/server.ts",
@@ -47,7 +46,7 @@
     "typescript": "^5.9.3"
   },
   "optionalDependencies": {
-    "@github/keytar": "file:submodules/node-keytar"
+    "@github/keytar": "github:github/node-keytar#v7.10.6"
   },
   "allowScripts": {
     "@github/keytar@7.10.5": true,
