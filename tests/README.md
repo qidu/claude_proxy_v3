@@ -75,6 +75,7 @@ node run-integration-tests.js 5         # run suite index 5 only
 node run-integration-tests.js 0,3       # run suites 0 and 3
 ```
 
+
 ### 3. Multi-agent SDK tests — `tests/multi-agents-test.ts` / `.py`
 
 End-to-end: real agent SDKs talking to a running proxy. Requires the proxy to be started first.
@@ -93,6 +94,17 @@ npx tsx tests/multi-agents-test.ts 0 2 1        # all models, Claude agent, firs
 .venv/bin/python tests/multi-agents-test.py --all        # run all
 .venv-crewai/bin/python tests/multi-agents-test.py --all # CrewAI only (Python ≤ 3.13)
 ```
+
+### 4. OpenRouter free-model smoke test — `tests/models/openrouter-free-tests.js`
+
+Standalone script: fetches OpenRouter's live model list, filters for free models matching this proxy's testing criteria, generates a `[models.FREE]` + composite config, spawns its own local proxy instance, and smoke-tests every model plus the `free-model`/`free-model-fusion`/`free-model-coordinator` composite aliases. Requires `tests/models/openrouter-api-key.txt` (gitignored — `api_key`/`base_url`/`model_list` lines) with a valid, budget-limited OpenRouter key. Falls back to the local `tests/models/or-free-models-examples.json` fixture if the live fetch fails or matches zero models.
+
+```bash
+npx tsx tests/models/openrouter-free-tests.js
+```
+
+> Run via `tsx`, not `node` — the script imports directly from `src/utils/config-loader.ts` (TypeScript source, no compiled `.js` sibling unless you `npm run build` first).
+
 
 ---
 
