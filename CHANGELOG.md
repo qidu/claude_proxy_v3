@@ -5,6 +5,22 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### feat(tui): live-refresh the 'Model Quota' picker while open
+
+The Model Quota picker built its quota entries once when opened, so rows kept
+showing the values from open time — e.g. a stale `Quota: 100% 5h left` — even
+though every upstream response updates the passively recorded
+`anthropic-ratelimit-unified-5h-utilization` value (recorded per request in the
+anthropic-messages handler; verified against a live Anthropic-compatible upstream,
+which forwards
+the header on every response). The picker now keeps its live state
+(`quotaPickerState`) and is rebuilt from the 500ms refresh loop
+(`refreshQuotaPicker`, same pattern as the composite overlay's quota refresh):
+row suffixes and the highlighted row's `Quota:` status line update as new
+upstream responses arrive while the overlay is open. Provider quota fetches
+stay bounded by `getModelQuota`'s 30s cache; the anthropic-5h fallback is a
+plain in-memory map read.
+
 ### fix(build): keytar dependency now installs prebuilt; Docker skips it; dead config removed
 
 The `@github/keytar` optionalDependency is now pinned as
@@ -197,8 +213,8 @@ success, with exponential backoff (5s → 30min) on failure.
 
 Anthropic-routed models have no usage endpoint, but Anthropic-compatible
 upstreams report the account-wide 5h-window used fraction (0-1) in the
-`anthropic-ratelimit-unified-5h-utilization` response header (same source as
-pi-proxy). The `anthropic-messages` passthrough now records this per model on
+`anthropic-ratelimit-unified-5h-utilization` response header. The
+`anthropic-messages` passthrough now records this per model on
 real traffic (no polling — a value appears only after the first proxied
 request to that model) and derives a usage-left percent
 (`(1 - utilization)` clamped at 0%) as a fallback when the route has no usage

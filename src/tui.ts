@@ -1346,6 +1346,21 @@ class DashboardApp {
   private modelTestTimer: ReturnType<typeof setInterval> | null = null;
   private modelTestTimerActive = false;
   private compositeQuotaRefreshing = false;
+  /** Live state of the open 'Model Quota' picker — set by openQuotaPicker,
+   *  cleared by closeOverlay/its close callbacks, and rebuilt from the
+   *  refresh() loop (refreshQuotaPicker) so open rows track new upstream
+   *  responses (e.g. the passively recorded anthropic 5h utilization). */
+  private quotaPickerState: {
+    overlay: ListOverlay;
+    choices: SelectItem[];
+    /** Base description (before the quota suffix) per choice value. */
+    baseDescription: Map<string, string>;
+    /** Latest quota entries, refreshed while the picker is open. */
+    data: Map<string, QuotaPickerEntry>;
+    /** Value of the currently highlighted row. */
+    highlighted: string | null;
+  } | null = null;
+  private quotaPickerRefreshing = false;
   private modelTestInProgress = false;
   // Set by togglePeriodicModelTest / stop() to abort an in-flight test-all
   // batch. The for-loop in runAllCustomModelTests checks it between models;
@@ -1472,6 +1487,7 @@ class DashboardApp {
       this.compositeOverlay?.setSnapshot(snapshot);
       this.scheduleOverlay?.setSnapshot(snapshot);
       void this.refreshCompositeQuota(proxyConfig);
+      void this.refreshQuotaPicker();
       if (fromMutation) this.view.setConfigStatus('saved');
       // When this refresh is triggered by a save action, don't override the
       // success message the save flow sets right after this returns. The
@@ -2263,6 +2279,10 @@ class DashboardApp {
     this.requestRender();
     const quotaData = await this.buildQuotaData(choices);
     this.view.setMessage('');
+    // Base descriptions before the quota suffix is appended, so the live
+    // refresh (refreshQuotaPicker) can rebuild descriptions without
+    // duplicating the suffix.
+    const baseDescription = new Map(choices.map((c) => [c.value, c.description ?? ''] as const));
     for (const choice of choices) {
       choice.description += quotaListSuffix(quotaData.get(choice.value) ?? {});
     }
@@ -2271,10 +2291,12 @@ class DashboardApp {
       `↑/↓ ${dim('move')}  Esc ${dim('close')}`,
       choices,
       () => {
+        this.quotaPickerState = null;
         this.hideOverlay();
         this.requestRender();
       },
       () => {
+        this.quotaPickerState = null;
         this.hideOverlay();
         this.view.setMessage('quota cancelled');
         this.requestRender();
@@ -2284,14 +2306,45 @@ class DashboardApp {
       { minPrimaryColumnWidth: 25, maxPrimaryColumnWidth: 25 },
       undefined,
       (item) => {
-        overlay.setStatus(quotaStatusLine(quotaData.get(item.value) ?? {}));
+        const state = this.quotaPickerState;
+        if (!state) return;
+        state.highlighted = item.value;
+        overlay.setStatus(quotaStatusLine(state.data.get(item.value) ?? {}));
       },
     );
     // Show the initially highlighted row's quota without waiting for a move.
     const first = choices[0];
     if (first) overlay.setStatus(quotaStatusLine(quotaData.get(first.value) ?? {}));
+    this.quotaPickerState = { overlay, choices, baseDescription, data: quotaData, highlighted: first?.value ?? null };
     this.overlay = this.tui.showOverlay(overlay, { width: '70%', maxHeight: '50%', anchor: 'center' });
     this.overlay.focus();
+  }
+
+  /**
+   * Live-refresh the open 'Model Quota' picker from the 500ms refresh loop
+   * (same pattern as refreshCompositeQuota): rebuild the quota entries —
+   * getModelQuota's 30s cache keeps provider load bounded, and the
+   * anthropic-5h header lookups are plain map reads — so row suffixes and the
+   * highlighted row's status line track recordings from new upstream
+   * responses while the picker is open.
+   */
+  private async refreshQuotaPicker(): Promise<void> {
+    const state = this.quotaPickerState;
+    if (!state || this.quotaPickerRefreshing) return;
+    this.quotaPickerRefreshing = true;
+    try {
+      state.data = await this.buildQuotaData(state.choices);
+      for (const choice of state.choices) {
+        choice.description = (state.baseDescription.get(choice.value) ?? '') + quotaListSuffix(state.data.get(choice.value) ?? {});
+      }
+      if (state.highlighted !== null) {
+        state.overlay.setStatus(quotaStatusLine(state.data.get(state.highlighted) ?? {}));
+      }
+      state.overlay.invalidate();
+      this.requestRender();
+    } finally {
+      this.quotaPickerRefreshing = false;
+    }
   }
 
   /**
@@ -3170,6 +3223,7 @@ class DashboardApp {
     this.overlay = null;
     this.compositeOverlay = null;
     this.scheduleOverlay = null;
+    this.quotaPickerState = null;
     this.tui.setFocus(this.view);
   }
 
