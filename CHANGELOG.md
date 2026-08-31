@@ -5,6 +5,29 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### fix(build): keytar dependency now installs prebuilt; Docker skips it; dead config removed
+
+The `@github/keytar` optionalDependency is now pinned as
+`github:github/node-keytar#v7.10.6` instead of `file:submodules/node-keytar`, and
+the root `postinstall` (git submodule + forced `npx node-gyp rebuild`) is gone:
+`npm install` fetches the addon from GitHub and its install script downloads a
+prebuilt NAPI binary (ABI 3) — no compiler or Python needed; node-gyp compiles
+from source only as the fallback when the prebuilt download fails. The
+`submodules/node-keytar` submodule is kept as a local source copy for development
+but is no longer used by `npm install`.
+
+The Dockerfile now installs with `--omit=optional --ignore-scripts`, excluding
+the keytar addon (no OS keychain in the image; `store_key_in_system` keeps
+failing loud there) — previously the root postinstall's `git submodule` call
+would have broken the image build.
+
+Also removed the dead `allowScripts` / `lavamoat.allowScripts` blocks from
+`package.json` (they referenced `@lavamoat/allow-scripts`, which is not a
+dependency). README and `docs/configuration-reference.md` updated to describe
+the prebuilt-first install, per-platform system/toolchain requirements (runtime
+keychain backend per OS; build toolchain only for the source-build fallback),
+and the headless-Linux keyring caveat.
+
 ### fix(tui): quota picker falls back to shared host-level usage when a model alias has no recording
 
 Models sharing the same `(target_url, api_key)` (e.g. `codelite`, `codesmall`,

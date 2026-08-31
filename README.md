@@ -437,21 +437,39 @@ The full field-by-field reference lives in
   long as the same `node` binary/path keeps reading them — a Node upgrade or a different
   binary path can trigger a one-time OS keychain prompt or a fatal `KeyStoreError` if
   access is denied. Scope:
-  configured api_keys of `[models.*]` targets in the local `proxy_config.toml` only —
-  ignored for Consul/Apollo sources, N/A for composite aliases, and caller/user keys
-  from request headers are never stored. Local/dev-host feature only — fails loud when
-  no OS keychain is available (Docker, Cloudflare Workers). Requires the `@github/keytar`
-  native addon — vendored as the `submodules/node-keytar` git submodule and declared an
-  `optionalDependency`, so `npm install` links it (and builds the native binding via
-  node-gyp) only when the submodule is checked out. Setup: `git submodule update --init
-  submodules/node-keytar && npm install`. If startup fails with `Cannot find package
-  '@github/keytar'`, first check `git diff package.json`: npm prune-style runs
-  (`--dry-run --omit=dev`, `--production` — see the warning in Quick Start) can strip
-  the `optionalDependencies` block, after which no `npm install` ever re-links the
-  addon; restore it with `git checkout -- package.json && npm install`. Band-aid when
-  the submodule is unavailable: `npm i @github/keytar --no-save` (registry copy with a
-  prebuilt binary; `--no-save` keeps the `file:submodules/node-keytar` pin in
-  `package.json`).
+  configured api_keys of `[models.*]` targets (and `default_upstream.default_api_key`)
+  in the local `proxy_config.toml` only — ignored for Consul/Apollo sources, N/A for
+  composite aliases, and caller/user keys from request headers are never stored.
+  Local/dev-host feature only — fails loud when no OS keychain is available (Docker,
+  Cloudflare Workers). Backed by the `@github/keytar` native addon, pinned in
+  `optionalDependencies` as `github:github/node-keytar#v7.10.6`: `npm install` fetches
+  it from GitHub and its install script downloads a prebuilt NAPI binary — no compiler
+  or Python needed (see the toolchain note below). A source copy is kept at
+  `submodules/node-keytar` for local development; it is not used by `npm install`.
+  If startup fails with `Cannot find package '@github/keytar'`, first check
+  `git diff package.json`: npm prune-style runs (`--dry-run --omit=dev`,
+  `--production` — see the warning in Quick Start) can strip the
+  `optionalDependencies` block, after which no `npm install` ever re-fetches the
+  addon; restore it with `git checkout -- package.json && npm install`.
+- **System & toolchain requirements for `store_key_in_system = true`** — the feature
+  needs an OS keychain backend at run time. The `@github/keytar` native addon normally
+  installs as a prebuilt NAPI binary (ABI 3 — works on any modern Node), so no build
+  toolchain is required; a native toolchain (Python 3 + a C++ compiler, via node-gyp)
+  is needed only when the prebuilt download fails (e.g. no network access to GitHub
+  releases) and npm falls back to compiling the addon from source:
+
+  | Platform | Runtime requirement (OS keychain) | Source-build fallback (node-gyp) |
+  |---|---|---|
+  | macOS | Keychain Services (built in) | Xcode Command Line Tools (`xcode-select --install`) + Python 3 |
+  | Linux | a Secret Service provider — `gnome-keyring` (or KWallet) daemon running, with `libsecret-1` | `build-essential` (gcc/g++/make) + Python 3 + `libsecret-1-dev` headers |
+  | Windows | Credential Vault (built in) | Visual Studio Build Tools with the "Desktop development with C++" workload + Python 3 |
+
+  Headless Linux servers need a keyring daemon unlocked in the session (e.g.
+  `gnome-keyring-daemon --start --components=secrets` with `DBus` session) or keychain
+  access fails. Unsupported environments — Docker/distroless containers, Cloudflare
+  Workers — have no OS keychain; with the flag enabled the proxy refuses to start
+  (fatal `KeyStoreError`, no silent fallback). The Docker image installs with
+  `--omit=optional --ignore-scripts`, so the addon is absent there by design.
 - **Environment variables** — core/server (`PORT`, `LOG_LEVEL`, …), config source
   (`PROXY_CONFIG_PATH` / `PROXY_CONFIG_CONSUL` / `PROXY_CONFIG_APOLLO`), token counting &
   upstream, and the privacy-filter / compression / image-encode sidecars.

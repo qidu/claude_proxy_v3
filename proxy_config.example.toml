@@ -57,11 +57,11 @@ week_start_day = "monday"
 # (backup: .bak) with those keys replaced by the literal STORE_KEY_IN_SYSTEM
 # sentinel; every later load resolves the sentinels back from the keychain.
 # Startup fails loud when the keychain is unavailable. Requires the
-# @github/keytar native addon (vendored at submodules/node-keytar): enable with
-# `git submodule update --init submodules/node-keytar && npm install` — if startup
-# then fails with "Cannot find package '@github/keytar'", see README ("OS keychain
-# key storage") for recovery (prune-style npm runs can strip the declaration from
-# package.json; restore it before reinstalling).
+# @github/keytar native addon (optionalDependency, fetched from GitHub; npm
+# installs a prebuilt NAPI binary — see README "System & toolchain requirements")
+# — if startup then fails with "Cannot find package '@github/keytar'", see README
+# ("OS keychain key storage") for recovery (prune-style npm runs can strip the
+# declaration from package.json; restore it before reinstalling).
 # store_key_in_system = true
 
 [default_upstream]
