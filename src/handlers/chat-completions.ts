@@ -447,6 +447,14 @@ export async function handleChatCompletionsPassthrough(
     return new Response(JSON.stringify(completions), { status: 200, headers: geminiOutHeaders });
   }
 
+  // Per OpenAI spec, streaming usage is only emitted when stream_options.include_usage
+  // is set. Force it on so the SSE usage tracker records tokens even when the
+  // client didn't ask for them (the extra final usage chunk is spec-compliant
+  // and forwarded to the client as part of the passthrough stream).
+  if (isStreaming) {
+    parsedBody.stream_options = { ...(parsedBody.stream_options as Record<string, unknown> | undefined), include_usage: true };
+  }
+
   logPipelineStage(logger, requestId, 'upstream-request', targetUrl, parsedBody);
   const defaultFetchHeaders = { 'Content-Type': 'application/json', ...addForwardedHeaders(authHeaders, request) };
   logPipelineHeaders(logger, requestId, 'upstream-request', targetUrl, defaultFetchHeaders);

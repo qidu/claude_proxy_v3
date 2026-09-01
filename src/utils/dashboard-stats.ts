@@ -1299,16 +1299,18 @@ export function extractUsageFromResponsePayload(payload: unknown): UsageStats | 
   if (usageMetadata && typeof usageMetadata === 'object') {
     const metadata = usageMetadata as Record<string, unknown>;
     const input_tokens = toSafeNumber(metadata.promptTokenCount);
+    // Gemini's promptTokenCount INCLUDES the cached portion; cachedContentTokenCount is a subset of it.
+    const cached_tokens = toSafeNumber(metadata.cachedContentTokenCount);
     const output_tokens = toSafeNumber(metadata.candidatesTokenCount ?? metadata.responseTokenCount);
     const total_tokens = toSafeNumber(metadata.totalTokenCount ?? (input_tokens + output_tokens));
 
-    if (input_tokens === 0 && output_tokens === 0 && total_tokens === 0) {
+    if (input_tokens === 0 && cached_tokens === 0 && output_tokens === 0 && total_tokens === 0) {
       return undefined;
     }
 
     return {
       input_tokens,
-      cached_tokens: 0,
+      cached_tokens,
       cache_written_tokens: 0,
       output_tokens,
       total_tokens,
@@ -1578,7 +1580,22 @@ export function createUsageTrackingTransformStream(
               continue;
             }
             const data = JSON.parse(dataText);
-            if (data.usage) {
+            if (data.usageMetadata) {
+              // Gemini :streamGenerateContent?alt=sse chunks — usage lives in
+              // usageMetadata (running totals; the final chunk is authoritative).
+              const metadata = data.usageMetadata as Record<string, unknown>;
+              const pt = toSafeNumber(metadata.promptTokenCount);
+              const ct = toSafeNumber(metadata.candidatesTokenCount);
+              if (pt > 0 || ct > 0) {
+                inputTokens = pt;
+                outputTokens = ct;
+                totalTokens = toSafeNumber(metadata.totalTokenCount);
+                const cached = toSafeNumber(metadata.cachedContentTokenCount);
+                if (cached > 0) cachedTokens = cached;
+                foundUsage = true;
+                setLiveTokens(inputTokens, outputTokens);
+              }
+            } else if (data.usage) {
               const usage = data.usage as Record<string, unknown>;
               const pt = toSafeNumber(usage.prompt_tokens);
               const ct = toSafeNumber(usage.completion_tokens);

@@ -325,6 +325,7 @@ async function handleGeminiInteractionsRequest(
             total_input_tokens: geminiResponse.usageMetadata?.promptTokenCount || 0,
             total_output_tokens: geminiResponse.usageMetadata?.candidatesTokenCount || 0,
             total_tokens: geminiResponse.usageMetadata?.totalTokenCount || 0,
+            ...(geminiResponse.usageMetadata?.cachedContentTokenCount ? { total_cached_tokens: geminiResponse.usageMetadata.cachedContentTokenCount } : {}),
         }
     };
     

@@ -261,6 +261,26 @@ Notes:
 - Direct transforms are preferred long-term for endpoint fidelity. The current `/v1/interactions` → `anthropic-messages` / `openai-responses` routes use the indirect `openai-completions` bridge for code reuse; see [Routing transform review](./docs/routing-review.md) for tradeoffs and recommendations.
 
 
+### Token usage statistics columns
+
+The TUI "Top Models" panel and the stats sidecar record token usage per request
+from the upstream response (JSON body or final SSE usage event), via
+`extractUsageFromResponsePayload` / `createUsageTrackingTransformStream`
+(`src/utils/dashboard-stats.ts`). Column semantics per endpoint:
+
+| Endpoint | in | cached | wrote | out |
+|---|---|---|---|---|
+| `/v1/messages` | `input_tokens` (uncached input only) | `cache_read_input_tokens` | `cache_creation_input_tokens` | `output_tokens` |
+| `/v1/chat/completions` | `prompt_tokens` (**includes** cached) | `prompt_cache_hit_tokens` or `prompt_tokens_details.cached_tokens` | `prompt_cache_miss_tokens` (DeepSeek-style) | `completion_tokens` |
+| `/v1/responses` | `input_tokens` | `input_tokens_details.cached_tokens` | — (always 0) | `output_tokens` |
+| `/v1beta/models/{model}:generateContent` | `promptTokenCount` (**includes** cached) | `cachedContentTokenCount` | — (always 0) | `candidatesTokenCount` |
+| `/v1/interactions` | `input_tokens` ?? `total_input_tokens` | only if upstream sends `cache_read_input_tokens` | only if upstream sends `cache_creation_input_tokens` | `output_tokens` ?? `total_output_tokens` |
+
+Notes:
+- `total` is the upstream `total_tokens` when present, else computed as `in + cached + wrote + out`.
+- For streaming chat/completions, the proxy forces `stream_options.include_usage: true` (native passthrough and converted routes alike) so the upstream emits the final usage chunk; the extra chunk is forwarded to the client unchanged.
+- Anthropic's `input_tokens` excludes cached tokens, but OpenAI Chat Completions `prompt_tokens` and Gemini `promptTokenCount` include them — so for those endpoints the computed total counts cached tokens in both `in` and `cached`.
+
 ### Endpoint details
 
 Additional endpoint behavior is documented in [`docs/api-endpoints.md`](./docs/api-endpoints.md):

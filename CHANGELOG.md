@@ -5,6 +5,34 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### fix(stats): record tokens for native Gemini streams, force `include_usage` on streaming chat/completions passthrough, map Gemini cached tokens
+
+Three usage-statistics gaps closed (column semantics per endpoint are now
+documented in a new README table under "Token usage statistics columns"):
+
+- **Native Gemini streaming recorded zero tokens.** `:streamGenerateContent?alt=sse`
+  chunks carry `usageMetadata`, but the SSE usage tracker only looked for
+  OpenAI-shaped `data.usage`. The no-event branch now also parses
+  `usageMetadata` (`promptTokenCount` / `candidatesTokenCount` /
+  `totalTokenCount` / `cachedContentTokenCount`), final-chunk running totals
+  winning.
+- **Gemini `cachedContentTokenCount` was dropped everywhere except the
+  streaming Gemini→Claude converter.** It is now mapped to `cached_tokens` in
+  the JSON usage extractor (`extractUsageFromResponsePayload`), the
+  non-streaming Gemini→Claude conversion (`cache_read_input_tokens`), and the
+  `/v1/interactions` non-streaming handler (`total_cached_tokens`, which the
+  streaming converter already consumed). Note Gemini's `promptTokenCount`
+  includes the cached portion, same semantics as OpenAI `prompt_tokens`.
+- **Streaming `/v1/chat/completions` native passthrough didn't force
+  `stream_options.include_usage`.** OpenAI only emits the usage-bearing final
+  chunk when the client sets it; the proxy now forces `include_usage: true` on
+  the forwarded body (mirroring the existing converted-route behavior in the
+  messages handler / claude-to-openai converter). The extra chunk is
+  spec-compliant and forwarded to the client unchanged.
+
+Unit tests added for the `cachedContentTokenCount` JSON mapping and native
+Gemini SSE capture (tests/unit/token-usage.test.ts).
+
 ### feat(tui): live-refresh the 'Model Quota' picker while open
 
 The Model Quota picker built its quota entries once when opened, so rows kept
