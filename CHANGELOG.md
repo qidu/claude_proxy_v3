@@ -5,6 +5,31 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### fix(quota): record upstream rate-limit usage from every endpoint, not just `/v1/messages`
+
+`recordUpstreamRateLimit` (which populates the passively-recorded
+`anthropic-ratelimit-unified-5h-utilization` value, both per-model and
+per-upstream-host) was only wired into the native `/v1/messages` handler
+(`claude.ts`). Requests reaching the same upstream through any other
+endpoint/format — `/v1/chat/completions`, `/v1/messages` (compat path),
+`/v1/responses` (all sub-routes: anthropic-messages, completions,
+input_tokens, compact, passthrough), and the OpenAI-format handlers —
+never recorded quota, even though quota is a property of the upstream host,
+not the endpoint used to reach it. `recordUpstreamRateLimit` is now called
+after every upstream `fetch()` in `chat-completions.ts`, `messages.ts`,
+`openai.ts`, `responses.ts` (7 call sites), and `gemini.ts` (3 call sites,
+no-ops today since Gemini doesn't send this header, but wired for
+consistency and any future Anthropic-compatible bridging).
+
+`getModelQuota` (the active-polling path used for Kimi/DeepSeek/MiniMax/
+OpenRouter/Zhipu usage) needed no equivalent change: all 4 call sites
+(`tui.ts` quota picker, `tui.ts` composite overlay refresh, and both
+`dashboard.ts` `/dashboard/api/quota` variants) already resolve routes via
+`getModelRouteConfig`/`getConfiguredModelIds`/`modelChoices`, which key
+purely off each model's config entry (`target`, `base_url`, `api_key`) —
+never off which proxy endpoint serves it. It was never endpoint-scoped, so
+there was nothing to fix.
+
 ### fix(stats): record tokens for native Gemini streams, force `include_usage` on streaming chat/completions passthrough, map Gemini cached tokens
 
 Three usage-statistics gaps closed (column semantics per endpoint are now

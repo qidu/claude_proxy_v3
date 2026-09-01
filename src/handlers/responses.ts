@@ -17,6 +17,7 @@ import { convertResponsesToChatCompletions } from '../converters/responses-to-co
 import { convertCompletionsToResponses, convertCompletionsToCompactedResponse } from '../converters/completions-to-responses.js';
 import { getConversation, saveConversation, normalizeInputToItems, getConversationThreadItems, appendConversationThreadItems } from '../utils/conversation-store.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
+import { recordUpstreamRateLimit } from '../utils/provider-quota.js';
 import { handleGeminiRequestForMessages } from './gemini.js';
 import { completionsToClaudeBody } from './openai.js';
 
@@ -570,6 +571,7 @@ async function handleAsAnthropicMessages(
   logPipelineHeaders(logger, requestId, 'upstream-response', targetUrl, response.headers);
   recordResponseStatusCodeFromUpstream(response.status);
   recordUpstreamResponseToolCount('anthropic-messages', 0);
+  recordUpstreamRateLimit(model, (name) => response.headers.get(name), targetUrl);
 
   if (!response.ok) {
     const upstreamBody = await response.text();
@@ -791,6 +793,7 @@ async function handleAsCompletions(
   logPipelineHeaders(logger, requestId, 'upstream-response', targetUrl, response.headers);
   recordResponseStatusCodeFromUpstream(response.status);
   recordUpstreamResponseToolCount('openai-completions', 0);
+  recordUpstreamRateLimit(model, (name) => response.headers.get(name), targetUrl);
 
   if (!response.ok) {
     const bodyPreview = JSON.stringify(completionsRequest);
@@ -1317,6 +1320,7 @@ export async function handleResponsesInputTokensRequest(
     logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, response.headers);
     recordResponseStatusCodeFromUpstream(response.status);
     recordUpstreamResponseToolCount('openai-completions', 0);
+    recordUpstreamRateLimit(model, (name) => response.headers.get(name), targetUrl);
 
     if (!response.ok) {
       const upstreamErrorBody = await response.text();
@@ -1365,6 +1369,7 @@ export async function handleResponsesInputTokensRequest(
   logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, passthroughInputTokensResponse.headers);
   recordResponseStatusCodeFromUpstream(passthroughInputTokensResponse.status);
   recordUpstreamResponseToolCount('openai-completions', 0);
+  recordUpstreamRateLimit(model, (name) => passthroughInputTokensResponse.headers.get(name), targetUrl);
 
   if (!passthroughInputTokensResponse.ok) {
     const upstreamErrorBody = await passthroughInputTokensResponse.text();
@@ -1438,6 +1443,7 @@ export async function handleResponsesCompactRequest(
     logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, compactCompletionsResponse.headers);
     recordResponseStatusCodeFromUpstream(compactCompletionsResponse.status);
     recordUpstreamResponseToolCount('openai-completions', 0);
+    recordUpstreamRateLimit(model, (name) => compactCompletionsResponse.headers.get(name), targetUrl);
 
     if (!compactCompletionsResponse.ok) {
       const upstreamErrorBody = await compactCompletionsResponse.text();
@@ -1486,6 +1492,7 @@ export async function handleResponsesCompactRequest(
   logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, compactPassthroughResponse.headers);
   recordResponseStatusCodeFromUpstream(compactPassthroughResponse.status);
   recordUpstreamResponseToolCount('openai-completions', 0);
+  recordUpstreamRateLimit(model, (name) => compactPassthroughResponse.headers.get(name), targetUrl);
 
   if (!compactPassthroughResponse.ok) {
     const upstreamErrorBody = await compactPassthroughResponse.text();
@@ -1547,6 +1554,7 @@ async function handleAsPassthrough(
   logPipelineHeaders(logger, requestId, 'upstream-response', targetUrl, response.headers);
   recordResponseStatusCodeFromUpstream(response.status);
   recordUpstreamResponseToolCount('openai-completions', 0);
+  recordUpstreamRateLimit((requestBody.model as string) || 'unknown', (name) => response.headers.get(name), targetUrl);
 
   if (!response.ok) {
     const bodyPreview = JSON.stringify(requestBody);

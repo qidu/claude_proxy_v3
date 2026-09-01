@@ -19,6 +19,7 @@ import { handleTargetApiError } from '../utils/errors.js';
 import { addForwardedHeaders } from '../utils/routing.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream } from '../utils/dashboard-stats.js';
+import { recordUpstreamRateLimit } from '../utils/provider-quota.js';
 import { runHook, applyAfterUpstream, type HookContext } from '../utils/request-transform.js';
 import type { ModelRouteConfig } from '../utils/config-loader.js';
 
@@ -148,6 +149,7 @@ async function handleGeminiCountTokensRequest(
 
     logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, response.headers);
     recordResponseStatusCodeFromUpstream(response.status);
+    recordUpstreamRateLimit(modelId, (name) => response.headers.get(name), targetUrl);
 
     if (!response.ok) {
         const errorText = await response.text();
@@ -294,6 +296,7 @@ async function handleGeminiInteractionsRequest(
     logPipelineHeaders(activeLogger, requestId, 'upstream-response', fullTargetUrl, response.headers);
     activeLogger.debug(requestId, `Response status: ${response.status}`);
     recordResponseStatusCodeFromUpstream(response.status);
+    recordUpstreamRateLimit((requestBody.model as string) || modelId, (name) => response.headers.get(name), fullTargetUrl);
 
     if (!response.ok) {
         const errorText = await response.text();
@@ -473,6 +476,7 @@ async function handleGeminiGenerateContentRequest(
 
         logPipelineHeaders(activeLogger, requestId, 'upstream-response', fullTargetUrl, response.headers);
         recordResponseStatusCodeFromUpstream(response.status);
+        recordUpstreamRateLimit(effectiveModelId || modelId, (name) => response.headers.get(name), fullTargetUrl);
 
         // Handle target API errors
         if (!response.ok) {

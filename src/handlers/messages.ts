@@ -22,6 +22,7 @@ import type { ModelRouteConfig } from '../utils/config-loader.js';
 import { countClaudeRequestTokens, getLocalTokenCountingConfig, TokenCountingOptions } from '../utils/token-counting.js';
 import { createUpstreamAbortSignal, getUpstreamBodyTimeoutMs } from '../utils/fetch-timeout.js';
 import { recordResponseStatusCodeFromUpstream, recordUpstreamResponseToolCount } from '../utils/dashboard-stats.js';
+import { recordUpstreamRateLimit } from '../utils/provider-quota.js';
 import { OpenAIResponsesResponse } from '../converters/completions-to-responses.js';
 
 /**
@@ -344,6 +345,7 @@ export async function handleMessagesRequest(
       logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, responsesResponse.headers);
       recordResponseStatusCodeFromUpstream(responsesResponse.status);
       recordUpstreamResponseToolCount('openai-responses', 0);
+      recordUpstreamRateLimit(model, (name) => responsesResponse.headers.get(name), targetUrl);
 
       if (!responsesResponse.ok) {
         const upstreamResponseBody = await responsesResponse.text();
@@ -453,6 +455,7 @@ export async function handleMessagesRequest(
     logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, response.headers);
     recordResponseStatusCodeFromUpstream(response.status);
     recordUpstreamResponseToolCount('openai-completions', 0);
+    recordUpstreamRateLimit((requestBody.model as string) || modelId || model, (name) => response.headers.get(name), targetUrl);
 
     // Handle target API errors
     if (!response.ok) {
@@ -616,6 +619,7 @@ export async function handleMessagesRequest(
     logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, responsesResponse.headers);
     recordResponseStatusCodeFromUpstream(responsesResponse.status);
     recordUpstreamResponseToolCount('openai-responses', 0);
+    recordUpstreamRateLimit(targetModelId, (name) => responsesResponse.headers.get(name), targetUrl);
 
     if (!responsesResponse.ok) {
       const upstreamResponseBody = await responsesResponse.text();
@@ -744,6 +748,7 @@ export async function handleMessagesRequest(
   logPipelineHeaders(activeLogger, requestId, 'upstream-response', targetUrl, response.headers);
   recordResponseStatusCodeFromUpstream(response.status);
   recordUpstreamResponseToolCount('openai-completions', 0);
+  recordUpstreamRateLimit(targetModelId, (name) => response.headers.get(name), targetUrl);
 
   // Handle target API errors
   if (!response.ok) {
