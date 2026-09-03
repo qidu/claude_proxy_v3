@@ -3,7 +3,9 @@
  *
  * Covers: store pass (keychain accounts per target/category/default_upstream),
  * file rewrite (sentinel replacement + .bak backup + comment preservation),
- * resolve pass (sentinel → key, missing entry fatal), no-op when flag off.
+ * resolve pass (sentinel → key, missing entry fatal), no-op when flag off,
+ * and withTimeout (the bound wrapped around findCredentials — see key-store.ts
+ * comment above FIND_CREDENTIALS_TIMEOUT_MS: a real hang there was observed).
  *
  * Run with: npx tsx --test tests/unit/key-store.test.ts
  */
@@ -20,6 +22,7 @@ import {
   applySystemKeyStore,
   findSentinelApiKeys,
   keychainAccount,
+  withTimeout,
   type KeytarLike,
 } from '../../src/utils/key-store.js';
 import { parseSimpleToml, serializeProxyConfigToml, toDashboardConfigPayload } from '../../src/utils/config-loader.js';
@@ -307,5 +310,27 @@ describe('config round-trip with store_key_in_system', () => {
     assert.ok(serialized.includes('store_key_in_system = true'), serialized);
     const reparsed = parseSimpleToml(serialized);
     assert.equal(reparsed.general?.store_key_in_system, true);
+  });
+});
+
+describe('withTimeout', () => {
+  it('resolves with the wrapped value when the promise settles before the timeout', async () => {
+    const result = await withTimeout(Promise.resolve('value'), 1000, 'should not fire');
+    assert.equal(result, 'value');
+  });
+
+  it('rejects with the wrapped error when the promise rejects before the timeout', async () => {
+    await assert.rejects(
+      () => withTimeout(Promise.reject(new Error('inner failure')), 1000, 'should not fire'),
+      /inner failure/,
+    );
+  });
+
+  it('rejects with the timeout message when the promise never settles', async () => {
+    const neverSettles = new Promise<string>(() => {});
+    await assert.rejects(
+      () => withTimeout(neverSettles, 20, 'findCredentials timed out'),
+      /findCredentials timed out/,
+    );
   });
 });

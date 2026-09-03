@@ -2456,7 +2456,7 @@ export default {
         for (let i = 0; i < compositeAttempts.length; i++) {
           const attempt = compositeAttempts[i];
           try {
-            logger.info(requestId, `${new URL(attempt.request.url).pathname} for ${scheduleAliasName ?? compositeAliasName ?? attempt.modelId} to ${attempt.targetUrl} (${attempt.upstreamMode})`);
+            logger.info(requestId, `${new URL(attempt.request.url).pathname},${scheduleAliasName ?? compositeAliasName ?? attempt.modelId},${attempt.targetUrl}`);
             const response = await runAttempt(attempt);
             // Gradual share recovery: a successful primary or fallback attempt
             // doubles its effective share back toward the configured value

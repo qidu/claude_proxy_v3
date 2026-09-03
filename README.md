@@ -471,6 +471,14 @@ The full field-by-field reference lives in
   `--production` — see the warning in Quick Start) can strip the
   `optionalDependencies` block, after which no `npm install` ever re-fetches the
   addon; restore it with `git checkout -- package.json && npm install`.
+  When a sentinel's exact `<target>/<base_url>` account isn't found, resolution
+  falls back to a best-effort search across every stored account for the service
+  (`keytar.findCredentials`) — on macOS this broader enumeration can trigger its
+  own Keychain Access permission prompt in a separate GUI window (not the
+  terminal); if startup appears to hang here, check for that dialog and click
+  "Always Allow". This fallback call is bounded to 60s — if it doesn't respond
+  in time (e.g. a stuck/dismissed dialog), it fails loud with a clear timeout
+  error instead of hanging the process indefinitely.
 - **System & toolchain requirements for `store_key_in_system = true`** — the feature
   needs an OS keychain backend at run time. The `@github/keytar` native addon normally
   installs as a prebuilt NAPI binary (ABI 3 — works on any modern Node), so no build
@@ -531,6 +539,147 @@ The [`docs/`](./docs/) folder has deep-dives on specific topics:
 - **Fusion & composite design** — `docs/design_fusion_composite_alias.md`
 - **Request/response transform hooks** — `docs/transforms-reference.md` (current reference: hooks, Tier-1 ops, Tier-2 built-ins incl. `restore_client_model_alias`, `[transforms.*]` / `[transform_defaults]` config) — plus `docs/design_request_transform_hooks.md` (original design) and `docs/implementation_of_request_transform_hooks.md` (implementation log)
 - **Agent harness integrations** — [`docs/agents/`](./docs/agents/) (per-agent guides; e.g. [using this proxy as an LLM provider for deepseek-harness](./docs/agents/proxy-as-provider-for-deepseek-harness.md))
+
+## Interactive agent session (optional)
+
+Start an interactive [`pi-agent-core`](https://github.com/earendil-works/pi-agent-core)
+agent session that uses the proxy's own `/v1/messages` endpoint (loopback, on the same
+port) as its LLM provider — useful for exercising the proxy's routing/quotas/transforms
+through a real agent loop without a separate client:
+
+```bash
+AGENT=true npm run server
+```
+
+`AGENT` and `TUI` are mutually exclusive (both want the terminal); if both are set,
+`AGENT` wins and a warning is printed.
+
+Set `TRAJ=true`/`1` alongside `AGENT=true` to also record the full session trajectory
+(every status line, `[tool]`/`[result]` entry, and error — the same lines printed
+to the terminal, ANSI color stripped) to a flat, timestamped, append-only log at
+`<os.tmpdir()>/agent_trajectory.log`, printed once at session start. Off by default; the
+terminal output itself is unaffected either way.
+
+The flow:
+
+1. **Working directory** — prompts for a working directory (default: current dir). If
+   it isn't writable, falls back to a fresh `/tmp/task-<random-id>` directory, printing
+   a visible notice. This directory is the base path for the `read_file`/`write_file`/
+   `bash` tools. Ctrl+C at this or any later prompt cancels and exits the session.
+2. **System prompt** — loads `AGENTS.md` or `CLAUDE.md` from that working directory as
+   the system prompt (first match wins); falls back to a minimal default if neither
+   exists. Any skills already installed for the `pi` agent — globally at
+   `~/.pi/agent/skills`, or project-scoped at `<workDir>/.pi/skills` — are loaded and
+   appended at this point too (see below); a machine with none installed yet is normal
+   and not an error.
+3. **Model picker** — lists the aliases configured in `proxy_config.toml` (same set as
+   `GET /v1/models`), ordered `composite` aliases first, then `schedule` aliases, then
+   plain `[models.*]` target models last, so the multi-target routing worth exercising is
+   at the top. Each entry is labelled with its kind; ordering/labelling is local to this
+   picker, and `GET /v1/models` is unchanged.
+4. **Verification** — sends "hi, which model and agent are right here?" through the selected model and confirms a real reply
+   before continuing; pick a different model on failure.
+5. **Budget** — a single prompt accepts either a turn budget (bare integer, e.g. `20`)
+   or a token budget (`k`/`m` suffix, e.g. `1m`); the run stops after the turn that
+   reaches the budget. Prefilled with `5m`: submitting it unchanged, or clearing the
+   field and leaving it blank, both apply the same full default — **5,000,000 tokens
+   and 100 turns together**, whichever is hit first. (Typing a different value sets
+   exactly one limit: `1m` is tokens-only with no turn cap, `20` is turns-only.) The
+   turn cap is sized as a runaway-loop backstop rather than the binding limit — at a
+   realistic ~30k tokens per turn the token budget is what normally trips first.
+   Typing `/quit` or `/exit` here also ends the session, same as ctrl+c.
+6. **Task** — free-text description of what the agent should do; runs with the
+   `read_file`/`write_file`/`bash` tools (plus `find_skill`/`add_skill`, see below)
+   until the budget is reached or the task completes. Each tool call and its result are
+   printed as `[tool] <name>(<args>)` / `[result] <preview>`, truncated to 120
+   characters so a large `write_file` body or `bash` stdout can't flood the terminal.
+   When the run stops, a summary of
+   files created/modified under the working directory (by mtime, so it works even
+   outside a git repo) is printed, followed by a "Next task" prompt — entering another
+   task continues the same agent and budget (usage accumulates across follow-ups, it
+   isn't reset per task). This is also how you answer a clarifying question the agent
+   asked at the end of its last turn (e.g. "Want me to consolidate them?") — the input
+   is appended to the same conversation, not started fresh. Leaving it blank, typing
+   `/q`, `/quit`, or `/exit` ends the session immediately, signing off with "bye!"
+   (ctrl+c also ends it, but terminates the process directly, so no sign-off is
+   printed). When the budget is reached instead, a "Budget reached — press enter or
+   type /q to exit:" prompt appears before the session ends — an explicit
+   acknowledgment, not a silent stop, and not a user-initiated quit, so no "bye!".
+
+For the duration of the session (from the budget prompt until exit), the proxy's normal
+per-request `info`-level logging (e.g. the `/v1/messages,<alias>,<url>` and
+`<model>,(s,t) [openai-completions] <ua>` lines) is suppressed to keep the terminal
+readable against the agent's own streamed output — this only affects log verbosity for
+this session's own traffic while it runs, restored automatically on exit; it's not a
+global logging change.
+
+Whenever `AGENT=true`/`1`, the shared proxy logger also prints every remaining log line
+(any level) dark gray — matching this session's own dimmed status/notice output — and
+drops its two startup-only config diagnostics (`Config source: ...`, `Privacy filter
+active: ...`) entirely, since they have no ongoing value once the session is running.
+The agent's actual streamed reply text and the `[WARNING] No OS-level sandbox` notice
+printed at session start (see "Tool safety limits" below) are left plain so they stay
+visually distinct from this background chatter. This
+log dimming applies for as long as `AGENT=true` is set, not just from the budget prompt
+onward; only the plain proxy server (no `AGENT`/`TUI`) and `TUI=true` keep plain logs.
+
+Loopback auth: the session needs a key to authenticate its own `/v1/messages` calls
+against this same proxy instance. Resolved in order: `PROXY_CLIENT_API_KEY` env var,
+else `[default_upstream] default_api_key` from `proxy_config.toml` (same fallback
+`TUI=true`'s own model-test call uses), else `DEV_NO_KEY=true` (no auth header sent —
+only works if the proxy's own auth check is otherwise satisfied, e.g. no upstream
+requires it). If none of these resolve, the session aborts immediately with a clear
+error rather than starting the model picker — without a valid key, every model's
+verification step would 401 and the picker would loop forever asking you to pick again.
+
+### Progressive skill loading
+
+At session start, any skills already installed for the `pi` agent are loaded from both
+`~/.pi/agent/skills` (global) and `<workDir>/.pi/skills` (project-scoped) and appended to
+the system prompt — install skills ahead of time with
+`npx skills add <package> --skill <skill> --agent pi -y -g` (global) or `-p` (project).
+Neither directory existing yet is fine; the session just starts with no extra skills.
+
+If the [`skills`](https://github.com/vercel-labs/skills) CLI (`npm install skills`,
+package name `skills`) is available on `PATH`/`npx`, two extra tools are also added to
+the agent's toolset — this is checked once at session start (`npx skills --version`); if
+it fails, the tools are omitted and a notice explains why, along with a tip to run
+`npm install skills` and verify with `npx skills find <query>`:
+
+- **`find_skill(query)`** — read-only, searches for installable skill packages
+  (`npx skills find <query> --json`). Doesn't install anything.
+- **`add_skill(package, skill)`** — installs a specific skill from a package found via
+  `find_skill` (`npx skills add <package> --skill <skill> --agent pi -y -p`, writing to
+  `.pi/skills` under the working directory), then appends its instructions to the
+  running system prompt so subsequent turns can use it.
+
+The model decides on its own when to call these during the task — there's no separate
+prompt step. Each session is capped at **5 added skills**; the 6th `add_skill` call
+throws a clear "limit reached" error rather than silently doing nothing.
+
+### Tool safety limits
+
+The `bash`/`write_file` tools apply two independent, non-bypassable checks (raw
+command/path matching, not a full shell parser — the goal is to stop the agent from
+accidentally running an obviously destructive command it typed itself, not to sandbox
+an adversarial actor). Both throw a clear error and never execute the blocked action:
+
+- **Path confinement** — `write_file`, and `bash`'s `rm`/`mv` (checking every non-flag
+  argument, including `mv`'s destination), are confined to the chosen working directory
+  plus the real `/tmp/` tree. Any target path resolving outside both is blocked.
+- **Denylisted command patterns** — `bash` blocks a small set of destructive patterns
+  regardless of path: `rm -rf` (any flag order), `kill -9`/`-KILL`, `git push --force`/
+  `-f`, `chmod -R 777`, and piping `curl`/`wget` output into a shell. There is no
+  override flag.
+
+**⚠️ No OS-level sandbox.** The above are raw string/regex checks in this repo's own
+code (`src/agent-tools.ts`), not an OS sandbox (no `sandbox-exec`/Seatbelt profile,
+container, or chroot). `bash` runs commands via a plain `/bin/sh -c` child process with
+the full privileges of whichever user started `AGENT=true npm run server` — pi-agent-core
+itself (the underlying agent loop/tool-execution library) provides no sandboxing either.
+A sufficiently obfuscated command (quoting tricks, variable indirection) can evade the
+denylist, since it isn't a real shell parser. Only run agent sessions against working
+directories and models you trust.
 
 ## 🤝 Contributing
 

@@ -43,6 +43,7 @@ const env: NodeEnv = {
   PROXY_CONFIG_APOLLO: process.env.PROXY_CONFIG_APOLLO,
   PORT: process.env.PORT || '8788',
   DEV_NO_KEY: process.env.DEV_NO_KEY || 'false',
+  PROXY_CLIENT_API_KEY: process.env.PROXY_CLIENT_API_KEY,
   CONVERSATION_STATE: process.env.CONVERSATION_STATE || 'false',
   PRIVACY_FILTER_URL: process.env.PRIVACY_FILTER_URL,
   PRIVACY_FILTER_TIMEOUT_MS: process.env.PRIVACY_FILTER_TIMEOUT_MS,
@@ -148,6 +149,7 @@ const server = createServer(async (req, res) => {
 });
 
 let stopTui: (() => void) | undefined;
+let agentSessionPromise: Promise<void> | undefined;
 
 server.listen(port, '0.0.0.0', async () => {
   console.log(`Server running on http://0.0.0.0:${port} (version: ${env.VERSION})`);
@@ -161,10 +163,16 @@ server.listen(port, '0.0.0.0', async () => {
   // when the TUI dashboard or the standalone DUMP timer is active. Without
   // it, stats live purely in memory, capped at the 30d retention window by
   // recordTokenHeatmapEvent.
-  const tuiEnabled = process.env.TUI === 'true' || process.env.TUI === '1';
+  let tuiEnabled = process.env.TUI === 'true' || process.env.TUI === '1';
+  const agentEnabled = process.env.AGENT === 'true' || process.env.AGENT === '1';
   const dumpEnabled = process.env.DUMP === 'true' || process.env.DUMP === '1';
   const persistenceEnabled = tuiEnabled || dumpEnabled;
   setStatsPersistenceEnabled(persistenceEnabled);
+
+  if (agentEnabled && tuiEnabled) {
+    console.warn('[WARN] Both AGENT and TUI are set; AGENT takes precedence and the dashboard TUI will not start.');
+    tuiEnabled = false;
+  }
 
   if (persistenceEnabled) {
     // Restore token stats from log with a retention window sized to fit the
@@ -195,7 +203,27 @@ server.listen(port, '0.0.0.0', async () => {
     loadTokenStatsFromLog(retentionDays);
   }
 
-  if (tuiEnabled && process.stdin.isTTY && process.stdout.isTTY) {
+  if (agentEnabled && process.stdin.isTTY && process.stdout.isTTY) {
+    // Lazy import: pi-agent-core/pi-tui/pi-ai are devDependencies, not shipped in the production image
+    const { startAgentSession } = await import('./agent-session.js');
+    agentSessionPromise = startAgentSession({
+      env,
+      loadConfig: async (forceReload?: boolean) => {
+        if (forceReload) clearProxyConfigCache();
+        return loadProxyConfig(env);
+      },
+      port,
+    }).catch((err) => {
+      console.error('Agent session failed:', (err as Error).message);
+    }).finally(() => {
+      // The agent session owns the terminal for its whole lifetime; once it
+      // ends (clean exit, cancel, or error) there's no interactive use left
+      // for this process, and nothing else was keeping the server open on
+      // its behalf — shut down the same way SIGINT does instead of leaving
+      // an orphaned server with no one attached to it.
+      shutdown();
+    });
+  } else if (tuiEnabled && process.stdin.isTTY && process.stdout.isTTY) {
     console.log = () => {};
     console.info = () => {};
     console.warn = () => {};
@@ -213,7 +241,7 @@ server.listen(port, '0.0.0.0', async () => {
       readOnly: !!env.PROXY_CONFIG_CONSUL || !!env.PROXY_CONFIG_APOLLO,
     });
   } else {
-    // Non-TUI mode: eagerly load config to validate and show errors in console
+    // Non-TUI/non-agent mode: eagerly load config to validate and show errors in console
     loadProxyConfig(env).catch((err) => {
       console.error('Failed to load config at startup:', (err as Error).message);
     });
@@ -221,13 +249,15 @@ server.listen(port, '0.0.0.0', async () => {
 });
 
 let shuttingDown = false;
-process.on('SIGINT', () => {
+function shutdown(): void {
   if (shuttingDown) {
-    // Second Ctrl+C: force-quit without waiting for in-flight requests
+    // Second shutdown trigger (e.g. Ctrl+C during close): force-quit without
+    // waiting for in-flight requests
     process.exit(130);
   }
   shuttingDown = true;
   stopTui?.();
   server.close(() => process.exit(0));
   server.closeAllConnections();
-});
+}
+process.on('SIGINT', shutdown);

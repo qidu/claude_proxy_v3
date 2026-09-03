@@ -5,6 +5,79 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### feat(agent): interactive `AGENT=true` coding session backed by the proxy itself
+
+A new `AGENT=true`/`1` mode (`src/agent-session.ts`, mirroring the existing
+`TUI=true` convention in `server.ts`) runs an interactive
+[`@earendil-works/pi-agent-core`](https://www.npmjs.com/package/@earendil-works/pi-agent-core)
+session whose LLM provider is the proxy's own loopback `/v1/messages` — so an
+agent task exercises the same routing, composite aliases, quota accounting and
+privacy filtering as any other client.
+
+Flow: pick a working directory → pick a model → verify with a "hi" round-trip →
+set a budget → state a task → run → summarize file changes → prompt for a
+follow-up task against the same agent and budget.
+
+- **Tools** (`src/agent-tools.ts`): `read_file`, `write_file`, `bash`, plus
+  `find_skill`/`add_skill` when the `skills` CLI is available (probed once at
+  startup — tools that would always fail are not exposed at all). Skills are
+  loaded from both the project-scoped `.pi/skills` and a global dir.
+- **Budget**: prompt accepts tokens (`1m`, `50k`) or turns (`20`), prefilled with
+  `5m`. Submitting the prefill unchanged and submitting blank both apply the same
+  combined 5,000,000-token / 100-turn default; an explicitly typed value sets
+  exactly one limit. Turns is sized as a runaway-loop backstop, not the binding
+  limit — at a realistic ~30k tokens/turn the token budget trips first. Note
+  pi-agent-core itself imposes **no** turn limit — its `runLoop()` is an
+  unbounded `while(true)` — so this budget is the only stop condition besides
+  explicit exit. `/q`, `/quit`, `/exit` and ctrl+c end the session at either the
+  budget or the task prompt.
+- **Model picker** lists composite aliases first and target models last, each
+  labelled by kind. Ordering is local to the picker; the shared
+  `getConfiguredModelIds` (and therefore `GET /v1/models`) is unchanged.
+- **`TRAJ=1`** tees the session's console output to `agent_trajectory.log` under
+  the OS temp dir, ANSI stripped and blank lines dropped. Restored on every exit
+  path, including early returns.
+- **Log verbosity**: for the session's duration `LOG_LEVEL` is raised to `warn`
+  so per-request proxy chatter doesn't fight the agent's streamed reply;
+  restored on exit. Tool call/result lines are truncated to 120 chars.
+
+**No OS-level sandbox.** `bash` and `write_file` run with the operator's full
+privileges; pi-agent-core provides no confinement. Writes/deletes/moves are
+confined to the working directory plus the real OS temp tree, and `bash` blocks a
+small denylist of destructive patterns (`rm -rf`, `kill -9`, force push,
+`chmod -R 777`, `curl|sh`) — but all of it is raw string/regex matching, not a
+shell parser, and is evadable by obfuscation. It guards against an agent
+mistake, not an adversary. A startup warning states this explicitly.
+
+### refactor(logs): shorten per-request log lines and request ids
+
+Request-line logging was verbose enough to be hard to scan, especially
+interleaved with an agent session's own output:
+
+- `src/index.ts` composite-attempt line is now comma-separated, dropping the
+  `for`/`to` filler and the trailing upstream mode:
+  `/v1/messages,forclaw,https://openrouter.ai/api/v1/chat/completions`
+- `src/handlers/messages.ts` upstream line drops the user-agent prefix,
+  `upstream (stream=…)` and `thinking (…)` in favour of a flag list, with the
+  user-agent moved to the end:
+  `minimax/minimax-m3:free,(s,t) [openai-completions] <ua>`, where `s` means
+  streaming and `t` means thinking is *enabled* (a `{type: "disabled"}` block
+  counts as off, matching the existing `thinkingType` check).
+- `shortRequestId` (`src/utils/logger.ts`) now displays the last 8 digits of the
+  timestamp and 6 chars of the UUID: `req_1783840535295_2a042b05-…-5266bdbac7f1`
+  → `req_40535295_5266bd`. Two deliberate losses: the truncated timestamp
+  discards multiples of 1e8 ms so it repeats every **~27.8 hours** (recoverable
+  as `prefix * 1e8 + shown`, but not a full date), and the 6-char fragment is 24
+  bits, so ids sharing a displayed millisecond collide far more readily than
+  before. Both are fine for reading a log by eye; neither is a unique key. The
+  full id is unchanged everywhere outside log display, including upstream
+  correlation. Non-matching ids (e.g. the literal `config`) pass through
+  untouched.
+
+When `AGENT=true`, the shared logger also dims every remaining line to dark gray
+and drops startup-only `config` diagnostics outright. Non-AGENT modes
+(`server.ts`, `tui.ts`) are unaffected.
+
 ### fix(quota): record upstream rate-limit usage from every endpoint, not just `/v1/messages`
 
 `recordUpstreamRateLimit` (which populates the passively-recorded

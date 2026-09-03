@@ -508,8 +508,13 @@ export async function handleMessagesRequest(
   // Check if streaming is requested
   const isStreaming = claudeRequest.stream === true;
 
-  // Log request info
-  activeLogger.info(requestId, `${userAgent} upstream (stream=${isStreaming}) thinking (${thinking?.type ?? 'none'}) to target ${targetModelId} [openai-completions]`);
+  // Log request info. Flags: 's' present when streaming, 't' when thinking is
+  // enabled (matching the thinkingType check above — a "disabled"/false thinking
+  // block counts as off, not on).
+  const flags = [isStreaming && 's', thinking && thinking.type !== 'disabled' && thinking.type !== false && 't']
+    .filter(Boolean)
+    .join(',');
+  activeLogger.info(requestId, `${targetModelId},(${flags}) [openai-completions] ${userAgent}`);
   activeLogger.debug(requestId, `Has auth headers: ${!!authHeaders['Authorization'] || !!authHeaders['x-api-key']}`);
   activeLogger.debug(requestId, `Is for SDK Model: ${isSdkUrl(targetUrl)} with upstreamMode: ${upstreamMode}`);
 

@@ -148,6 +148,14 @@ export interface Env {
     DEV_NO_KEY?: string;
 
     /**
+     * Client API key the AGENT=true interactive session (agent-session.ts)
+     * uses to authenticate its own loopback /v1/messages calls. Falls back to
+     * [default_upstream] default_api_key from proxy_config.toml, then to
+     * DEV_NO_KEY, if unset.
+     */
+    PROXY_CLIENT_API_KEY?: string;
+
+    /**
      * Base URL of the OPF privacy-filter sidecar, e.g. "http://127.0.0.1:8799".
      * When unset, the privacy filter plugin is disabled (no behavior change).
      */

@@ -124,6 +124,24 @@ export function findSentinelApiKeys(config: ProxyConfig): string[] {
  *  build the submodule); absence is a runtime KeyStoreError instead. */
 const KEYTAR_MODULE = '@github/keytar';
 
+/** findCredentials (broad keychain enumeration, as opposed to the scoped
+ *  getPassword lookup) has been observed to hang indefinitely rather than
+ *  resolve or reject — bound it so a stuck call fails loud after
+ *  FIND_CREDENTIALS_TIMEOUT_MS instead of hanging the process forever. */
+const FIND_CREDENTIALS_TIMEOUT_MS = 60_000;
+
+/** Exported for direct unit testing with a short timeout — the 60s production
+ *  value would make a real timeout-firing test too slow to run routinely. */
+export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const timer = setTimeout(() => rejectPromise(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => { clearTimeout(timer); resolvePromise(value); },
+      (err) => { clearTimeout(timer); rejectPromise(err); },
+    );
+  });
+}
+
 async function loadKeytar(opts: { keytarImpl?: KeytarLike }): Promise<KeytarLike> {
   if (opts.keytarImpl) return opts.keytarImpl;
   try {
@@ -201,9 +219,20 @@ export async function applySystemKeyStore(
   for (const slot of slots) {
     if (slot.get() !== STORE_KEY_IN_SYSTEM) continue;
     const exact = await keytar.getPassword(KEY_STORE_SERVICE, slot.account);
-    const resolved = exact !== null
-      ? { key: exact, account: slot.account }
-      : await findBestEffortKey(keytar, slot.account);
+    let resolved: { key: string; account: string } | null;
+    if (exact !== null) {
+      resolved = { key: exact, account: slot.account };
+    } else {
+      // No exact match — falls back to findCredentials, which enumerates every
+      // keychain item for this service. Unlike the scoped getPassword lookup
+      // above, this broader call can trigger a macOS Keychain Access GUI
+      // prompt ("model_proxy_v3 wants to access your keychain...") that
+      // renders in its own window, not this terminal — print a notice first
+      // so a silent wait here isn't mistaken for a genuine hang (Rule 8).
+      console.log(`[key-store] no exact keychain match for "${slot.account}" — searching all stored keys` +
+        ' (if this pauses, check for a macOS Keychain Access permission dialog and click "Always Allow")');
+      resolved = await findBestEffortKey(keytar, slot.account);
+    }
     if (!resolved) {
       throw new KeyStoreError(
         `${slot.location} is "${STORE_KEY_IN_SYSTEM}" but no key was found in the system keychain` +
@@ -239,7 +268,12 @@ export async function listSystemKeychainAccounts(): Promise<string[]> {
     if (!keytar.findCredentials) {
       throw new Error('keytar build does not support findCredentials');
     }
-    const credentials = await keytar.findCredentials(KEY_STORE_SERVICE);
+    const credentials = await withTimeout(
+      keytar.findCredentials(KEY_STORE_SERVICE),
+      FIND_CREDENTIALS_TIMEOUT_MS,
+      `keytar.findCredentials("${KEY_STORE_SERVICE}") did not respond within ${FIND_CREDENTIALS_TIMEOUT_MS / 1000}s` +
+        ' (check for a stuck macOS Keychain Access permission dialog)',
+    );
     return credentials.map((c) => c.account).sort((a, b) => a.localeCompare(b));
   } catch (err) {
     throw new Error(`Cannot list system keychain keys: ${(err as Error).message}`);
@@ -294,8 +328,14 @@ async function findBestEffortKey(keytar: KeytarLike, wantedAccount: string): Pro
   if (!keytar.findCredentials) return null;
   let credentials: Array<{ account: string; password: string }>;
   try {
-    credentials = await keytar.findCredentials(KEY_STORE_SERVICE);
-  } catch {
+    credentials = await withTimeout(
+      keytar.findCredentials(KEY_STORE_SERVICE),
+      FIND_CREDENTIALS_TIMEOUT_MS,
+      `keytar.findCredentials("${KEY_STORE_SERVICE}") did not respond within ${FIND_CREDENTIALS_TIMEOUT_MS / 1000}s` +
+        ' (check for a stuck macOS Keychain Access permission dialog)',
+    );
+  } catch (err) {
+    console.warn(`[key-store] best-effort lookup for "${wantedAccount}" failed: ${(err as Error).message}`);
     return null;
   }
   let best: { key: string; account: string; score: number } | null = null;
