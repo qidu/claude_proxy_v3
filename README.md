@@ -543,178 +543,40 @@ The [`docs/`](./docs/) folder has deep-dives on specific topics:
 ## Interactive agent session (optional)
 
 Start an interactive [`pi-agent-core`](https://github.com/earendil-works/pi-agent-core)
-agent session that uses the proxy's own `/v1/messages` endpoint (loopback, on the same
-port) as its LLM provider — useful for exercising the proxy's routing/quotas/transforms
-through a real agent loop without a separate client:
+agent session that uses the proxy's own `/v1/messages` endpoint (loopback) as its LLM
+provider — useful for exercising the proxy's routing/quotas/transforms through a real
+agent loop without a separate client:
 
 ```bash
 AGENT=true npm run server
 ```
 
-`AGENT` and `TUI` are mutually exclusive (both want the terminal); if both are set,
-`AGENT` wins and a warning is printed.
+`AGENT` and `TUI` are mutually exclusive; if both are set, `AGENT` wins with a warning.
 
-Set `TRAJ=true`/`1` alongside `AGENT=true` to also record the full session trajectory
-(every status line, `[tool]`/`[result]` entry, and error — the same lines printed
-to the terminal, ANSI color stripped) to a flat, timestamped, append-only log at
-`<os.tmpdir()>/agent_trajectory-<random-id>.log`, printed once at session start. Off by
-default; the terminal output itself is unaffected either way. The random per-session
-suffix, `O_EXCL|O_NOFOLLOW` open, and `0600` mode keep the transcript — which can
-contain file contents and task text — from being redirected or read by other users
-where `os.tmpdir()` is shared (e.g. `/tmp` on Linux).
+**Flow:** pick a working directory (tools are confined to it) → system prompt loads
+`AGENTS.md`/`CLAUDE.md` from that directory, with an optional multi-select for
+already-installed `pi` skills (global `~/.pi/agent/skills` or project `.pi/skills`),
+plus skills installable on demand from other agents via the [`skills`](https://github.com/vercel-labs/skills)
+CLI → pick a model alias from `proxy_config.toml` → a verification message confirms it
+replies → set a budget (tokens and/or turns, default 5,000,000 tokens / 100 turns) →
+enter a free-text task. The agent runs with `read_file`/`write_file`/`bash` tools (plus
+`find_skill`/`add_skill` when the `skills` CLI is available, capped at 5 runtime
+installs/session) until the task completes or the budget is hit, then prompts for a
+follow-up task in the same conversation. Set `TRAJ=true` to also log the full session
+transcript to a private (`0600`), per-session file under `os.tmpdir()`.
 
-The flow:
+**Dependencies:** `pi-agent-core` (bundled), and optionally the `skills` CLI
+(`npm install skills`) for the dynamic skill-install tools — omitted with a notice if
+unavailable.
 
-1. **Working directory** — prompts for a working directory (default: current dir). If
-   it isn't writable, falls back to a fresh `/tmp/task-<random-id>` directory, printing
-   a visible notice. This directory is the base path for the `read_file`/`write_file`/
-   `bash` tools. Ctrl+C at this or any later prompt cancels and exits the session.
-2. **System prompt** — loads `AGENTS.md` or `CLAUDE.md` from that working directory as
-   the system prompt (first match wins); falls back to a minimal default if neither
-   exists. Any skills available to the `pi` agent are also gathered and offered in a
-   multi-select picker (see [Progressive skill loading](#progressive-skill-loading) below);
-   the user's choices are appended to the system prompt. A machine with no skills
-   installed anywhere — for `pi` or for any other agent — simply skips the picker.
-3. **Model picker** — lists the aliases configured in `proxy_config.toml` (same set as
-   `GET /v1/models`), ordered `composite` aliases first, then `schedule` aliases, then
-   plain `[models.*]` target models last, so the multi-target routing worth exercising is
-   at the top. Each entry is labelled with its kind; ordering/labelling is local to this
-   picker, and `GET /v1/models` is unchanged.
-4. **Verification** — sends "hi, which model and agent are right here?" through the selected model and confirms a real reply
-   before continuing; pick a different model on failure.
-5. **Budget** — a single prompt accepts one of three shapes:
-   - A number with `k`/`m`/`b`/`t` suffix (case-insensitive) — token budget, e.g.
-     `50k`, `1m`, `2b`.
-   - A bare number — turn budget under `1000` (e.g. `20`, `200`), token budget at or
-     above `1000` (e.g. `2000`, `10000`) so a large token cap doesn't need a suffix.
-   - Two whitespace-separated numbers, e.g. `1m 200` — first slot is always tokens
-     (with optional `k`/`m`/`b`/`t` suffix), second slot is always turns.
-   The run stops after the turn that reaches whichever cap is hit first. Prefilled
-   with `5m`: submitting it unchanged, or clearing the field and leaving it blank,
-   both apply the same full default — **5,000,000 tokens and 100 turns together**.
-   The turn cap is sized as a runaway-loop backstop rather than the binding limit —
-   at a realistic ~30k tokens per turn the token budget is what normally trips first.
-   Typing `/quit` or `/exit` here also ends the session, same as ctrl+c.
-6. **Task** — free-text description of what the agent should do; runs with the
-   `read_file`/`write_file`/`bash` tools (plus `find_skill`/`add_skill`, see below)
-   until the budget is reached or the task completes. While the run is in progress a
-   single in-place process-log line is rewritten every event, in the form
-   `[N skills, N tools, N results] (skill1,skill2)|(tool1,tool2) ...` — the skills
-   list is the set you picked at startup, the tools list is the de-duped union of
-   completed and currently-in-flight tool calls (so a long-running tool stays
-   visible at the tail), and the trailing dots animate `.` → `..` → `...` while
-   at least one tool is in flight so LLM-only steps don't look frozen. The first
-   text delta of the agent's reply moves to a fresh line so the reply doesn't sit
-   on the same row as the log. When the run stops, a summary of
-   files created/modified under the working directory (by mtime, so it works even
-   outside a git repo) is printed, followed by a "Next task" prompt — entering another
-   task continues the same agent and budget (usage accumulates across follow-ups, it
-   isn't reset per task). This is also how you answer a clarifying question the agent
-   asked at the end of its last turn (e.g. "Want me to consolidate them?") — the input
-   is appended to the same conversation, not started fresh. Leaving it blank, typing
-   `/q`, `/quit`, or `/exit` ends the session immediately, signing off with "bye!"
-   (ctrl+c also ends it, but terminates the process directly, so no sign-off is
-   printed). When the budget is reached instead, a "Budget reached — press enter or
-   type /q to exit:" prompt appears before the session ends — an explicit
-   acknowledgment, not a silent stop, and not a user-initiated quit, so no "bye!".
-
-The proxy's normal per-request `info`-level logging (e.g. the
-`/v1/messages,<alias>,<url>` and `<model>,(s,t) [openai-completions] <ua>` lines)
-is very noisy against the agent's streamed output, so when `AGENT=true`/`1` the
-server defaults `LOG_LEVEL` to `warn` unless the user explicitly set `LOG_LEVEL`
-themselves. Set `LOG_LEVEL=info AGENT=true npm run server` to opt back into the full
-per-request trace.
-
-Whenever `AGENT=true`/`1`, the shared proxy logger also prints every remaining log line
-(any level) dark gray — matching this session's own dimmed status/notice output — and
-drops its two startup-only config diagnostics (`Config source: ...`, `Privacy filter
-active: ...`) entirely, since they have no ongoing value once the session is running.
-The agent's actual streamed reply text and the `[WARNING] No OS-level sandbox` notice
-printed at session start (see "Tool safety limits" below) are left plain so they stay
-visually distinct from this background chatter. This
-log dimming applies for as long as `AGENT=true` is set, not just from the budget prompt
-onward; only the plain proxy server (no `AGENT`/`TUI`) and `TUI=true` keep plain logs.
-
-Loopback auth: the session needs a key to authenticate its own `/v1/messages` calls
-against this same proxy instance. Resolved in order: `PROXY_CLIENT_API_KEY` env var,
-else (when `AGENT=true`/`1`) a built-in sentinel `sk-hi-agent-launched-in-proxy-v3`
-that the proxy's own auth check accepts out of the box, else
-`[default_upstream] default_api_key` from `proxy_config.toml` (same fallback
-`TUI=true`'s own model-test call uses), else `DEV_NO_KEY=true` (no auth header sent —
-only works if the proxy's own auth check is otherwise satisfied, e.g. no upstream
-requires it). The AGENT-mode sentinel is the typical path on a fresh checkout: it
-lets the session start without forcing you to mint a key or disable auth, and the
-proxy's request handler accepts it the same way it would any caller-supplied key.
-If none of the above resolve, the session aborts immediately with a clear error
-rather than starting the model picker — without a valid key, every model's
-verification step would 401 and the picker would loop forever asking you to pick again.
-
-### Progressive skill loading
-
-At session start, the agent checks for skills already installed for `pi` in
-`~/.pi/agent/skills` (global) and `<workDir>/.pi/skills` (project-scoped). If any are found,
-the session shows a multi-select list; use **Space** to toggle skills and **Enter** to
-confirm. Selecting none is allowed, so the task can run with only the base system prompt.
-
-The list also includes skills installed globally for other agents by the `skills` CLI. These
-candidates come from `~/.agents/.skill-lock.json` (the same installs shown by
-`npx skills list -g`) and are marked `needs install`. If selected, the session installs the
-skill for `pi` in the current project with:
-
-```bash
-npx skills add <package> --skill <skill> --agent pi -y -p
-```
-
-It then loads the selected skills' instructions into the system prompt. Skills can also be
-installed ahead of time with `npx skills add <package> --skill <skill> --agent pi -y -g`
-(global) or `-p` (project). Missing skill directories or an unavailable/unreadable global
-lock file simply produce no candidates.
-
-If the [`skills`](https://github.com/vercel-labs/skills) CLI (`npm install skills`,
-package name `skills`) is available on `PATH`/`npx`, two extra tools are also added to
-the agent's toolset — this is checked once at session start (`npx skills --version`); if
-it fails, the tools are omitted and a notice explains why, along with a tip to run
-`npm install skills` and verify with `npx skills find <query>`:
-
-- **`find_skill(query)`** — read-only, searches for installable skill packages
-  (`npx skills find <query> --json`). Doesn't install anything.
-- **`add_skill(package, skill)`** — installs a specific skill from a package found via
-  `find_skill` (`npx skills add <package> --skill <skill> --agent pi -y -p`, writing to
-  `.pi/skills` under the working directory), then appends its instructions to the
-  running system prompt so subsequent turns can use it.
-
-The model can call these tools during the task when needed. Each session is capped at
-**5 skills added at runtime**; the 6th `add_skill` call throws a clear "limit reached"
-error rather than silently doing nothing.
-
-### Tool safety limits
-
-The `read_file`/`write_file`/`bash` tools apply two independent, non-bypassable checks
-(raw command/path matching, not a full shell parser — the goal is to stop the agent from
-accidentally running an obviously destructive command it typed itself, not to sandbox
-an adversarial actor). Both throw a clear error and never execute the blocked action:
-
-- **Path confinement** — `read_file`, `write_file`, and `bash`'s `rm`/`mv` (checking
-  every non-flag argument, including `mv`'s destination) are confined to the chosen
-  working directory plus the real `/tmp/` tree. Any target path resolving outside both
-  is blocked. Symlinks are resolved before the check (via the deepest existing ancestor,
-  so not-yet-created files still work), so a link planted inside the working directory
-  cannot be used to read or write outside it — a link can only ever narrow what is
-  reachable, never widen it.
-- **Denylisted command patterns** — `bash` blocks a small set of destructive patterns
-  regardless of path: `rm -rf` (any flag order), `kill -9`/`-KILL`, `git push --force`/
-  `-f`, `chmod -R 777`, and piping `curl`/`wget` output into a shell. Each `&&`/`||`/
-  `;`/`|`-separated segment is checked independently, so a second `rm`/`mv` cannot hide
-  behind an earlier in-scope one. There is no override flag.
-
-**⚠️ No OS-level sandbox.** The above are raw string/regex checks in this repo's own
-code (`src/agent-tools.ts`), not an OS sandbox (no `sandbox-exec`/Seatbelt profile,
-container, or chroot). `bash` runs commands via a plain `/bin/sh -c` child process with
-the full privileges of whichever user started `AGENT=true npm run server` — pi-agent-core
-itself (the underlying agent loop/tool-execution library) provides no sandboxing either.
-A sufficiently obfuscated command (quoting tricks, variable indirection) can evade the
-denylist, since it isn't a real shell parser. Only run agent sessions against working
-directories and models you trust.
+**Risks/limits:** ⚠️ no OS-level sandbox — `bash` runs via a plain `/bin/sh -c` child
+process with the full privileges of the user running the server. Tool safety is limited
+to non-bypassable but simple raw string/regex checks (not a real shell parser): path
+confinement to the working directory + `/tmp`, and a denylist of destructive patterns
+(`rm -rf`, `kill -9`, `git push --force`, `chmod -R 777`, piping `curl`/`wget` into a
+shell). These stop obviously destructive self-inflicted commands, not an adversarial or
+sufficiently obfuscated one. Only run agent sessions against working directories and
+models you trust. See `src/agent-tools.ts` for the exact checks.
 
 ## 🤝 Contributing
 
