@@ -10,7 +10,7 @@
  */
 import { randomUUID } from 'crypto';
 import { access, constants as fsConstants, mkdir, readFile, readdir, stat } from 'fs/promises';
-import { appendFileSync } from 'fs';
+import { closeSync, openSync, writeSync } from 'fs';
 import { resolve, relative, join } from 'path';
 import { tmpdir, homedir } from 'os';
 import { execFile } from 'child_process';
@@ -56,9 +56,18 @@ function stripAnsi(text: string): string {
 // AGENT_MODE's terminal-only dimming above. Path uses os.tmpdir() (not a
 // hardcoded /tmp — see the same fix in agent-tools.ts's TMP_ROOT_RAW) so it
 // still lands under the real OS temp root when $TMPDIR is set. Opt-in and
-// off by default: appends across runs rather than truncating, so nothing is
-// silently lost if this is left on across multiple sessions.
-const TRAJECTORY_LOG_PATH = join(tmpdir(), 'agent_trajectory.log');
+// off by default.
+//
+// The filename carries a per-session random suffix rather than being a fixed,
+// predictable path. On Linux os.tmpdir() is normally the shared world-writable
+// /tmp, where a fixed name is a symlink-attack target: any local user can
+// pre-create it as a link to a file this user can write, and appendFileSync
+// follows it — redirecting the whole transcript (task text, file contents in
+// tool results) into an attacker-chosen file and clobbering it. A fresh name
+// per session also means runs no longer accumulate into one file.
+function buildTrajectoryLogPath(): string {
+  return join(tmpdir(), `agent_trajectory-${randomUUID().slice(0, 8)}.log`);
+}
 function isTrajectoryLoggingEnabled(): boolean {
   return process.env.TRAJ === 'true' || process.env.TRAJ === '1';
 }
@@ -430,13 +439,25 @@ export async function startAgentSession(source: AgentSessionSource): Promise<voi
   const trajectoryEnabled = isTrajectoryLoggingEnabled();
   const originalConsoleLog = console.log;
   const originalConsoleError = console.error;
+  let trajectoryFd: number | null = null;
+  let trajectoryLogPath: string | null = null;
   if (trajectoryEnabled) {
+    trajectoryLogPath = buildTrajectoryLogPath();
+    // 'ax' = O_APPEND|O_CREAT|O_EXCL — fails rather than writing if the path
+    // already exists, so a pre-planted file/symlink is refused outright.
+    // O_NOFOLLOW additionally refuses a symlink at the final component even in
+    // the race between the name being chosen and opened. Mode 0600: the
+    // transcript can contain file contents and task text, so it must not be
+    // readable by other users where tmpdir is shared. Opened once and held for
+    // the session instead of re-resolving the path on every appendFileSync
+    // call, which is what made the old code follow a swapped-in symlink.
+    trajectoryFd = openSync(trajectoryLogPath, fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW, 0o600);
     const writeLine = (prefix: string, args: unknown[]) => {
       const line = args.map((a) => (typeof a === 'string' ? stripAnsi(a) : String(a))).join(' ');
       // Blank lines are terminal-only spacing (see promptText) — same rationale
       // as stripping ANSI above, they carry no information in the log file.
       if (!line.trim()) return;
-      appendFileSync(TRAJECTORY_LOG_PATH, `${new Date().toISOString()} ${prefix} ${line}\n`);
+      writeSync(trajectoryFd!, `${new Date().toISOString()} ${prefix} ${line}\n`);
     };
     console.log = (...args: unknown[]) => {
       writeLine('[LOG]', args);
@@ -446,7 +467,7 @@ export async function startAgentSession(source: AgentSessionSource): Promise<voi
       writeLine('[ERROR]', args);
       originalConsoleError(...args);
     };
-    originalConsoleLog(dim(`[TRAJ] Recording session trajectory to ${TRAJECTORY_LOG_PATH}`));
+    originalConsoleLog(dim(`[TRAJ] Recording session trajectory to ${trajectoryLogPath}`));
   }
 
   try {
@@ -455,6 +476,7 @@ export async function startAgentSession(source: AgentSessionSource): Promise<voi
     if (trajectoryEnabled) {
       console.log = originalConsoleLog;
       console.error = originalConsoleError;
+      if (trajectoryFd !== null) closeSync(trajectoryFd);
     }
   }
 }

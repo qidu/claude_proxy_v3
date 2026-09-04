@@ -5,6 +5,58 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### fix(agent): close three path/log confinement holes and two bash edge cases
+
+Follow-up review of `src/agent-session.ts` / `src/agent-tools.ts`. Each item below
+was reproduced against the running tools before being fixed, and has a regression
+test in `tests/unit/agent-tools.test.ts`.
+
+Security:
+
+- **Symlink bypass of write confinement** — `isPathAllowed` compared only the
+  *lexical* (`path.resolve`) form of a target, so a symlink inside the working
+  directory pointing outside it passed the check and the write followed the link,
+  reporting success on an in-scope path while clobbering a file outside both
+  allowed roots. The agent could plant that symlink itself (`ln -s` is on no
+  denylist), making it a self-contained bypass. Both the lexical and the
+  symlink-resolved form are now required to be in scope, so a link can only ever
+  narrow what is reachable, never widen it. Resolution walks up to the deepest
+  *existing* ancestor (`realpath` fails on a not-yet-created file, the normal
+  `write_file` case), which also catches a symlinked parent directory.
+- **`read_file` had no path check at all** — unlike `write_file` it never called
+  `isPathAllowed`, so the agent could read anything the operator's account could
+  (`~/.ssh/id_rsa`, `~/.aws/credentials`, `proxy_config.toml`'s
+  `default_api_key`). Because the session's provider is the proxy itself,
+  anything read was sent upstream as conversation context. Now confined to the
+  same roots as writes.
+- **Trajectory log was symlink-attackable** — `TRAJ=1` appended to a fixed
+  `<os.tmpdir()>/agent_trajectory.log`, re-resolving the path on every write. On
+  Linux `os.tmpdir()` is normally the shared world-writable `/tmp`, where any
+  local user could pre-create that name as a symlink and capture the whole
+  transcript (task text, file contents in tool results) while clobbering a file
+  of their choosing; the log was also mode `0644`. The name now carries a
+  per-session random suffix and is opened **once** with
+  `O_EXCL|O_NOFOLLOW|O_APPEND` at mode `0600`, held for the session.
+
+Correctness:
+
+- **Compound commands hid a second `rm`/`mv`** — the extraction regex matched
+  only the first `rm`/`mv` in the whole command string, folding everything after
+  it (including an independent second invocation) into that first match's
+  argument list instead of checking it. Each `&&`/`||`/`;`/`|`-separated segment
+  is now checked on its own.
+- **Any signal exit was reported as a timeout** — `execFile`'s `error.killed` /
+  `error.signal` are set whenever a process ends via a signal, whether Node's
+  `timeout` fired, the child killed itself, or something external killed it (OOM
+  killer, manual `SIGKILL`). A command killed after two seconds was reported as
+  "timed out after 60s". A dedicated timer now tracks whether *our* timeout
+  actually fired; other signal exits report the signal instead.
+
+The `⚠️ No OS-level sandbox` caveat is unchanged and still applies: `bash` runs
+with the operator's full privileges, and the command denylist remains raw
+string/regex matching, evadable by obfuscation. These fixes close gaps in the
+path confinement the code already claimed to enforce; they do not add a sandbox.
+
 ### feat(agent): interactive `AGENT=true` coding session backed by the proxy itself
 
 A new `AGENT=true`/`1` mode (`src/agent-session.ts`, mirroring the existing
@@ -34,20 +86,23 @@ follow-up task against the same agent and budget.
 - **Model picker** lists composite aliases first and target models last, each
   labelled by kind. Ordering is local to the picker; the shared
   `getConfiguredModelIds` (and therefore `GET /v1/models`) is unchanged.
-- **`TRAJ=1`** tees the session's console output to `agent_trajectory.log` under
-  the OS temp dir, ANSI stripped and blank lines dropped. Restored on every exit
-  path, including early returns.
+- **`TRAJ=1`** tees the session's console output to `agent_trajectory-<id>.log`
+  under the OS temp dir, ANSI stripped and blank lines dropped. Restored on every
+  exit path, including early returns. (Path and open flags hardened later — see
+  the `fix(agent)` entry above.)
 - **Log verbosity**: for the session's duration `LOG_LEVEL` is raised to `warn`
   so per-request proxy chatter doesn't fight the agent's streamed reply;
   restored on exit. Tool call/result lines are truncated to 120 chars.
 
 **No OS-level sandbox.** `bash` and `write_file` run with the operator's full
-privileges; pi-agent-core provides no confinement. Writes/deletes/moves are
-confined to the working directory plus the real OS temp tree, and `bash` blocks a
-small denylist of destructive patterns (`rm -rf`, `kill -9`, force push,
-`chmod -R 777`, `curl|sh`) — but all of it is raw string/regex matching, not a
-shell parser, and is evadable by obfuscation. It guards against an agent
-mistake, not an adversary. A startup warning states this explicitly.
+privileges; pi-agent-core provides no confinement. Reads, writes, deletes and
+moves are confined to the working directory plus the real OS temp tree (reads and
+symlink resolution were added later — see the `fix(agent)` entry above), and
+`bash` blocks a small denylist of destructive patterns (`rm -rf`, `kill -9`,
+force push, `chmod -R 777`, `curl|sh`) — but the command denylist is raw
+string/regex matching, not a shell parser, and is evadable by obfuscation. It
+guards against an agent mistake, not an adversary. A startup warning states this
+explicitly.
 
 ### refactor(logs): shorten per-request log lines and request ids
 

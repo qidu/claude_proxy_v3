@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -77,6 +77,35 @@ describe('read_file', () => {
     const readFileTool = getTool(tools, 'read_file');
     await assert.rejects(() => readFileTool.execute('t1', { path: 'missing.txt' }));
   });
+
+  // read_file previously had no path check at all (write_file did), letting the
+  // agent read ~/.ssh/id_rsa, ~/.aws/credentials, or proxy_config.toml's
+  // default_api_key — and since this session's provider is the proxy itself,
+  // anything read is sent upstream as context.
+  it('blocks reads outside workDir and outside /tmp/', async () => {
+    const tools = createAgentTools(workDir);
+    const readFileTool = getTool(tools, 'read_file');
+    const target = join(OUTSIDE_ROOT, 'secret.txt');
+    writeFileSync(target, 'SECRET');
+
+    await assert.rejects(
+      () => readFileTool.execute('t1', { path: target }),
+      /read_file path is outside the working directory and outside \/tmp\//,
+    );
+  });
+
+  it('blocks a read that escapes via a symlink inside workDir', async () => {
+    const tools = createAgentTools(workDir);
+    const readFileTool = getTool(tools, 'read_file');
+    const secret = join(OUTSIDE_ROOT, 'secret.txt');
+    writeFileSync(secret, 'SECRET');
+    symlinkSync(secret, join(workDir, 'innocent.txt'));
+
+    await assert.rejects(
+      () => readFileTool.execute('t1', { path: 'innocent.txt' }),
+      /read_file path is outside the working directory and outside \/tmp\//,
+    );
+  });
 });
 
 describe('write_file', () => {
@@ -117,6 +146,49 @@ describe('write_file', () => {
       /outside the working directory and outside \/tmp\//,
     );
     assert.equal(existsSync(target), false);
+  });
+
+  // isPathAllowed used to be purely lexical, so a symlink *inside* workDir
+  // pointing outside it passed the check and the write followed the link —
+  // reporting success on an in-scope path while clobbering a file outside both
+  // allowed roots. The agent can plant that symlink itself (`ln -s` is on no
+  // denylist), making it a self-contained bypass of the whole confinement.
+  it('blocks a write that escapes via a symlinked file inside workDir, leaving the target intact', async () => {
+    const tools = createAgentTools(workDir);
+    const writeFileTool = getTool(tools, 'write_file');
+    const outsideTarget = join(OUTSIDE_ROOT, 'protected.txt');
+    writeFileSync(outsideTarget, 'ORIGINAL');
+    symlinkSync(outsideTarget, join(workDir, 'innocent.txt'));
+
+    await assert.rejects(
+      () => writeFileTool.execute('t1', { path: 'innocent.txt', content: 'PWNED' }),
+      /outside the working directory and outside \/tmp\//,
+    );
+    assert.equal(readFileSync(outsideTarget, 'utf-8'), 'ORIGINAL', 'symlink target must not be overwritten');
+  });
+
+  it('blocks a write through a symlinked parent directory inside workDir', async () => {
+    const tools = createAgentTools(workDir);
+    const writeFileTool = getTool(tools, 'write_file');
+    // The leaf doesn't exist yet (the usual write_file case) — the escape is
+    // the symlinked *directory* in the middle of the path, which realpath
+    // resolution must still catch.
+    symlinkSync(OUTSIDE_ROOT, join(workDir, 'linkdir'));
+
+    await assert.rejects(
+      () => writeFileTool.execute('t1', { path: 'linkdir/new-file.txt', content: 'x' }),
+      /outside the working directory and outside \/tmp\//,
+    );
+    assert.equal(existsSync(join(OUTSIDE_ROOT, 'new-file.txt')), false);
+  });
+
+  it('still allows a normal write to a not-yet-existing nested path', async () => {
+    const tools = createAgentTools(workDir);
+    const writeFileTool = getTool(tools, 'write_file');
+
+    await writeFileTool.execute('t1', { path: 'deep/nested/new.txt', content: 'ok' });
+
+    assert.equal(readFileSync(join(workDir, 'deep/nested/new.txt'), 'utf-8'), 'ok');
   });
 });
 
@@ -279,5 +351,75 @@ describe('bash — Section 12 rm/mv path confinement', () => {
 
     assert.equal(existsSync(join(workDir, 'from.txt')), false);
     assert.equal(readFileSync(join(workDir, 'to.txt'), 'utf-8'), 'moved content');
+  });
+
+  // A compound command's second rm/mv used to be swallowed as trailing
+  // "arguments" of the first (RM_MV_COMMAND's greedy match only ever found
+  // one verb per command string) — these prove each `&&`/`;`/`|`-separated
+  // segment is now checked independently, so a second, unrelated rm/mv can't
+  // hide behind an earlier in-scope one.
+  it('blocks a second, unrelated rm hidden after an in-scope command via &&', async () => {
+    const tools = createAgentTools(workDir);
+    const bashTool = getTool(tools, 'bash');
+    writeFileSync(join(workDir, 'kept.txt'), 'x');
+    const outsideFile = join(OUTSIDE_ROOT, 'outside.txt');
+    writeFileSync(outsideFile, 'keepme');
+
+    await assert.rejects(
+      () => bashTool.execute('t1', { command: `echo hi && rm ${outsideFile}` }),
+      /rm targeting a path outside the working directory and outside \/tmp\//,
+    );
+    assert.equal(existsSync(outsideFile), true);
+  });
+
+  it('blocks a second, unrelated mv hidden after an in-scope rm via ;', async () => {
+    const tools = createAgentTools(workDir);
+    const bashTool = getTool(tools, 'bash');
+    writeFileSync(join(workDir, 'scratch.txt'), 'x');
+    const dest = join(OUTSIDE_ROOT, 'config-should-not-move.toml');
+    writeFileSync(join(workDir, 'config.toml'), 'stuff');
+
+    await assert.rejects(
+      () => bashTool.execute('t1', { command: `rm scratch.txt ; mv config.toml ${dest}` }),
+      /mv targeting a path outside the working directory and outside \/tmp\//,
+    );
+    assert.equal(existsSync(join(workDir, 'config.toml')), true, 'source must not be moved');
+    assert.equal(existsSync(dest), false, 'destination must not be created');
+  });
+
+  it('still allows a compound command where every rm/mv segment stays in scope', async () => {
+    const tools = createAgentTools(workDir);
+    const bashTool = getTool(tools, 'bash');
+    writeFileSync(join(workDir, 'a.txt'), 'x');
+    writeFileSync(join(workDir, 'b.txt'), 'y');
+
+    await bashTool.execute('t1', { command: 'rm a.txt && mv b.txt c.txt' });
+
+    assert.equal(existsSync(join(workDir, 'a.txt')), false);
+    assert.equal(existsSync(join(workDir, 'b.txt')), false);
+    assert.equal(readFileSync(join(workDir, 'c.txt'), 'utf-8'), 'y');
+  });
+});
+
+// A real 60s-timeout case isn't covered here — BASH_TIMEOUT_MS is a module
+// constant, not configurable per-call, so exercising it for real would mean a
+// 60s test. The behavior that changed is what happens on a *non*-timeout
+// kill, which is fast and meaningful to assert directly.
+describe('bash — timeout vs. non-timeout kill', () => {
+  it('does not misreport an externally-signaled kill as a timeout', async () => {
+    const tools = createAgentTools(workDir);
+    const bashTool = getTool(tools, 'bash');
+
+    // Self-delivered SIGTERM well within the 60s timeout window: execFile
+    // still reports `killed: true`, so this must be distinguished from an
+    // actual timeout by identity of the timer, not by `killed` alone.
+    await assert.rejects(
+      () => bashTool.execute('t1', { command: 'kill -TERM $$' }),
+      (err: Error) => {
+        assert.match(err.message, /killed by signal/);
+        assert.doesNotMatch(err.message, /timed out/);
+        return true;
+      },
+    );
   });
 });

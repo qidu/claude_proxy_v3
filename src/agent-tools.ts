@@ -23,7 +23,7 @@ import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node';
 import { Type, type Static } from 'typebox';
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { realpathSync } from 'fs';
-import { dirname, isAbsolute, resolve, sep } from 'path';
+import { basename, dirname, isAbsolute, resolve, sep } from 'path';
 import { execFile } from 'child_process';
 import { tmpdir } from 'os';
 
@@ -57,18 +57,50 @@ function underRoot(resolved: string, root: string): boolean {
   return resolved === root || resolved.startsWith(root + sep);
 }
 
+// Resolves symlinks in `targetPath` as far as the filesystem allows. A purely
+// lexical resolve() is not enough for confinement: a symlink *inside* workDir
+// pointing outside it (which the agent can create itself — `ln -s` is on no
+// denylist) resolves lexically to an in-scope path, while the actual write
+// follows the link and lands outside both allowed roots.
+//
+// realpath() fails on a path that doesn't exist yet (the common write_file
+// case: creating a new file), so walk up to the deepest ancestor that does
+// exist, realpath *that*, and re-append the not-yet-existing tail. The tail
+// can't itself be a symlink — it doesn't exist — so this is sufficient, and
+// it catches a symlinked parent directory as well as a symlinked leaf.
+function realpathBoundary(targetPath: string): string {
+  let current = resolve(targetPath);
+  const trailing: string[] = [];
+  for (;;) {
+    try {
+      // slice() first — this runs inside a retry loop, and reversing
+      // `trailing` in place would corrupt it for the next attempt.
+      return resolve(realpathSync(current), ...trailing.slice().reverse());
+    } catch {
+      const parent = dirname(current);
+      // Reached the filesystem root without finding an existing ancestor —
+      // fall back to the lexical form rather than looping forever.
+      if (parent === current) return resolve(targetPath);
+      trailing.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
 // Confines writes/deletes/moves to workDir plus the real OS tmp tree (a
 // second always-allowed root — covers the Section 3 /tmp/task-<id> fallback
 // dir too, since workDir is one of the two allowed roots regardless of where
-// it lives).
+// it lives). Both the lexical and the symlink-resolved form of the target must
+// be in scope: the lexical check alone is bypassable via a symlink (see
+// realpathBoundary), and requiring both means a link can only ever narrow what
+// is reachable, never widen it.
 function isPathAllowed(workDir: string, targetPath: string): boolean {
-  const resolved = resolve(targetPath);
-  const resolvedWorkDir = resolve(workDir);
-  return (
-    underRoot(resolved, resolvedWorkDir) ||
-    underRoot(resolved, TMP_ROOT_RAW) ||
-    underRoot(resolved, TMP_ROOT_REAL)
-  );
+  const resolvedWorkDir = realpathBoundary(workDir);
+  const inScope = (candidate: string): boolean =>
+    underRoot(candidate, resolvedWorkDir) ||
+    underRoot(candidate, TMP_ROOT_RAW) ||
+    underRoot(candidate, TMP_ROOT_REAL);
+  return inScope(resolve(targetPath)) && inScope(realpathBoundary(targetPath));
 }
 
 function runCli(command: string, args: string[], cwd: string, timeoutMs: number, maxBuffer: number): Promise<{ stdout: string; stderr: string }> {
@@ -105,26 +137,42 @@ function findDangerousPattern(command: string): string | null {
   return null;
 }
 
-// Matches a bare `rm <args...>` or `mv <args...>` invocation, capturing every
-// space-separated token after the verb. Raw-string extraction, not a real shell
-// parser (see DANGEROUS_COMMAND_PATTERNS doc comment for the same caveat).
-const RM_MV_COMMAND = /\b(rm|mv)\s+(.+)/;
+// Matches a bare `rm <args...>` or `mv <args...>` invocation at the start of a
+// command segment, capturing every space-separated token after the verb.
+// Raw-string extraction, not a real shell parser (see DANGEROUS_COMMAND_PATTERNS
+// doc comment for the same caveat).
+const RM_MV_COMMAND = /^\s*\b(rm|mv)\s+(.+)/;
+
+// Splits on shell command separators (&&, ||, ;, |) so each segment can be
+// checked for a leading rm/mv independently — without this, `RM_MV_COMMAND`'s
+// greedy match against the whole string only ever finds the *first* rm/mv in a
+// compound command (e.g. `mv a.txt b.txt && rm /etc/passwd`), folding
+// everything after it — including a second, independent rm/mv — into the
+// first match's argument list instead of examining it as its own command.
+// Raw-string splitting, not a real shell parser: doesn't account for
+// separators inside quotes, but that's the same accepted tradeoff as the rest
+// of this file's command matching.
+const COMMAND_SEPARATOR = /&&|\|\||[;|]/;
 
 // Extends the bash denylist: blocks rm/mv where any non-flag argument resolves
 // outside workDir and outside the real /tmp/ tree. Checks ALL non-flag args, not
 // just the first — for `mv src dest` both matter (dest is where data lands; src
-// is being read/removed from outside workDir either way). Separate from
+// is being read/removed from outside workDir either way). Checks every
+// command segment, not just the first, so a compound command can't hide a
+// second rm/mv behind an earlier, innocuous one. Separate from
 // findDangerousPattern because it needs workDir to resolve relative paths
 // (Section 12).
 function findPathEscapingRmMv(command: string, workDir: string): string | null {
-  const match = RM_MV_COMMAND.exec(command);
-  if (!match) return null;
-  const [, verb, rest] = match;
-  const args = rest.split(/\s+/).filter((arg) => arg.length > 0 && !arg.startsWith('-'));
-  for (const target of args) {
-    const resolved = resolveInWorkDir(workDir, target);
-    if (!isPathAllowed(workDir, resolved)) {
-      return `${verb} targeting a path outside the working directory and outside /tmp/ (${target})`;
+  for (const segment of command.split(COMMAND_SEPARATOR)) {
+    const match = RM_MV_COMMAND.exec(segment);
+    if (!match) continue;
+    const [, verb, rest] = match;
+    const args = rest.split(/\s+/).filter((arg) => arg.length > 0 && !arg.startsWith('-'));
+    for (const target of args) {
+      const resolved = resolveInWorkDir(workDir, target);
+      if (!isPathAllowed(workDir, resolved)) {
+        return `${verb} targeting a path outside the working directory and outside /tmp/ (${target})`;
+      }
     }
   }
   return null;
@@ -171,6 +219,14 @@ export function createAgentTools(workDir: string, options?: AgentToolsOptions): 
     parameters: readFileParams,
     execute: async (_toolCallId: string, params: Static<typeof readFileParams>) => {
       const fullPath = resolveInWorkDir(workDir, params.path);
+      // Reads are confined to the same roots as writes. Without this the agent
+      // could read anything the operator's account can (~/.ssh/id_rsa,
+      // ~/.aws/credentials, proxy_config.toml's default_api_key) — and because
+      // this session's model provider is the proxy itself, whatever it reads is
+      // sent upstream as conversation context.
+      if (!isPathAllowed(workDir, fullPath)) {
+        throw new Error(`Blocked: read_file path is outside the working directory and outside /tmp/ (${fullPath}).`);
+      }
       const content = await readFile(fullPath, 'utf-8');
       return {
         content: [{ type: 'text' as const, text: content }],
@@ -213,13 +269,32 @@ export function createAgentTools(workDir: string, options?: AgentToolsOptions): 
         throw new Error(`Blocked: ${pathEscape}. Command: ${params.command}`);
       }
       const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolvePromise, rejectPromise) => {
+        // execFile's own `error.killed`/`error.signal` only mean "the process
+        // ended via a signal" — set the same way whether Node's `timeout`
+        // option fired, the child killed itself (e.g. `kill $$`), or something
+        // external killed it (OOM killer, a manual SIGKILL) — so neither can be
+        // used on its own to tell a real timeout apart from any other signal
+        // exit. Track our own timeout instead: a plain flag flipped by a
+        // setTimeout matched to the same BASH_TIMEOUT_MS, so the "timed out"
+        // message is only reported when this timer — not some other signal —
+        // is what ended the command.
+        let timedOut = false;
+        const timer = setTimeout(() => {
+          timedOut = true;
+        }, BASH_TIMEOUT_MS);
         const child = execFile(
           '/bin/sh',
           ['-c', params.command],
           { cwd: workDir, timeout: BASH_TIMEOUT_MS, maxBuffer: BASH_MAX_BUFFER, signal },
           (error, stdout, stderr) => {
-            if (error && (error as NodeJS.ErrnoException).code === undefined && (error as any).killed) {
+            clearTimeout(timer);
+            if (error && timedOut) {
               rejectPromise(new Error(`Command timed out after ${BASH_TIMEOUT_MS / 1000}s: ${params.command}`));
+              return;
+            }
+            const signal = (error as (NodeJS.ErrnoException & { signal?: string }) | null)?.signal;
+            if (error && signal) {
+              rejectPromise(new Error(`Command was killed by signal ${signal} (not a timeout): ${params.command}`));
               return;
             }
             resolvePromise({ stdout, stderr, code: child.exitCode });

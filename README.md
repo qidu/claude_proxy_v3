@@ -557,8 +557,11 @@ AGENT=true npm run server
 Set `TRAJ=true`/`1` alongside `AGENT=true` to also record the full session trajectory
 (every status line, `[tool]`/`[result]` entry, and error — the same lines printed
 to the terminal, ANSI color stripped) to a flat, timestamped, append-only log at
-`<os.tmpdir()>/agent_trajectory.log`, printed once at session start. Off by default; the
-terminal output itself is unaffected either way.
+`<os.tmpdir()>/agent_trajectory-<random-id>.log`, printed once at session start. Off by
+default; the terminal output itself is unaffected either way. The random per-session
+suffix, `O_EXCL|O_NOFOLLOW` open, and `0600` mode keep the transcript — which can
+contain file contents and task text — from being redirected or read by other users
+where `os.tmpdir()` is shared (e.g. `/tmp` on Linux).
 
 The flow:
 
@@ -659,18 +662,23 @@ throws a clear "limit reached" error rather than silently doing nothing.
 
 ### Tool safety limits
 
-The `bash`/`write_file` tools apply two independent, non-bypassable checks (raw
-command/path matching, not a full shell parser — the goal is to stop the agent from
+The `read_file`/`write_file`/`bash` tools apply two independent, non-bypassable checks
+(raw command/path matching, not a full shell parser — the goal is to stop the agent from
 accidentally running an obviously destructive command it typed itself, not to sandbox
 an adversarial actor). Both throw a clear error and never execute the blocked action:
 
-- **Path confinement** — `write_file`, and `bash`'s `rm`/`mv` (checking every non-flag
-  argument, including `mv`'s destination), are confined to the chosen working directory
-  plus the real `/tmp/` tree. Any target path resolving outside both is blocked.
+- **Path confinement** — `read_file`, `write_file`, and `bash`'s `rm`/`mv` (checking
+  every non-flag argument, including `mv`'s destination) are confined to the chosen
+  working directory plus the real `/tmp/` tree. Any target path resolving outside both
+  is blocked. Symlinks are resolved before the check (via the deepest existing ancestor,
+  so not-yet-created files still work), so a link planted inside the working directory
+  cannot be used to read or write outside it — a link can only ever narrow what is
+  reachable, never widen it.
 - **Denylisted command patterns** — `bash` blocks a small set of destructive patterns
   regardless of path: `rm -rf` (any flag order), `kill -9`/`-KILL`, `git push --force`/
-  `-f`, `chmod -R 777`, and piping `curl`/`wget` output into a shell. There is no
-  override flag.
+  `-f`, `chmod -R 777`, and piping `curl`/`wget` output into a shell. Each `&&`/`||`/
+  `;`/`|`-separated segment is checked independently, so a second `rm`/`mv` cannot hide
+  behind an earlier in-scope one. There is no override flag.
 
 **⚠️ No OS-level sandbox.** The above are raw string/regex checks in this repo's own
 code (`src/agent-tools.ts`), not an OS sandbox (no `sandbox-exec`/Seatbelt profile,
