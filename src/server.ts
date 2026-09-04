@@ -33,7 +33,10 @@ const env: NodeEnv = {
   LOCAL_TIKTOKEN: process.env.LOCAL_TIKTOKEN || 'false',
   ALLOWED_HOSTS: process.env.ALLOWED_HOSTS || '127.0.0.1,localhost',
   IMAGE_BLOCK_DATA_MAX_SIZE: process.env.IMAGE_BLOCK_DATA_MAX_SIZE || '10485760',
-  LOG_LEVEL: process.env.LOG_LEVEL || 'info',
+  // AGENT=true's interactive TUI is noisy at the default 'info' level (every
+  // proxy request logs its own line) — default to 'warn' in that mode unless
+  // the user explicitly set LOG_LEVEL.
+  LOG_LEVEL: process.env.LOG_LEVEL || ((process.env.AGENT === 'true' || process.env.AGENT === '1') ? 'warn' : 'info'),
   GEMINI_API_VERSION: process.env.GEMINI_API_VERSION || 'v1beta',
   MESSAGES_UPSTREAM_MODE: (process.env.MESSAGES_UPSTREAM_MODE as 'native' | 'openai-completions') || 'openai-completions',
   INTERACTIONS_UPSTREAM_MODE: (process.env.INTERACTIONS_UPSTREAM_MODE as 'native' | 'openai-completions') || 'native',
@@ -44,6 +47,7 @@ const env: NodeEnv = {
   PORT: process.env.PORT || '8788',
   DEV_NO_KEY: process.env.DEV_NO_KEY || 'false',
   PROXY_CLIENT_API_KEY: process.env.PROXY_CLIENT_API_KEY,
+  AGENT: process.env.AGENT,
   CONVERSATION_STATE: process.env.CONVERSATION_STATE || 'false',
   PRIVACY_FILTER_URL: process.env.PRIVACY_FILTER_URL,
   PRIVACY_FILTER_TIMEOUT_MS: process.env.PRIVACY_FILTER_TIMEOUT_MS,

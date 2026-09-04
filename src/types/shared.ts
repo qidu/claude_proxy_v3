@@ -156,6 +156,13 @@ export interface Env {
     PROXY_CLIENT_API_KEY?: string;
 
     /**
+     * Interactive agent mode (agent-session.ts). Set to "true" or "1" to launch
+     * an interactive pi-agent session using the proxy's own /v1/messages endpoint.
+     * When set, a default PROXY_CLIENT_API_KEY is supplied if not explicitly set.
+     */
+    AGENT?: string;
+
+    /**
      * Base URL of the OPF privacy-filter sidecar, e.g. "http://127.0.0.1:8799".
      * When unset, the privacy filter plugin is disabled (no behavior change).
      */

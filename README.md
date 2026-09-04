@@ -571,10 +571,10 @@ The flow:
    `bash` tools. Ctrl+C at this or any later prompt cancels and exits the session.
 2. **System prompt** — loads `AGENTS.md` or `CLAUDE.md` from that working directory as
    the system prompt (first match wins); falls back to a minimal default if neither
-   exists. Any skills already installed for the `pi` agent — globally at
-   `~/.pi/agent/skills`, or project-scoped at `<workDir>/.pi/skills` — are loaded and
-   appended at this point too (see below); a machine with none installed yet is normal
-   and not an error.
+   exists. Any skills available to the `pi` agent are also gathered and offered in a
+   multi-select picker (see [Progressive skill loading](#progressive-skill-loading) below);
+   the user's choices are appended to the system prompt. A machine with no skills
+   installed anywhere — for `pi` or for any other agent — simply skips the picker.
 3. **Model picker** — lists the aliases configured in `proxy_config.toml` (same set as
    `GET /v1/models`), ordered `composite` aliases first, then `schedule` aliases, then
    plain `[models.*]` target models last, so the multi-target routing worth exercising is
@@ -582,21 +582,30 @@ The flow:
    picker, and `GET /v1/models` is unchanged.
 4. **Verification** — sends "hi, which model and agent are right here?" through the selected model and confirms a real reply
    before continuing; pick a different model on failure.
-5. **Budget** — a single prompt accepts either a turn budget (bare integer, e.g. `20`)
-   or a token budget (`k`/`m` suffix, e.g. `1m`); the run stops after the turn that
-   reaches the budget. Prefilled with `5m`: submitting it unchanged, or clearing the
-   field and leaving it blank, both apply the same full default — **5,000,000 tokens
-   and 100 turns together**, whichever is hit first. (Typing a different value sets
-   exactly one limit: `1m` is tokens-only with no turn cap, `20` is turns-only.) The
-   turn cap is sized as a runaway-loop backstop rather than the binding limit — at a
-   realistic ~30k tokens per turn the token budget is what normally trips first.
+5. **Budget** — a single prompt accepts one of three shapes:
+   - A number with `k`/`m`/`b`/`t` suffix (case-insensitive) — token budget, e.g.
+     `50k`, `1m`, `2b`.
+   - A bare number — turn budget under `1000` (e.g. `20`, `200`), token budget at or
+     above `1000` (e.g. `2000`, `10000`) so a large token cap doesn't need a suffix.
+   - Two whitespace-separated numbers, e.g. `1m 200` — first slot is always tokens
+     (with optional `k`/`m`/`b`/`t` suffix), second slot is always turns.
+   The run stops after the turn that reaches whichever cap is hit first. Prefilled
+   with `5m`: submitting it unchanged, or clearing the field and leaving it blank,
+   both apply the same full default — **5,000,000 tokens and 100 turns together**.
+   The turn cap is sized as a runaway-loop backstop rather than the binding limit —
+   at a realistic ~30k tokens per turn the token budget is what normally trips first.
    Typing `/quit` or `/exit` here also ends the session, same as ctrl+c.
 6. **Task** — free-text description of what the agent should do; runs with the
    `read_file`/`write_file`/`bash` tools (plus `find_skill`/`add_skill`, see below)
-   until the budget is reached or the task completes. Each tool call and its result are
-   printed as `[tool] <name>(<args>)` / `[result] <preview>`, truncated to 120
-   characters so a large `write_file` body or `bash` stdout can't flood the terminal.
-   When the run stops, a summary of
+   until the budget is reached or the task completes. While the run is in progress a
+   single in-place process-log line is rewritten every event, in the form
+   `[N skills, N tools, N results] (skill1,skill2)|(tool1,tool2) ...` — the skills
+   list is the set you picked at startup, the tools list is the de-duped union of
+   completed and currently-in-flight tool calls (so a long-running tool stays
+   visible at the tail), and the trailing dots animate `.` → `..` → `...` while
+   at least one tool is in flight so LLM-only steps don't look frozen. The first
+   text delta of the agent's reply moves to a fresh line so the reply doesn't sit
+   on the same row as the log. When the run stops, a summary of
    files created/modified under the working directory (by mtime, so it works even
    outside a git repo) is printed, followed by a "Next task" prompt — entering another
    task continues the same agent and budget (usage accumulates across follow-ups, it
@@ -609,12 +618,12 @@ The flow:
    type /q to exit:" prompt appears before the session ends — an explicit
    acknowledgment, not a silent stop, and not a user-initiated quit, so no "bye!".
 
-For the duration of the session (from the budget prompt until exit), the proxy's normal
-per-request `info`-level logging (e.g. the `/v1/messages,<alias>,<url>` and
-`<model>,(s,t) [openai-completions] <ua>` lines) is suppressed to keep the terminal
-readable against the agent's own streamed output — this only affects log verbosity for
-this session's own traffic while it runs, restored automatically on exit; it's not a
-global logging change.
+The proxy's normal per-request `info`-level logging (e.g. the
+`/v1/messages,<alias>,<url>` and `<model>,(s,t) [openai-completions] <ua>` lines)
+is very noisy against the agent's streamed output, so when `AGENT=true`/`1` the
+server defaults `LOG_LEVEL` to `warn` unless the user explicitly set `LOG_LEVEL`
+themselves. Set `LOG_LEVEL=info AGENT=true npm run server` to opt back into the full
+per-request trace.
 
 Whenever `AGENT=true`/`1`, the shared proxy logger also prints every remaining log line
 (any level) dark gray — matching this session's own dimmed status/notice output — and
@@ -628,20 +637,38 @@ onward; only the plain proxy server (no `AGENT`/`TUI`) and `TUI=true` keep plain
 
 Loopback auth: the session needs a key to authenticate its own `/v1/messages` calls
 against this same proxy instance. Resolved in order: `PROXY_CLIENT_API_KEY` env var,
-else `[default_upstream] default_api_key` from `proxy_config.toml` (same fallback
+else (when `AGENT=true`/`1`) a built-in sentinel `sk-hi-agent-launched-in-proxy-v3`
+that the proxy's own auth check accepts out of the box, else
+`[default_upstream] default_api_key` from `proxy_config.toml` (same fallback
 `TUI=true`'s own model-test call uses), else `DEV_NO_KEY=true` (no auth header sent —
 only works if the proxy's own auth check is otherwise satisfied, e.g. no upstream
-requires it). If none of these resolve, the session aborts immediately with a clear
-error rather than starting the model picker — without a valid key, every model's
+requires it). The AGENT-mode sentinel is the typical path on a fresh checkout: it
+lets the session start without forcing you to mint a key or disable auth, and the
+proxy's request handler accepts it the same way it would any caller-supplied key.
+If none of the above resolve, the session aborts immediately with a clear error
+rather than starting the model picker — without a valid key, every model's
 verification step would 401 and the picker would loop forever asking you to pick again.
 
 ### Progressive skill loading
 
-At session start, any skills already installed for the `pi` agent are loaded from both
-`~/.pi/agent/skills` (global) and `<workDir>/.pi/skills` (project-scoped) and appended to
-the system prompt — install skills ahead of time with
-`npx skills add <package> --skill <skill> --agent pi -y -g` (global) or `-p` (project).
-Neither directory existing yet is fine; the session just starts with no extra skills.
+At session start, the agent checks for skills already installed for `pi` in
+`~/.pi/agent/skills` (global) and `<workDir>/.pi/skills` (project-scoped). If any are found,
+the session shows a multi-select list; use **Space** to toggle skills and **Enter** to
+confirm. Selecting none is allowed, so the task can run with only the base system prompt.
+
+The list also includes skills installed globally for other agents by the `skills` CLI. These
+candidates come from `~/.agents/.skill-lock.json` (the same installs shown by
+`npx skills list -g`) and are marked `needs install`. If selected, the session installs the
+skill for `pi` in the current project with:
+
+```bash
+npx skills add <package> --skill <skill> --agent pi -y -p
+```
+
+It then loads the selected skills' instructions into the system prompt. Skills can also be
+installed ahead of time with `npx skills add <package> --skill <skill> --agent pi -y -g`
+(global) or `-p` (project). Missing skill directories or an unavailable/unreadable global
+lock file simply produce no candidates.
 
 If the [`skills`](https://github.com/vercel-labs/skills) CLI (`npm install skills`,
 package name `skills`) is available on `PATH`/`npx`, two extra tools are also added to
@@ -656,9 +683,9 @@ it fails, the tools are omitted and a notice explains why, along with a tip to r
   `.pi/skills` under the working directory), then appends its instructions to the
   running system prompt so subsequent turns can use it.
 
-The model decides on its own when to call these during the task — there's no separate
-prompt step. Each session is capped at **5 added skills**; the 6th `add_skill` call
-throws a clear "limit reached" error rather than silently doing nothing.
+The model can call these tools during the task when needed. Each session is capped at
+**5 skills added at runtime**; the 6th `add_skill` call throws a clear "limit reached"
+error rather than silently doing nothing.
 
 ### Tool safety limits
 
