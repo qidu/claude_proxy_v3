@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "build-chatjimmy": "cd submodules/chatjimmy && npm run build",
     "build": "tsc -p tsconfig.server.json",
+    "build:native": "node scripts/build-sea.js",
     "start": "node dist/server.js",
     "server": "tsx src/server.ts",
     "test:unit": "node --experimental-global-webcrypto --import tsx --test tests/unit/**/*.test.ts",
@@ -41,6 +42,8 @@
     "@opencode-ai/sdk": "^1.18.4",
     "@types/node": "^25.1.0",
     "ai": "^7.0.52",
+    "esbuild": "^0.28.2",
+    "postject": "^1.0.0-alpha.6",
     "tsx": "^4.23.1",
     "typescript": "^5.9.3"
   },
