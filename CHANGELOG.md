@@ -5,6 +5,82 @@ Historical changes to `model_proxy_v3`. For current usage documentation, see
 
 ## Latest Changes
 
+### feat(build): `npm run build:native` single-file executable
+
+Adds a second distribution channel alongside the existing one. `npm run build`
+is unchanged — `tsc` to `dist/*.js`, run as `node dist/server.js` with
+`node_modules` beside it, which is what the Dockerfile ships. `npm run
+build:native` (`scripts/build-sea.js`) instead produces one self-contained
+binary in `dist/`, named per platform/arch (`model-proxy-v3-macos-arm64`,
+`model-proxy-v3-linux-x64`, `model-proxy-v3-win.exe`, …).
+
+The pipeline is Node's built-in SEA (Single Executable Application): esbuild
+bundles `src/server.ts` and its whole dependency graph into one CJS file,
+`--experimental-sea-config` turns that into a blob, the host `node` binary is
+copied, and `postject` injects the blob into the copy. On macOS the copy is
+re-signed, since injecting a section invalidates the existing signature. A
+`tsc --noEmit` preflight runs first — esbuild strips types without checking
+them, so without it a native build could ship code `npm run build` would
+reject.
+
+**Cross-compilation is not possible.** The output *is* a copy of the Node that
+built it, so each target platform needs its own build host (CI matrix, VM, or
+container). This is inherent to SEA, not a limitation of the script.
+
+**The build Node must be official and self-contained** (nodejs.org, nvm,
+`actions/setup-node`). Homebrew and some distro packages ship `node` as a small
+launcher against a shared `libnode`; the SEA sentinel fuse lives in the library
+rather than the launcher, so injection fails. Check by size — a real one is
+~110MB, the stub ~50KB. The script reads the fuse out of the binary at build
+time rather than assuming `postject`'s default, because its spelling
+(`NODE_SEA_FUSE_` vs `POSTJECT_SENTINEL_`) and hash change between Node
+releases; it fails with that diagnostic when no fuse is found.
+
+Not in the binary, both matching the Docker image and both failing loud rather
+than silently:
+
+- **System keychain** (`@github/keytar`) — a native `.node` addon, which SEA
+  has no mechanism to embed. `store_key_in_system = true` raises the existing
+  `KeyStoreError`, as it already does in Docker (`--omit=optional`).
+- **`sdk://` routes** (the `chatjimmy` submodule) — loaded through a
+  deliberately non-literal relative specifier so it stays optional at build
+  time. That specifier is relative to the *source file*, and a SEA binary has
+  no source tree, so it cannot resolve regardless of what sits next to the
+  executable. The existing catch reports `ChatJimmy SDK not available`.
+
+Two bundling details worth recording, both found by running the binary rather
+than by reading the source:
+
+- **`import.meta.url` had to be defined explicitly.** Bundling ESM to CJS
+  leaves `import.meta` with no equivalent and esbuild emits `import_meta = {}`,
+  making `import.meta.url` `undefined`. `@earendil-works/pi-tui` calls
+  `createRequire(import.meta.url)` at *module scope*, so it threw
+  `ERR_INVALID_ARG_VALUE` the moment that initializer ran — killing `TUI=1` and
+  `AGENT=1` at startup while plain HTTP serving looked fine, because both
+  import pi-tui lazily. A `--define` plus banner now supplies a real `file://`
+  URL derived from `process.execPath`. pi-tui uses that `require` only to probe
+  for an optional native addon inside a `try`/`catch`, and SEA cannot ship
+  native addons anyway, so the probe now *misses* instead of *throwing*; TUI
+  modifier-key detection is degraded in the binary, on every platform equally.
+- **`npx` needs a shell on Windows.** There `npx` is `npx.cmd`, and
+  `execFileSync` spawns executables directly — `CreateProcess` cannot run a
+  batch script, and Node 20+ additionally refuses `.cmd` via `execFile` without
+  a shell (CVE-2024-27980). `shell` is now set on win32 only, so POSIX gains no
+  extra quoting layer.
+
+Installing for a native build must **not** use `--omit=optional`, unlike the
+Dockerfile: esbuild ships its platform binary (`@esbuild/darwin-arm64`,
+`@esbuild/linux-x64`, …) as an optional dependency, and omitting it leaves
+esbuild unable to run.
+
+Verified on macOS arm64 only: builds, runs from a directory containing just the
+binary and a `proxy_config.toml` (no `node_modules`, no source tree), serves
+`/dashboard` and `/v1/models`, and starts under both `TUI=1` and `AGENT=1`.
+Linux and Windows are expected to work — the script branches correctly for
+them and nothing in `src/` is platform-specific — but have not been run.
+`proxy_config.toml` is still read from the working directory at runtime
+(`PROXY_CONFIG_PATH`); it is not embedded.
+
 ### fix(agent): close three path/log confinement holes and two bash edge cases
 
 Follow-up review of `src/agent-session.ts` / `src/agent-tools.ts`. Each item below

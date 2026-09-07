@@ -119,8 +119,25 @@ function outputName() {
   throw new Error(`Unsupported platform: ${platform}`);
 }
 
+/**
+ * shell:true on Windows because `npx` there is `npx.cmd`, a batch script.
+ * execFileSync spawns the executable directly with no shell, and CreateProcess
+ * cannot run a .cmd — so every npx step below dies with ENOENT without it.
+ * (Node 20+ additionally refuses to run .cmd/.bat via execFile without a
+ * shell, as a fix for CVE-2024-27980.)
+ *
+ * The shell is confined to Windows: on POSIX it is unnecessary, and it would
+ * put an extra layer of quoting between us and the argv we pass. Every
+ * argument here is build-time constant or a path this script computed, so
+ * there is no untrusted input to interpolate either way.
+ */
 function run(cmd, args, opts = {}) {
-  execFileSync(cmd, args, { stdio: 'inherit', cwd: ROOT, ...opts });
+  execFileSync(cmd, args, {
+    stdio: 'inherit',
+    cwd: ROOT,
+    shell: os.platform() === 'win32',
+    ...opts,
+  });
 }
 
 /**
